@@ -1,0 +1,45 @@
+[package]
+name = "ontok"
+version = "0.1.0"
+edition = "2021"
+# MSRV —— 让 cargo 自动挑选兼容本机工具链的依赖版本，避免解析到要更高 rustc 的包
+rust-version = "1.86"   # 实际工具链 1.98.1；此处保留较低 MSRV 以便他人复现
+
+[workspace]
+
+[lib]
+name = "ontok"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ontok"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# REQ-034：内置 LLM 兜底 agent 要打 OpenAI 兼容端点，本 crate 此前**零 HTTP 客户端**。
+#
+# 为什么是 ureq 而不是 reqwest（本 crate 的纪律决定了答案，不是随手选的）：
+# · **阻塞 I/O**：`ExtractionAgent` 的方法全是同步的（`mod.rs` 模块头：MSRV 1.86 下
+#   没有 dyn-safe 的 `async fn in trait`，也没有 async-trait 依赖）。reqwest 是
+#   async 的，要用它就得在同步方法里 `block_on` —— 而 `block_on` 在已有 runtime
+#   上下文里**直接 panic**（ADR-002 · N3；`acp/mod.rs:38-41` 记着这个坑，
+#   并为此专门选了「一个 block_on 都不写」的方案）。ureq 让本实现与那条纪律一致。
+# · **依赖面小**：默认 rustls，**不碰 OpenSSL 系统库**，且 rustls 已经在树里
+#   （sqlx 的 `runtime-tokio-rustls`），TLS 侧不引入第二套栈。
+ureq = { version = "3", default-features = false, features = ["rustls", "json", "gzip"] }
+
+[dev-dependencies]
+# 用外部测试库（PG 16.14），不引入 testcontainers
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1"

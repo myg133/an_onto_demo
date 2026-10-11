@@ -1,0 +1,90 @@
+{
+  "project": "acme",
+  "base_version": 1,
+  "round": 1,
+  "extracted_by": {
+    "agent": "demo-extractor",
+    "version": "0.1.0",
+    "round": 1,
+    "failed_groups": []
+  },
+  "items": [
+    {
+      "kind": "add_entity_type",
+      "target": "客户",
+      "payload": {
+        "key": "customer",
+        "display_name": "客户",
+        "description": "签约的企业主体",
+        "aliases": ["用户", "客户账号"],
+        "properties": [
+          { "name": "客户编号", "column": "customer_no", "nullable": false, "note": "营业执照号" },
+          { "name": "客户名称", "column": "customer_name", "nullable": true }
+        ],
+        "evidence": [{ "table": "customers", "column": "customer_no", "claim": "客户主键" }]
+      }
+    },
+    {
+      "kind": "add_entity_type",
+      "target": "订阅",
+      "payload": {
+        "key": "subscription",
+        "display_name": "客户订阅",
+        "description": "客户购买的调用额度套餐",
+        "aliases": ["订阅"],
+        "properties": [
+          { "name": "订阅编号", "column": "subscription_id", "nullable": false },
+          { "name": "客户编号", "column": "customer_id", "nullable": false }
+        ],
+        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+      }
+    },
+    {
+      "kind": "add_entity_type",
+      "target": "资产",
+      "payload": {
+        "key": "asset",
+        "display_name": "资产",
+        "description": "客户名下的可调配资源",
+        "properties": [],
+        "evidence": [{ "table": "assets", "column": "asset_id", "claim": "资产主键" }]
+      }
+    },
+    {
+      "kind": "add_entity_type",
+      "target": "设备",
+      "payload": {
+        "key": "device",
+        "display_name": "设备",
+        "description": "部署在客户现场的终端",
+        "parent": "asset",
+        "properties": [{ "name": "设备编号", "column": "device_no", "nullable": false }],
+        "evidence": [{ "table": "devices", "column": "device_no", "claim": "设备编号列" }]
+      }
+    },
+    {
+      "kind": "add_link_type",
+      "target": "客户→订阅",
+      "payload": {
+        "key": "customer_has_subscription",
+        "from_type": "customer",
+        "to_type": "subscription",
+        "cardinality": "1:N",
+        "semantic": "has",
+        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+      }
+    },
+    {
+      "kind": "add_link_type",
+      "target": "资产→设备",
+      "payload": {
+        "key": "asset_has_device",
+        "from_type": "asset",
+        "to_type": "device",
+        "cardinality": "1:N",
+        "semantic": "has",
+        "evidence": [{ "table": "devices", "column": "asset_id", "claim": "设备属于资产" }]
+      }
+    }
+  ]
+}

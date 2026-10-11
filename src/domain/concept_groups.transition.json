@@ -1,0 +1,817 @@
+{
+  "version": "0.2.0",
+  "declared_by": "prefix-cluster-seed",
+  "rule": "⚠ 过渡声明，不是结论。规则：表名首个下划线词干（去尾 s 做单数归一）聚类；同词干 ≥2 张且未被显式钉出 ⇒ 一个概念；单张表不构成「一个概念拆多表」，留在未归组清单；显式钉住与显式不归组各自带理由。最终由 HK Agent 或业务人员确认/修正。改这份文件必须升 version 并在 history 追加一条（改内容必须改版本）。",
+  "confirmed_by": null,
+  "history": [
+    {
+      "version": "0.1.0",
+      "content_digest": "3a578995d32e5e9a",
+      "note": "初版：按表名前缀聚类 + 人工钉住明显例外"
+    },
+    {
+      "version": "0.2.0",
+      "content_digest": "438970d3dbb858e9",
+      "note": "REQ-028 · F4：把 scope_hint 里的「低置信/待确认」措辞固化为结构化字段 low_confidence=true（仅这 5 组，值不变）。判据从「读说明文字」改为「读字段」，措辞再改也不会让标记静默消失；文字与字段分家由 ScopeHintDrift 报错。"
+    }
+  ],
+  "groups": [
+    {
+      "key": "concept_activity",
+      "display_name": "活动",
+      "members": [
+        "activity",
+        "activity_keys"
+      ],
+      "scope_hint": "活动主表 + 活动关键词：一个活动被拆成两张表",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "activity",
+          "column": "",
+          "claim": "与同前缀表（activity_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "activity_keys",
+          "column": "",
+          "claim": "与同前缀表（activity_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_admin",
+      "display_name": "后台管理员",
+      "members": [
+        "admin_roles",
+        "admin_user_roles",
+        "admin_users"
+      ],
+      "scope_hint": "管理员、角色、角色分配属同一件事的三张表",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "admin_roles",
+          "column": "",
+          "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "admin_user_roles",
+          "column": "",
+          "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "admin_users",
+          "column": "",
+          "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_agent",
+      "display_name": "智能体",
+      "members": [
+        "agent_device_version",
+        "agent_white_list"
+      ],
+      "scope_hint": "⚠ 低置信：设备版本与白名单可能该分开，待确认",
+      "low_confidence": true,
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "agent_device_version",
+          "column": "",
+          "claim": "与同前缀表（agent_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "agent_white_list",
+          "column": "",
+          "claim": "与同前缀表（agent_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_balance",
+      "display_name": "客户余额",
+      "members": [
+        "balance_operation_log",
+        "balance_transfer",
+        "balances"
+      ],
+      "scope_hint": "余额账户、余额流水、余额划拨：余额被拆成三张表",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "balance_operation_log",
+          "column": "",
+          "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "balance_transfer",
+          "column": "",
+          "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "balances",
+          "column": "",
+          "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_customer",
+      "display_name": "客户",
+      "members": [
+        "customer_feature_permissions",
+        "customer_provider_permission_policies",
+        "customer_provider_permissions",
+        "customer_rate_limit",
+        "customer_tpm_rate_limit",
+        "customers"
+      ],
+      "scope_hint": "⚠ 客户主档 + 5 张客户侧配置表。**这是最需要业务确认的一条** —— 业务人员可能会说「权限和限流不是我这个人」，但按「客户这一侧有哪些东西」的读法它们确实是客户的一部分。宁可多列，不替业务判断",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "customer_feature_permissions",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "customer_provider_permission_policies",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "customer_provider_permissions",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "customer_rate_limit",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "customer_tpm_rate_limit",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "customers",
+          "column": "",
+          "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_gift",
+      "display_name": "兑换码",
+      "members": [
+        "gift_code_batch",
+        "gift_codes"
+      ],
+      "scope_hint": "兑换码与兑换码批次是同一件事的两张表",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "gift_code_batch",
+          "column": "",
+          "claim": "与同前缀表（gift_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "gift_codes",
+          "column": "",
+          "claim": "与同前缀表（gift_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_instance",
+      "display_name": "实例与实例任务",
+      "members": [
+        "instance_manager",
+        "instance_task_manager",
+        "instance_task_record"
+      ],
+      "scope_hint": "⚠ 低置信：实例、任务管理、任务记录是三个层级，可能该分开",
+      "low_confidence": true,
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "instance_manager",
+          "column": "",
+          "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "instance_task_manager",
+          "column": "",
+          "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "instance_task_record",
+          "column": "",
+          "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_internal",
+      "display_name": "内部运营",
+      "members": [
+        "internal_messages",
+        "internal_operation_records",
+        "internal_staff"
+      ],
+      "scope_hint": "⚠ 低置信：内部消息与内部员工可能该分开",
+      "low_confidence": true,
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "internal_messages",
+          "column": "",
+          "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "internal_operation_records",
+          "column": "",
+          "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "internal_staff",
+          "column": "",
+          "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_ip",
+      "display_name": "IP 名单",
+      "members": [
+        "ip_blacklist",
+        "ip_whitelist"
+      ],
+      "scope_hint": "黑名单与白名单是同一件事的两种方向",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "ip_blacklist",
+          "column": "",
+          "claim": "与同前缀表（ip_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "ip_whitelist",
+          "column": "",
+          "claim": "与同前缀表（ip_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_license",
+      "display_name": "授权",
+      "members": [
+        "license_quota",
+        "licenses",
+        "licenses_archive"
+      ],
+      "scope_hint": "⚠ 低置信：授权凭证与授权额度配置可能该分开（配置 vs 凭证）",
+      "low_confidence": true,
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "license_quota",
+          "column": "",
+          "claim": "与同前缀表（license_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "licenses",
+          "column": "",
+          "claim": "与同前缀表（license_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "licenses_archive",
+          "column": "",
+          "claim": "与同前缀表（license_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_marketing",
+      "display_name": "营销渠道",
+      "members": [
+        "marketing_channel",
+        "marketing_channel_customer",
+        "marketing_channel_log"
+      ],
+      "scope_hint": "渠道、渠道客户归属、渠道日志属同一件事",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "marketing_channel",
+          "column": "",
+          "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "marketing_channel_customer",
+          "column": "",
+          "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "marketing_channel_log",
+          "column": "",
+          "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_package",
+      "display_name": "套餐",
+      "members": [
+        "package_benefits",
+        "package_products",
+        "package_templates"
+      ],
+      "scope_hint": "模板、产品、权益：套餐被拆成三张表",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "package_benefits",
+          "column": "",
+          "claim": "与同前缀表（package_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "package_products",
+          "column": "",
+          "claim": "与同前缀表（package_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "package_templates",
+          "column": "",
+          "claim": "与同前缀表（package_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_proxy",
+      "display_name": "代理操作",
+      "members": [
+        "proxy_operation_auths",
+        "proxy_operation_records"
+      ],
+      "scope_hint": "代理的授权与操作记录",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "proxy_operation_auths",
+          "column": "",
+          "claim": "与同前缀表（proxy_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "proxy_operation_records",
+          "column": "",
+          "claim": "与同前缀表（proxy_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_service",
+      "display_name": "服务",
+      "members": [
+        "service_apps",
+        "service_config",
+        "service_config_peak",
+        "service_free_amount_config"
+      ],
+      "scope_hint": "⚠ 低置信：服务应用与服务配置可能该分开（应用 vs 配置）",
+      "low_confidence": true,
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "service_apps",
+          "column": "",
+          "claim": "与同前缀表（service_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "service_config",
+          "column": "",
+          "claim": "与同前缀表（service_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "service_config_peak",
+          "column": "",
+          "claim": "与同前缀表（service_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "service_free_amount_config",
+          "column": "",
+          "claim": "与同前缀表（service_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_share",
+      "display_name": "分享",
+      "members": [
+        "share_records",
+        "share_usage"
+      ],
+      "scope_hint": "分享记录与分享用量属同一件事",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "share_records",
+          "column": "",
+          "claim": "与同前缀表（share_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "share_usage",
+          "column": "",
+          "claim": "与同前缀表（share_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_simulate",
+      "display_name": "模拟登录",
+      "members": [
+        "simulate_login_operations",
+        "simulate_login_sessions"
+      ],
+      "scope_hint": "模拟登录的会话与操作",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "simulate_login_operations",
+          "column": "",
+          "claim": "与同前缀表（simulate_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "simulate_login_sessions",
+          "column": "",
+          "claim": "与同前缀表（simulate_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_sub",
+      "display_name": "子账号",
+      "members": [
+        "sub_account_bind_permission",
+        "sub_account_permission",
+        "sub_account_quota"
+      ],
+      "scope_hint": "子账号的权限、绑定权限与额度",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "sub_account_bind_permission",
+          "column": "",
+          "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "sub_account_permission",
+          "column": "",
+          "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "sub_account_quota",
+          "column": "",
+          "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "concept_usage",
+      "display_name": "用量",
+      "members": [
+        "usage_details",
+        "usage_quotas",
+        "usage_reconciliation_log"
+      ],
+      "scope_hint": "用量明细、用量额度、用量对账属同一件事",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "usage_details",
+          "column": "",
+          "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "usage_quotas",
+          "column": "",
+          "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
+        },
+        {
+          "table": "usage_reconciliation_log",
+          "column": "",
+          "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
+        }
+      ]
+    },
+    {
+      "key": "customer_account_binding",
+      "display_name": "客户账号绑定",
+      "members": [
+        "customer_account_binding",
+        "dim_customer_binding"
+      ],
+      "scope_hint": "显式钉住：主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "customer_account_binding",
+          "column": "",
+          "claim": "主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字"
+        },
+        {
+          "table": "dim_customer_binding",
+          "column": "",
+          "claim": "主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字"
+        }
+      ]
+    },
+    {
+      "key": "customer_interest",
+      "display_name": "客户意向",
+      "members": [
+        "customer_interests"
+      ],
+      "scope_hint": "显式钉住：意向是一条待跟进的记录（它还指向订单），不是客户档案的一部分",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "customer_interests",
+          "column": "",
+          "claim": "意向是一条待跟进的记录（它还指向订单），不是客户档案的一部分"
+        }
+      ]
+    },
+    {
+      "key": "customer_rebate",
+      "display_name": "客户折扣返利",
+      "members": [
+        "customer_rebate"
+      ],
+      "scope_hint": "显式钉住：返利是结算对象，不是客户的属性",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "customer_rebate",
+          "column": "",
+          "claim": "返利是结算对象，不是客户的属性"
+        }
+      ]
+    },
+    {
+      "key": "customer_subscription",
+      "display_name": "客户订阅",
+      "members": [
+        "customer_subscriptions"
+      ],
+      "scope_hint": "显式钉住：「订阅」有自己的生命周期与计费口径，合并进「客户」会让客户以为看不到自己的订阅信息",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "customer_subscriptions",
+          "column": "",
+          "claim": "「订阅」有自己的生命周期与计费口径，合并进「客户」会让客户以为看不到自己的订阅信息"
+        }
+      ]
+    },
+    {
+      "key": "llm_auth_cache",
+      "display_name": "鉴权缓存",
+      "members": [
+        "llm_auth_cache_change_outbox",
+        "llm_auth_cache_kafka_event_outbox",
+        "llm_auth_cache_trigger_state"
+      ],
+      "scope_hint": "显式钉住：同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "llm_auth_cache_change_outbox",
+          "column": "",
+          "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
+        },
+        {
+          "table": "llm_auth_cache_kafka_event_outbox",
+          "column": "",
+          "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
+        },
+        {
+          "table": "llm_auth_cache_trigger_state",
+          "column": "",
+          "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
+        }
+      ]
+    },
+    {
+      "key": "llm_model",
+      "display_name": "大模型",
+      "members": [
+        "llm_model",
+        "llm_model_peak_config",
+        "llm_model_sort"
+      ],
+      "scope_hint": "显式钉住：同上：模型本身、高峰配置、排序是同一个概念的三个面",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "llm_model",
+          "column": "",
+          "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
+        },
+        {
+          "table": "llm_model_peak_config",
+          "column": "",
+          "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
+        },
+        {
+          "table": "llm_model_sort",
+          "column": "",
+          "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
+        }
+      ]
+    },
+    {
+      "key": "llm_provider",
+      "display_name": "大模型服务商",
+      "members": [
+        "llm_provider",
+        "llm_provider_back_20260701",
+        "llm_provider_group_items",
+        "llm_provider_groups"
+      ],
+      "scope_hint": "显式钉住：服务商与其分组明细、备份属同一概念",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "llm_provider",
+          "column": "",
+          "claim": "服务商与其分组明细、备份属同一概念"
+        },
+        {
+          "table": "llm_provider_back_20260701",
+          "column": "",
+          "claim": "服务商与其分组明细、备份属同一概念"
+        },
+        {
+          "table": "llm_provider_group_items",
+          "column": "",
+          "claim": "服务商与其分组明细、备份属同一概念"
+        },
+        {
+          "table": "llm_provider_groups",
+          "column": "",
+          "claim": "服务商与其分组明细、备份属同一概念"
+        }
+      ]
+    },
+    {
+      "key": "llm_routing",
+      "display_name": "模型路由规则",
+      "members": [
+        "llm_routing_rules"
+      ],
+      "scope_hint": "显式钉住：路由是独立机制，不属于模型也不属于服务商",
+      "extracted_by": {
+        "agent": "prefix-cluster-seed",
+        "version": "0.1.0",
+        "round": 1,
+        "failed_groups": []
+      },
+      "evidence": [
+        {
+          "table": "llm_routing_rules",
+          "column": "",
+          "claim": "路由是独立机制，不属于模型也不属于服务商"
+        }
+      ]
+    }
+  ]
+}

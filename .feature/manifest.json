@@ -1,0 +1,11 @@
+{
+  "req_id": "REQ-002",
+  "title": "本体内核 MVP（Rust）实施",
+  "branch": "feature/REQ-002",
+  "base": "develop",
+  "assigned_by": "ba-local-145007-20260930-175512",
+  "assigned_at": "2026-09-30 17:57:35",
+  "plan": "BA/docs/plans/2026-09-30-REQ-002-kernel-mvp-implementation.md",
+  "acceptance": "BA/demands/REQ-002-kernel-mvp/acceptance.md",
+  "status": "进行中"
+}
