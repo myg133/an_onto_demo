@@ -537,7 +537,7 @@ fn test_req058_prefix_is_stripped_exactly_once() {
 fn test_req058_merged_track_lines_are_still_caught() {
     let v = view(vec![
         full_item("客户", json!({ "key": "customer" })),
-        full_item("订单", json!({ "key": "order" })),
+        full_item("订单", json!({ "key": "t064" })),
     ]);
     let text = render_review_text(&v);
     assert!(verify_track_separation(&v, &text).is_empty(), "前提不成立：正控不干净");

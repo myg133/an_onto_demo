@@ -206,7 +206,7 @@ async fn test_apply_with_dangling_link_is_rejected() {
     let p = c.proposals
         .create(c.project_id,
             NewProposal { base_version_id: c.v1, round: 1, extracted_by: None },
-            &[ent("customer", "客户"), ent("order", "订单"), link("customer", "order")])
+            &[ent("customer", "客户"), ent("t064", "订单"), link("customer", "t064")])
         .await
         .unwrap();
     let items = c.proposals.items(p.id).await.unwrap();
@@ -234,7 +234,7 @@ async fn test_chained_apply_keeps_accumulating() {
     let v2 = c.applier.apply_proposal(p1.id).await.unwrap();
 
     let p2 = c.proposals
-        .create(c.project_id, NewProposal { base_version_id: v2, round: 2, extracted_by: None }, &[ent("order", "订单")])
+        .create(c.project_id, NewProposal { base_version_id: v2, round: 2, extracted_by: None }, &[ent("t064", "订单")])
         .await
         .unwrap();
     accept_all(&c, p2.id).await;
@@ -243,7 +243,7 @@ async fn test_chained_apply_keeps_accumulating() {
     let snap = c.store.get_snapshot(v3).await.unwrap().unwrap();
     assert!(snap.has("customer"), "v3 应仍含 v1 加的「客户」，实际：{:?}",
         snap.entity_types.iter().map(|e| &e.key).collect::<Vec<_>>());
-    assert!(snap.has("order"), "v3 应含 v2 加的「订单」");
+    assert!(snap.has("t064"), "v3 应含 v2 加的「订单」");
     assert_eq!(snap.seq, 3);
 }
 
@@ -491,7 +491,7 @@ async fn test_apply_remove_entity_type_cleans_links() {
     let c = ctx().await;
     let p1 = c.proposals
         .create(c.project_id, NewProposal { base_version_id: c.v1, round: 1, extracted_by: None },
-            &[ent("customer", "客户"), ent("order", "订单"), link("customer", "order")])
+            &[ent("customer", "客户"), ent("t064", "订单"), link("customer", "t064")])
         .await
         .unwrap();
     accept_all(&c, p1.id).await;
@@ -500,14 +500,14 @@ async fn test_apply_remove_entity_type_cleans_links() {
 
     let p2 = c.proposals
         .create(c.project_id, NewProposal { base_version_id: v2, round: 2, extracted_by: None },
-            &[NewItem { kind: ItemKind::RemoveEntityType, target_key: "order".into(), payload: json!({}) }])
+            &[NewItem { kind: ItemKind::RemoveEntityType, target_key: "t064".into(), payload: json!({}) }])
         .await
         .unwrap();
     accept_all(&c, p2.id).await;
     let v3 = c.applier.apply_proposal(p2.id).await.unwrap();
 
     let snap = c.store.get_snapshot(v3).await.unwrap().unwrap();
-    assert!(!snap.has("order"));
+    assert!(!snap.has("t064"));
     assert!(snap.link_types.is_empty(), "指向已删类型的关系必须被清掉：{:?}", snap.link_types);
 }
 

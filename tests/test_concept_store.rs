@@ -42,7 +42,7 @@ fn group_with_all_three_states(key: &str) -> ConceptGroup {
     ConceptGroup {
         key: key.into(),
         display_name: "套餐".into(),
-        members: vec!["package_templates".into(), "package_products".into()],
+        members: vec!["t067".into(), "t066".into()],
         scope_hint: None,
         // REQ-028 · F4：刻意置 `Some(true)` 而不是 None ——
         // 这条快照往返测试要证明**非默认值**也能无损存回。
@@ -57,7 +57,7 @@ fn group_with_all_three_states(key: &str) -> ConceptGroup {
             source: None,
         }),
         evidence: vec![Evidence {
-            table: "package_products".into(),
+            table: "t066".into(),
             column: String::new(),
             claim: "套餐下可买的产品".into(),
         }],
@@ -67,8 +67,8 @@ fn group_with_all_three_states(key: &str) -> ConceptGroup {
 fn base_snapshot(vid: Uuid) -> Snapshot {
     let mut s = Snapshot::new(vid, 1);
     s.entity_types = vec![
-        entity("package_templates", "套餐模板"),
-        entity("package_products", "套餐产品"),
+        entity("t067", "套餐模板"),
+        entity("t066", "套餐产品"),
         entity("orders", "订单"),
     ];
     s
@@ -89,7 +89,7 @@ async fn test_concept_group_survives_snapshot_roundtrip() {
     assert!(g.scope_hint.is_none(), "NULL 要还原成 None（还没写说明），不是空串");
     assert!(g.extracted_by.is_some());
     assert_eq!(g.members.len(), 2);
-    assert_eq!(g.evidence[0].table, "package_products");
+    assert_eq!(g.evidence[0].table, "t066");
 }
 
 #[tokio::test]
@@ -117,7 +117,7 @@ async fn test_concept_groups_do_not_touch_entity_rows() {
     let mut b = base_snapshot(vid_b);
     b.concept_groups = vec![
         group_with_all_three_states("package"),
-        ConceptGroup { key: "order".into(), display_name: "订单".into(), members: vec!["orders".into()], ..group_with_all_three_states("tmp") },
+        ConceptGroup { key: "t064".into(), display_name: "订单".into(), members: vec!["orders".into()], ..group_with_all_three_states("tmp") },
     ];
     // 第二个组只留一个成员，避免与第一个组重叠（校验层会拒）
     b.concept_groups[1].evidence = vec![];
@@ -151,7 +151,7 @@ async fn test_resave_replaces_concept_groups_not_appends() {
     snap.concept_groups = vec![ConceptGroup {
         key: "package".into(),
         display_name: "套餐（已改名）".into(),
-        members: vec!["package_templates".into()],
+        members: vec!["t067".into()],
         scope_hint: Some("只留模板".into()),
         extracted_by: None,
         low_confidence: None, // REQ-028 · F4：默认「没声明过」
@@ -178,7 +178,7 @@ async fn test_stored_dangling_member_is_still_detectable() {
     snap.concept_groups = vec![ConceptGroup {
         key: "package".into(),
         display_name: "套餐".into(),
-        members: vec!["package_templates".into(), "package_ghost".into()],
+        members: vec!["t067".into(), "package_ghost".into()],
         scope_hint: None,
         extracted_by: None,
         low_confidence: None, // REQ-028 · F4：默认「没声明过」

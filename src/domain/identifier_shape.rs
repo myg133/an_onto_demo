@@ -227,7 +227,7 @@ pub fn contains_identifier_shape(s: &str) -> bool {
 /// `note` 是**数据库列注释原文**，是真实业务信息（属性说明）。
 /// BA 裁定：不许用「把 `note` 整个丢掉」绕过 —— 丢了会伤回答质量。
 /// 所以命中的标识符串被换成 `…`，**周围的业务文字原样保留**：
-/// `关联模型ID(对应llm_model.model_id)` → `关联模型ID(对应…)`。
+/// `关联模型ID(对应t052.model_id)` → `关联模型ID(对应…)`。
 ///
 /// # 只在**整个词元**命中时才替换
 ///
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn real_identifiers_still_caught() {
         for hit in [
-            "关联模型ID(对应llm_model.model_id)",
+            "关联模型ID(对应t052.model_id)",
             "核销人customer_id",
             "供应商配置(base_url, api_key等)",
             "功能编码，如 jd_api",
@@ -442,7 +442,7 @@ mod tests {
         // 真阳性样本：旧判据命中 ⇒ 新判据必须也命中（漏网为零）
         for tok in [
             "a.b", "z.y.x", "customer_id", "base_url", "api_key", "jd_api",
-            "llm_model.model_id", "v2_model", "x_1", "t.c", "billing_account",
+            "t052.model_id", "v2_model", "x_1", "t.c", "billing_account",
             "llm_provider_back_20260701", "rewrite_times",
         ] {
             assert!(old(tok), "样本应当是旧判据的真阳性: {tok}");

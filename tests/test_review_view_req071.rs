@@ -164,13 +164,13 @@ fn cases() -> Vec<Case> {
 
     // 各位的脏值（先建一次，避免「断言用的串」与「喂进去的串」分叉）
     let l_raw = format!("customer{model_forge}");
-    let m_raw = format!("order{model_forge}");
+    let m_raw = format!("t064{model_forge}");
     let n_raw = format!("建模轨显式拒绝{model_forge}");
     let o_raw = format!("客户_has_订单{model_forge}");
     let s_raw = format!("1{prov_forge}");
     let t_raw = format!("g1{prov_forge}");
     let clean_rel = || Inputs {
-        items: vec![rel_item("客户_has_订单", Some("customer"), Some("order"))],
+        items: vec![rel_item("客户_has_订单", Some("customer"), Some("t064"))],
         status: None,
         eb: Some(declared_eb()),
     };
@@ -189,7 +189,7 @@ fn cases() -> Vec<Case> {
                 items: vec![rel_item(
                     "客户_has_订单",
                     Some(&l_raw),
-                    Some("order"),
+                    Some("t064"),
                 )],
                 status: None,
                 eb: Some(declared_eb()),
@@ -259,7 +259,7 @@ fn cases() -> Vec<Case> {
             slot: "O `blocked[].target`",
             dirty_raw: o_raw.clone(),
             dirty: Inputs {
-                items: vec![rel_item(&o_raw, Some("customer"), Some("order"))],
+                items: vec![rel_item(&o_raw, Some("customer"), Some("t064"))],
                 status: None,
                 eb: Some(declared_eb()),
             },
@@ -276,7 +276,7 @@ fn cases() -> Vec<Case> {
                 items: vec![rel_item(
                     "客户_has_订单",
                     Some(&l_raw),
-                    Some("order"),
+                    Some("t064"),
                 )],
                 status: None,
                 eb: Some(declared_eb()),

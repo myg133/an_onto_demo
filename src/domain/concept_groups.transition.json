@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "declared_by": "prefix-cluster-seed",
   "rule": "⚠ 过渡声明，不是结论。规则：表名首个下划线词干（去尾 s 做单数归一）聚类；同词干 ≥2 张且未被显式钉出 ⇒ 一个概念；单张表不构成「一个概念拆多表」，留在未归组清单；显式钉住与显式不归组各自带理由。最终由 HK Agent 或业务人员确认/修正。改这份文件必须升 version 并在 history 追加一条（改内容必须改版本）。",
   "confirmed_by": null,
@@ -13,6 +13,11 @@
       "version": "0.2.0",
       "content_digest": "438970d3dbb858e9",
       "note": "REQ-028 · F4：把 scope_hint 里的「低置信/待确认」措辞固化为结构化字段 low_confidence=true（仅这 5 组，值不变）。判据从「读说明文字」改为「读字段」，措辞再改也不会让标记静默消失；文字与字段分家由 ScopeHintDrift 报错。"
+    },
+    {
+      "version": "0.3.0",
+      "content_digest": "651bf27ea8efe3fd",
+      "note": "REQ-084：客户源库表名脱敏为 t001..t091（与源库 table_names.json 同一套编号，键序一致）。groups 数 26、成员 67 张、关系与 rule 字段逐字未动；仅 members / evidence[].table / 4 个以表名命名的 key 换名。按本文件 rule 的「改内容必须升 version 并在 history 追加一条」执行。"
     }
   ],
   "groups": [
@@ -20,8 +25,8 @@
       "key": "concept_activity",
       "display_name": "活动",
       "members": [
-        "activity",
-        "activity_keys"
+        "t001",
+        "t002"
       ],
       "scope_hint": "活动主表 + 活动关键词：一个活动被拆成两张表",
       "extracted_by": {
@@ -32,12 +37,12 @@
       },
       "evidence": [
         {
-          "table": "activity",
+          "table": "t001",
           "column": "",
           "claim": "与同前缀表（activity_*）聚成一类；待业务确认"
         },
         {
-          "table": "activity_keys",
+          "table": "t002",
           "column": "",
           "claim": "与同前缀表（activity_*）聚成一类；待业务确认"
         }
@@ -47,9 +52,9 @@
       "key": "concept_admin",
       "display_name": "后台管理员",
       "members": [
-        "admin_roles",
-        "admin_user_roles",
-        "admin_users"
+        "t004",
+        "t005",
+        "t006"
       ],
       "scope_hint": "管理员、角色、角色分配属同一件事的三张表",
       "extracted_by": {
@@ -60,17 +65,17 @@
       },
       "evidence": [
         {
-          "table": "admin_roles",
+          "table": "t004",
           "column": "",
           "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
         },
         {
-          "table": "admin_user_roles",
+          "table": "t005",
           "column": "",
           "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
         },
         {
-          "table": "admin_users",
+          "table": "t006",
           "column": "",
           "claim": "与同前缀表（admin_*）聚成一类；待业务确认"
         }
@@ -80,8 +85,8 @@
       "key": "concept_agent",
       "display_name": "智能体",
       "members": [
-        "agent_device_version",
-        "agent_white_list"
+        "t007",
+        "t008"
       ],
       "scope_hint": "⚠ 低置信：设备版本与白名单可能该分开，待确认",
       "low_confidence": true,
@@ -93,12 +98,12 @@
       },
       "evidence": [
         {
-          "table": "agent_device_version",
+          "table": "t007",
           "column": "",
           "claim": "与同前缀表（agent_*）聚成一类；待业务确认"
         },
         {
-          "table": "agent_white_list",
+          "table": "t008",
           "column": "",
           "claim": "与同前缀表（agent_*）聚成一类；待业务确认"
         }
@@ -108,9 +113,9 @@
       "key": "concept_balance",
       "display_name": "客户余额",
       "members": [
-        "balance_operation_log",
-        "balance_transfer",
-        "balances"
+        "t013",
+        "t014",
+        "t015"
       ],
       "scope_hint": "余额账户、余额流水、余额划拨：余额被拆成三张表",
       "extracted_by": {
@@ -121,17 +126,17 @@
       },
       "evidence": [
         {
-          "table": "balance_operation_log",
+          "table": "t013",
           "column": "",
           "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
         },
         {
-          "table": "balance_transfer",
+          "table": "t014",
           "column": "",
           "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
         },
         {
-          "table": "balances",
+          "table": "t015",
           "column": "",
           "claim": "与同前缀表（balance_*）聚成一类；待业务确认"
         }
@@ -141,12 +146,12 @@
       "key": "concept_customer",
       "display_name": "客户",
       "members": [
-        "customer_feature_permissions",
-        "customer_provider_permission_policies",
-        "customer_provider_permissions",
-        "customer_rate_limit",
-        "customer_tpm_rate_limit",
-        "customers"
+        "t017",
+        "t019",
+        "t020",
+        "t021",
+        "t024",
+        "t025"
       ],
       "scope_hint": "⚠ 客户主档 + 5 张客户侧配置表。**这是最需要业务确认的一条** —— 业务人员可能会说「权限和限流不是我这个人」，但按「客户这一侧有哪些东西」的读法它们确实是客户的一部分。宁可多列，不替业务判断",
       "extracted_by": {
@@ -157,32 +162,32 @@
       },
       "evidence": [
         {
-          "table": "customer_feature_permissions",
+          "table": "t017",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         },
         {
-          "table": "customer_provider_permission_policies",
+          "table": "t019",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         },
         {
-          "table": "customer_provider_permissions",
+          "table": "t020",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         },
         {
-          "table": "customer_rate_limit",
+          "table": "t021",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         },
         {
-          "table": "customer_tpm_rate_limit",
+          "table": "t024",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         },
         {
-          "table": "customers",
+          "table": "t025",
           "column": "",
           "claim": "与同前缀表（customer_*）聚成一类；待业务确认"
         }
@@ -192,8 +197,8 @@
       "key": "concept_gift",
       "display_name": "兑换码",
       "members": [
-        "gift_code_batch",
-        "gift_codes"
+        "t033",
+        "t034"
       ],
       "scope_hint": "兑换码与兑换码批次是同一件事的两张表",
       "extracted_by": {
@@ -204,12 +209,12 @@
       },
       "evidence": [
         {
-          "table": "gift_code_batch",
+          "table": "t033",
           "column": "",
           "claim": "与同前缀表（gift_*）聚成一类；待业务确认"
         },
         {
-          "table": "gift_codes",
+          "table": "t034",
           "column": "",
           "claim": "与同前缀表（gift_*）聚成一类；待业务确认"
         }
@@ -219,9 +224,9 @@
       "key": "concept_instance",
       "display_name": "实例与实例任务",
       "members": [
-        "instance_manager",
-        "instance_task_manager",
-        "instance_task_record"
+        "t035",
+        "t036",
+        "t037"
       ],
       "scope_hint": "⚠ 低置信：实例、任务管理、任务记录是三个层级，可能该分开",
       "low_confidence": true,
@@ -233,17 +238,17 @@
       },
       "evidence": [
         {
-          "table": "instance_manager",
+          "table": "t035",
           "column": "",
           "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
         },
         {
-          "table": "instance_task_manager",
+          "table": "t036",
           "column": "",
           "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
         },
         {
-          "table": "instance_task_record",
+          "table": "t037",
           "column": "",
           "claim": "与同前缀表（instance_*）聚成一类；待业务确认"
         }
@@ -253,9 +258,9 @@
       "key": "concept_internal",
       "display_name": "内部运营",
       "members": [
-        "internal_messages",
-        "internal_operation_records",
-        "internal_staff"
+        "t040",
+        "t041",
+        "t042"
       ],
       "scope_hint": "⚠ 低置信：内部消息与内部员工可能该分开",
       "low_confidence": true,
@@ -267,17 +272,17 @@
       },
       "evidence": [
         {
-          "table": "internal_messages",
+          "table": "t040",
           "column": "",
           "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
         },
         {
-          "table": "internal_operation_records",
+          "table": "t041",
           "column": "",
           "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
         },
         {
-          "table": "internal_staff",
+          "table": "t042",
           "column": "",
           "claim": "与同前缀表（internal_*）聚成一类；待业务确认"
         }
@@ -287,8 +292,8 @@
       "key": "concept_ip",
       "display_name": "IP 名单",
       "members": [
-        "ip_blacklist",
-        "ip_whitelist"
+        "t043",
+        "t044"
       ],
       "scope_hint": "黑名单与白名单是同一件事的两种方向",
       "extracted_by": {
@@ -299,12 +304,12 @@
       },
       "evidence": [
         {
-          "table": "ip_blacklist",
+          "table": "t043",
           "column": "",
           "claim": "与同前缀表（ip_*）聚成一类；待业务确认"
         },
         {
-          "table": "ip_whitelist",
+          "table": "t044",
           "column": "",
           "claim": "与同前缀表（ip_*）聚成一类；待业务确认"
         }
@@ -314,9 +319,9 @@
       "key": "concept_license",
       "display_name": "授权",
       "members": [
-        "license_quota",
-        "licenses",
-        "licenses_archive"
+        "t046",
+        "t047",
+        "t048"
       ],
       "scope_hint": "⚠ 低置信：授权凭证与授权额度配置可能该分开（配置 vs 凭证）",
       "low_confidence": true,
@@ -328,17 +333,17 @@
       },
       "evidence": [
         {
-          "table": "license_quota",
+          "table": "t046",
           "column": "",
           "claim": "与同前缀表（license_*）聚成一类；待业务确认"
         },
         {
-          "table": "licenses",
+          "table": "t047",
           "column": "",
           "claim": "与同前缀表（license_*）聚成一类；待业务确认"
         },
         {
-          "table": "licenses_archive",
+          "table": "t048",
           "column": "",
           "claim": "与同前缀表（license_*）聚成一类；待业务确认"
         }
@@ -348,9 +353,9 @@
       "key": "concept_marketing",
       "display_name": "营销渠道",
       "members": [
-        "marketing_channel",
-        "marketing_channel_customer",
-        "marketing_channel_log"
+        "t060",
+        "t061",
+        "t062"
       ],
       "scope_hint": "渠道、渠道客户归属、渠道日志属同一件事",
       "extracted_by": {
@@ -361,17 +366,17 @@
       },
       "evidence": [
         {
-          "table": "marketing_channel",
+          "table": "t060",
           "column": "",
           "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
         },
         {
-          "table": "marketing_channel_customer",
+          "table": "t061",
           "column": "",
           "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
         },
         {
-          "table": "marketing_channel_log",
+          "table": "t062",
           "column": "",
           "claim": "与同前缀表（marketing_*）聚成一类；待业务确认"
         }
@@ -381,9 +386,9 @@
       "key": "concept_package",
       "display_name": "套餐",
       "members": [
-        "package_benefits",
-        "package_products",
-        "package_templates"
+        "t065",
+        "t066",
+        "t067"
       ],
       "scope_hint": "模板、产品、权益：套餐被拆成三张表",
       "extracted_by": {
@@ -394,17 +399,17 @@
       },
       "evidence": [
         {
-          "table": "package_benefits",
+          "table": "t065",
           "column": "",
           "claim": "与同前缀表（package_*）聚成一类；待业务确认"
         },
         {
-          "table": "package_products",
+          "table": "t066",
           "column": "",
           "claim": "与同前缀表（package_*）聚成一类；待业务确认"
         },
         {
-          "table": "package_templates",
+          "table": "t067",
           "column": "",
           "claim": "与同前缀表（package_*）聚成一类；待业务确认"
         }
@@ -414,8 +419,8 @@
       "key": "concept_proxy",
       "display_name": "代理操作",
       "members": [
-        "proxy_operation_auths",
-        "proxy_operation_records"
+        "t068",
+        "t069"
       ],
       "scope_hint": "代理的授权与操作记录",
       "extracted_by": {
@@ -426,12 +431,12 @@
       },
       "evidence": [
         {
-          "table": "proxy_operation_auths",
+          "table": "t068",
           "column": "",
           "claim": "与同前缀表（proxy_*）聚成一类；待业务确认"
         },
         {
-          "table": "proxy_operation_records",
+          "table": "t069",
           "column": "",
           "claim": "与同前缀表（proxy_*）聚成一类；待业务确认"
         }
@@ -441,10 +446,10 @@
       "key": "concept_service",
       "display_name": "服务",
       "members": [
-        "service_apps",
-        "service_config",
-        "service_config_peak",
-        "service_free_amount_config"
+        "t075",
+        "t076",
+        "t077",
+        "t078"
       ],
       "scope_hint": "⚠ 低置信：服务应用与服务配置可能该分开（应用 vs 配置）",
       "low_confidence": true,
@@ -456,22 +461,22 @@
       },
       "evidence": [
         {
-          "table": "service_apps",
+          "table": "t075",
           "column": "",
           "claim": "与同前缀表（service_*）聚成一类；待业务确认"
         },
         {
-          "table": "service_config",
+          "table": "t076",
           "column": "",
           "claim": "与同前缀表（service_*）聚成一类；待业务确认"
         },
         {
-          "table": "service_config_peak",
+          "table": "t077",
           "column": "",
           "claim": "与同前缀表（service_*）聚成一类；待业务确认"
         },
         {
-          "table": "service_free_amount_config",
+          "table": "t078",
           "column": "",
           "claim": "与同前缀表（service_*）聚成一类；待业务确认"
         }
@@ -481,8 +486,8 @@
       "key": "concept_share",
       "display_name": "分享",
       "members": [
-        "share_records",
-        "share_usage"
+        "t079",
+        "t080"
       ],
       "scope_hint": "分享记录与分享用量属同一件事",
       "extracted_by": {
@@ -493,12 +498,12 @@
       },
       "evidence": [
         {
-          "table": "share_records",
+          "table": "t079",
           "column": "",
           "claim": "与同前缀表（share_*）聚成一类；待业务确认"
         },
         {
-          "table": "share_usage",
+          "table": "t080",
           "column": "",
           "claim": "与同前缀表（share_*）聚成一类；待业务确认"
         }
@@ -508,8 +513,8 @@
       "key": "concept_simulate",
       "display_name": "模拟登录",
       "members": [
-        "simulate_login_operations",
-        "simulate_login_sessions"
+        "t081",
+        "t082"
       ],
       "scope_hint": "模拟登录的会话与操作",
       "extracted_by": {
@@ -520,12 +525,12 @@
       },
       "evidence": [
         {
-          "table": "simulate_login_operations",
+          "table": "t081",
           "column": "",
           "claim": "与同前缀表（simulate_*）聚成一类；待业务确认"
         },
         {
-          "table": "simulate_login_sessions",
+          "table": "t082",
           "column": "",
           "claim": "与同前缀表（simulate_*）聚成一类；待业务确认"
         }
@@ -535,9 +540,9 @@
       "key": "concept_sub",
       "display_name": "子账号",
       "members": [
-        "sub_account_bind_permission",
-        "sub_account_permission",
-        "sub_account_quota"
+        "t083",
+        "t084",
+        "t085"
       ],
       "scope_hint": "子账号的权限、绑定权限与额度",
       "extracted_by": {
@@ -548,17 +553,17 @@
       },
       "evidence": [
         {
-          "table": "sub_account_bind_permission",
+          "table": "t083",
           "column": "",
           "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
         },
         {
-          "table": "sub_account_permission",
+          "table": "t084",
           "column": "",
           "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
         },
         {
-          "table": "sub_account_quota",
+          "table": "t085",
           "column": "",
           "claim": "与同前缀表（sub_*）聚成一类；待业务确认"
         }
@@ -568,9 +573,9 @@
       "key": "concept_usage",
       "display_name": "用量",
       "members": [
-        "usage_details",
-        "usage_quotas",
-        "usage_reconciliation_log"
+        "t088",
+        "t089",
+        "t090"
       ],
       "scope_hint": "用量明细、用量额度、用量对账属同一件事",
       "extracted_by": {
@@ -581,28 +586,28 @@
       },
       "evidence": [
         {
-          "table": "usage_details",
+          "table": "t088",
           "column": "",
           "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
         },
         {
-          "table": "usage_quotas",
+          "table": "t089",
           "column": "",
           "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
         },
         {
-          "table": "usage_reconciliation_log",
+          "table": "t090",
           "column": "",
           "claim": "与同前缀表（usage_*）聚成一类；待业务确认"
         }
       ]
     },
     {
-      "key": "customer_account_binding",
+      "key": "t016",
       "display_name": "客户账号绑定",
       "members": [
-        "customer_account_binding",
-        "dim_customer_binding"
+        "t016",
+        "t027"
       ],
       "scope_hint": "显式钉住：主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字",
       "extracted_by": {
@@ -613,12 +618,12 @@
       },
       "evidence": [
         {
-          "table": "customer_account_binding",
+          "table": "t016",
           "column": "",
           "claim": "主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字"
         },
         {
-          "table": "dim_customer_binding",
+          "table": "t027",
           "column": "",
           "claim": "主表 + 维表是同一个概念的两次存储；两张表在翻译表里翻成了同一个名字"
         }
@@ -628,7 +633,7 @@
       "key": "customer_interest",
       "display_name": "客户意向",
       "members": [
-        "customer_interests"
+        "t018"
       ],
       "scope_hint": "显式钉住：意向是一条待跟进的记录（它还指向订单），不是客户档案的一部分",
       "extracted_by": {
@@ -639,17 +644,17 @@
       },
       "evidence": [
         {
-          "table": "customer_interests",
+          "table": "t018",
           "column": "",
           "claim": "意向是一条待跟进的记录（它还指向订单），不是客户档案的一部分"
         }
       ]
     },
     {
-      "key": "customer_rebate",
+      "key": "t022",
       "display_name": "客户折扣返利",
       "members": [
-        "customer_rebate"
+        "t022"
       ],
       "scope_hint": "显式钉住：返利是结算对象，不是客户的属性",
       "extracted_by": {
@@ -660,7 +665,7 @@
       },
       "evidence": [
         {
-          "table": "customer_rebate",
+          "table": "t022",
           "column": "",
           "claim": "返利是结算对象，不是客户的属性"
         }
@@ -670,7 +675,7 @@
       "key": "customer_subscription",
       "display_name": "客户订阅",
       "members": [
-        "customer_subscriptions"
+        "t023"
       ],
       "scope_hint": "显式钉住：「订阅」有自己的生命周期与计费口径，合并进「客户」会让客户以为看不到自己的订阅信息",
       "extracted_by": {
@@ -681,7 +686,7 @@
       },
       "evidence": [
         {
-          "table": "customer_subscriptions",
+          "table": "t023",
           "column": "",
           "claim": "「订阅」有自己的生命周期与计费口径，合并进「客户」会让客户以为看不到自己的订阅信息"
         }
@@ -691,9 +696,9 @@
       "key": "llm_auth_cache",
       "display_name": "鉴权缓存",
       "members": [
-        "llm_auth_cache_change_outbox",
-        "llm_auth_cache_kafka_event_outbox",
-        "llm_auth_cache_trigger_state"
+        "t049",
+        "t050",
+        "t051"
       ],
       "scope_hint": "显式钉住：同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事",
       "extracted_by": {
@@ -704,29 +709,29 @@
       },
       "evidence": [
         {
-          "table": "llm_auth_cache_change_outbox",
+          "table": "t049",
           "column": "",
           "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
         },
         {
-          "table": "llm_auth_cache_kafka_event_outbox",
+          "table": "t050",
           "column": "",
           "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
         },
         {
-          "table": "llm_auth_cache_trigger_state",
+          "table": "t051",
           "column": "",
           "claim": "同为 llm_ 前缀，但缓存事件流与大模型/服务商/路由是四件事"
         }
       ]
     },
     {
-      "key": "llm_model",
+      "key": "t052",
       "display_name": "大模型",
       "members": [
-        "llm_model",
-        "llm_model_peak_config",
-        "llm_model_sort"
+        "t052",
+        "t053",
+        "t054"
       ],
       "scope_hint": "显式钉住：同上：模型本身、高峰配置、排序是同一个概念的三个面",
       "extracted_by": {
@@ -737,30 +742,30 @@
       },
       "evidence": [
         {
-          "table": "llm_model",
+          "table": "t052",
           "column": "",
           "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
         },
         {
-          "table": "llm_model_peak_config",
+          "table": "t053",
           "column": "",
           "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
         },
         {
-          "table": "llm_model_sort",
+          "table": "t054",
           "column": "",
           "claim": "同上：模型本身、高峰配置、排序是同一个概念的三个面"
         }
       ]
     },
     {
-      "key": "llm_provider",
+      "key": "t055",
       "display_name": "大模型服务商",
       "members": [
-        "llm_provider",
-        "llm_provider_back_20260701",
-        "llm_provider_group_items",
-        "llm_provider_groups"
+        "t055",
+        "t056",
+        "t057",
+        "t058"
       ],
       "scope_hint": "显式钉住：服务商与其分组明细、备份属同一概念",
       "extracted_by": {
@@ -771,22 +776,22 @@
       },
       "evidence": [
         {
-          "table": "llm_provider",
+          "table": "t055",
           "column": "",
           "claim": "服务商与其分组明细、备份属同一概念"
         },
         {
-          "table": "llm_provider_back_20260701",
+          "table": "t056",
           "column": "",
           "claim": "服务商与其分组明细、备份属同一概念"
         },
         {
-          "table": "llm_provider_group_items",
+          "table": "t057",
           "column": "",
           "claim": "服务商与其分组明细、备份属同一概念"
         },
         {
-          "table": "llm_provider_groups",
+          "table": "t058",
           "column": "",
           "claim": "服务商与其分组明细、备份属同一概念"
         }
@@ -796,7 +801,7 @@
       "key": "llm_routing",
       "display_name": "模型路由规则",
       "members": [
-        "llm_routing_rules"
+        "t059"
       ],
       "scope_hint": "显式钉住：路由是独立机制，不属于模型也不属于服务商",
       "extracted_by": {
@@ -807,7 +812,7 @@
       },
       "evidence": [
         {
-          "table": "llm_routing_rules",
+          "table": "t059",
           "column": "",
           "claim": "路由是独立机制，不属于模型也不属于服务商"
         }

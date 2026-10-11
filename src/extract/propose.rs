@@ -885,8 +885,8 @@ fn is_field_name_list(parts: &[&str]) -> bool {
 /// 客户要的是「这列有哪些值」，而**值的真身就是那些英文常量**。
 ///
 /// 真实源库上恰好两条命中（REQ-005 类 B）：
-/// - `app_billing_transactions.status` = `processing/charged/failed`
-/// - `llm_model.type` = `0: llm, 1: emb`
+/// - `t012.status` = `processing/charged/failed`
+/// - `t052.type` = `0: llm, 1: emb`
 ///
 /// **REQ-008 · 任务 3b**：还要排除「**字段名列表**」——
 /// `name,email` / `name,phone,email` 这种形态同样是「≥2 个裸原子」，
@@ -1188,7 +1188,7 @@ impl LinkEvidence {
 /// - **闸 B · 唯一命中才产出** ⇒ 词干同时是 N（N≥2）张表的尾缀时**不产出**。
 ///   真实源库实测会命中 **17 个歧义列**（此前注释误写为 8 个，低报）：
 ///   `product_id`×4、`product_code`×2、`role_id`/`role_code`×2、
-///   `channel_code`×5 + `service_apps.channel_id`、`binding_id`×2、
+///   `channel_code`×5 + `t075.channel_id`、`binding_id`×2、
 ///   `config_id`×1（命中 6 张表）。每一个**确实**无法从命名上判定，
 ///   猜错的代价（把「买了哪个商品」说成另一个商品）远大于少一条。
 ///   17/17 实测产出 0 条关系 ⇒ 闸 B 生效。
@@ -1460,19 +1460,19 @@ mod tests {
     /// **REQ-009 · 阻断项 ② 的钉子**：中文值域**不许**占属性名。
     ///
     /// 这 6 条是真实客户源库里**实测**踩到的形态（不是构造的）：
-    /// `customers.type` / `customers.verify` / `customers.status` /
-    /// `customers.is_foreign_model_allowed` / `admin_users.status` / `llm_model.type`。
+    /// `t025.type` / `t025.verify` / `t025.status` /
+    /// `t025.is_foreign_model_allowed` / `t006.status` / `t052.type`。
     /// 判成 `EnumDomain` 后走 REQ-007 那条路：`name` 置空 → `project()`
     /// 去问 `humanize_column()` → `type → 类型`；值域原样留在**说明**里。
     #[test]
     fn test_chinese_value_domain_never_becomes_a_property_name() {
         for c in [
-            "0: 未分类, 1: 个人用户, 2: 企业用户", // customers.type
-            "0: 未认证, 1: 已认证",                 // customers.verify
-            "0: 已停用, 1: 已启用",                 // customers.status / admin_users.status
-            "0: 不允许, 1: 允许",                   // customers.is_foreign_model_allowed
+            "0: 未分类, 1: 个人用户, 2: 企业用户", // t025.type
+            "0: 未认证, 1: 已认证",                 // t025.verify
+            "0: 已停用, 1: 已启用",                 // t025.status / t006.status
+            "0: 不允许, 1: 允许",                   // t025.is_foreign_model_allowed
             "0=禁用 1=启用",                         // 服务应用.status
-            "0: llm, 1: emb",                       // llm_model.type（与 REQ-007 同一形态）
+            "0: llm, 1: emb",                       // t052.type（与 REQ-007 同一形态）
         ] {
             assert_eq!(
                 classify_comment(c),

@@ -85,13 +85,13 @@ fn test_diff_added_entity() {
 #[test]
 fn test_diff_removed_entity() {
     let mut a = Snapshot::new(Uuid::nil(), 1);
-    a.entity_types = vec![ent("customer", "客户"), ent("order", "订单")];
+    a.entity_types = vec![ent("customer", "客户"), ent("t064", "订单")];
     let mut b = a.clone();
-    b.entity_types.retain(|e| e.key != "order");
+    b.entity_types.retain(|e| e.key != "t064");
     let d = diff_snapshots(&a, &b);
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].kind, DiffKind::Removed);
-    assert_eq!(d[0].target, "order");
+    assert_eq!(d[0].target, "t064");
 }
 
 #[test]
@@ -174,9 +174,9 @@ fn test_diff_properties_added_removed_modified() {
 #[test]
 fn test_diff_link_added_removed_modified() {
     let mut a = Snapshot::new(Uuid::nil(), 1);
-    a.link_types = vec![link("c_has_o", "customer", "order", "1:N")];
+    a.link_types = vec![link("c_has_o", "customer", "t064", "1:N")];
     let mut b = a.clone();
-    b.link_types = vec![link("c_has_o", "customer", "order", "N:M")];
+    b.link_types = vec![link("c_has_o", "customer", "t064", "N:M")];
 
     let d = diff_snapshots(&a, &b);
     let it = find(&d, "c_has_o", "cardinality").expect("基数变了要报");
@@ -196,7 +196,7 @@ fn test_diff_link_added_removed_modified() {
 fn test_diff_link_semantic_change_reported() {
     // has → belongs_to 是语义反转，比基数改动更重，必须报
     let mut a = Snapshot::new(Uuid::nil(), 1);
-    a.link_types = vec![link("rel", "customer", "order", "1:N")];
+    a.link_types = vec![link("rel", "customer", "t064", "1:N")];
     let mut b = a.clone();
     b.link_types[0].semantic = "belongs_to".into();
     let d = diff_snapshots(&a, &b);
@@ -211,12 +211,12 @@ fn test_diff_multiple_changes_all_reported() {
     let mut b = a.clone();
     b.entity_types.retain(|e| e.key != "old");
     b.entity_types[0].display_name = "新客户名".into();
-    b.entity_types.push(ent("order", "订单"));
+    b.entity_types.push(ent("t064", "订单"));
     b.link_types.clear();
 
     let d = diff_snapshots(&a, &b);
     assert!(d.iter().any(|x| x.kind == DiffKind::Removed && x.target == "old"));
-    assert!(d.iter().any(|x| x.kind == DiffKind::Added && x.target == "order"));
+    assert!(d.iter().any(|x| x.kind == DiffKind::Added && x.target == "t064"));
     assert!(find(&d, "customer", "display_name").is_some());
     assert!(d.iter().any(|x| x.kind == DiffKind::Removed && x.target == "rel"));
     assert_eq!(d.len(), 4, "一次 diff 应报全所有变化，实际 {d:#?}");

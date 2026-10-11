@@ -51,7 +51,7 @@ fn entity_with_prop(key: &str, name: &str, column: &str) -> EntityType {
 /// 带 `note`（= 数据库**列注释原文**）的属性。
 ///
 /// ⚠️ `note` 取的是**真实 E2E 产物里的原文**，不是编的：
-/// `gift_codes.redeemed_by` 与 `llm_provider.model_id` 两列的注释
+/// `t034.redeemed_by` 与 `t055.model_id` 两列的注释
 /// 在 `code/out/e2e-schema.json` 里可核。B1 就是被这两条原文击穿的 ——
 /// 用编造的串测不出来，因为编造的人会照着判据挑一个干净的串。
 fn prop_with_note(column: &str, note: &str) -> Property {
@@ -66,7 +66,7 @@ fn prop_with_note(column: &str, note: &str) -> Property {
 
 /// 真实 E2E 产物里那两条**带标识符**的列注释原文。
 /// 见 `code/out/e2e-schema.json` 的 `tables[].columns[].comment`。
-const REAL_LEAKY_NOTE_DOTTED: &str = "关联模型ID(对应llm_model.model_id)";
+const REAL_LEAKY_NOTE_DOTTED: &str = "关联模型ID(对应t052.model_id)";
 const REAL_LEAKY_NOTE_SNAKE: &str = "核销人customer_id";
 /// 一条**干净**的真实注释 —— 用来证明清洗不是「把 note 整个丢掉」。
 const REAL_CLEAN_NOTE: &str = "子账号ID";
@@ -138,9 +138,9 @@ async fn frozen_context() -> (PgStore, OntologyContext) {
 /// 一份**带真实脏 `note`** 的冻结快照 —— B1 的判别力所在。
 ///
 /// 复刻真实 E2E 产物的两个对象：
-/// - `大模型服务商`（源表 `llm_provider`）的 `model_id` 列，
-///   注释原文 `关联模型ID(对应llm_model.model_id)`
-/// - `兑换码`（源表 `gift_codes`）的 `redeemed_by` 列，
+/// - `大模型服务商`（源表 `t055`）的 `model_id` 列，
+///   注释原文 `关联模型ID(对应t052.model_id)`
+/// - `兑换码`（源表 `t034`）的 `redeemed_by` 列，
 ///   注释原文 `核销人customer_id`
 ///
 /// ⚠️ 属性名给的是**中文**（真实抽取侧就是这么给的）—— 因为
@@ -158,19 +158,19 @@ async fn leaky_note_context() -> (PgStore, OntologyContext) {
     // ⚠️ key 用**真实源表名**、display_name 用中文 —— 与真实抽取产物同构。
     // 若把中文名同时当 key，`usable_as_human_name` 会因为「值 == key」把整个对象
     // 剔掉，那样 `describe_object` 只会回 NotFound，下面的断言**全部空过**（假绿）。
-    let mut provider = entity("llm_provider", "大模型服务商");
+    let mut provider = entity("t055", "大模型服务商");
     provider.properties = vec![{
         let mut pr = prop_with_note("model_id", REAL_LEAKY_NOTE_DOTTED);
         pr.name = "关联模型编号".into(); // ← 抽取侧给的中文名
         pr
     }];
-    let mut gift = entity("gift_codes", "兑换码");
+    let mut gift = entity("t034", "兑换码");
     gift.properties = vec![{
         let mut pr = prop_with_note("redeemed_by", REAL_LEAKY_NOTE_SNAKE);
         pr.name = "核销人".into();
         pr
     }];
-    let mut sub = entity("sub_account_quota", "子账号额度");
+    let mut sub = entity("t085", "子账号额度");
     sub.properties = vec![{
         let mut pr = prop_with_note("sub_customer_id", REAL_CLEAN_NOTE);
         pr.name = "子账号".into();
@@ -535,7 +535,7 @@ async fn guard_rejects_payloads_carrying_modeling_terms() {
 ///    固化成契约。
 /// 3. **它的前提已被 B1 证伪**：它成立的前提是「投影层完整挡住标识符」，
 ///    而 B1 用真实二进制在 92 条 `describe_object` 响应里找到了泄漏
-///    （`关联模型ID(对应llm_model.model_id)` / `核销人customer_id`）。
+///    （`关联模型ID(对应t052.model_id)` / `核销人customer_id`）。
 ///    在一个前提被证伪的测试上固化缺陷，是把错误的架构判断写进测试套件。
 ///
 /// # 标识符防线的**现行**归属
@@ -639,7 +639,7 @@ fn mcp_tools_actually_calls_the_shared_criterion() {
     // ② 真标识符仍然被抓 —— 防止「接线测试」变成「放水测试」。
     //    这几条旧判据也命中，它们的作用是证明变异**只杀在①上**（方向正确）。
     for (raw, want) in [
-        ("关联模型ID(对应llm_model.model_id)", "关联模型ID(对应…)"),
+        ("关联模型ID(对应t052.model_id)", "关联模型ID(对应…)"),
         ("核销人customer_id", "核销人…"),
         ("指向 billing_account", "指向 …"),
         // 中文前缀粘点路径：页面层曾因此漏抓，MCP 侧要确认没漏
@@ -704,8 +704,8 @@ async fn raw_identifiers_never_reach_the_output_structurally() {
     // 从只测 key 层扩到 note 层」—— 同一个测试，两层防线。
     let (_s2, ctx2) = leaky_note_context().await;
     for (obj, leaked) in [
-        ("大模型服务商", "llm_model.model_id"),
-        ("大模型服务商", "llm_model"),
+        ("大模型服务商", "t052.model_id"),
+        ("大模型服务商", "t052"),
         ("大模型服务商", "model_id"),
         ("兑换码", "customer_id"),
     ] {
@@ -764,16 +764,18 @@ async fn guard_error_message_does_not_repeat_the_offending_terms() {
 async fn guard_is_wired_into_the_serving_path_not_just_a_helper() {
     // 造一个**故意脏**的上下文（正常数据不会这样），
     // 证明守门器真的挂在 `tools/call` 的出口上。
+    // ⚠️ REQ-084：`t021` 是假名，与 768/770 的输入侧、776 的判据侧是同一个串，
+    // **三处必须同批改**。脏性仍由 `外键表`（建模术语）承担，与表名无关。
     let (_s, mut ctx) = frozen_context().await;
-    ctx.view.objects[0].name = "customer_rate_limit 外键表".into();
+    ctx.view.objects[0].name = "t021 外键表".into();
 
-    let line = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"describe_object","arguments":{"name":"customer_rate_limit 外键表"}}}"#;
+    let line = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"describe_object","arguments":{"name":"t021 外键表"}}}"#;
     let r = reply(&ctx, line);
 
     // fail-closed：给「不给数据」，而不是「给一份看着干净的数据」
     assert_eq!(r["result"]["isError"], true, "脏数据必须被拒绝外送");
     let text = r["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(!text.contains("customer_rate_limit"), "脏数据不许出现在响应里：{text}");
+    assert!(!text.contains("t021"), "脏数据不许出现在响应里：{text}");
     assert!(!text.contains("外键"), "命中词条也不许出现在响应里：{text}");
 }
 

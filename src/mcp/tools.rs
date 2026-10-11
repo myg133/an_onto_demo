@@ -22,7 +22,7 @@
 //!
 //! [`scrub_identifiers`] 按**形态**清掉自由文本里的源表名/列名。
 //! 它与 [`guard`] 分工：守门器抓的是**建模词汇**（外键/基数/key/…），
-//! 清洗抓的是**标识符形态**（`llm_model.model_id` / `customer_id`）——
+//! 清洗抓的是**标识符形态**（`t052.model_id` / `customer_id`）——
 //! 后者按词元切分时保留下划线，守门器**结构上就抓不到**。
 //! 详见 [`scrub_identifiers`] 的说明。
 
@@ -211,16 +211,16 @@ impl OntologyContext {
 /// 真实产物里 `PropertyView.note` 就是数据库**列注释原文**，例如
 ///
 /// ```text
-/// obj='大模型服务商' prop='关联模型ID(对应llm_model.model_id)'
+/// obj='大模型服务商' prop='关联模型ID(对应t052.model_id)'
 /// obj='兑换码'         prop='核销人customer_id'
 /// ```
 ///
-/// `llm_model.model_id` 与 `customer_id` 都是**源表名/列名**。
+/// `t052.model_id` 与 `customer_id` 都是**源表名/列名**。
 /// 而两道既有防线都管不到这条路：
 /// - 投影层只丢结构化字段，**不碰 `note` 的内容**；
 /// - [`crate::domain::view::scan_modeling_terms`] 的英文判据按词元切分时
 ///   **保留下划线**（`view.rs` 的 `split(|c| !(c.is_alphanumeric() || c == '_'))`），
-///   所以 `customer_rate_limit` 整体是**一个**词元，永远 `!= "key"` ⇒ 放行。
+///   所以 `t021` 整体是**一个**词元，永远 `!= "key"` ⇒ 放行。
 ///
 /// # 判据是**形状**，不是词表
 ///
@@ -240,7 +240,7 @@ impl OntologyContext {
 ///    注意 `key` 在 MCP 侧**不是漏网**：[`crate::domain::view::scan_modeling_terms`]
 ///    兜住了（`guard({"note":"这个字段叫 key"})` 返回 `Err`）。是**机制不同**，
 ///    不是缺失 —— 所以**没有**把它并进 MCP 侧判据：那会让真实列注释
-///    `license key`（`licenses.license_key` 的注释原文）被吃成 `license …`，
+///    `license key`（`t047.license_key` 的注释原文）被吃成 `license …`，
 ///    「License 密钥」是业务说法，不是列名；
 /// 3. **命中后的动作不同** —— 页面层**整条丢弃**，MCP 层**局部替换**成 `…`。
 ///    这一条是**有意保留**的：动作本来就该按出口的承受能力不同而不同。
@@ -253,7 +253,7 @@ impl OntologyContext {
 /// BA 裁定：不许用「把 `note` 整个丢掉」绕过 —— `note` 是真实业务信息
 /// （属性说明），丢了会伤回答质量。所以命中的标识符串被换成
 /// `…`，**周围的业务文字原样保留**：
-/// `关联模型ID(对应llm_model.model_id)` → `关联模型ID(对应…)`。
+/// `关联模型ID(对应t052.model_id)` → `关联模型ID(对应…)`。
 ///
 /// # 为什么不合并进 `scan_modeling_terms`
 ///
@@ -496,7 +496,7 @@ pub fn call(ctx: &OntologyContext, name: &str, arguments: &Value) -> Result<Valu
                 "source": ctx.source_block(),
                 "name": obj.name,
                 // ⚠️ `note` 出库前过标识符清洗（B1）：它是**列注释原文**，
-                // 真实数据里带 `llm_model.model_id` / `customer_id`。
+                // 真实数据里带 `t052.model_id` / `customer_id`。
                 "note": scrub_note(&obj.note),
                 "belongs_to": obj.belongs_to,
                 "aliases": obj.aliases,
@@ -687,7 +687,7 @@ mod tests {
     fn scrub_replaces_identifiers_by_shape_keeping_business_text() {
         // 真实原文 → 局部替换
         assert_eq!(
-            scrub_identifiers("关联模型ID(对应llm_model.model_id)"),
+            scrub_identifiers("关联模型ID(对应t052.model_id)"),
             "关联模型ID(对应…)"
         );
         assert_eq!(scrub_identifiers("核销人customer_id"), "核销人…");
@@ -726,7 +726,7 @@ mod tests {
             "功能编码，如 jd_api",
             "核销人customer_id",
             "供应商配置(base_url, api_key等)",
-            "关联模型ID(对应llm_model.model_id)",
+            "关联模型ID(对应t052.model_id)",
         ];
         for h in hit {
             assert_ne!(

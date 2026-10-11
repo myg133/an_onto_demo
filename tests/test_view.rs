@@ -33,7 +33,7 @@ fn demo_snapshot() -> SnapshotView {
                         sample: Some("某某科技".into()),
                     },
                 ],
-                evidence: vec![serde_json::json!({"table": "customers", "column": "customer_no"})],
+                evidence: vec![serde_json::json!({"table": "t025", "column": "customer_no"})],
             },
             EntityTypeView {
                 key: "subscription".into(),

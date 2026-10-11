@@ -94,7 +94,7 @@ fn clean_payload() -> Value {
         "cardinality": "1:N",
         "properties": [{"name": "编号", "column": "no"}],
         "from_type": "customer",
-        "to_type": "order",
+        "to_type": "t064",
         "evidence": [{"table": "t_customer", "column": "customer_no", "claim": "客户编号唯一"}]
     })
 }
@@ -172,7 +172,7 @@ fn newline_injection_corpus() -> Vec<(&'static str, String, Value, bool, bool)> 
             // 只给一端 ⇒ 那一栏压根不渲染 ⇒ 测不到转义。
             "from_type",
             "客户".to_string(),
-            json!({"key":"customer","from_type":format!("customer\n{forge}"),"to_type":"order",
+            json!({"key":"customer","from_type":format!("customer\n{forge}"),"to_type":"t064",
                    "evidence":[{"table":"t","column":"c","claim":"正常"}]}),
             true,
             true,
@@ -180,7 +180,7 @@ fn newline_injection_corpus() -> Vec<(&'static str, String, Value, bool, bool)> 
         (
             "to_type",
             "客户".to_string(),
-            json!({"key":"customer","from_type":"customer","to_type":format!("order\n{forge}"),
+            json!({"key":"customer","from_type":"customer","to_type":format!("t064\n{forge}"),
                    "evidence":[{"table":"t","column":"c","claim":"正常"}]}),
             true,
             true,
@@ -240,7 +240,7 @@ fn test_req069_payload_cannot_add_a_line_anywhere() {
         // 否则 `两端：` 不渲染，或走 `it.from_type` 那条路 ⇒ payload 值测不到。
         let mk = if relational { rel_item_ends_from_payload } else { item };
         let base_payload = if relational {
-            json!({"key":"customer","from_type":"customer","to_type":"order",
+            json!({"key":"customer","from_type":"customer","to_type":"t064",
                    "evidence":[{"table":"t","column":"c","claim":"正常"}]})
         } else {
             clean_payload()
@@ -641,7 +641,7 @@ fn test_req069_every_payload_string_read_goes_through_the_escape() {
         kind: ItemKind::AddLinkType,
         target: "客户_has_订单".into(),
         from_type: Some("customer".into()),
-        to_type: Some("order".into()),
+        to_type: Some("t064".into()),
         biz_status: Decision::Accepted,
         model_status: Decision::Accepted,
         payload: json!({
@@ -649,7 +649,7 @@ fn test_req069_every_payload_string_read_goes_through_the_escape() {
             "cardinality": "1:N",
             "properties": [{"name": "编号", "column": "no"}],
             "from_type": "customer",
-            "to_type": "order",
+            "to_type": "t064",
             "evidence": [{"table": "t_customer", "column": "customer_no", "claim": "客户编号唯一"}]
         }),
     };

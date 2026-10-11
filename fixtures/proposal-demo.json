@@ -21,7 +21,7 @@
           { "name": "客户编号", "column": "customer_no", "nullable": false, "note": "营业执照号" },
           { "name": "客户名称", "column": "customer_name", "nullable": true }
         ],
-        "evidence": [{ "table": "customers", "column": "customer_no", "claim": "客户主键" }]
+        "evidence": [{ "table": "t025", "column": "customer_no", "claim": "客户主键" }]
       }
     },
     {
@@ -36,7 +36,7 @@
           { "name": "订阅编号", "column": "subscription_id", "nullable": false },
           { "name": "客户编号", "column": "customer_id", "nullable": false }
         ],
-        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+        "evidence": [{ "table": "t023", "column": "customer_id", "claim": "订阅挂客户" }]
       }
     },
     {
@@ -71,7 +71,7 @@
         "to_type": "subscription",
         "cardinality": "1:N",
         "semantic": "has",
-        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+        "evidence": [{ "table": "t023", "column": "customer_id", "claim": "订阅挂客户" }]
       }
     },
     {

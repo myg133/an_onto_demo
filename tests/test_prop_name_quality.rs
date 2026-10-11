@@ -36,25 +36,25 @@ use ontok::extract::propose::{classify_comment, extract, CommentQuality, Extract
 /// 于是客户视图里每个对象恰好一个属性，按对象名取名字不会认错。
 const REAL: &[(&str, &str, &str, &str)] = &[
     // ── 类 A：纯英文，必须降级 ──
-    ("activity_keys", "活动关键词", "license_key", "license key"),
+    ("t002", "活动关键词", "license_key", "license key"),
     ("licenses", "授权凭证", "license_key", "license key"),
-    ("api_call_logs", "API 调用日志", "license_id", "License ID"),
-    ("instance_manager", "实例管理", "session_id", "SessionId"),
-    ("customer_provider_permissions", "客户服务商权限", "customer_quota_policies",
+    ("t011", "API 调用日志", "license_id", "License ID"),
+    ("t035", "实例管理", "session_id", "SessionId"),
+    ("t020", "客户服务商权限", "customer_quota_policies",
      "user quota policies in JSON array format"),
     // ── 类 B：合法枚举值域，有意不翻 ──
-    ("app_billing_transactions", "应用扣费交易", "status", "processing/charged/failed"),
-    ("llm_model", "大模型", "type", "0: llm, 1: emb"),
+    ("t012", "应用扣费交易", "status", "processing/charged/failed"),
+    ("t052", "大模型", "type", "0: llm, 1: emb"),
     // ── 类 C：类 A 的同型，翻译与否是判断题 ──
-    ("llm_provider_group_items", "服务商分组明细", "provider_id", "Provider ID"),
+    ("t057", "服务商分组明细", "provider_id", "Provider ID"),
     // ── 中英混排：**绝不可被误杀**（范围外的「145 个」）──
-    ("order", "订单", "status", "状态 rech:成功 pending:支付中 free:取消"),
-    ("deductions", "扣费流水", "license_id", "license 标识"),
-    ("llm_routing_rules", "模型路由规则", "provider_id", "直接指定Provider(优先级最高)"),
+    ("t064", "订单", "status", "状态 rech:成功 pending:支付中 free:取消"),
+    ("t026", "扣费流水", "license_id", "license 标识"),
+    ("t059", "模型路由规则", "provider_id", "直接指定Provider(优先级最高)"),
 ];
 
 /// 无注释列 —— 走的是「本来就没注释」的路径，与降级路径要分开验证。
-const NO_COMMENT: (&str, &str, &str) = ("licenses_archive", "历史授权凭证", "license_key");
+const NO_COMMENT: (&str, &str, &str) = ("t048", "历史授权凭证", "license_key");
 
 fn build_schema() -> SchemaReport {
     let mut tables: Vec<TableMeta> = Vec::new();
@@ -532,7 +532,7 @@ fn test_field_name_list_is_not_an_enum_domain() {
 fn test_runtime_guard_is_blind_to_english_property_names() {
     let snap = SnapshotView {
         entity_types: vec![EntityTypeView {
-            key: "activity_keys".into(),
+            key: "t002".into(),
             display_name: "活动关键词".into(),
             description: None,
             aliases: vec![],

@@ -65,11 +65,11 @@ fn fixture() -> (CustomerView, BTreeMap<String, String>) {
         ],
     };
     let n = names(&[
-        ("package_templates", "套餐模板"),
-        ("package_products", "套餐产品"),
-        ("package_benefits", "套餐权益"),
-        ("order", "订单"),
-        ("trial_records", "试用记录"),
+        ("t067", "套餐模板"),
+        ("t066", "套餐产品"),
+        ("t065", "套餐权益"),
+        ("t064", "订单"),
+        ("t087", "试用记录"),
     ]);
     (view, n)
 }
@@ -93,7 +93,7 @@ fn test_concept_lists_members_with_scope_hint() {
     let (view, n) = fixture();
     let o = build_overview(
         &view,
-        &[g("package", "套餐", &["package_templates", "package_products", "package_benefits"], Some("给客户看的三类套餐配置"))],
+        &[g("package", "套餐", &["t067", "t066", "t065"], Some("给客户看的三类套餐配置"))],
         &n,
     );
     assert_eq!(o.stats.concept_count, 1);
@@ -134,16 +134,16 @@ fn test_cross_group_relation_is_redirected_to_the_other_concept() {
         relations: vec![rel("扣费流水", "套餐模板", "多对一")],
     };
     let n = names(&[
-        ("package_templates", "套餐模板"),
-        ("package_products", "套餐产品"),
-        ("deductions", "扣费流水"),
-        ("balances", "余额账户"),
+        ("t067", "套餐模板"),
+        ("t066", "套餐产品"),
+        ("t026", "扣费流水"),
+        ("t015", "余额账户"),
     ]);
     let o = build_overview(
         &view,
         &[
-            g("package", "套餐", &["package_templates", "package_products"], None),
-            g("billing", "账务", &["deductions", "balances"], None),
+            g("package", "套餐", &["t067", "t066"], None),
+            g("billing", "账务", &["t026", "t015"], None),
         ],
         &n,
     );
@@ -172,7 +172,7 @@ fn test_relations_point_to_concept_not_to_member_table() {
     let (view, n) = fixture();
     let o = build_overview(
         &view,
-        &[g("package", "套餐", &["package_templates", "package_products", "package_benefits"], None)],
+        &[g("package", "套餐", &["t067", "t066", "t065"], None)],
         &n,
     );
     let c = &o.concepts[0];
@@ -198,7 +198,7 @@ fn test_inside_group_relation_is_skipped_and_counted() {
     let (view, n) = fixture();
     let o = build_overview(
         &view,
-        &[g("package", "套餐", &["package_templates", "package_products", "package_benefits"], None)],
+        &[g("package", "套餐", &["t067", "t066", "t065"], None)],
         &n,
     );
     // 套餐产品 → 套餐模板 两端都在组内 ⇒ 不能变成「一个 套餐，有几个 套餐？」
@@ -213,7 +213,7 @@ fn test_same_named_properties_are_merged_with_provenance() {
     let (view, n) = fixture();
     let o = build_overview(
         &view,
-        &[g("package", "套餐", &["package_templates", "package_products", "package_benefits"], None)],
+        &[g("package", "套餐", &["t067", "t066", "t065"], None)],
         &n,
     );
     let c = &o.concepts[0];
@@ -237,7 +237,7 @@ fn test_required_is_or_across_members() {
     let (view, n) = fixture();
     let mut view = view;
     view.objects[0].properties[0].required = true;
-    let o = build_overview(&view, &[g("package", "套餐", &["package_templates", "package_products"], None)], &n);
+    let o = build_overview(&view, &[g("package", "套餐", &["t067", "t066"], None)], &n);
     let row = o.concepts[0].properties.iter().find(|p| p.name == "模板编号").unwrap();
     assert!(row.required);
 }
@@ -245,8 +245,8 @@ fn test_required_is_or_across_members() {
 #[test]
 fn test_concept_name_degenerated_to_entity_key_is_dropped_and_reported() {
     let (view, n) = fixture();
-    // 概念名叫「package_templates」—— 退化成了实体 key，客户视图里同类名字整批消失
-    let o = build_overview(&view, &[g("package", "package_templates", &["package_products"], None)], &n);
+    // 概念名叫「t067」—— 退化成了实体 key，客户视图里同类名字整批消失
+    let o = build_overview(&view, &[g("package", "t067", &["t066"], None)], &n);
     assert!(o.concepts.is_empty(), "退化名不许上总览");
     assert_eq!(o.stats.concepts_dropped, 1);
     assert!(o.notes.iter().any(|x| x.contains("不可用")), "必须报出来：{:?}", o.notes);
@@ -256,7 +256,7 @@ fn test_concept_name_degenerated_to_entity_key_is_dropped_and_reported() {
 #[test]
 fn test_english_only_concept_name_is_dropped() {
     let (view, n) = fixture();
-    let o = build_overview(&view, &[g("package", "package", &["package_products"], None)], &n);
+    let o = build_overview(&view, &[g("package", "package", &["t066"], None)], &n);
     assert!(o.concepts.is_empty(), "纯英文概念名对业务人员没有信息量");
     assert_eq!(o.stats.concepts_dropped, 1);
 }
@@ -264,38 +264,42 @@ fn test_english_only_concept_name_is_dropped() {
 #[test]
 fn test_member_missing_from_view_is_reported_not_silently_dropped() {
     let (view, n) = fixture();
-    let mut o = build_overview(&view, &[g("package", "套餐", &["package_templates", "package_ghost"], None)], &n);
+    let mut o = build_overview(&view, &[g("package", "套餐", &["t067", "package_ghost"], None)], &n);
     // 构造一个「成员在快照里但没进客户视图」的情形：names 有它，view 没有
-    o = build_overview(&view, &[g("package", "套餐", &["package_templates", "package_ghost"], None)], &n);
+    o = build_overview(&view, &[g("package", "套餐", &["t067", "package_ghost"], None)], &n);
     assert_eq!(o.concepts[0].members.len(), 1, "只显示查得到的成员");
     assert!(o.notes.iter().any(|x| x.contains("1 个成员不在客户视图")), "notes={:?}", o.notes);
 }
 
 #[test]
 fn test_duplicate_member_display_names_are_reported() {
-    // 真实源库：customer_account_binding 与 dim_customer_binding 都翻成「客户账号绑定」
+    // 真实源库：t016 与 t027 都翻成「客户账号绑定」
     let view = CustomerView {
         objects: vec![obj("客户账号绑定", &["账号"]), obj("试用记录", &["试用"])],
         relations: vec![],
     };
     let n = names(&[
-        ("customer_account_binding", "客户账号绑定"),
-        ("dim_customer_binding", "客户账号绑定"),
-        ("trial_records", "试用记录"),
+        ("t016", "客户账号绑定"),
+        ("t027", "客户账号绑定"),
+        ("t087", "试用记录"),
     ]);
-    let o = build_overview(&view, &[g("binding", "账号绑定", &["customer_account_binding", "dim_customer_binding"], None)], &n);
+    let o = build_overview(&view, &[g("binding", "账号绑定", &["t016", "t027"], None)], &n);
     assert_eq!(o.concepts[0].members.len(), 1, "同一个显示名只列一次");
     assert_eq!(o.concepts[0].duplicate_member_names, 1);
     assert!(o.notes.iter().any(|x| x.contains("显示名")), "notes={:?}", o.notes);
 }
 
 /// 证据（表名）**不许**出现在客户读到的总览里 —— 表名是源库标识符。
+///
+/// ⚠️ REQ-084：判据串是**假名**（`t067`），与本测试内的输入侧是同一个串 ——
+/// `t067` 在 `fixture()` 的 `n` 里能翻成「套餐模板」，翻译一旦失效就原样吐回，
+/// 判据随之变红。**改输入侧必须同批改判据侧**，只改一侧 ⇒ 恒真 ⇒ 守卫静默失效。
 #[test]
 fn test_evidence_table_names_never_reach_the_overview() {
     let (view, n) = fixture();
-    let mut groups = vec![g("package", "套餐", &["package_templates", "package_products"], Some("给客户看的三类套餐配置"))];
+    let mut groups = vec![g("package", "套餐", &["t067", "t066"], Some("给客户看的三类套餐配置"))];
     groups[0].evidence = vec![Evidence {
-        table: "package_templates".into(),
+        table: "t067".into(),
         column: "template_no".into(),
         claim: "套餐下可买的产品".into(),
     }];
@@ -303,7 +307,7 @@ fn test_evidence_table_names_never_reach_the_overview() {
     let text = render_overview_text(&o);
     let json = serde_json::to_string(&o).unwrap();
     for hay in [&text, &json] {
-        assert!(!hay.contains("package_templates"), "表名泄进了总览：\n{hay}");
+        assert!(!hay.contains("t067"), "表名泄进了总览：\n{hay}");
         assert!(!hay.contains("template_no"), "列名泄进了总览：\n{hay}");
     }
     // 守门器也不许命中
@@ -316,7 +320,7 @@ fn test_evidence_table_names_never_reach_the_overview() {
 fn test_overview_text_is_gated_by_modeling_term_scanner() {
     let (view, n) = fixture();
     // 名字里带建模术语的概念：守门器必须能抓住（CLI 据此 exit 2）
-    let bad = g("package", "套餐主键组", &["package_templates"], None);
+    let bad = g("package", "套餐主键组", &["t067"], None);
     let o = build_overview(&view, &[bad], &n);
     let text = render_overview_text(&o);
     let hits = scan_modeling_terms(&text);
@@ -327,7 +331,7 @@ fn test_overview_text_is_gated_by_modeling_term_scanner() {
 fn test_overview_never_shows_member_property_columns() {
     // S-2 红线相关：总览只吃客户视图，视图里没有列名，总览就不可能有
     let (view, n) = fixture();
-    let o = build_overview(&view, &[g("package", "套餐", &["package_templates"], None)], &n);
+    let o = build_overview(&view, &[g("package", "套餐", &["t067"], None)], &n);
     let text = render_overview_text(&o);
     for col in ["template_no", "product_id", "created_at", "id"] {
         assert!(!text.contains(col), "源库列名泄进总览：{col}\n{text}");
@@ -339,8 +343,8 @@ fn test_home_map_drives_uncovered_complement() {
     // 归属映射 = home_map；未归组必须是它的补集，一个不多一个不少
     let (view, n) = fixture();
     let groups = vec![
-        g("package", "套餐", &["package_templates", "package_products", "package_benefits"], None),
-        g("trial", "试用", &["trial_records"], None),
+        g("package", "套餐", &["t067", "t066", "t065"], None),
+        g("trial", "试用", &["t087"], None),
     ];
     let o = build_overview(&view, &groups, &n);
     let covered: BTreeSet<String> = o
@@ -364,8 +368,8 @@ fn test_technical_property_names_are_dropped_not_passed_through() {
         objects: vec![o1, obj("试用记录", &["试用编号"])],
         relations: vec![],
     };
-    let n = names(&[("gift_codes", "兑换码"), ("trial_records", "试用记录")]);
-    let o = build_overview(&view, &[g("gift", "兑换码", &["gift_codes"], None)], &n);
+    let n = names(&[("t034", "兑换码"), ("t087", "试用记录")]);
+    let o = build_overview(&view, &[g("gift", "兑换码", &["t034"], None)], &n);
 
     let card = &o.concepts[0];
     let shown: Vec<&str> = card.properties.iter().map(|p| p.name.as_str()).collect();
@@ -387,8 +391,8 @@ fn test_id_token_is_stripped_then_merged() {
     let mut b = obj("客户订阅", &["客户", "到期时间"]);
     b.properties[0].name = "客户".into();
     let view = CustomerView { objects: vec![a, b], relations: vec![] };
-    let n = names(&[("customers", "客户"), ("customer_subscriptions", "客户订阅")]);
-    let o = build_overview(&view, &[g("c", "客户", &["customers", "customer_subscriptions"], None)], &n);
+    let n = names(&[("t025", "客户"), ("t023", "客户订阅")]);
+    let o = build_overview(&view, &[g("c", "客户", &["t025", "t023"], None)], &n);
     let names: Vec<&str> = o.concepts[0].properties.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, vec!["客户", "状态", "到期时间"], "清洗后再去重：{names:?}");
     let row = o.concepts[0].properties.iter().find(|p| p.name == "客户").unwrap();

@@ -97,10 +97,10 @@ fn test_semantically_distinct_objects_are_pinned_separate() {
 
     // 「客户」不得吞掉这些 —— 客户会说「我的订阅信息呢」
     for (table, concept) in [
-        ("customer_subscriptions", "客户订阅"),
-        ("customer_rebate", "客户折扣返利"),
-        ("customer_interests", "客户意向"),
-        ("customer_account_binding", "客户账号绑定"),
+        ("t023", "客户订阅"),
+        ("t022", "客户折扣返利"),
+        ("t018", "客户意向"),
+        ("t016", "客户账号绑定"),
     ] {
         assert_eq!(
             home.get(table).copied(),
@@ -115,17 +115,17 @@ fn test_semantically_distinct_objects_are_pinned_separate() {
     );
 
     // 反过来，「客户」这一组确实覆盖了客户侧的那些表（规则如此，但要显眼）
-    assert_eq!(home.get("customers").copied(), Some("客户"));
-    assert_eq!(home.get("customer_rate_limit").copied(), Some("客户"));
-    assert_eq!(home.get("customer_tpm_rate_limit").copied(), Some("客户"));
+    assert_eq!(home.get("t025").copied(), Some("客户"));
+    assert_eq!(home.get("t021").copied(), Some("客户"));
+    assert_eq!(home.get("t024").copied(), Some("客户"));
 
     // 同前缀但不同业务域的 llm_* 必须拆开
-    assert_eq!(home.get("llm_model").copied(), Some("大模型"));
-    assert_eq!(home.get("llm_provider").copied(), Some("大模型服务商"));
-    assert_eq!(home.get("llm_auth_cache_trigger_state").copied(), Some("鉴权缓存"));
+    assert_eq!(home.get("t052").copied(), Some("大模型"));
+    assert_eq!(home.get("t055").copied(), Some("大模型服务商"));
+    assert_eq!(home.get("t051").copied(), Some("鉴权缓存"));
     assert_ne!(
-        home.get("llm_model").copied(),
-        home.get("llm_provider").copied(),
+        home.get("t052").copied(),
+        home.get("t055").copied(),
         "大模型与服务商不能合成一个概念"
     );
 }
@@ -164,9 +164,9 @@ fn test_declaration_evidence_never_reaches_customer_facing_text() {
         relations: vec![],
     };
     let names = BTreeMap::from([
-        ("package_templates".to_string(), "套餐模板".to_string()),
-        ("package_products".to_string(), "套餐产品".to_string()),
-        ("package_benefits".to_string(), "套餐权益".to_string()),
+        ("t067".to_string(), "套餐模板".to_string()),
+        ("t066".to_string(), "套餐产品".to_string()),
+        ("t065".to_string(), "套餐权益".to_string()),
     ]);
     let o = build_overview(&view, &d.groups, &names);
     let text = render_overview_text(&o);
@@ -218,29 +218,29 @@ fn obj(name: &str, props: &[&str]) -> EntityView {
 /// 抄在这里而不是读文件：测试必须**离线**能跑，且这张名单本身就是
 /// 「成员必须是真实表」这一条的判据。
 const SOURCE_TABLES: &[&str] = &[
-    "activity", "activity_keys", "activity_recommendations", "admin_roles", "admin_user_roles",
-    "admin_users", "agent_device_version", "agent_white_list", "ai_search_pipelines",
-    "alembic_version", "api_call_logs", "app_billing_transactions", "balance_operation_log",
-    "balance_transfer", "balances", "customer_account_binding", "customer_feature_permissions",
-    "customer_interests", "customer_provider_permission_policies", "customer_provider_permissions",
-    "customer_rate_limit", "customer_rebate", "customer_subscriptions",
-    "customer_tpm_rate_limit", "customers", "deductions", "dim_customer_binding",
-    "enterprise_recharge_order", "family_high_risk_records", "file_parser_task", "free_amounts",
-    "frozen_assets", "gift_code_batch", "gift_codes", "instance_manager", "instance_task_manager",
-    "instance_task_record", "intance_task_plans", "interest_configs", "internal_messages",
-    "internal_operation_records", "internal_staff", "ip_blacklist", "ip_whitelist",
-    "keyword_filter_config", "license_quota", "licenses", "licenses_archive",
-    "llm_auth_cache_change_outbox", "llm_auth_cache_kafka_event_outbox", "llm_auth_cache_trigger_state",
-    "llm_model", "llm_model_peak_config", "llm_model_sort", "llm_provider",
-    "llm_provider_back_20260701", "llm_provider_group_items", "llm_provider_groups",
-    "llm_routing_rules", "marketing_channel", "marketing_channel_customer", "marketing_channel_log",
-    "operate_log", "order", "package_benefits", "package_products", "package_templates",
-    "proxy_operation_auths", "proxy_operation_records", "recharge_products", "refund_operations",
-    "rpt_dim_customer", "rpt_dws_channel", "seetings", "service_apps", "service_config",
-    "service_config_peak", "service_free_amount_config", "share_records", "share_usage",
-    "simulate_login_operations", "simulate_login_sessions", "sub_account_bind_permission",
-    "sub_account_permission", "sub_account_quota", "subscription_priority", "trial_records",
-    "usage_details", "usage_quotas", "usage_reconciliation_log", "website_notice_config",
+    "t001", "t002", "t003", "t004", "t005",
+    "t006", "t007", "t008", "t009",
+    "t010", "t011", "t012", "t013",
+    "t014", "t015", "t016", "t017",
+    "t018", "t019", "t020",
+    "t021", "t022", "t023",
+    "t024", "t025", "t026", "t027",
+    "t028", "t029", "t030", "t031",
+    "t032", "t033", "t034", "t035", "t036",
+    "t037", "t038", "t039", "t040",
+    "t041", "t042", "t043", "t044",
+    "t045", "t046", "t047", "t048",
+    "t049", "t050", "t051",
+    "t052", "t053", "t054", "t055",
+    "t056", "t057", "t058",
+    "t059", "t060", "t061", "t062",
+    "t063", "t064", "t065", "t066", "t067",
+    "t068", "t069", "t070", "t071",
+    "t072", "t073", "t074", "t075", "t076",
+    "t077", "t078", "t079", "t080",
+    "t081", "t082", "t083",
+    "t084", "t085", "t086", "t087",
+    "t088", "t089", "t090", "t091",
 ];
 
 #[test]
@@ -260,7 +260,7 @@ fn test_source_table_list_is_complete() {
     }
     let covered: BTreeSet<&str> = d.groups.iter().flat_map(|g| g.members.iter().map(|m| m.as_str())).collect();
     assert_eq!(covered.len(), 67);
-    assert!(!covered.contains("order"), "单张表不构成概念，订单应留在未归组清单");
-    assert!(!covered.contains("rpt_dim_customer"), "报表不并进业务概念");
+    assert!(!covered.contains("t064"), "单张表不构成概念，订单应留在未归组清单");
+    assert!(!covered.contains("t072"), "报表不并进业务概念");
     let _ = ConceptProblem::EmptyGroup { group: String::new() };
 }

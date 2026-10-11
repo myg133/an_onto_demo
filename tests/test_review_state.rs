@@ -469,22 +469,22 @@ fn test_review_type_key_falls_back_to_target_when_payload_has_no_key() {
 
 #[test]
 fn test_review_remove_uses_type_key_namespace() {
-    // 删除也走 key 命名空间：target 是「订单」展示名，payload.key 是 `order`
-    let mut del = entity_item_with_key("订单", "order", Decision::Accepted, Decision::Accepted);
+    // 删除也走 key 命名空间：target 是「订单」展示名，payload.key 是 `t064`
+    let mut del = entity_item_with_key("订单", "t064", Decision::Accepted, Decision::Accepted);
     del.kind = ItemKind::RemoveEntityType;
     del.id = "remove_entity_type:订单".into();
 
     let mut link_item = item(ItemKind::AddLinkType, "客户→订单", Decision::Accepted, Decision::Accepted);
     link_item.from_type = Some("customer".into());
-    link_item.to_type = Some("order".into());
+    link_item.to_type = Some("t064".into());
     link_item.target = "客户—订单".into();
-    link_item.payload = serde_json::json!({ "from_type": "customer", "to_type": "order" });
+    link_item.payload = serde_json::json!({ "from_type": "customer", "to_type": "t064" });
 
-    // 基线里是 key `order`（英文）
-    let st = summarize(&[del, link_item], &baseline(&["customer", "order"]));
+    // 基线里是 key `t064`（英文）
+    let st = summarize(&[del, link_item], &baseline(&["customer", "t064"]));
     assert!(
         !st.dangling_relations.is_empty(),
-        "删掉 order 后，指向它的关系必须被拦：{:?}",
+        "删掉 t064 后，指向它的关系必须被拦：{:?}",
         st
     );
     assert!(!st.passed);

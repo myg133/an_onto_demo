@@ -539,15 +539,15 @@ mod tests {
 
     #[test]
     fn test_valid_partition_passes() {
-        let groups = vec![g("package", &["package_templates", "package_products"]), g("balance", &["balances"])];
-        let known = keys(&["package_templates", "package_products", "balances", "orders"]);
+        let groups = vec![g("package", &["t067", "t066"]), g("balance", &["t015"])];
+        let known = keys(&["t067", "t066", "t015", "orders"]);
         assert_eq!(validate_groups(&groups, &known), vec![]);
     }
 
     #[test]
     fn test_dangling_member_is_caught() {
-        let groups = vec![g("package", &["package_templates", "package_ghost"])];
-        let known = keys(&["package_templates"]);
+        let groups = vec![g("package", &["t067", "package_ghost"])];
+        let known = keys(&["t067"]);
         let p = validate_groups(&groups, &known);
         assert_eq!(
             p,
@@ -653,12 +653,12 @@ mod tests {
 
     #[test]
     fn test_items_carry_add_concept_group_kind_and_payload_key() {
-        let d = decl(vec![g("package", &["package_templates"])], "0.1.0");
+        let d = decl(vec![g("package", &["t067"])], "0.1.0");
         let items = d.to_items();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["kind"], "add_concept_group");
         assert_eq!(items[0]["payload"]["key"], "package");
-        assert_eq!(items[0]["payload"]["members"][0], "package_templates");
+        assert_eq!(items[0]["payload"]["members"][0], "t067");
     }
 
     // ──────────────────────────────────────────────────────────
@@ -669,7 +669,7 @@ mod tests {
         ConceptGroup {
             low_confidence: lc,
             scope_hint: hint.map(String::from),
-            ..g(key, &["package_templates"])
+            ..g(key, &["t067"])
         }
     }
 
@@ -690,7 +690,7 @@ mod tests {
     /// `None` ≠ `false`：没声明过不能说成「有把握」。
     #[test]
     fn test_absent_field_is_not_a_false_assertion() {
-        let known = keys(&["package_templates"]);
+        let known = keys(&["t067"]);
         for lc in [None, Some(false)] {
             assert!(!g_with("a", None, lc).is_low_confidence());
         }
@@ -702,7 +702,7 @@ mod tests {
     /// 文字与字段**分家** ⇒ 报错（ScopeHintDrift），而不是静默取其一。
     #[test]
     fn test_scope_hint_wording_without_the_field_is_a_problem() {
-        let known = keys(&["package_templates"]);
+        let known = keys(&["t067"]);
         let p = validate_groups(&[g_with("a", Some("⚠ 低置信：可能该分开"), None)], &known);
         assert_eq!(p.len(), 1, "文字写了低置信、字段没写 ⇒ 必须报一条");
         assert!(matches!(p[0], ConceptProblem::ScopeHintDrift { .. }));

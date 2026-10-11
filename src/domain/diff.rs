@@ -322,14 +322,14 @@ mod tests {
         let mut a = Snapshot::new(uuid::Uuid::nil(), 1);
         a.entity_types = vec![ent("customer", "客户")];
         let mut b = a.clone();
-        b.entity_types.push(ent("order", "订单"));
+        b.entity_types.push(ent("t064", "订单"));
         let d = diff_snapshots(&a, &b);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].kind, DiffKind::Added);
-        assert_eq!(d[0].target, "order");
+        assert_eq!(d[0].target, "t064");
 
         let d2 = diff_snapshots(&b, &a);
         assert_eq!(d2[0].kind, DiffKind::Removed);
-        assert_eq!(d2[0].target, "order");
+        assert_eq!(d2[0].target, "t064");
     }
 }

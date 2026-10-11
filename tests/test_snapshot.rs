@@ -51,7 +51,7 @@ fn three_state_snapshot(vid: Uuid) -> Snapshot {
                     sample: Some("«已脱敏»".into()),
                 }],
                 evidence: vec![Evidence {
-                    table: "customers".into(),
+                    table: "t025".into(),
                     column: "customer_no".into(),
                     claim: "客户主键".into(),
                 }],

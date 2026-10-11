@@ -1,0 +1,246 @@
+# REQ-084 · 客户源库表名「保留项」登记 —— 唯一登记点
+#
+# 本文件登记 REQ-084 脱敏后**仍保留真名**的全部 199 处：
+#   160 L          —— 已过审，一字未动；
+#    19 L-改判      —— ①第一步判 S、被 cargo test 变红证伪后改判 L（13 处：
+#                      preflight 12 + prop_name_quality 1）；
+#                      ②AC-003 泄漏 oracle 经 BA rev.3 裁定**全留**的 6 处；
+#    20 R（代码 13 + 注释 7）—— 红线文件，已过审，一字未动。
+# 逐条写明「为什么脱敏会让被测性质消失」。
+#
+# ✅ AC-003「泄漏 oracle」15 处已全部裁定（rev.3），`O-待裁` 档现为 **0**：
+#    · A tests/test_overview.rs 4 处  → **两侧同批替换**为 `t067`/`t066`
+#    · B src/domain/html_view.rs 2 处 → **两侧同批替换**为 `t052`（须保留点号路径）
+#    · C tests/test_mcp_server.rs 3 处→ **两侧同批替换**为 `t021`
+#    · D src/bin/ontok-gate-preflight.rs 6 处 → **全留**，并入 `L-改判`
+#      （与同文件另外 12 处夹具耦合，共 18 处不可拆动；BA rev.3 已确认）
+#    A/B/C 的判据串现为**假名**。⚠️ 判据串与输入侧是同一个串，
+#    **只改一侧 ⇒ 判据恒真 ⇒ 泄漏守卫静默失效**（不报错、不变红）。
+#    改动这三个测试函数时，输入侧与判据侧必须同批改。
+#
+# ⚠️ 登记 ≠ 屏蔽。**不得**因为登记在此就把这些名字从代码里删掉：
+#    它们承重，删掉等于删测试。
+#
+# 被 tests/test_retained_names_req084.rs 用 include_str! 钉住：
+#    删掉本文件 ⇒ **构建失败**（不是变红）。
+#    改动代码里被登记的名字而不改本文件 ⇒ 那条元测试变红。
+#
+# 口径：假名编号 t001..t091 取自 src/extract/table_names.json 的 `names` 键序，
+#    与 demand 分支那 240 处、源库那份翻译表同属一套。
+#
+# 列（`\t` 分隔）：
+#   KIND    L | L-改判 | R-代码 | R-注释
+#   FILE    相对仓库根的路径
+#   LINE    1-based 行号
+#   COL     该次出现的 1-based **字节**列（同名同行的第几次出现靠它区分；
+#           Rust 侧按 `&line[i..]` 切片，所以不是字符列）
+#   NAME    被保留的真实表名
+#   CRIT    这处名字**是哪条被测性质本身**（或其论证文本）
+#   WHY     脱敏会让哪条性质消失 / 哪条断言当场变红
+#
+# `L-改判` = 两种来源，都保留独立 KIND 是为了让这次自我否定在登记表上**看得见**：
+#   ① 第一步判 `S`、被 `cargo test` 变红证伪后改判 `L`（12 处，
+#      全部在 `src/bin/ontok-gate-preflight.rs`）；
+#   ② AC-003「泄漏 oracle」经 BA rev.3 裁定**全留**的 6 处（同上文件）。
+#
+KIND	FILE	LINE	COL	NAME	CRIT	WHY
+
+L-改判	src/bin/ontok-gate-preflight.rs	958	11	activity	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1952	14	deductions	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1953	14	deductions	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1954	14	package_templates	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1955	14	service_config_peak	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1956	14	service_config_peak	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1990	22	deductions	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	1997	22	package_templates	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	2004	22	service_config_peak	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	2018	15	deductions	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	2019	15	package_templates	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L-改判	src/bin/ontok-gate-preflight.rs	2020	15	service_config_peak	**改判**（第一步判 S，`cargo test` 变红后改判 L）：该文件的判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	第一步误判为「合成夹具自建自断言」。实测：`real_pair_five_missing_columns_are_named` 把判据串拿去匹配**真实** baseline/live 报告（真名），改成假名后永命中、当场变红；`synthetic_pair_reproduces_the_real_drift_claims` 的 `find(|t| t.name == "…")` 与夹具侧同属一条测试，只改一侧 ⇒ 返回 None ⇒ panic
+L	src/domain/concept.rs	7	52	package_benefits	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其内容）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/concept.rs	7	31	package_products	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其内容）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/concept.rs	7	9	package_templates	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其内容）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/concept.rs	8	21	customer_rate_limit	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其内容）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/concept.rs	8	45	customer_tpm_rate_limit	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其内容）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/html_view.rs	167	16	sub_account_bind_permission	翻译表内容判例：点名某张**真实业务表**的旧译名如何被 `PAGE_FORBIDDEN_CJK` 整对象剔除	该表名是句子主语且论断「真业务表」依赖它真实存在；换成 `t083` 后这段事故复盘失去指称对象
+L	src/domain/html_view.rs	719	19	sub_account_bind_permission	翻译表内容判例：点名某张**真实业务表**的旧译名如何被 `PAGE_FORBIDDEN_CJK` 整对象剔除	该表名是句子主语且论断「真业务表」依赖它真实存在；换成 `t083` 后这段事故复盘失去指称对象
+L	src/domain/identifier_shape.rs	71	8	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	src/domain/identifier_shape.rs	83	8	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	src/domain/identifier_shape.rs	103	53	licenses	注释质量判据：注释与**所属表英文名**构成复述关系时必须降级（`license` 是 `licenses` 的英文名）	表名改假名后注释 `license key` 不再命中复述检测 ⇒ 降级路径不被触发，被测的复述防线整条消失
+L	src/domain/identifier_shape.rs	104	6	activity_keys	注释质量判据：注释与**所属表英文名**构成复述关系时必须降级（`license` 是 `licenses` 的英文名）	表名改假名后注释 `license key` 不再命中复述检测 ⇒ 降级路径不被触发，被测的复述防线整条消失
+L	src/domain/identifier_shape.rs	166	9	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	src/domain/identifier_shape.rs	312	14	llm_provider_back_20260701	标识符形态判据：断言「该串被 `is_identifier_token` 判为标识符」	`t0xx` 无 `.`/`_` ⇒ 段数为 1、下划线段数为 0，判据返回 false，断言恒假
+L	src/domain/identifier_shape.rs	319	38	llm_provider_back_20260701	标识符形态判据：断言「该串被 `is_identifier_token` 判为标识符」	`t0xx` 无 `.`/`_` ⇒ 段数为 1、下划线段数为 0，判据返回 false，断言恒假
+L	src/domain/identifier_shape.rs	339	23	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	src/domain/identifier_shape.rs	375	40	licenses	注释质量判据：注释与**所属表英文名**构成复述关系时必须降级（`license` 是 `licenses` 的英文名）	表名改假名后注释 `license key` 不再命中复述检测 ⇒ 降级路径不被触发，被测的复述防线整条消失
+L	src/domain/identifier_shape.rs	446	14	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它（旧/新判据双向真阳性样本）	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	src/domain/review.rs	52	62	package_templates	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其语义）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/review.rs	53	31	package_benefits	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其语义）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+L	src/domain/review.rs	53	10	package_products	生产 `include_str!` 的概念组声明（`confirmed_by: null`），`members` 是客户可见的语义事实（模块文档复述其语义）	换成 `t0xx` 后，「`t001` 与 `t002` 是同一个概念」在真实库里查无实据；且首词干聚类依据（`activity`/`activity_keys` 同前缀）不可见
+R-注释	src/domain/view.rs	44	27	customers	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
+R-注释	src/domain/view.rs	62	19	order	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
+R-代码	src/domain/view.rs	87	7	order	红线词表 `BUSINESS_WORDS` 的词根条目：剥掉 `_id/_no/_num/_code/_key` 后按词根查表翻中文	改词根条目等于改客户视图的翻译能力；`order`→`t064` 会让 `order_no` 这类列翻不出「订单编号」，且位于红线文件
+R-注释	src/domain/view.rs	163	33	instance_manager	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
+R-注释	src/domain/view.rs	1311	10	instance_manager	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
+L	src/extract/propose.rs	280	60	customer_rebate	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	280	46	customers	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	928	59	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	976	23	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	985	73	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	988	70	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	989	26	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1137	59	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1144	59	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1164	25	customer_rebate	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1164	6	customers	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1170	9	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1196	46	package_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1197	21	recharge_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1235	6	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1237	22	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1247	8	package_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1247	56	recharge_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1254	61	admin_roles	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1254	16	admin_user_roles	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1273	29	package_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1274	13	recharge_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1302	45	file_parser_task	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1302	8	instance_task_record	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1303	43	file_parser_task	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1303	8	intance_task_plans	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1304	8	file_parser_task	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1307	6	instance_task_record	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1311	56	instance_task_record	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1313	12	app_billing_transactions	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1315	9	instance_task_record	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1328	13	instance_task_record	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1328	48	intance_task_plans	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1334	8	app_billing_transactions	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1334	44	service_apps	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1335	50	customer_subscriptions	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1335	8	subscription_priority	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1341	8	subscription_priority	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1365	6	activity	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1365	21	activity	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1603	78	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1607	26	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1607	52	order	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1607	82	package_benefits	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1607	61	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1608	24	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1608	50	order	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1608	59	package_benefits	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1609	56	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1610	32	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1610	86	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1624	58	customer_rebate	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1624	45	customers	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1624	36	order	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1628	31	customers	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1629	52	licenses	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1630	47	customers	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1641	14	package_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1642	14	recharge_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1643	14	admin_roles	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1644	14	admin_user_roles	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1645	14	service_config	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1646	14	website_notice_config	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1647	14	keyword_filter_config	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1648	14	usage_quotas	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1658	52	package_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1658	81	package_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1658	101	recharge_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1663	22	package_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1664	10	recharge_products	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1671	47	package_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1671	76	package_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1671	96	recharge_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1673	66	recharge_products	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1676	67	service_apps	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1677	47	service_apps	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1680	54	package_templates	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1684	26	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1686	23	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1687	36	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1690	46	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1691	19	package_templates	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1703	39	customer_rebate	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1703	26	customers	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1723	47	file_parser_task	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1730	14	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1731	14	intance_task_plans	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1732	14	instance_task_manager	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1733	14	file_parser_task	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1735	24	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1735	48	intance_task_plans	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1739	110	file_parser_task	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1748	50	file_parser_task	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1748	26	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1750	55	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1752	77	file_parser_task	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1752	53	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1754	80	llm_model	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1754	55	llm_model_peak_config	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1761	52	llm_model	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1761	15	llm_model_peak_config	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1762	45	llm_model	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1762	15	llm_model_sort	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1763	48	llm_provider_groups	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1763	15	llm_routing_rules	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1764	51	llm_provider	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1764	15	llm_routing_rules	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1765	15	llm_provider_group_items	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1765	55	llm_provider_groups	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1768	43	llm_provider	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1768	59	llm_provider_groups	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1782	20	app_billing_transactions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1782	48	service_apps	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1783	47	app_billing_transactions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1784	48	app_billing_transactions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1785	28	service_apps	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1787	45	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1787	20	subscription_priority	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1788	56	subscription_priority	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1789	57	subscription_priority	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1790	28	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1793	53	app_billing_transactions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1793	81	service_apps	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1794	87	customer_subscriptions	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1794	62	subscription_priority	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1795	77	file_parser_task	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1795	53	instance_task_record	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1801	20	order	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
+L	src/extract/propose.rs	1802	36	order	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+L	src/extract/propose.rs	1803	49	order	词干/尾缀/域归属匹配：`infer_link`/`tail_match_target`/`stem_bound_to_owner_domain` 对表名做 `ends_with(stem)`、`split('_')` 前缀聚类、单数化	`t0xx` 无下划线 ⇒ 前缀词元塌成单个 token、尾缀恒不命中、词干与表名不再有派生关系；断言变恒真或恒假，被测性质消失
+R-注释	tests/test_fk_naming.rs	22	25	customers	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-注释	tests/test_fk_naming.rs	47	38	customers	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	183	56	admin_users	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	183	31	customers	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	183	92	share_usage	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	227	31	customers	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	261	55	order	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	263	31	licenses	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	263	61	order	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-注释	tests/test_fk_naming.rs	276	6	api_call_logs	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	284	31	licenses	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	369	14	app_billing_transactions	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	370	14	balance_operation_log	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	371	14	dim_customer_binding	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+R-代码	tests/test_fk_naming.rs	372	14	frozen_assets	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名）	把真名换成 `t0xx` 后，「英文名复述」这一红线场景在测试里不复存在；且改红线文件本身违反 AC-004
+L	tests/test_mcp_server.rs	597	14	llm_provider_back_20260701	标识符形态的**日期后缀**判例：末尾段是纯数字 `20260701`，验的是「每段都含字母」这条收紧会漏掉它	`t056` 尾部无纯数字段 ⇒ 该反例不复存在，「收紧为何必须取至少一段」的论证当场失效
+L	tests/test_mcp_server.rs	648	11	llm_provider_back_20260701	标识符形态判据：断言「该串被 `is_identifier_token` 判为标识符」：`scrub_identifiers` 必须把整串替换为 `…`	`t0xx` 无 `.`/`_` ⇒ 段数为 1、下划线段数为 0，判据返回 false，断言恒假
+L-改判	tests/test_prop_name_quality.rs	40	7	licenses	**改判**（第一步判 S，`cargo test` 变红后改判 L）：它同时是外键复述检测的**目标表名**	`fk_comment_is_restatement` 的第 3b 路靠 `english_forms(target_table)` 认「目标表自己的英文名」：注释 `license 标识` 剥掉 `标识` 剩 `license`，必须等于目标表的原样/去尾 s 两种写法之一。换成 `t047` 后两种写法恒为 `t047` ⇒ 复述不成立 ⇒ 注释被原样保留 ⇒ `test_mixed_chinese_comments_are_preserved_verbatim` 变红
+L	tests/test_prop_name_quality.rs	364	47	licenses	注释质量判据：注释与**所属表英文名**构成复述关系时必须降级（`license` 是 `licenses` 的英文名）	表名改假名后注释 `license key` 不再命中复述检测 ⇒ 降级路径不被触发，被测的复述防线整条消失
+L	tests/test_prop_name_quality.rs	364	84	licenses	注释质量判据：注释与**所属表英文名**构成复述关系时必须降级（`license` 是 `licenses` 的英文名）	表名改假名后注释 `license key` 不再命中复述检测 ⇒ 降级路径不被触发，被测的复述防线整条消失
+L	tests/test_snapshot_write_paths.rs	126	23	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L	tests/test_snapshot_write_paths.rs	139	23	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L	tests/test_snapshot_write_paths.rs	168	26	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L	tests/test_snapshot_write_paths.rs	180	53	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L	tests/test_snapshot_write_paths.rs	186	47	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L	tests/test_snapshot_write_paths.rs	264	56	order	`object_types` 按 `ORDER BY key` 落库，断言新增行 `subscription` 必须位于末位	排序取决于键的字面量序：`customer`(0x63) < `order`(0x6F) < `subscription`(0x73)。改成 `t064`(0x74) 后末行变成 `t064`，`b.last()` 断言当场变红
+L-改判	src/bin/ontok-gate-preflight.rs	2031	60	deductions	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见
+L-改判	src/bin/ontok-gate-preflight.rs	2044	14	deductions	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见
+L-改判	src/bin/ontok-gate-preflight.rs	2045	14	package_templates	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见
+L-改判	src/bin/ontok-gate-preflight.rs	2046	14	service_config_peak	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见
+L-改判	src/bin/ontok-gate-preflight.rs	2047	14	service_config_peak	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见
+L-改判	src/bin/ontok-gate-preflight.rs	2062	49	deductions	**改判**（AC-003 泄漏 oracle，BA rev.3 裁定全留）：该判据串不是自建夹具的载荷，而是与**真实 schema 报告 / 同测试内耦合夹具**绑定的承重串	BA rev.3 裁定**全留**。判据串与同测试内另外 12 处夹具耦合（共 18 处，见 `synthetic_pair_reproduces_the_real_drift_claims` / `real_pair_five_missing_columns_are_named`），只换一侧会 panic ⇒ 18 处不可拆动。一并并入 `L-改判`，使「泄漏 oracle 档 O-待裁」清零这件事在登记表上看得见

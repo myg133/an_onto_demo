@@ -128,7 +128,7 @@ pub struct Overview {
 ///
 /// `names` 是「实体 key → 展示名」的映射（由调用方从快照给）。
 /// **必须用 key 定位成员**，而不是拿展示名去猜：两个成员可能翻成同一个
-/// 展示名（真实源库里 `customer_account_binding` 与 `dim_customer_binding`
+/// 展示名（真实源库里 `t016` 与 `t027`
 /// 都叫「客户账号绑定」），按名字反查会张冠李戴。
 pub fn build_overview(
     view: &CustomerView,

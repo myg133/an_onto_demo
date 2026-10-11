@@ -193,7 +193,7 @@ fn name_is_forbidden(name: &str) -> bool {
 /// 名字里会留着 `对应abcdef`）。这里只保留**调用**。
 ///
 /// 判据是**形态**不是词表：
-/// - `customer_id` / `llm_model.model_id` / `api_key` —— 下划线或点路径，
+/// - `customer_id` / `t052.model_id` / `api_key` —— 下划线或点路径，
 ///   这是**列名 / 表名**的形态，业务语言里不会出现；
 /// - 独立的 `key` 词元 —— 建模术语本体（[`identifier_shape::is_modeling_literal`]）。
 ///
@@ -873,7 +873,7 @@ mod tests {
             "用量快照",
             "价格快照",
             "核销人customer_id",
-            "关联模型ID(对应llm_model.model_id)",
+            "关联模型ID(对应t052.model_id)",
             "供应商配置(base_url, api_key等)",
             "ID",
         ] {
@@ -1029,10 +1029,15 @@ mod tests {
     }
 
     /// **绝不许把被剔掉的技术名搬到说明里** —— 那是把泄漏换了个位置。
+    ///
+    /// ⚠️ REQ-084：`t052` 是假名，与下面判据循环里的 `t052` 是同一个串，
+    /// **两侧必须同批改**。假名必须**保留点号路径形态**（`t052.model_id`）：
+    /// `is_identifier_token` 只认含 `.` 或 `_` 的串（`identifier_shape.rs:181`），
+    /// 光杆 `t052` 判不出标识符 ⇒ 属性不被剔除 ⇒ `另有 3 项` 当场变红。
     #[test]
     fn test_withheld_notice_never_prints_the_technical_names() {
         let mut v = view_with_prop("名称", None);
-        for bad in ["用量快照", "核销人customer_id", "关联模型ID(对应llm_model.model_id)"] {
+        for bad in ["用量快照", "核销人customer_id", "关联模型ID(对应t052.model_id)"] {
             v.objects[0].properties.push(PropertyView {
                 name: bad.into(),
                 note: None,
@@ -1041,7 +1046,7 @@ mod tests {
             });
         }
         let out = render_html(&v, &[]);
-        for bad in ["用量快照", "customer_id", "llm_model", "model_id", "快照"] {
+        for bad in ["用量快照", "customer_id", "t052", "model_id", "快照"] {
             assert!(
                 !out.html.contains(bad),
                 "被剔除的技术名「{bad}」被印到页面上了 —— 换个位置漏出去不算修好"

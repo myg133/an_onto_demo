@@ -52,8 +52,8 @@ fn keys(v: &[&str]) -> BTreeSet<String> {
 /// 提案通道①：没两轨都通过，概念组一样不可用。
 #[test]
 fn test_concept_group_needs_both_tracks() {
-    let baseline = keys(&["package_templates", "package_products"]);
-    let items = vec![cg("package", &["package_templates", "package_products"])];
+    let baseline = keys(&["t067", "t066"]);
+    let items = vec![cg("package", &["t067", "t066"])];
 
     let mut one_track = items.clone();
     one_track[0].model_status = Decision::Pending;
@@ -68,8 +68,8 @@ fn test_concept_group_needs_both_tracks() {
 /// 提案通道②：任一轨显式拒绝 → 否决（不是「另一轨能救」）。
 #[test]
 fn test_concept_group_vetoed_by_either_track() {
-    let baseline = keys(&["package_templates"]);
-    let mut it = cg("package", &["package_templates"]);
+    let baseline = keys(&["t067"]);
+    let mut it = cg("package", &["t067"]);
     it.biz_status = Decision::Rejected;
     let st = summarize(&[it], &baseline);
     assert!(!st.passed);
@@ -79,12 +79,12 @@ fn test_concept_group_vetoed_by_either_track() {
 /// 提案通道③：成员还没被接受 → 拦下，且**理由要指名道姓**说缺谁。
 #[test]
 fn test_concept_group_blocked_when_member_not_accepted() {
-    let baseline = keys(&["package_templates"]); // package_products 还没进本体
-    let st = summarize(&[cg("package", &["package_templates", "package_products"])], &baseline);
+    let baseline = keys(&["t067"]); // t066 还没进本体
+    let st = summarize(&[cg("package", &["t067", "t066"])], &baseline);
     assert!(!st.passed);
     assert_eq!(st.blocked.len(), 1);
     let reason = st.blocked[0].reason.clone().unwrap_or_default();
-    assert!(reason.contains("package_products"), "理由必须指名缺哪个成员：{reason}");
+    assert!(reason.contains("t066"), "理由必须指名缺哪个成员：{reason}");
     assert!(st.applicable.is_empty(), "被拦下的条目不得进 applicable");
 }
 
@@ -103,9 +103,9 @@ fn test_concept_group_can_reference_entity_added_in_same_proposal() {
     let ent = item(
         ItemKind::AddEntityType,
         "套餐模板",
-        json!({ "key": "package_templates", "display_name": "套餐模板", "properties": [] }),
+        json!({ "key": "t067", "display_name": "套餐模板", "properties": [] }),
     );
-    let group = cg("package", &["package_templates"]);
+    let group = cg("package", &["t067"]);
     let st = summarize(&[ent, group], &baseline);
     assert!(st.passed, "概念组可以引用本提案内刚被接受的新实体");
     assert_eq!(st.applicable.len(), 2);
@@ -143,12 +143,12 @@ fn base_snapshot() -> Snapshot {
     let mut s = Snapshot::new(Uuid::nil(), 1);
     s.entity_types = vec![
         EntityType {
-            key: "package_templates".into(),
+            key: "t067".into(),
             display_name: "套餐模板".into(),
             description: Some("客户可购买的一档套餐配置".into()),
             aliases: vec!["模板包".into()],
             parent: None,
-            disjoint_with: vec!["package_products".into()],
+            disjoint_with: vec!["t066".into()],
             properties: vec![
                 prop("模板编号", "tmpl_id", false, Some("业务主键，人读用"), Some("T-0001")),
                 prop("模板名称", "tmpl_name", false, None, Some("家庭套餐")),
@@ -160,7 +160,7 @@ fn base_snapshot() -> Snapshot {
             evidence: vec![],
         },
         EntityType {
-            key: "package_products".into(),
+            key: "t066".into(),
             display_name: "套餐产品".into(),
             description: None,
             aliases: vec![],
@@ -177,8 +177,8 @@ fn base_snapshot() -> Snapshot {
     // 所以「从不比较 link_types」这件事根本没被任何断言看见过。
     s.link_types = vec![LinkType {
         key: "template_has_product".into(),
-        from_type: "package_templates".into(),
-        to_type: "package_products".into(),
+        from_type: "t067".into(),
+        to_type: "t066".into(),
         cardinality: "1:N".into(),
         semantic: "has".into(),
         evidence: vec![],
@@ -188,12 +188,12 @@ fn base_snapshot() -> Snapshot {
     // `apply` 的 `RemoveEntityType` 分支就会改 `action_types`。
     s.action_types = vec![ActionType {
         key: "publish_template".into(),
-        target: "package_templates".into(),
+        target: "t067".into(),
         parameters: json!({ "effective_from": "date" }),
         preconditions: json!({ "status": "draft" }),
         effects: vec![WriteBinding {
             system: "源库".into(),
-            table: "package_templates".into(),
+            table: "t067".into(),
             field: "status".into(),
             key_expr: json!({ "tmpl_id": "$1" }),
             value_map: [("published".to_string(), "ON".to_string())].into_iter().collect(),
@@ -207,8 +207,8 @@ fn base_snapshot() -> Snapshot {
     }];
     s.functions = vec![Function {
         key: "template_coverage".into(),
-        signature: "template_coverage(package_templates) -> i32".into(),
-        allowed_types: vec!["package_templates".into()],
+        signature: "template_coverage(t067) -> i32".into(),
+        allowed_types: vec!["t067".into()],
         evidence: vec![],
     }];
     s
@@ -261,8 +261,8 @@ fn extractor(agent: &str, version: &str, round: i32) -> ExtractedBy {
 #[test]
 fn test_apply_concept_group_leaves_entities_byte_identical() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates", "package_products"]);
-    let items = vec![cg("package", &["package_templates", "package_products"])];
+    let baseline = keys(&["t067", "t066"]);
+    let items = vec![cg("package", &["t067", "t066"])];
 
     let out = apply(ApplyInput {
         base: &base,
@@ -298,25 +298,25 @@ fn test_apply_concept_group_leaves_entities_byte_identical() {
 #[test]
 fn test_concept_group_changes_nothing_besides_concept_groups() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates", "package_products"]);
+    let baseline = keys(&["t067", "t066"]);
     let by = extractor("extractor", "1.4.0", 2);
 
     let common = vec![
         item(
             ItemKind::AddProperty,
             "模板说明",
-            json!({ "parent_key": "package_templates", "name": "模板说明",
+            json!({ "parent_key": "t067", "name": "模板说明",
                     "column": "tmpl_desc", "nullable": true, "note": "归并前后都得在" }),
         ),
         item(
             ItemKind::ModifyEntityType,
             "套餐模板",
-            json!({ "key": "package_templates", "display_name": "套餐模板（旧称模板包）" }),
+            json!({ "key": "t067", "display_name": "套餐模板（旧称模板包）" }),
         ),
     ];
 
     let mut with_cg = common.clone();
-    with_cg.push(cg("package", &["package_templates", "package_products"]));
+    with_cg.push(cg("package", &["t067", "t066"]));
     let without_cg = common.clone();
 
     let a = apply(ApplyInput {
@@ -361,8 +361,8 @@ fn test_concept_group_changes_nothing_besides_concept_groups() {
 #[test]
 fn test_concept_group_only_appends_and_touches_nothing_else() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates", "package_products"]);
-    let items = vec![cg("package", &["package_templates", "package_products"])];
+    let baseline = keys(&["t067", "t066"]);
+    let items = vec![cg("package", &["t067", "t066"])];
 
     let out = apply(ApplyInput {
         base: &base,
@@ -407,9 +407,9 @@ fn test_concept_group_only_appends_and_touches_nothing_else() {
 fn test_extracted_by_follows_proposal_not_base() {
     let mut base = base_snapshot();
     base.extracted_by = Some(extractor("old_agent", "0.9.0", 1));
-    let baseline = keys(&["package_templates", "package_products"]);
+    let baseline = keys(&["t067", "t066"]);
     let by = extractor("new_agent", "1.4.0", 2);
-    let items = vec![cg("package", &["package_templates", "package_products"])];
+    let items = vec![cg("package", &["t067", "t066"])];
 
     let out = apply(ApplyInput {
         base: &base,
@@ -441,8 +441,8 @@ fn test_extracted_by_follows_proposal_not_base() {
 fn test_concept_group_does_not_inherit_extracted_by_from_base() {
     let mut base = base_snapshot();
     base.extracted_by = Some(extractor("old_agent", "0.9.0", 1));
-    let baseline = keys(&["package_templates", "package_products"]);
-    let items = vec![cg("package", &["package_templates", "package_products"])];
+    let baseline = keys(&["t067", "t066"]);
+    let items = vec![cg("package", &["t067", "t066"])];
 
     let out = apply(ApplyInput {
         base: &base,
@@ -463,9 +463,9 @@ fn test_concept_group_does_not_inherit_extracted_by_from_base() {
 #[test]
 fn test_apply_rejects_two_groups_claiming_same_member() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates", "package_products"]);
+    let baseline = keys(&["t067", "t066"]);
     // 两条都单看合法（成员都在本提案的可用集合里），合起来才矛盾
-    let items = vec![cg("package", &["package_templates"]), cg("pack", &["package_templates"])];
+    let items = vec![cg("package", &["t067"]), cg("pack", &["t067"])];
     let st = summarize(&items, &baseline);
     assert!(st.passed, "逐条看都合法 —— 正是需要最后一道闸的原因");
 
@@ -499,8 +499,8 @@ fn test_nested_group_blocked_at_review_time() {
         properties: vec![prop("打包编号", "pack_id", false, None, None)],
         evidence: vec![],
     });
-    let baseline = keys(&["package_templates", "package_products", "pack"]);
-    let items = vec![cg("package", &["package_templates"]), cg("pack", &["package"])];
+    let baseline = keys(&["t067", "t066", "pack"]);
+    let items = vec![cg("package", &["t067"]), cg("pack", &["package"])];
     let st = summarize(&items, &baseline);
     assert!(!st.passed, "把概念当成员，审核期必须拦");
     let reason = st.blocked[0].reason.clone().unwrap_or_default();
@@ -536,8 +536,8 @@ fn test_apply_rejects_nested_group_when_group_key_is_also_an_entity() {
         properties: vec![prop("方案编号", "pkg_no", false, Some("与 group key 同名"), None)],
         evidence: vec![],
     });
-    let baseline = keys(&["package_templates", "package_products", "pack", "package"]);
-    let items = vec![cg("package", &["package_templates"]), cg("pack", &["package"])];
+    let baseline = keys(&["t067", "t066", "pack", "package"]);
+    let items = vec![cg("package", &["t067"]), cg("pack", &["package"])];
     let st = summarize(&items, &baseline);
     assert!(st.passed, "命名撞车时审核期看不出来 —— 正是需要最后一道闸的原因");
 
@@ -558,10 +558,10 @@ fn test_apply_rejects_nested_group_when_group_key_is_also_an_entity() {
 #[test]
 fn test_apply_rejects_duplicate_group_key() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates", "package_products"]);
+    let baseline = keys(&["t067", "t066"]);
     let items = vec![
-        cg("package", &["package_templates"]),
-        cg("package", &["package_products"]),
+        cg("package", &["t067"]),
+        cg("package", &["t066"]),
     ];
     let err = apply(ApplyInput {
         base: &base,
@@ -579,8 +579,8 @@ fn test_apply_rejects_duplicate_group_key() {
 fn test_apply_catches_dangling_member_even_with_lying_baseline() {
     let base = base_snapshot();
     // baseline 里谎称有 package_ghost，但 base 快照里没有
-    let baseline = keys(&["package_templates", "package_products", "package_ghost"]);
-    let items = vec![cg("package", &["package_templates", "package_ghost"])];
+    let baseline = keys(&["t067", "t066", "package_ghost"]);
+    let items = vec![cg("package", &["t067", "package_ghost"])];
     let err = apply(ApplyInput {
         base: &base,
         proposal_extracted_by: None,
@@ -598,7 +598,7 @@ fn test_apply_catches_dangling_member_even_with_lying_baseline() {
 #[test]
 fn test_apply_rejects_payload_without_members() {
     let base = base_snapshot();
-    let baseline = keys(&["package_templates"]);
+    let baseline = keys(&["t067"]);
     // summarize 会先拦（空成员），所以这里直接验证 group_from_payload 的契约
     assert!(ontok::domain::concept::group_from_payload("x", &json!({})).is_none());
     let g = ontok::domain::concept::group_from_payload("x", &json!({ "key": "x", "members": ["a"] })).unwrap();
@@ -620,7 +620,7 @@ async fn test_add_concept_group_kind_survives_storage_roundtrip() {
     let payload = json!({
         "key": "package",
         "display_name": "套餐",
-        "members": ["package_templates", "package_products"],
+        "members": ["t067", "t066"],
         "scope_hint": "给客户看的三类套餐配置",
     });
     let row = gs
@@ -664,7 +664,7 @@ async fn test_end_to_end_concept_group_via_dual_track_review() {
     let decl_groups = vec![ConceptGroup {
         key: "package".into(),
         display_name: "套餐".into(),
-        members: vec!["package_templates".into(), "package_products".into()],
+        members: vec!["t067".into(), "t066".into()],
         scope_hint: Some("给客户看的两类套餐配置".into()),
         extracted_by: None,
         low_confidence: None, // REQ-028 · F4：默认「没声明过」
@@ -791,7 +791,7 @@ async fn test_concept_group_item_accepts_per_track_decision() {
             &[NewItem {
                 kind: ItemKind::AddConceptGroup,
                 target_key: "套餐".into(),
-                payload: json!({ "key": "package", "display_name": "套餐", "members": ["package_templates"] }),
+                payload: json!({ "key": "package", "display_name": "套餐", "members": ["t067"] }),
             }],
         )
         .await
