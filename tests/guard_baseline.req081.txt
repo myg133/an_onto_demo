@@ -1,0 +1,51 @@
+# REQ-081 · 守卫清点基线 —— 「登记」的唯一位置
+#
+# 本文件是 `tests/test_guard_manifest_req081.rs` 那层判据的**单一登记点**：
+# 元测试读它、人读它、更新它由判据自己**机械生成**（失败信息里会原样给出新内容）。
+#
+# ⚠️ 本文件**不是**手打的清单 —— FILE / TEST 三行都由「实物」生成：
+#   守卫文件集合 = `tests/**/*.rs` 里带标记行 `//! @guard-manifest: REQ-081` 的文件；
+#   每条守卫测试 = 那些文件里 trim 后恰为 `#[test]` 的属性之后那条顶层 `fn`。
+#   判据失败时会把整段新内容原样打印出来，**贴回来即可**，不需要手打。
+#
+# 行格式（字段以 `|` 分隔；`#` 开头与空行是注释）：
+#   FILE|<守卫文件名>
+#   TEST|<守卫文件名>|<测试名>|<assert_eq! 数>|<assert_ne! 数>|<assert! 数>
+#   PHRASE|<守卫文件名>|<id>|<必须逐字出现在那份守卫文件里的措辞>
+#
+# TEST 后面三个数字是**下界（floor）**，不是当前值：实测低于它就报「被改弱」。
+# PHRASE 是**手写**的（它们是「如实标注」的承诺，不是实物能扫出来的东西）——
+# 刻意放在本文件而不是判据源码里：写在判据里的话，
+# 「判据读到的文本含那句措辞」会因为字面量自己就在文件里而恒真（REQ-075 已踩过）。
+#
+# ── 以下为实物生成段（FILE / TEST） ──────────────────────────
+FILE|test_guard_manifest_req081.rs
+TEST|test_guard_manifest_req081.rs|test_req081_every_criterion_is_proven_to_fire_on_synthetic_fixtures|4|0|10
+TEST|test_guard_manifest_req081.rs|test_req081_the_registered_guard_inventory_matches_the_physical_tree|0|0|2
+TEST|test_guard_manifest_req081.rs|test_req081_guard_tests_have_not_been_weakened|0|0|2
+TEST|test_guard_manifest_req081.rs|test_req081_guard_tests_are_top_level_not_hidden_behind_a_mod|0|0|2
+TEST|test_guard_manifest_req081.rs|test_req081_the_compile_time_anchors_really_are_the_guard_files|0|0|4
+TEST|test_guard_manifest_req081.rs|test_req081_the_recursion_limit_is_still_declared_honestly|0|0|4
+FILE|test_review_view_req075.rs
+TEST|test_review_view_req075.rs|test_req075_guard_files_still_carry_every_guard_test_in_the_inventory|1|0|2
+TEST|test_review_view_req075.rs|test_req075_guard_test_counts_match_the_inventory|0|0|1
+TEST|test_review_view_req075.rs|test_req075_guard_docs_still_mark_the_alias_boundary_as_unclosed|0|0|2
+TEST|test_review_view_req075.rs|test_req075_this_meta_test_really_reads_the_guard_files|1|0|3
+TEST|test_review_view_req075.rs|test_req075_the_next_guard_layer_is_still_attached_to_this_one|0|0|3
+
+# ── 以下为手写段（PHRASE）：递归终点与「未封堵」的如实标注 ──────
+PHRASE|test_review_view_req075.rs|recursion-terminus|递归到此为止
+PHRASE|test_guard_manifest_req081.rs|self-deletable|本文件自己也能被删
+PHRASE|test_guard_manifest_req081.rs|recursion-terminus|递归到此为止
+PHRASE|test_guard_manifest_req081.rs|not-sealed|不声称封堵
+PHRASE|test_guard_manifest_req081.rs|derived-from-artifacts|由实物生成
+# ── 以下为手写段（BANNED）：**不得**出现在守卫文件里的过度声明 ──
+# ⚠️ 刻意**不放成源码字面量**：判据源码里只要提到过那串话，这条判据就恒红
+# （REQ-075 的 BANNED 列表 + 那句「不许写…」的警告都在同一份文件里 ⇒ 全文找必中）。
+# 选词要求：这几句**当前不存在**于任何守卫文件里，否则是假阳性。
+BANNED|test_review_view_req075.rs|本层已彻底解决
+BANNED|test_review_view_req075.rs|递归封堵已实现
+BANNED|test_review_view_req075.rs|守卫彻底封堵了别名绕过
+BANNED|test_guard_manifest_req081.rs|本层已彻底解决
+BANNED|test_guard_manifest_req081.rs|递归封堵已实现
+BANNED|test_guard_manifest_req081.rs|守卫彻底封堵了别名绕过
