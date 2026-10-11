@@ -8,3 +8,7 @@
 
 # BA 私有工作目录（session 等，不跟踪）
 .ba/
+
+# QA 产物工作区（REQ-084 QA 发现 N1·高危，同 develop）
+# 内含 classify/rows/inventory/备份等中间件，含**全部 91 个真实客户表名**。
+/.review-workspace/
