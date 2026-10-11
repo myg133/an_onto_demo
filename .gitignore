@@ -1,0 +1,10 @@
+# 本地暂存目录（规范要求不跟踪）
+.local/
+
+# 工具产物
+/.codewhale/
+/args
+.DS_Store
+
+# BA 私有工作目录（session 等，不跟踪）
+.ba/

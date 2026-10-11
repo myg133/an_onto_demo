@@ -1,0 +1,804 @@
+   Compiling ontok v0.1.0 (/home/myg133/Projects/Anchnet/Ontology/code)
+warning: unused import: `RelationView`
+  --> tests/test_concept_transition.rs:17:88
+   |
+17 | use ontok::domain::view::{scan_modeling_terms, CustomerView, EntityView, PropertyView, RelationView};
+   |                                                                                        ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ontok` (test "test_concept_transition") generated 1 warning (run `cargo fix --test "test_concept_transition" -p ontok` to apply 1 suggestion)
+warning: unused variable: `report`
+   --> tests/test_agent_rebuild.rs:337:17
+    |
+337 |             let report = UsageReport {
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_report`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `agent`
+   --> tests/test_acp_extraction.rs:622:9
+    |
+622 |     let agent = agent_answering(good_answer(), 13993);
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_agent`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ontok` (test "test_agent_rebuild") generated 1 warning (run `cargo fix --test "test_agent_rebuild" -p ontok` to apply 1 suggestion)
+warning: `ontok` (test "test_acp_extraction") generated 1 warning (run `cargo fix --test "test_acp_extraction" -p ontok` to apply 1 suggestion)
+warning: variable does not need to be mutable
+   --> tests/test_concept_store.rs:116:9
+    |
+116 |     let mut a = base_snapshot(vid_a);
+    |         ----^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ontok` (test "test_concept_store") generated 1 warning (run `cargo fix --test "test_concept_store" -p ontok` to apply 1 suggestion)
+warning: value assigned to `o` is never read
+   --> tests/test_overview.rs:267:17
+    |
+267 |     let mut o = build_overview(&view, &[g("package", "套餐", &["package_templates", "package_ghost"], None)], &n);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+268 |     // 构造一个「成员在快照里但没进客户视图」的情形：names 有它，view 没有
+269 |     o = build_overview(&view, &[g("package", "套餐", &["package_templates", "package_ghost"], None)], &n);
+    |     - `o` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ontok` (test "test_overview") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.20s
+     Running unittests src/lib.rs (target/debug/deps/ontok-c31fc32febf16d83)
+
+running 108 tests
+test config::tests::test_config_missing_env_is_error_not_default ... ok
+test config::tests::test_config_empty_value_is_treated_as_missing ... ok
+test domain::apply::tests::test_apply_refuses_when_not_passed ... ok
+test domain::concept::tests::test_bumping_version_without_history_entry_is_caught ... ok
+test domain::concept::tests::test_digest_is_sensitive_to_rule_and_content ... ok
+test domain::concept::tests::test_editing_content_without_new_revision_is_caught ... ok
+test domain::concept::tests::test_empty_history_is_caught ... ok
+test domain::concept::tests::test_declaration_passes_when_digest_matches ... ok
+test domain::concept::tests::test_items_carry_add_concept_group_kind_and_payload_key ... ok
+test domain::concept::tests::test_low_confidence_reads_the_field_not_the_wording ... ok
+test agent::rule_based::tests::test_extraction_stats_fields_are_untouched ... ok
+test domain::concept::tests::test_absent_field_is_not_a_false_assertion ... ok
+test domain::concept::tests::test_empty_and_duplicate_are_caught ... ok
+test domain::concept::tests::test_dangling_member_is_caught ... ok
+test domain::concept::tests::test_nesting_is_caught_even_when_all_entities_exist ... ok
+test domain::concept::tests::test_home_map_is_single_assignment ... ok
+test domain::concept::tests::test_scope_hint_wording_without_the_field_is_a_problem ... ok
+test domain::concept::tests::test_valid_partition_passes ... ok
+test domain::concept::tests::test_overlap_is_caught ... ok
+test domain::diff::tests::test_diff_ignores_evidence_entirely ... ok
+test domain::diff::tests::test_diff_detects_added_and_removed ... ok
+test domain::html_view::tests::test_count_phrase_flips_with_end ... ok
+test domain::html_view::tests::test_html_escapes_untrusted_text ... ok
+test domain::html_view::tests::test_no_notice_when_nothing_was_withheld ... ok
+test domain::html_view::tests::test_html_is_self_contained_offline ... ok
+test domain::html_view::tests::test_html_has_no_modeling_terms ... ok
+test domain::html_view::tests::test_note_is_redundant_criterion_has_teeth ... ok
+test domain::html_view::tests::test_no_translated_table_name_is_filtered_by_page_guard ... ok
+test domain::html_view::tests::test_object_with_modeling_term_is_skipped_but_reported ... ok
+test domain::html_view::tests::test_page_does_not_repeat_name_when_note_equals_name ... ok
+test domain::html_view::tests::test_page_dedups_after_sanitizing_both_sides ... ok
+test agent::rule_based::tests::test_rule_based_agent_output_is_byte_identical_to_legacy_extract ... ok
+test domain::html_view::tests::test_page_keeps_note_that_merely_contains_name ... ok
+test domain::html_view::tests::test_page_shows_both_when_note_is_genuinely_different ... ok
+test domain::html_view::tests::test_sampling_list_has_no_technical_infrastructure ... ok
+test domain::html_view::tests::test_page_never_shows_cardinality_wording ... ok
+test domain::html_view::tests::test_page_tells_judge_how_many_props_were_withheld ... ok
+test domain::html_view::tests::test_page_never_shows_id_suffix_in_property_names ... ok
+test domain::html_view::tests::test_relation_uses_natural_question_per_end ... ok
+test domain::html_view::tests::test_sampling_list_keeps_thirteen_objects ... ok
+test domain::html_view::tests::test_sampling_list_highlights_exactly_its_own_objects ... ok
+test domain::html_view::tests::test_sanitize_drops_modeling_and_raw_identifiers ... ok
+test domain::html_view::tests::test_sanitize_keeps_normal_chinese_names ... ok
+test domain::html_view::tests::test_sampling_object_absent_from_view_is_not_invented ... ok
+test domain::html_view::tests::test_sanitize_strips_id_suffix ... ok
+test domain::html_view::tests::test_skip_does_not_swallow_normal_business_names ... ok
+test domain::identifier_shape::tests::html_criterion_includes_key_literal ... ok
+test domain::identifier_shape::tests::decimals_and_dates_are_not_identifiers ... ok
+test domain::html_view::tests::test_withheld_notice_never_prints_the_technical_names ... ok
+test domain::identifier_shape::tests::html_view_actually_calls_the_shared_criterion ... ok
+test domain::identifier_shape::tests::known_residual_risk_is_pinned ... ok
+test domain::identifier_shape::tests::mcp_criterion_does_not_eat_key_word ... ok
+test domain::html_view::tests::test_table_names_version_is_not_the_initial_one ... ok
+test domain::identifier_shape::tests::real_identifiers_still_caught ... ok
+test domain::identifier_shape::tests::shape_not_wordlist ... ok
+test domain::identifier_shape::tests::new_criterion_is_a_strengthening_of_the_old_one ... ok
+test domain::overview::tests::test_empty_groups_reduce_to_plain_object_list ... ok
+test domain::snapshot::tests::test_snapshot_extracted_by_failed_groups_do_not_block_success ... ok
+test domain::snapshot::tests::test_snapshot_new_is_all_empty_not_null ... ok
+test domain::html_view::tests::test_withheld_notice_wording_is_terminology_free ... ok
+test domain::snapshot::tests::test_snapshot_parents_feeds_hierarchy ... ok
+test domain::view::tests::test_cardinality_cn_translates_every_known_notation ... ok
+test domain::view::tests::test_humanize_boolean_prefix_form ... ok
+test domain::view::tests::test_humanize_bare_compound_form ... ok
+test domain::view::tests::test_humanize_column_known ... ok
+test domain::view::tests::test_guard_allows_translated_semantic_and_its_own_key_name ... ok
+test domain::view::tests::test_guard_catches_any_cardinality_notation ... ok
+test domain::view::tests::test_humanize_column_unknown_returns_none_not_raw ... ok
+test domain::view::tests::test_guard_does_not_mistake_timestamps_for_notation ... ok
+test domain::view::tests::test_humanize_column_via_business_word ... ok
+test domain::view::tests::test_guard_catches_untranslated_semantic_by_form ... ok
+test domain::view::tests::test_humanize_form_suffix_with_unknown_root_is_dropped ... ok
+test domain::view::tests::test_humanize_real_world_audit_columns ... ok
+test domain::view::tests::test_humanize_compound_is_all_or_nothing ... ok
+test domain::view::tests::test_humanize_form_suffix_time_and_metric ... ok
+test domain::view::tests::test_semantic_and_cardinality_cn ... ok
+test domain::view::tests::test_humanize_words_missing_from_real_source_db ... ok
+test extract::introspect::tests::appends_read_only_when_absent ... ok
+test domain::view::tests::test_humanize_still_refuses_unknown_columns ... ok
+test extract::introspect::tests::does_not_duplicate_read_only ... ok
+test extract::introspect::tests::ensure_read_only_rejects_anything_but_on ... ok
+test extract::introspect::tests::preserves_existing_params_and_keeps_read_only ... ok
+test extract::propose::tests::test_chinese_comment_with_independent_explanation_stays_human ... ok
+test extract::propose::tests::test_ambiguous_stem_emits_nothing ... ok
+test extract::propose::tests::test_chinese_value_domain_never_becomes_a_property_name ... ok
+test extract::propose::tests::test_core_case_template_id_reaches_package_templates ... ok
+test extract::propose::tests::test_cross_domain_stem_collision_emits_nothing ... ok
+test extract::propose::tests::test_entity_display_name_never_returns_some_empty_string ... ok
+test extract::propose::tests::test_exact_match_is_unaffected_and_keeps_its_tier ... ok
+test extract::propose::tests::test_gate_d_does_not_touch_the_exact_tier ... ok
+test extract::propose::tests::test_enum_domains_are_intentionally_not_translated ... ok
+test extract::propose::tests::test_gate_d_exempts_the_owners_scope_leading_token ... ok
+test extract::propose::tests::test_gate_is_presence_of_han_not_ratio ... ok
+test extract::propose::tests::test_gate_d_is_what_suppresses_the_cross_domain_collision ... ok
+test extract::propose::tests::test_han_on_the_code_side_is_a_key_not_a_code ... ok
+test extract::propose::tests::test_link_evidence_records_the_tier ... ok
+test extract::propose::tests::test_gate_d_keeps_same_domain_tail_matches ... ok
+test extract::propose::tests::test_plural_probe_is_required ... ok
+test extract::propose::tests::test_mixed_chinese_comments_are_never_rejected ... ok
+test extract::propose::tests::test_role_qualified_fks_still_infer_nothing ... ok
+test extract::propose::tests::test_self_table_counts_as_a_candidate ... ok
+test extract::propose::tests::test_real_schema_has_exactly_eight_hanless_comments ... ok
+test mcp::tools::tests::scrub_keeps_clean_text_untouched ... ok
+test mcp::tools::tests::scrub_replaces_identifiers_by_shape_keeping_business_text ... ok
+test mcp::tools::tests::scrub_hits_exactly_the_six_real_e2e_comments ... ok
+test domain::concept::tests::test_real_declaration_declares_low_confidence_structurally ... ok
+test extract::introspect::tests::read_only_pool_really_reads_back_on ... ok
+test db::apply::tests::write_snapshot_in_maps_unique_conflict_to_db_not_key_conflict ... ok
+
+test result: ok. 108 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+
+     Running unittests src/main.rs (target/debug/deps/ontok-6d6cd74aaf1c8c7b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/ontok-introspect.rs (target/debug/deps/ontok_introspect-cc57a646f8a1f400)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/ontok-propose.rs (target/debug/deps/ontok_propose-922c06310bf787ac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/drop_rate.rs (target/debug/deps/drop_rate-eef7fe398fdde167)
+
+running 1 test
+test real_schema_drop_rate_report ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/test_acp_extraction.rs (target/debug/deps/test_acp_extraction-cf646f8262756d5a)
+
+running 28 tests
+test a_pure_prose_answer_is_rejected_loudly ... ok
+test a_missing_agent_version_is_rejected_rather_than_defaulted ... ok
+test a_vague_agent_version_is_rejected_before_any_extraction ... ok
+test a_code_fenced_answer_is_accepted ... ok
+test a_turn_without_usage_update_fails_the_group_rather_than_reporting_zero ... ok
+test a_table_outside_this_group_is_not_accepted_as_a_source ... ok
+test an_empty_answer_is_legal_but_still_not_rebuildable ... ok
+test an_empty_type_key_is_rejected ... ok
+test a_conforming_answer_does_not_make_the_adapter_declare_the_capability ... ok
+test acp_output_fails_the_rebuild_contract_closed ... ok
+test braces_inside_string_literals_do_not_truncate_the_object ... ok
+test an_invented_column_is_rejected_outright ... ok
+test context_tables_are_present_but_never_in_scope ... ok
+test no_test_in_this_file_opens_a_subprocess ... ok
+test capabilities_report_usage_and_sign_no_proposal_producing_capability ... ok
+test capabilities_is_a_pure_function_that_reads_no_field ... ok
+test identity_comes_from_the_handshake_not_from_a_hardcoded_default ... ok
+test evidence_is_constructed_by_us_not_asked_for ... ok
+test capabilities_are_static_and_never_depend_on_the_answer ... ok
+test orchestrate_rejects_an_acp_agent_at_the_entry_gate ... ok
+test prompt_carries_every_one_of_the_five_stage_one_inputs ... ok
+test nullable_is_read_from_the_schema_not_taken_from_the_model ... ok
+test the_binary_version_is_not_mistaken_for_a_model_version ... ok
+test prose_around_the_json_is_tolerated ... ok
+test usage_is_recorded_even_when_parsing_the_answer_fails ... ok
+test parsed_candidates_satisfy_the_stage_two_verification_rules ... ok
+test the_capability_gate_fires_before_the_budget_gate_for_this_adapter ... ok
+test usage_is_recorded_per_group_as_a_delta ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_acp_protocol.rs (target/debug/deps/test_acp_protocol-341ad3076587e191)
+
+running 18 tests
+test a_backwards_usage_counter_is_clamped_instead_of_underflowing ... ok
+test a_null_id_response_decodes_without_panicking ... ok
+test array_content_yields_every_text_block ... ok
+test a_stale_response_id_is_never_mistaken_for_the_current_turn ... ok
+test a_json_rpc_error_is_never_treated_as_an_empty_result ... ok
+test a_turn_with_no_chunks_at_all_fails_loudly ... ok
+test a_malformed_line_is_rejected_with_the_offending_line ... ok
+test accumulated_chunks_are_the_only_source_of_the_answer ... ok
+test notifications_for_unknown_methods_are_tolerated ... ok
+test a_truncated_turn_is_rejected_instead_of_being_parsed ... ok
+test session_cumulative_usage_is_converted_into_a_per_group_delta ... ok
+test outgoing_requests_are_single_lines_of_json_rpc_20 ... ok
+test initialize_and_session_new_results_are_not_interchangeable ... ok
+test captured_usage_bytes_flow_all_the_way_into_the_budget_gates_input ... ok
+test chunk_accumulation_concatenates_in_order_not_just_the_last_one ... ok
+test thought_chunks_are_not_treated_as_the_answer ... ok
+test the_two_non_text_updates_from_the_capture_are_ignored_not_fatal ... ok
+test usage_update_maps_onto_the_protocol_neutral_usage_report ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_agent_orchestration.rs (target/debug/deps/test_agent_orchestration-061c12c14e72bc95)
+
+running 36 tests
+test test_default_attempts_is_greater_than_one ... ok
+test test_factory_builds_dyn_from_registered_protocol ... ok
+test test_factory_fails_closed_on_unknown_protocol_instead_of_falling_back ... ok
+test test_factory_rejects_vague_version_before_building ... ok
+test test_factory_refuses_to_build_an_acp_agent_without_a_usable_endpoint ... ok
+test test_factory_fails_closed_when_the_acp_executable_does_not_exist ... ok
+test test_agent_reported_failed_groups_are_read_and_merged ... ok
+test test_identity_cross_check_warns_on_a_fork_but_stays_quiet_when_aligned ... ok
+test test_failed_groups_are_deduplicated_by_group_id ... ok
+test test_orchestrate_calls_the_capability_gate_first ... ok
+test test_orchestrate_refuses_agent_that_cannot_produce_the_proposal ... ok
+test test_orchestrate_records_every_failed_group_with_group_id_and_reason ... ok
+test test_global_stats_keep_global_scope_after_grouping ... ok
+test test_gate_is_data_driven_not_keyed_on_protocol_or_concrete_type ... ok
+test test_orchestrate_runs_one_group_per_table ... ok
+test test_orchestrate_takes_a_trait_object_not_a_concrete_type ... ok
+test test_orchestrate_verifies_agent_declarations_in_code ... ok
+test test_orchestration_uses_the_same_verify_mappings_semantics ... ok
+test test_orchestration_output_is_byte_identical_to_legacy_full_pass ... ok
+test test_orchestration_source_calls_drive_group_and_verify_mappings ... ok
+test test_production_entry_has_no_concrete_agent_type_branch ... ok
+test test_proposal_forging_entries_are_not_exported_from_the_crate ... ok
+test test_refusal_happens_before_any_extraction_work_is_done ... ok
+test test_retry_recovers_a_flaky_agent_inside_orchestration ... ok
+test test_retry_count_comes_from_drive_group_not_from_a_private_loop ... ok
+test test_production_entry_no_longer_pins_attempts_to_one ... ok
+test test_rule_based_agent_declarations_pass_verification ... ok
+test test_rule_based_agent_is_admitted_by_the_gate ... ok
+test test_two_protocols_are_implemented_and_the_factory_knows_both ... ok
+test test_the_production_entry_still_reports_the_identity_fork ... ok
+test test_rule_based_propose_is_absent_from_production_builds ... ok
+test test_round_two_existing_types_make_key_checks_reachable ... ok
+test test_cli_end_to_end_output_is_byte_identical_to_legacy_extract ... ok
+test test_agent_modules_have_no_direct_db_access ... ok
+test test_factory_fails_closed_when_the_acp_process_dies_before_the_handshake ... ok
+test test_cli_default_and_registry_paths_remain_byte_identical ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.48s
+
+     Running tests/test_agent_rebuild.rs (target/debug/deps/test_agent_rebuild-34cd4894487c02ae)
+
+running 26 tests
+test test_cost_budget_only_trips_on_a_matching_currency ... ok
+test test_an_empty_group_is_classified_as_content_not_structural ... ok
+test test_contract_gaps_are_classified_per_field_not_per_answer ... ok
+test test_each_gap_text_states_its_class_and_why ... ok
+test test_orchestration_source_keeps_both_assembly_branches ... ok
+test test_agent_reporting_usage_without_a_budget_is_refused_before_any_work ... ok
+test test_rebuild_contract_guard_catches_a_link_without_evidence ... ok
+test test_a_rebuild_with_zero_candidates_refuses_to_emit_an_empty_proposal ... ok
+test test_rebuild_contract_guard_catches_a_property_without_nullable ... ok
+test test_one_empty_group_does_not_kill_the_whole_round ... ok
+test test_budget_within_limit_never_reports_a_stop ... ok
+test test_budget_stops_the_run_and_records_skipped_groups_separately_from_failures ... ok
+test test_rebuild_contract_guard_rejects_a_group_before_it_reaches_the_proposal ... ok
+test test_rebuild_carries_every_candidate_only_field_verbatim ... ok
+test test_rebuild_only_proposes_types_the_agent_actually_declared ... ok
+test test_rebuild_refuses_a_candidate_without_property_origin ... ok
+test test_rebuild_refuses_a_candidate_without_nullable ... ok
+test test_rebuild_refuses_a_candidate_without_rejected_comment_count ... ok
+test test_content_gaps_degrade_to_group_failure_instead_of_killing_the_round ... ok
+test test_rebuild_refuses_conflicting_duplicates_across_groups ... ok
+test test_rebuild_path_still_verifies_declarations_in_code ... ok
+test test_the_contract_guard_does_not_touch_the_rule_pipeline ... ok
+test test_registry_capabilities_do_not_choose_the_assembly_path ... ok
+test test_zero_cost_agent_needs_no_budget ... ok
+test test_rebuilt_run_records_that_it_rebuilt_and_not_fell_back_to_the_rule_path ... ok
+test test_rule_agent_rebuilt_proposal_is_byte_identical_to_the_rule_pipeline ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/test_apply.rs (target/debug/deps/test_apply-5e61b8e2675d3703)
+
+running 21 tests
+test test_apply_does_not_auto_freeze ... ok
+test test_apply_not_passed_is_rejected ... ok
+test test_apply_on_frozen_base_is_rejected ... ok
+test test_apply_creates_new_version_with_content ... ok
+test test_action_types_order_is_write_order_not_planner_order ... ok
+test test_apply_marks_proposal_applied ... ok
+test test_apply_add_property_to_existing_type ... ok
+test test_apply_carries_action_types_and_functions_into_new_version ... ok
+test test_apply_rejects_dangling_parent ... ok
+test test_apply_result_snapshot_passes_hierarchy_check ... ok
+test test_apply_rejects_hierarchy_cycle ... ok
+test test_apply_twice_is_rejected ... ok
+test test_apply_with_dangling_link_is_rejected ... ok
+test test_apply_remove_entity_type_cleans_links ... ok
+test test_apply_removing_entity_drops_actions_targeting_it ... ok
+test test_extracted_by_is_not_inherited ... ok
+test test_chained_apply_keeps_accumulating ... ok
+test test_extracted_by_is_not_inherited_on_apply ... ok
+test test_frozen_version_rejects_writes ... ok
+test test_extracted_by_taken_from_proposal_not_base ... ok
+test test_failed_groups_not_inherited ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.46s
+
+     Running tests/test_budget_report_truth.rs (target/debug/deps/test_budget_report_truth-a0d516c5c5d68d44)
+
+running 3 tests
+test test_budget_exceeded_on_rule_path_does_not_call_a_complete_proposal_partial ... ok
+test test_no_budget_configured_never_claims_the_proposal_is_partial ... ok
+test test_budget_exceeded_leaves_rule_path_items_identical_to_an_unbudgeted_run ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/test_concept_proposal.rs (target/debug/deps/test_concept_proposal-f186f6001d4acd9d)
+
+running 19 tests
+test test_apply_rejects_payload_without_members ... ok
+test test_concept_group_can_reference_entity_added_in_same_proposal ... ok
+test test_apply_rejects_duplicate_group_key ... ok
+test test_apply_concept_group_leaves_entities_byte_identical ... ok
+test test_concept_group_does_not_inherit_extracted_by_from_base ... ok
+test test_concept_group_changes_nothing_besides_concept_groups ... ok
+test test_concept_group_needs_both_tracks ... ok
+test test_concept_group_vetoed_by_either_track ... ok
+test test_concept_group_blocked_when_member_not_accepted ... ok
+test test_apply_rejects_nested_group_when_group_key_is_also_an_entity ... ok
+test test_apply_rejects_two_groups_claiming_same_member ... ok
+test test_apply_catches_dangling_member_even_with_lying_baseline ... ok
+test test_concept_group_without_members_is_blocked ... ok
+test test_nested_group_blocked_at_review_time ... ok
+test test_concept_group_only_appends_and_touches_nothing_else ... ok
+test test_extracted_by_follows_proposal_not_base ... ok
+test test_add_concept_group_kind_survives_storage_roundtrip ... ok
+test test_concept_group_item_accepts_per_track_decision ... ok
+test test_end_to_end_concept_group_via_dual_track_review ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.35s
+
+     Running tests/test_concept_store.rs (target/debug/deps/test_concept_store-0a64cf329bef2c33)
+
+running 5 tests
+test test_empty_concept_group_collection_roundtrips_as_empty_not_null ... ok
+test test_resave_replaces_concept_groups_not_appends ... ok
+test test_stored_dangling_member_is_still_detectable ... ok
+test test_concept_group_survives_snapshot_roundtrip ... ok
+test test_concept_groups_do_not_touch_entity_rows ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.13s
+
+     Running tests/test_concept_transition.rs (target/debug/deps/test_concept_transition-899a6be3a5909ac1)
+
+running 10 tests
+test test_every_group_has_a_reason_and_provenance ... ok
+test test_low_confidence_groups_say_so_in_their_own_scope_hint ... ok
+test test_semantically_distinct_objects_are_pinned_separate ... ok
+test test_all_declared_concept_names_are_customer_facing_safe ... ok
+test test_no_table_is_in_two_concepts ... ok
+test test_members_are_real_tables_and_single_assigned ... ok
+test test_source_table_list_is_complete ... ok
+test test_transition_declaration_is_not_claimed_as_confirmed ... ok
+test test_transition_declaration_satisfies_its_own_contract ... ok
+test test_declaration_evidence_never_reaches_customer_facing_text ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/test_db.rs (target/debug/deps/test_db-1f2c466192d32e2d)
+
+running 8 tests
+test test_db_missing_env_is_error_not_silent_default ... ok
+test test_db_pg_is_postgres_16 ... ok
+test test_db_pg_pool_connects ... ok
+test test_req030_wide_pool_actually_allows_concurrency ... ok
+test test_db_migrate_future_is_send ... ok
+test test_req030_test_pool_caps_connections_at_one ... ok
+test test_db_migrate_is_idempotent ... ok
+test test_migrate_on_empty_schema_survives_concurrent_first_run ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.53s
+
+     Running tests/test_diff.rs (target/debug/deps/test_diff-59fc8d9b6cc9f4ac)
+
+running 13 tests
+test test_diff_empty_to_empty_is_empty ... ok
+test test_diff_distinguishes_none_from_empty_string ... ok
+test test_diff_link_semantic_change_reported ... ok
+test test_diff_ignores_version_id_and_seq ... ok
+test test_diff_ignores_evidence_entirely ... ok
+test test_diff_modified_scalar_fields ... ok
+test test_diff_parent_change_is_hierarchy_kind ... ok
+test test_diff_properties_added_removed_modified ... ok
+test test_diff_removed_entity ... ok
+test test_diff_same_parent_no_change ... ok
+test test_diff_added_entity ... ok
+test test_diff_multiple_changes_all_reported ... ok
+test test_diff_link_added_removed_modified ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_extract_cli_req019.rs (target/debug/deps/test_extract_cli_req019-1b57a08011f7a1e0)
+
+running 8 tests
+test test_attempts_zero_is_rejected ... ok
+test test_cli_wording_does_not_claim_stage_two_passed ... ok
+test test_attempts_flag_is_accepted_and_default_is_used_when_absent ... ok
+test test_round_two_without_base_version_fails_closed ... ok
+test test_round_two_loads_existing_types_and_detects_display_name_change ... ok
+test test_round_one_does_not_load_existing_types ... ok
+test test_round_one_still_declares_base_version_one ... ok
+test test_base_version_matches_the_version_actually_compared_against ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.54s
+
+     Running tests/test_extract_cli_req020.rs (target/debug/deps/test_extract_cli_req020-4233d9ecb79602b3)
+
+running 5 tests
+test test_round_two_still_runs_when_latest_version_is_not_frozen ... ok
+test test_round_one_is_unaffected_by_a_frozen_version ... ok
+test test_frozen_base_does_not_silently_proceed_with_empty_types ... ok
+test test_frozen_base_error_explains_why_and_how_to_proceed ... ok
+test test_round_two_fails_early_when_latest_version_is_frozen ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.57s
+
+     Running tests/test_extraction_agent.rs (target/debug/deps/test_extraction_agent-30c902296e35501a)
+
+running 26 tests
+test test_drive_group_clamps_zero_attempts_to_one ... ok
+test test_drive_group_retries_then_succeeds ... ok
+test test_drive_group_surfaces_failure_with_group_id_and_reason ... ok
+test test_context_tables_do_not_widen_the_extraction_scope ... ok
+test test_existing_key_declared_as_new_is_reported ... ok
+test test_agent_input_carries_existing_type_list_and_output_marks_new_type ... ok
+test test_failed_group_serializes_into_proposal_metadata_shape ... ok
+test test_existing_display_name_change_is_reported_and_unchanged_name_is_quiet ... ok
+test test_group_counts_cover_the_group_scope_only ... ok
+test test_registration_rejects_empty_agent_and_protocol ... ok
+test test_fk_target_outside_group_scope_still_yields_relation_name ... ok
+test test_extract_group_emits_candidates_with_column_mappings_and_no_links ... ok
+test test_domain_layer_stays_io_free ... ok
+test test_registry_source_has_no_destructive_sql ... ok
+test test_cli_rejects_registry_plus_explicit_agent ... ok
+test test_trait_is_dyn_usable ... ok
+test test_vague_version_is_rejected ... ok
+test test_verify_mappings_accepts_real_declarations ... ok
+test test_verify_mappings_catches_fake_declarations ... ok
+test test_registry_register_require_and_fail_closed ... ok
+test test_registry_version_lock_rejects_silent_rewrite ... ok
+test test_registry_records_rounds_idempotently ... ok
+test test_registry_resolve_identity_is_fail_closed ... ok
+test test_cli_unknown_registry_agent_fails_closed_without_writing_output ... ok
+test test_registry_concurrent_same_key_never_leaks_raw_db_error ... ok
+test test_cli_registry_path_is_byte_identical_when_registry_says_the_same ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.51s
+
+     Running tests/test_fk_naming.rs (target/debug/deps/test_fk_naming-996e5aa3f90e0957)
+
+running 6 tests
+test test_view_level_fallback_still_uses_the_word_list ... ok
+test test_low_quality_comment_never_becomes_a_name_even_for_a_foreign_key ... ok
+test test_english_restatement_of_the_target_is_not_kept_as_a_name ... ok
+test test_customer_id_name_comes_from_the_relation_not_the_comment ... ok
+test test_role_qualified_foreign_keys_keep_their_comment ... ok
+test test_real_schema_customer_id_has_exactly_one_display_name ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/test_hierarchy.rs (target/debug/deps/test_hierarchy-b019077af12c0daf)
+
+running 16 tests
+test test_hierarchy_ancestors_stop_on_cycle ... ok
+test test_hierarchy_descendants_deep_chain ... ok
+test test_hierarchy_ancestors_exclude_self ... ok
+test test_hierarchy_ancestors_nearest_first ... ok
+test test_hierarchy_check_reparent_messages ... ok
+test test_hierarchy_accepts_valid_tree ... ok
+test test_hierarchy_descendants_exclude_self ... ok
+test test_hierarchy_ancestors_stop_on_dangling ... ok
+test test_hierarchy_descendants_exclude_self_under_cycle ... ok
+test test_hierarchy_descendants_walk_down ... ok
+test test_hierarchy_detects_dangling_parent ... ok
+test test_hierarchy_detects_cycle ... ok
+test test_hierarchy_detects_self_cycle ... ok
+test test_hierarchy_would_create_cycle_on_descendant ... ok
+test test_hierarchy_would_create_cycle_on_self ... ok
+test test_hierarchy_would_not_cycle_on_normal_reparent ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_mcp_server.rs (target/debug/deps/test_mcp_server-420fee92cca54c0a)
+
+running 32 tests
+test guard_error_message_does_not_repeat_the_offending_terms ... ok
+test guard_lets_clean_payloads_through ... ok
+test guard_rejects_payloads_carrying_modeling_terms ... ok
+test low_confidence_reads_the_structured_field_not_the_wording ... ok
+test error_echoing_client_input_also_passes_the_guard ... ok
+test every_catalogued_tool_is_actually_implemented ... ok
+test initialize_echoes_the_spec_requested_protocol_version ... ok
+test manually_revised_group_is_marked_confirmed ... ok
+test guard_is_wired_into_the_serving_path_not_just_a_helper ... ok
+test mcp_tools_actually_calls_the_shared_criterion ... ok
+test low_confidence_survives_the_snapshot_round_trip ... ok
+test initialize_declares_the_tools_capability_must_be_declared ... ok
+test five_customer_level_questions_all_get_answered ... ok
+test machine_declared_group_is_marked_unconfirmed ... ok
+test malformed_json_is_parse_error_with_null_id ... ok
+test instructions_do_not_leak_a_modeling_term_project_name ... ok
+test todo_identifier_defenses_have_own_assertions ... ignored, 缺口清单，不是可运行断言
+test marking_does_not_hide_unconfirmed_groups ... ok
+test missing_object_is_a_tool_error_not_a_protocol_error ... ok
+test notifications_get_no_response ... ok
+test response_is_exactly_one_line_without_embedded_newline ... ok
+test serving_reports_which_frozen_version_it_holds ... ok
+test string_ids_are_echoed_unchanged ... ok
+test tools_call_result_has_content_and_structured_content ... ok
+test unfrozen_version_is_refused_outright ... ok
+test tools_list_shape_matches_the_spec ... ok
+test raw_identifiers_never_reach_the_output_structurally ... ok
+test unknown_method_is_json_rpc_method_not_found ... ok
+test unknown_method_name_is_not_echoed_back_verbatim ... ok
+test unknown_tool_is_invalid_params ... ok
+test unknown_tool_name_is_not_echoed_back_verbatim ... ok
+test version_negotiation_falls_back_to_our_latest_when_unsupported ... ok
+
+test result: ok. 31 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 62.31s
+
+     Running tests/test_no_write_path.rs (target/debug/deps/test_no_write_path-bc6aad927ead77f7)
+
+running 4 tests
+test test_no_hardcoded_connection_string ... ok
+test test_write_binding_is_structure_only ... ok
+test test_no_write_path_in_slice1 ... ok
+test test_store_connects_to_exactly_one_database ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/test_overview.rs (target/debug/deps/test_overview-5876a611ddfa22af)
+
+running 17 tests
+test test_english_only_concept_name_is_dropped ... ok
+test test_concept_name_degenerated_to_entity_key_is_dropped_and_reported ... ok
+test test_duplicate_member_display_names_are_reported ... ok
+test test_cross_group_relation_is_redirected_to_the_other_concept ... ok
+test test_concept_lists_members_with_scope_hint ... ok
+test test_id_token_is_stripped_then_merged ... ok
+test test_home_map_drives_uncovered_complement ... ok
+test test_no_groups_reduces_to_plain_object_list ... ok
+test test_overview_never_shows_member_property_columns ... ok
+test test_member_missing_from_view_is_reported_not_silently_dropped ... ok
+test test_inside_group_relation_is_skipped_and_counted ... ok
+test test_relations_point_to_concept_not_to_member_table ... ok
+test test_required_is_or_across_members ... ok
+test test_technical_property_names_are_dropped_not_passed_through ... ok
+test test_same_named_properties_are_merged_with_provenance ... ok
+test test_overview_text_is_gated_by_modeling_term_scanner ... ok
+test test_evidence_table_names_never_reach_the_overview ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/test_project.rs (target/debug/deps/test_project-90f7e1f90c326bea)
+
+running 10 tests
+test test_project_duplicate_name_rejected ... ok
+test test_project_create_and_isolated ... ok
+test test_version_freeze_sets_frozen_at_and_is_idempotent ... ok
+test test_version_first_seq_is_one ... ok
+test test_version_by_seq_not_found_is_error ... ok
+test test_project_get_or_create_is_idempotent ... ok
+test test_version_frozen_at_is_none_before_freeze ... ok
+test test_version_latest_picks_highest_seq ... ok
+test test_version_seq_increments_and_is_isolated ... ok
+test test_version_seq_under_concurrency_is_unique ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.66s
+
+     Running tests/test_prop_name_quality.rs (target/debug/deps/test_prop_name_quality-6e221710182655a0)
+
+running 8 tests
+test test_field_name_list_is_not_an_enum_domain ... ok
+test test_inflection_is_morphology_not_wordlist ... ok
+test test_runtime_guard_is_blind_to_english_property_names ... ok
+test test_class_c_provider_id_is_translated ... ok
+test test_class_b_enum_domains_keep_values_but_not_as_name ... ok
+test test_class_a_english_names_reach_customer_as_chinese ... ok
+test test_low_quality_comment_does_not_leak_through_note ... ok
+test test_mixed_chinese_comments_are_preserved_verbatim ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/test_proposal.rs (target/debug/deps/test_proposal-c0052a2d847f73a7)
+
+running 9 tests
+test test_proposal_parse_kind_known_and_unknown ... ok
+test test_proposal_unknown_decision_is_pending_not_accepted ... ok
+test test_proposal_link_item_requires_both_ends_in_payload ... ok
+test test_proposal_empty_items_rejected ... ok
+test test_proposal_set_decision_per_track ... ok
+test test_proposal_extracted_by_none_roundtrips ... ok
+test test_proposal_create_with_items ... ok
+test test_proposal_item_by_seq ... ok
+test test_proposal_to_item_views_bridges_to_domain ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.77s
+
+     Running tests/test_provenance_source.rs (target/debug/deps/test_provenance_source-80d63e82bf7fda3b)
+
+running 5 tests
+test test_missing_source_field_stays_none_instead_of_guessing_tool_produced ... ok
+test test_reserved_tool_produced_is_not_declared_but_is_still_distinguishable_from_none ... ok
+test test_import_marks_extracted_by_as_declared_not_as_introspect_provenance ... ok
+test test_proposal_without_extracted_by_stays_null ... ok
+test test_concept_import_also_marks_extracted_by_as_declared ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.83s
+
+     Running tests/test_read_only_guard.rs (target/debug/deps/test_read_only_guard-4786f63eae2fc4e3)
+
+running 5 tests
+test stripper_strips_comments_before_matching ... ok
+test after_connect_read_only_set_is_in_executable_code ... ok
+test read_only_pool_itself_is_not_wired_to_reject_everything ... ok
+test force_read_only_is_actually_called_by_the_pool_builder ... ok
+test fail_closed_check_is_actually_called_by_introspect ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/test_review_state.rs (target/debug/deps/test_review_state-9212a47a315943cd)
+
+running 28 tests
+test test_review_all_passed_with_no_dangling_is_passed ... ok
+test test_review_apply_decision_is_immutable ... ok
+test test_review_apply_decision_model_track ... ok
+test test_review_available_uses_type_key_not_display_target ... ok
+test test_review_biz_pending_is_not_passed ... ok
+test test_review_biz_reject_vetoes_regardless_of_model ... ok
+test test_review_blocked_item_forces_passed_false ... ok
+test test_review_blocked_and_dangling_cover_the_same_items ... ok
+test test_review_both_pending_is_pending ... ok
+test test_review_both_tracks_accepted_is_passed ... ok
+test test_review_empty_proposal_is_not_passed ... ok
+test test_review_dangling_relation_forces_not_passed ... ok
+test test_review_link_acceptance_requires_both_ends_accepted ... ok
+test test_review_link_missing_both_ends ... ok
+test test_review_link_ok_when_both_ends_added_in_same_proposal ... ok
+test test_review_link_ok_when_both_ends_in_baseline ... ok
+test test_review_link_to_surviving_type_is_fine ... ok
+test test_review_model_pending_is_not_passed ... ok
+test test_review_model_reject_vetoes_regardless_of_biz ... ok
+test test_review_pending_item_blocks_overall_pass ... ok
+test test_review_passed_expression_keeps_both_guard_clauses ... ok
+test test_review_pending_removal_does_not_block_link ... ok
+test test_review_remove_uses_type_key_namespace ... ok
+test test_review_removed_type_is_not_available_to_new_link ... ok
+test test_review_two_tracks_judge_independently ... ok
+test test_review_removed_type_still_blocks_link_to_it ... ok
+test test_review_type_key_falls_back_to_target_when_payload_has_no_key ... ok
+test test_review_verdicts_cover_every_item ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_snapshot.rs (target/debug/deps/test_snapshot-1c6758a5d24d2e84)
+
+running 10 tests
+test test_extracted_by_none_means_human_edit ... ok
+test test_extracted_by_is_per_version_not_global ... ok
+test test_snapshot_records_extracted_by ... ok
+test test_snapshot_duplicate_key_is_rejected ... ok
+test test_snapshot_placeholder_structures_present_when_empty ... ok
+test test_snapshot_resave_replaces_not_appends ... ok
+test test_frozen_version_rejects_snapshot_write ... ok
+test test_snapshot_resave_same_data_does_not_duplicate ... ok
+test test_snapshot_roundtrip ... ok
+test test_snapshot_three_states_survive ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.15s
+
+     Running tests/test_snapshot_freeze_gate.rs (target/debug/deps/test_snapshot_freeze_gate-7663f5d16dc059a6)
+
+running 2 tests
+test test_set_extracted_by_unknown_version_is_row_not_found ... ok
+test test_set_extracted_by_rejects_frozen_version ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.22s
+
+     Running tests/test_snapshot_write_paths.rs (target/debug/deps/test_snapshot_write_paths-4119f8d8fad5cac3)
+
+running 8 tests
+test test_apply_does_not_reimplement_the_inserts ... ok
+test test_freeze_gate_precedes_delete_call_in_source_order ... ok
+test test_set_extracted_by_gate_and_write_share_one_transaction ... ok
+test test_delete_loop_and_version_update_have_exactly_one_home ... ok
+test test_save_snapshot_keeps_key_conflict_mapping ... ok
+test test_backfill_is_deterministic_preserves_and_idempotent ... ok
+test test_two_entry_points_write_identical_rows ... ok
+test test_freeze_gate_precedes_delete_and_delete_covers_five_tables ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.74s
+
+     Running tests/test_view.rs (target/debug/deps/test_view-6e426a0dd345a164)
+
+running 26 tests
+test test_view_empty_snapshot_is_empty_not_error ... ok
+test test_view_blacklist_scanner_catches_a_planted_term ... ok
+test test_view_blacklist_scanner_is_case_insensitive ... ok
+test test_view_falls_back_to_humanized_column_when_name_missing ... ok
+test test_view_dangling_parent_becomes_none ... ok
+test test_view_guard_allows_real_business_key_concepts ... ok
+test test_view_drops_property_when_column_unhumanizable ... ok
+test test_view_guard_still_catches_cjk_terms_anywhere_in_text ... ok
+test test_view_guard_still_catches_leaked_identifiers ... ok
+test test_view_humanizes_generic_column_via_business_word ... ok
+test test_view_guard_catches_key_in_serialized_view ... ok
+test test_view_biz_view_never_exposes_modeling_terms ... ok
+test test_view_keeps_aliases ... ok
+test test_view_guard_catches_semantic_with_chinese_prefix ... ok
+test test_view_guard_still_allows_pure_chinese_semantics ... ok
+test test_view_never_publishes_key_as_display_name ... ok
+test test_view_guard_does_not_mistake_the_belongs_to_key_for_a_semantic_leak ... ok
+test test_view_omits_reserved_fields ... ok
+test test_view_parent_is_shown_as_name_not_key ... ok
+test test_view_property_sample_survives ... ok
+test test_view_relation_to_unknown_type_is_dropped ... ok
+test test_view_relations_use_human_words ... ok
+test test_view_translates_every_known_cardinality_notation ... ok
+test test_view_translates_every_known_semantic ... ok
+test test_view_no_cardinality_notation_passes_silently ... ok
+test test_view_no_untranslated_semantic_passes_silently ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests ontok
+warning: unexpected character `围`
+   --> src/agent/acp/parse.rs:174:1
+    |
+174 | / /// 从自由文本里取出那个 JSON 对象。
+175 | | ///
+176 | | /// # 为什么要有这一层「宽容」
+177 | | ///
+...   |
+188 | | /// 而 `find('}')` 会在这里截断出一个**语法合法但内容残缺**的片段 ——
+189 | | /// 那比解析失败糟得多。
+    | |________________________^
+    |
+    = note: `#[warn(rustdoc::invalid_codeblock_attributes)]` on by default
+
+warning: 1 warning emitted
+
+
+running 1 test
+test src/agent/acp/mod.rs - agent::acp (line 203) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+real	5m18.196s
+user	1m23.401s
+sys	0m18.340s

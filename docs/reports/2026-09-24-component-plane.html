@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本体平台 · 组件面架构</title>
+<style>
+:root{
+  --ink:#161513;
+  --paper:#f2f2f0;
+  --navy:#082d4f;
+  --card:#fdfdfa;
+  --mut:#6f6c66;
+  --hair:#c9c6c0;
+  --wash:#f4f7fa;
+  --mono:"SF Mono",Menlo,Monaco,Consolas,"Courier New",monospace;
+  --serif:Georgia,"Times New Roman","Songti SC","STSong","Noto Serif SC","SimSun",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{
+  font-size:calc(14px + (17 - 14) * ((100vw - 768px) / (1600 - 768)));
+  scroll-behavior:smooth;
+  scroll-padding-top:64px;
+}
+@media(max-width:820px){html{font-size:15px}}
+body{
+  background:var(--paper);color:var(--ink);font-family:var(--sans);
+  line-height:1.8;font-variant-numeric:tabular-nums;
+}
+::selection{background:var(--ink);color:var(--paper)}
+a{color:var(--navy);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── top bar ── */
+header.top{
+  position:sticky;top:0;z-index:50;background:var(--paper);
+  border-bottom:1px solid var(--ink);
+  display:flex;align-items:stretch;justify-content:space-between;
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
+}
+header.top .cell{padding:.75rem 1.1rem;display:flex;align-items:center;gap:.6rem}
+header.top .cell + .cell{border-left:1px solid var(--ink)}
+header.top .dot{width:.5rem;height:.5rem;background:var(--navy);border-radius:50%}
+header.top .muted{color:var(--mut)}
+
+/* ── layout ── */
+.shell{
+  max-width:1400px;margin:0 auto;
+  display:grid;grid-template-columns:1fr;gap:0;
+  padding:0 1.5rem 6rem;
+}
+@media(min-width:1180px){
+  .shell{grid-template-columns:200px minmax(0,1fr);gap:3.5rem;padding-right:2rem}
+}
+nav.toc{display:none}
+@media(min-width:1180px){
+  nav.toc{
+    display:block;position:sticky;top:4.2rem;align-self:start;
+    padding-top:4rem;font-size:.74rem;line-height:1.5;
+    border-right:1px solid var(--hair);padding-right:1rem;margin-right:-1.5rem;
+  }
+  nav.toc a{display:block;padding:.34rem 0;color:var(--mut);font-family:var(--mono);letter-spacing:.02em}
+  nav.toc a.on{color:var(--navy);font-weight:600}
+  nav.toc a:hover{color:var(--ink);text-decoration:none}
+}
+main{min-width:0;padding-top:3.4rem}
+
+/* ── typography ── */
+.eyebrow{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--mut);margin-bottom:.9rem;
+}
+h1{
+  font-family:var(--serif);font-weight:400;font-size:2.5rem;line-height:1.25;
+  letter-spacing:-.01em;margin-bottom:1.1rem;
+}
+h1 .cn{display:block;font-size:.44em;color:var(--mut);margin-top:.5rem;letter-spacing:.04em}
+.lead{font-size:1.02rem;color:#2c2a26;max-width:62ch}
+.lead strong{background:linear-gradient(transparent 62%, #dfe6ec 62%)}
+h2{
+  font-family:var(--serif);font-weight:400;font-size:1.7rem;
+  margin:3.6rem 0 1.1rem;padding-bottom:.5rem;border-bottom:1px solid var(--ink);
+  letter-spacing:-.005em;
+}
+h2 .n{font-family:var(--mono);font-size:.72rem;color:var(--navy);letter-spacing:.1em;margin-right:.7rem;vertical-align:.18em}
+h3{
+  font-size:1.06rem;font-weight:600;margin:2.2rem 0 .7rem;
+  letter-spacing:.005em;
+}
+h3 .en{font-family:var(--mono);font-size:.78rem;color:var(--mut);font-weight:400;letter-spacing:.06em;margin-left:.5rem}
+p{margin:.75rem 0;max-width:66ch}
+ul,ol{margin:.7rem 0 .7rem 1.2rem;max-width:66ch}
+li{margin:.32rem 0}
+code{
+  font-family:var(--mono);font-size:.86em;background:#e9e9e5;
+  padding:.1em .35em;border-radius:2px;color:#33302b;
+}
+blockquote{
+  border-left:2px solid var(--navy);padding:.1rem 0 .1rem 1.1rem;
+  margin:1.2rem 0;color:#3a3833;font-size:.95rem;
+}
+hr{border:0;border-top:1px solid var(--hair);margin:2.6rem 0}
+
+/* ── hero meta ── */
+.meta-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.6rem 0 0}
+.tag{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;
+  border:1px solid var(--hair);background:var(--card);
+  padding:.3rem .65rem;color:var(--mut);white-space:nowrap;
+}
+.tag.hot{border-color:var(--navy);color:var(--navy)}
+
+/* ── figure ── */
+figure{margin:1.8rem 0}
+figure svg{width:100%;height:auto;display:block}
+figcaption{
+  font-family:var(--mono);font-size:.7rem;color:var(--mut);
+  letter-spacing:.06em;margin-top:.9rem;text-align:center;
+}
+
+/* ── legend ── */
+.legend{
+  display:flex;flex-wrap:wrap;gap:1.4rem;justify-content:center;
+  font-family:var(--mono);font-size:.68rem;color:var(--mut);
+  letter-spacing:.04em;margin-top:.2rem;
+}
+.legend span{display:flex;align-items:center;gap:.5rem}
+.legend i{display:block;width:2.2rem;height:0;border-top:1.4px solid var(--ink)}
+.legend i.dash{border-top-style:dashed;border-top-color:var(--navy)}
+.legend i.stub{border-top:1.6px solid var(--navy)}
+
+/* ── callout ── */
+.note{
+  background:var(--card);border:1px solid var(--hair);
+  border-left:3px solid var(--navy);padding:1rem 1.2rem;margin:1.4rem 0;
+  font-size:.93rem;
+}
+.note .lbl{
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--navy);display:block;margin-bottom:.4rem;
+}
+.note p{margin:.4rem 0}
+.note p:first-child{margin-top:0}
+.note p:last-child{margin-bottom:0}
+.note.warn{border-left-color:#8a5a12}
+.note.warn .lbl{color:#8a5a12}
+
+/* ── key point cards ── */
+.keys{display:grid;grid-template-columns:1fr;gap:.9rem;margin:1.4rem 0}
+@media(min-width:900px){.keys{grid-template-columns:repeat(3,1fr)}}
+.key{
+  border:1px solid var(--ink);background:var(--card);padding:1.1rem 1.2rem;
+}
+.key .k{
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;
+  color:var(--navy);display:block;margin-bottom:.5rem;
+}
+.key .t{font-family:var(--serif);font-size:1.06rem;display:block;margin-bottom:.45rem}
+.key .d{font-size:.87rem;color:#3a3833;line-height:1.7}
+
+/* ── table ── */
+.tbl-wrap{overflow-x:auto;margin:1.4rem 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:520px}
+th,td{border:1px solid var(--hair);padding:.55rem .75rem;text-align:left;vertical-align:top}
+th{
+  background:#e9e9e5;font-weight:600;font-size:.76rem;
+  font-family:var(--mono);letter-spacing:.06em;color:#33302b;
+}
+tbody tr:nth-child(even){background:var(--card)}
+td.hl{color:var(--navy);font-weight:600}
+td.dim{color:var(--mut)}
+
+/* ── flow strip ── */
+.strip{display:flex;flex-wrap:wrap;align-items:stretch;gap:.6rem;margin:1.4rem 0}
+.strip .step{
+  flex:1 1 150px;border:1px solid var(--ink);background:var(--card);
+  padding:.9rem 1rem;
+}
+.strip .step .t{font-family:var(--serif);font-size:1.05rem;display:block;margin-bottom:.25rem}
+.strip .step .s{font-size:.82rem;color:var(--mut);line-height:1.5}
+.strip .step.ctrl{border-style:dashed;border-color:var(--hair)}
+.strip .arw{align-self:center;font-family:var(--mono);color:var(--mut);font-size:1rem}
+
+/* ── storage tree ── */
+.store{
+  border:1px solid var(--ink);background:var(--card);
+  padding:1.1rem 1.3rem;margin:1.4rem 0;font-size:.9rem;
+}
+.store .root{
+  font-family:var(--mono);font-size:.85rem;color:var(--navy);
+  font-weight:600;display:block;margin-bottom:.6rem;
+}
+.store ul{list-style:none;margin:0 0 0 1.1rem;border-left:1px solid var(--hair);padding-left:1.1rem}
+.store li{padding:.24rem 0;margin:0}
+.store li.rec{color:var(--navy);font-weight:600}
+.store li .why{color:var(--mut);font-weight:400;font-size:.85em}
+
+/* ── mapping ── */
+.map{display:grid;grid-template-columns:1fr;gap:.55rem;margin:1.3rem 0}
+@media(min-width:760px){.map{grid-template-columns:1fr auto 1fr}}
+.map .l,.map .r{
+  border:1px solid var(--hair);background:var(--card);padding:.6rem .8rem;
+  font-size:.87rem;display:flex;align-items:center;
+}
+.map .l{color:var(--mut)}
+.map .r{border-color:var(--ink);color:var(--ink);font-weight:600}
+.map .m{
+  font-family:var(--mono);color:var(--navy);font-size:.8rem;
+  display:flex;align-items:center;justify-content:center;padding:0 .3rem;
+}
+@media(max-width:759px){.map .m{justify-content:flex-start;padding-left:.9rem}}
+
+/* ── footer ── */
+footer{
+  margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--ink);
+  font-family:var(--mono);font-size:.7rem;color:var(--mut);letter-spacing:.06em;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:.6rem;
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="cell"><span class="dot"></span><span>本体平台</span></div>
+  <div class="cell muted">组件面架构 · Component Plane</div>
+  <div class="cell muted">2026-09-24</div>
+</header>
+
+<div class="shell">
+
+<nav class="toc" id="toc">
+  <a href="#s1">01 · 总图</a>
+  <a href="#s2">02 · 三条关键点</a>
+  <a href="#s3">03 · 数据面 / 控制面</a>
+  <a href="#s4">04 · 存储抽象</a>
+  <a href="#s5">05 · 组件 → 能力</a>
+  <a href="#s6">06 · 图上要注意</a>
+</nav>
+
+<main>
+
+<div class="eyebrow">Ontology Platform · Architecture View I</div>
+<h1>
+  组件面架构
+  <span class="cn">系统由哪些模块组成，以及模块之间的边界</span>
+</h1>
+<p class="lead">
+  客户数据在内网，平台在公网 —— 这条边界决定了整套架构的形状：<strong>采集器进客户域，平台只收标准化结果，原始数据一步不出去</strong>。
+  图上是模块与连线；模块为什么这么切，见下三节。
+</p>
+
+<div class="meta-row">
+  <span class="tag hot">视角 · 组件面</span>
+  <span class="tag">读者 · 工程师 / 交付</span>
+  <span class="tag">配套 · 能力面 View II</span>
+  <span class="tag">事实源 · docs/design/ontology-platform-spec.md §4</span>
+  <span class="tag">修订 · 2026-09-28</span>
+</div>
+
+<div class="note" style="margin-top:1.8rem">
+  <span class="lbl">两种读法</span>
+  <p><b>组件面</b>（本文）回答「系统由哪些模块组成」，面向工程师 —— 一张部署与职责图。</p>
+  <p><b>能力面</b>（<code>2026-09-24-capability-plane.html</code>）回答「平台能做什么事」，面向业务与客户。同一套系统，两种读法，映射见 §05。</p>
+</div>
+
+<!-- ══════════ 01 总图 ══════════ -->
+<h2 id="s1"><span class="n">01</span>总图</h2>
+
+<figure>
+<svg viewBox="0 0 1400 864" role="img" aria-label="本体平台组件面分层架构图">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0.5 L 10 5 L 0 9.5 z" fill="#161513"/>
+    </marker>
+    <marker id="arN" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0.5 L 10 5 L 0 9.5 z" fill="#082d4f"/>
+    </marker>
+  </defs>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif">
+
+  <!-- ═══ 客户环境（内网）═══ -->
+  <rect x="20" y="60" width="420" height="460" fill="none" stroke="#c9c6c0"/>
+  <text x="36" y="84" font-family="Menlo,Consolas,monospace" font-size="10.5" letter-spacing="1.6" fill="#6f6c66">客户环境（内网）</text>
+
+  <rect x="44" y="104" width="300" height="44" fill="#fdfdfa" stroke="#c9c6c0"/>
+  <text x="60" y="132" font-size="12.5" fill="#161513">数据库</text>
+
+  <rect x="44" y="158" width="300" height="44" fill="#fdfdfa" stroke="#c9c6c0"/>
+  <text x="60" y="186" font-size="12.5" fill="#161513">m365 / 文件</text>
+
+  <rect x="44" y="212" width="300" height="44" fill="#fdfdfa" stroke="#c9c6c0"/>
+  <text x="60" y="240" font-size="12.5" fill="#161513">IM 数据</text>
+
+  <rect x="44" y="266" width="300" height="44" fill="#fdfdfa" stroke="#c9c6c0"/>
+  <text x="60" y="294" font-size="12.5" fill="#161513">查询日志 / 报表 / 系统调用</text>
+
+  <!-- 源 → 采集器（母线汇总） -->
+  <g stroke="#161513" stroke-width="1.2" fill="none">
+    <path d="M 344 126 H 372"/>
+    <path d="M 344 180 H 372"/>
+    <path d="M 344 234 H 372"/>
+    <path d="M 344 288 H 372"/>
+    <path d="M 372 126 V 330 H 250 V 346" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- 采集器 -->
+  <rect x="44" y="350" width="300" height="130" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.6"/>
+  <text x="60" y="382" font-family="Georgia,Songti SC,SimSun,serif" font-size="15" fill="#082d4f">采集器 Collector</text>
+  <text x="60" y="408" font-size="11.5" fill="#6f6c66">轻量容器 · 本地抽取</text>
+  <text x="60" y="432" font-size="11.5" fill="#082d4f" font-weight="600">原始数据不出域</text>
+
+  <!-- ═══ 边界标注 ═══ -->
+  <text x="400" y="376" font-size="10.5" fill="#6f6c66" text-anchor="middle">实体 + 关系 + 证据</text>
+  <text x="400" y="390" font-size="10.5" fill="#082d4f" text-anchor="middle" font-weight="600">出站 TLS</text>
+  <text x="400" y="428" font-size="10.5" fill="#6f6c66" text-anchor="middle">使用痕迹</text>
+
+  <!-- ═══ 平台（SaaS）═══ -->
+  <rect x="480" y="60" width="660" height="660" fill="none" stroke="#c9c6c0"/>
+  <text x="496" y="84" font-family="Menlo,Consolas,monospace" font-size="10.5" letter-spacing="1.6" fill="#6f6c66">本体论平台（SaaS）</text>
+
+  <!-- 接入层 -->
+  <rect x="500" y="104" width="620" height="112" fill="none" stroke="#c9c6c0" stroke-dasharray="4 3"/>
+  <text x="516" y="124" font-family="Menlo,Consolas,monospace" font-size="10" letter-spacing="1.4" fill="#6f6c66">接入层</text>
+
+  <rect x="520" y="140" width="280" height="64" fill="#fdfdfa" stroke="#161513"/>
+  <text x="536" y="166" font-family="Menlo,Consolas,monospace" font-size="13" fill="#161513">connector</text>
+  <text x="536" y="188" font-size="11" fill="#6f6c66">结构化 / 非结构化 / 对话式</text>
+
+  <rect x="820" y="140" width="280" height="64" fill="#fdfdfa" stroke="#161513"/>
+  <text x="836" y="166" font-size="12.5" fill="#161513">元数据采集通道</text>
+  <text x="836" y="188" font-size="11" fill="#6f6c66">使用痕迹 · 仅作上下文</text>
+
+  <!-- 语义层 -->
+  <rect x="500" y="248" width="620" height="280" fill="none" stroke="#c9c6c0" stroke-dasharray="4 3"/>
+  <text x="516" y="268" font-family="Menlo,Consolas,monospace" font-size="10" letter-spacing="1.4" fill="#6f6c66">语义层</text>
+
+  <rect x="520" y="284" width="180" height="80" fill="#fdfdfa" stroke="#161513"/>
+  <text x="536" y="314" font-size="12.5" fill="#161513">数据面 pipeline</text>
+  <text x="536" y="338" font-size="10.5" fill="#6f6c66">高频 · 自动 · 幂等</text>
+
+  <rect x="720" y="284" width="180" height="80" fill="#fdfdfa" stroke="#161513"/>
+  <text x="736" y="314" font-size="12.5" fill="#161513">控制面 pipeline</text>
+  <text x="736" y="338" font-size="10.5" fill="#6f6c66">低频 · 需审核</text>
+
+  <rect x="920" y="284" width="180" height="80" fill="#fdfdfa" stroke="#161513"/>
+  <text x="936" y="314" font-size="12.5" fill="#161513">抽取引擎</text>
+  <text x="936" y="338" font-size="10.5" fill="#6f6c66">消费元数据上下文</text>
+
+  <rect x="520" y="408" width="580" height="100" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.6"/>
+  <text x="536" y="442" font-family="Menlo,Consolas,monospace" font-size="14" fill="#082d4f">ontology-store</text>
+  <text x="536" y="468" font-size="11.5" fill="#082d4f">存储抽象层</text>
+  <text x="1084" y="434" font-size="10.5" fill="#6f6c66" text-anchor="end">可整体替换</text>
+  <text x="1084" y="452" font-size="10.5" fill="#6f6c66" text-anchor="end">上层无感</text>
+
+  <!-- 出口 -->
+  <rect x="520" y="560" width="280" height="72" fill="#fdfdfa" stroke="#161513"/>
+  <text x="536" y="590" font-family="Menlo,Consolas,monospace" font-size="12.5" fill="#161513">agent-registry</text>
+  <text x="536" y="612" font-size="11" fill="#6f6c66">KH Agent 抽象层 · 只服务建侧</text>
+
+  <rect x="820" y="560" width="280" height="72" fill="#fdfdfa" stroke="#161513"/>
+  <text x="836" y="590" font-family="Menlo,Consolas,monospace" font-size="12.5" fill="#161513">mcp-server</text>
+  <text x="836" y="612" font-size="11" fill="#6f6c66">本体暴露为标准工具</text>
+
+  <!-- ═══ 外部 agent ═══ -->
+  <rect x="520" y="760" width="580" height="64" fill="#fdfdfa" stroke="#161513"/>
+  <text x="810" y="788" font-size="12.5" fill="#161513" text-anchor="middle">外部 agent / 业务系统</text>
+  <text x="810" y="808" font-size="10.5" fill="#6f6c66" text-anchor="middle">Claude Desktop · Cursor · 自研</text>
+
+  <!-- ═══ GraphDB ═══ -->
+  <rect x="1180" y="414" width="200" height="90" fill="#fdfdfa" stroke="#082d4f" stroke-dasharray="4 3"/>
+  <text x="1280" y="452" font-size="13" fill="#082d4f" text-anchor="middle">GraphDB</text>
+  <text x="1280" y="476" font-size="10.5" fill="#6f6c66" text-anchor="middle">存储实现之一</text>
+  <text x="1280" y="494" font-size="10.5" fill="#6f6c66" text-anchor="middle">Neo4j 等</text>
+
+  <!-- ═══ 边 ═══ -->
+  <!-- 客户域 → 平台 -->
+  <path d="M 344 400 H 490 V 172 H 520" fill="none" stroke="#161513" stroke-width="1.4" marker-end="url(#ar)"/>
+  <path d="M 344 440 H 462 V 96 H 960 V 140" fill="none" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arN)"/>
+
+  <!-- 平台内部 -->
+  <g fill="none" stroke="#161513" stroke-width="1.4">
+    <path d="M 610 204 V 284" marker-end="url(#ar)"/>
+    <path d="M 920 324 H 900" marker-end="url(#ar)"/>
+    <path d="M 610 364 V 408" marker-end="url(#ar)"/>
+    <path d="M 810 364 V 408" marker-end="url(#ar)"/>
+    <path d="M 660 508 V 560" marker-end="url(#ar)"/>
+    <path d="M 960 508 V 560" marker-end="url(#ar)"/>
+    <path d="M 960 632 V 760" marker-end="url(#ar)"/>
+  </g>
+  <path d="M 960 204 V 284" fill="none" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arN)"/>
+  <path d="M 1100 458 H 1180" fill="none" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arN)"/>
+
+  <!-- 边标注 -->
+  <text x="984" y="244" font-size="10.5" fill="#082d4f">仅作抽取上下文，不产实体</text>
+
+  </g>
+</svg>
+
+<div class="legend">
+  <span><i></i>实线　数据流 · 调用</span>
+  <span><i class="dash"></i>虚线　不产实体 · 实现之一</span>
+  <span><i class="stub"></i>蓝框　本体的落点 / 出域边界</span>
+</div>
+
+<figcaption>本体平台 · 组件面总图 —— 对应 specs §4.1。左侧客户域，右侧平台，GraphDB 在平台之外（它只是存储实现之一）</figcaption>
+</figure>
+
+<!-- ══════════ 02 三条关键点 ══════════ -->
+<h2 id="s2"><span class="n">02</span>三条关键点</h2>
+
+<p>图上信息量最大的是三条线，不是那些框。</p>
+
+<div class="keys">
+  <div class="key">
+    <span class="k">关键点 01</span>
+    <span class="t">存储是可替换的</span>
+    <span class="d"><code>ontology-store</code> 是<strong>存储抽象</strong>，GraphDB 只是其实现之一。存储可替换，上层无感。</span>
+  </div>
+  <div class="key">
+    <span class="k">关键点 02</span>
+    <span class="t">原始数据不出域</span>
+    <span class="d">采集器与平台之间<strong>只传实体 + 关系 + 证据</strong>，原始数据留在客户域内。</span>
+  </div>
+  <div class="key">
+    <span class="k">关键点 03</span>
+    <span class="t">元数据不进本体</span>
+    <span class="d">元数据通道（使用痕迹）<strong>不进本体</strong>，只喂抽取引擎，作为抽取时的上下文。</span>
+  </div>
+</div>
+
+<h3>为什么必须这样切<span class="en">§4.2</span></h3>
+<p>SaaS 在公网，客户数据在内网。<strong>connector 无法直连客户数据源</strong> —— 这是 SaaS 形态的硬约束，不是可选项。</p>
+<p>于是职责一分为二：</p>
+<ul>
+  <li><strong>采集器（客户侧）</strong>：连接数据源、执行连通性测试、驱动抽取、本地标准化为「实体 + 关系 + 证据」</li>
+  <li><strong>平台（SaaS 侧）</strong>：接收标准化结果、语义映射、抽取、本体管理、审核、MCP 暴露</li>
+</ul>
+<p><strong>原始数据不出客户环境</strong>，这条是合规刚需（尤其 IM 内容），也是对客户沟通时的核心话术。</p>
+<div class="note">
+  <span class="lbl">一个组件吃两种形态</span>
+  <p>私有化部署 = 把 SaaS 整体搬进客户环境，采集器<strong>在两种形态下都复用</strong>（私有化时退化成本地直连，或保留作为隔离层）。FDE 不必维护两套交付流程。</p>
+</div>
+
+<!-- ══════════ 03 数据面 / 控制面 ══════════ -->
+<h2 id="s3"><span class="n">03</span>数据面 / 控制面</h2>
+
+<p>进入 pipeline 的东西性质不同，<strong>必须分车道</strong>。这是整份架构里最容易做错的一处。</p>
+
+<div class="strip">
+  <div class="step">
+    <span class="t">数据面</span>
+    <span class="s">connector 抽取 → 语义映射 → 本体实例写入</span>
+  </div>
+  <div class="arw">∥</div>
+  <div class="step ctrl">
+    <span class="t">控制面</span>
+    <span class="s">抽取提案 → 双轨审核 → 版本快照 / 冻结</span>
+  </div>
+</div>
+
+<div class="tbl-wrap">
+<table>
+  <thead>
+    <tr><th></th><th>数据面</th><th>控制面</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>频率</td><td>高频</td><td>低频</td></tr>
+    <tr><td>触发</td><td>自动（定时 / 增量）</td><td>人工审核通过</td></tr>
+    <tr><td>幂等</td><td>是，可重放</td><td>否，有语义后果</td></tr>
+    <tr><td>是否需要人</td><td>否</td><td class="hl">是</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>为什么不合并</strong>：混在一条流水线里会出现两个后果 —— 无法区分「哪些变化需要人看」；本体结构一变，是否触发历史数据重算变得不可控。</p>
+<p>因此：<strong>冻结的版本不可覆盖</strong>，后续抽取只能在其上追加 diff。而本体变更后的历史数据重抽取，必须在图上<strong>显式表达</strong>（图里的虚线回路），作为可观测、可审批的动作，不能靠流水线自然流动。</p>
+
+<!-- ══════════ 04 存储抽象 ══════════ -->
+<h2 id="s4"><span class="n">04</span>存储抽象</h2>
+
+<p><code>ontology-store</code> 是一个抽象接口，底下可以换实现 —— 这也是能力面图上它「不出现在主视觉里」的原因。</p>
+
+<div class="store">
+  <span class="root">ontology-store（抽象接口）</span>
+  <ul>
+    <li><code>GraphDB</code> 实现 <span class="why">—— Neo4j 等。深链查询与超大规模图</span></li>
+    <li class="rec"><code>RDBMS</code> 实现 <span class="why">—— PostgreSQL：JSONB + 邻接表 + pgvector</span></li>
+    <li><code>内存</code> 实现 <span class="why">—— 测试用</span></li>
+  </ul>
+</div>
+
+<div class="note">
+  <span class="lbl">选型说明</span>
+  <p>企业本体的实际查询深度通常 <strong>≤ 3 跳</strong>，PostgreSQL 完全够用；GraphDB 的价值在 10 跳以上的深链查询和超大规模图。</p>
+  <p><strong>切片 1 建议直接用 PostgreSQL 实现</strong> —— 客户环境里大概率本来就有 PG，少一个中间件就少一个交付障碍。对 FDE 而言，部署阻力是最大的敌人。</p>
+</div>
+
+<!-- ══════════ 05 组件 → 能力 ══════════ -->
+<h2 id="s5"><span class="n">05</span>组件 → 能力</h2>
+
+<p>同一套系统，两种读法。能力面（View II）说「平台对外只有四件事」，那这一张图上的每个模块，都落进其中一个能力里：</p>
+
+<div class="map">
+  <div class="l">采集器 + <code>connector</code></div><div class="m">→</div><div class="r">建 Build</div>
+  <div class="l">数据面 pipeline + 抽取引擎</div><div class="m">→</div><div class="r">建 Build</div>
+  <div class="l">KH Agent + <code>agent-registry</code></div><div class="m">→</div><div class="r">建 Build</div>
+  <div class="l">控制面 pipeline + 双轨审核</div><div class="m">→</div><div class="r">审 Review</div>
+  <div class="l"><code>mcp-server</code>、<code>ontology-store</code>、查询引擎</div><div class="m">→</div><div class="r">用 Use</div>
+  <div class="l">Action · 写回外部系统</div><div class="m">→</div><div class="r">动 Act（切片 2）</div>
+  <div class="l">版本 / 提案 / 证据链</div><div class="m">→</div><div class="r">溯 Trace（纵切）</div>
+</div>
+
+<div class="note">
+  <span class="lbl">读法</span>
+  <p>组件面上几乎所有模块，在能力面上都退到了能力内部；<strong>唯一被提升到主视觉中心的，是本体核心模型</strong>。</p>
+  <p>这不是删掉模块，而是换一个提问方式：工程师问「怎么搭」，老板和客户问「能做什么」。两张图都要有，缺一张就有一方看不懂。</p>
+</div>
+
+<div class="note">
+  <span class="lbl">agent-registry 归「建」，不归「用」</span>
+  <p><code>agent-registry</code> 承载 FDE 反复调整抽取方法的闭环：<strong>注册抽取 agent（自研的与外部的）、锁定版本、记录每轮迭代</strong>。它服务的是<strong>建侧</strong>。</p>
+  <p>经 <code>mcp-server</code> 消费本体的<strong>外部 agent（logic agent）走的是另一条路</strong>，不经过 <code>agent-registry</code>。两者名字里都有 agent，但一个是造本体的，一个是读本体的。</p>
+  <p><strong>版本锁定是它的硬职责</strong>：一轮抽取用了哪个 agent 的哪个版本，必须与本体版本一起冻结进快照。否则 agent 悄悄升级后，你分不清 diff 变化是「本体演进」还是「agent 换人」。</p>
+</div>
+
+<!-- ══════════ 06 图上要注意 ══════════ -->
+<h2 id="s6"><span class="n">06</span>图上要注意的两点</h2>
+
+<div class="note">
+  <span class="lbl">agent-registry 在图上没有出边，是刻意的</span>
+  <p>它只有一个入边（<code>ontology-store → agent-registry</code>），右边 <code>mcp-server</code> 那条才通到外部 agent。这正是两者的分工：<code>agent-registry</code> 是 <strong>KH Agent 的抽象层</strong>，只服务建侧；外部 agent 只经 <code>mcp-server</code> 消费本体。</p>
+  <p>图上不画 <code>agent-registry → 外部 agent</code> 那一笔，是<strong>有意为之，不是漏画</strong>。</p>
+</div>
+
+<div class="note">
+  <span class="lbl">主图与 specs §4.1 的一致之处</span>
+  <p>分层、模块命名、连线语义（含 <code>META</code> 不产实体、<code>ONT -.-&gt; GDB</code> 表示实现之一、<code>agent-registry</code> 只入不出）均逐条对应 specs §4.1，没有增删模块。</p>
+  <p>本文只做两件事：把 mermaid 换成预先渲染的内联 SVG（离线可看、可打印），以及把 §4.1 那四条「关键点」提到图的正下方。</p>
+</div>
+
+<footer>
+  <span>组件面架构 · Component Plane · 对应 specs §4.1 – §4.5</span>
+  <span>配套 · 2026-09-24-capability-plane.html</span>
+</footer>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var links = [].slice.call(document.querySelectorAll('#toc a'));
+  var secs = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function upd(){
+    var y = window.scrollY + 140, i = 0;
+    for (var k = 0; k < secs.length; k++) {
+      if (secs[k] && secs[k].offsetTop <= y) i = k;
+    }
+    links.forEach(function(a, k){ a.classList.toggle('on', k === i); });
+  }
+  window.addEventListener('scroll', upd, {passive:true});
+  window.addEventListener('resize', upd);
+  upd();
+})();
+</script>
+
+</body>
+</html>

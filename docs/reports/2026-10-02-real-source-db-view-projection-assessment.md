@@ -1,0 +1,150 @@
+# 真实源库客户视图投影评估
+
+> 2026-10-02 · 源库 `<业务库名>`（public schema，**只读**）
+> 目的：验证 REQ-002 的客户视图投影在**真实业务命名**上是否有效 —— 此前全部测试跑在中文 demo fixture 上。
+
+## 0. 范围与安全声明
+
+| 项 | 值 |
+| --- | --- |
+| 连接方式 | `default_transaction_read_only = on`（连接时强制，非依赖自觉） |
+| 读取内容 | **仅 `information_schema` 元数据**（表名/列名/列注释/约束），**零业务数据行** |
+| 写操作 | 无。未执行任何 `INSERT`/`UPDATE`/`DELETE`/`DDL` |
+| 口令 | 走环境变量，**未写入本文档、任何脚本、任何提交** |
+| 评估对象 | `src/domain/view.rs` 的 `humanize_column` / `usable_as_human_name` / `scan_modeling_terms` / `project` |
+
+评估方式：用 Python **逐条复刻** `view.rs` 的词表与算法（不增不减），喂入真实库的 1068 个列名。
+**未修改任何生产代码。**
+
+---
+
+## 1. 库结构实况
+
+| 项 | 值 |
+| --- | --- |
+| `public` schema 表数 | **91** |
+| 列总数 | **1068** |
+| **外键约束** | **0** |
+| 主键约束 | 91 |
+| 其他 schema | `ods_logs` 477 表 · `dwd` 58 · `ads` 9 · `meta` 3 |
+| 注释覆盖 | 极不均匀。`balances` 27/27、`customers` 16/18、`order` 16/19 有注释；`package_templates`、`llm_auth_cache_*`、`internal_operation_records` **零注释** |
+| 命名风格 | 表名列名**全为英文技术命名**（`customers`、`rewrite_times`、`aisearch_times`） |
+| 保留字表名 | 存在 `order` 表 |
+
+---
+
+## 2. 五项发现
+
+### 🔴 发现 1 · 投影在真实列名上覆盖率仅 **18%**
+
+| 指标 | 值 |
+| --- | --- |
+| 能翻成中文 | **200 / 1068（18%）** |
+| 认不出被丢弃 | **868 / 1068（81%）** |
+
+**根因是词表与真实命名约定存在系统性形态偏差** —— 词表是照着中文 demo fixture 手工编的：
+
+| 词表里写的 | 真实库用的 | 结果 |
+| --- | --- | --- |
+| `create_time` | `created_at`（×83） | 形态不匹配，丢弃 |
+| `create_by` | `created_by`（×52） | 少一个 `d`，丢弃 |
+| `updated_at` / `update_by` | `updated_at`（×55）/`updated_by`（×16） | 形态不匹配，丢弃 |
+| `deleted_at` | `is_deleted`（×4，布尔软删标志） | 语义形态不同，丢弃 |
+| （无 `id` 条目） | `id`（×88，全库最常见列） | 丢弃 |
+
+未覆盖列名前 6 名全是标准审计字段：`id`(88) · `created_at`(83) · `updated_at`(55) · `created_by`(52) · `updated_by`(16) · `model_id`(8)。
+
+**丢弃率 100% 的表**（客户端点不出任何属性）：
+`rpt_dws_channel`(17 列) · `website_notice_config`(16) · `simulate_login_sessions`(15) ·
+`llm_auth_cache_trigger_state`(9) · `proxy_operation_records`(9) · `service_config`(9) · `simulate_login_operations`(9)
+
+### 🔴 发现 2 · **64% 被丢弃的列其实有中文注释，而投影算法完全不看注释**
+
+未覆盖列中 **560 / 868（64%）**带 `COMMENT`。
+注释是抽取阶段的黄金信息（`comment_description` 可直接翻成人话），但 `humanize_column` **只查硬编码词表，不读注释**。
+
+> 这是最大的一块浪费：本可零成本恢复的语义，被一个封闭词表挡住了。
+
+### 🟠 发现 3 · 极端情形下客户视图会**整体为空**
+
+`usable_as_human_name` 规定：若 `display_name` 的词元命中任一实体 key，则该实体**不发布**。
+抽取器若直接用表名当 `display_name`（退化情形）：
+
+| 场景 | 结果 |
+| --- | --- |
+| **A. 抽取器用表名当 display_name** | 表 91 → 实体存活 **0（0%）**。整个客户视图空 |
+| **B. 抽取器给出中文 display_name（理想）** | 91 个实体中 **14 个（15%）属性数为 0**；平均每实体仅 **2.2 个可用属性**（平均 11.5 列） |
+
+> 场景 A 是 S-1 防御的**正确行为**（宁可漏也不误杀），但它意味着**抽取侧必须翻出中文名**，否则视图全空。
+> 场景 B 的 2.2 属性/实体是 AC-013 的直接风险 —— 客户被问「它有哪几个属性？」时，面对 2.2 个属性很可能答不出。
+
+### 🟡 发现 4 · 守门词按**子串**匹配，真实业务概念会被误杀（尚未触发）
+
+`scan_modeling_terms` 用 `low.contains(term)` 匹配，守门词含 `"key"`。真实库里含 `key` 的对象：
+
+- **表名 2 张**：`activity_keys`、`keyword_filter_config`
+- **列名 9 种**：`aggregate_key` · `cache_key` · `config_key` · `idempotency_key` · `keywords` · `license_key` · `public_key` · `record_key` · …
+
+当前**中文投影结果里 400 条抽样 0 命中**，所以 AC-005 仍然安全。
+但这是个**尚未触发的定时炸弹**：若抽取器把某实体的 `display_name` 或 alias 翻成 `License Key`、`API Key` 这类正常业务名，
+`cli.rs:473-478` 的运行时守门会 `exit 2` —— **整个客户视图打不开**。
+
+`license_key`（授权密钥）在这个库里是真实存在的业务概念。
+
+### 🔴 发现 5 · 零外键：关系投影没有物理依据
+
+91 个主键、**0 个外键约束**。关系只能靠抽取器从命名约定（`*_id`）和语义推断。
+AC-007「关系条目依赖两端已被接受」在真实数据上**没有 FK 可依赖**，
+审查时无法机械验证「这条关系是否真实存在」，只能信抽取器的判断。
+
+零外键的真实库里，`*_id` 命名也不总是关系（可能是 JSON 字段、可能是日志 actor）。
+这直接放大了抽取阶段的风险 —— 属 REQ-001 spike 要回答的核心未知。
+
+---
+
+## 3. 对验收标准的影响
+
+| AC | 影响 | 说明 |
+| --- | --- | --- |
+| **AC-005** 客户视图零建模术语 | ✅ **仍可通过** | 守门词未被中文标签触发（400 抽样 0 命中）。S-1/S-3 修复有效 |
+| **AC-013** 客户视图 3 人判读 | ⚠ **风险显著升高** | 平均 2.2 属性/实体、15% 实体零属性。客户很可能答不出「它有哪几个属性」 |
+| **AC-007** 关系依赖两端 | ⚠ 真实数据上无法机械验证 | 零外键，只能信抽取器 |
+| **AC-003** 快照契约占位 | ➖ 无关 | |
+
+**结论：AC 的字面要求（零术语）能过，但客户视图在真实数据上的实际可用性存疑。**
+这不是 REQ-002 的缺陷 —— REQ-002 没有「覆盖率」这条验收标准。是**下一切片（抽取）的前置输入**。
+
+---
+
+## 4. 建议（按性价比排序）
+
+| # | 建议 | 收益 | 代价 | 归属 |
+| --- | --- | --- | --- | --- |
+| 1 | **投影优先读列注释**，注释缺失才退回词表 | 一次改动可覆盖 64% 的丢弃列 | `humanize_column` 要能拿到快照里的注释；快照契约需加占位 | 下一切片 |
+| 2 | 补齐词表的高频形态：`created_at`/`updated_at`/`created_by`/`updated_by`/`id`/`is_deleted` | 立竿见影，`id`+审计字段 ≈ 300 列 | 小（纯词表） | 下一切片 |
+| 3 | 守门词从**子串匹配**改为**词元精确匹配** | 消除 `License Key` 类误杀 | 小；需保证仍能抓住 `CARDINALITY`/`Key`（S-3 的回归点） | 下一切片 |
+| 4 | 抽取阶段**必须输出中文 display_name**，并把「实体存活数」列为抽取验收指标 | 避免场景 A 的空视图 | 抽取计划阶段定 | REQ-001 / 抽取 |
+| 5 | 真实源库**建立只读账号**替代「只读事务」约定 | 双保险 | 需 DBA | 待定 |
+| 6 | 关系抽取在零外键库上**单独评估** | 决定 AC-007 的真实可行性 | 属抽取阶段 | REQ-001 |
+
+---
+
+## 5. 复现方式
+
+```bash
+# 源库口令走环境变量，不入库
+export PGUSER='…' PGPASSWORD='…' PGHOST='…' PGPORT='…' PGDATABASE='…'
+python3 - <<'PY'
+import os, pg8000.native
+c = pg8000.native.Connection(user=os.environ["PGUSER"], host=os.environ["PGHOST"],
+    port=int(os.environ["PGPORT"]), database=os.environ["PGDATABASE"],
+    password=os.environ["PGPASSWORD"])
+c.run("SET default_transaction_read_only = on")
+print(list(c.run("""select table_name, column_name from information_schema.columns
+  where table_schema='public' order by 1,2"""))[:20])
+PY
+```
+
+> 评估脚本（词表复刻 + 覆盖率统计 + 守门词检查）位于本次会话的 `/tmp`，未入库。
+> 建议在立项「客户视图投影改进」时固化为回归脚本 —— 它是对**真实数据分布**的度量，
+> 比中文 fixture 更有代表性。

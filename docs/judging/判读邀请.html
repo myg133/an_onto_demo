@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>本体平台 · 判读邀请</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.75 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       color:#1f2328;background:#f6f7f9}
+  .w{max-width:860px;margin:0 auto;padding:32px 24px 72px}
+  h1{font-size:28px;margin:0 0 6px}
+  h2{font-size:20px;margin:34px 0 12px;padding-bottom:8px;border-bottom:2px solid #e3e5e8}
+  .lead{font-size:17px;color:#57606a;margin:0 0 26px}
+  .card{background:#fff;border:1px solid #d8dce0;border-radius:10px;padding:20px 22px;margin:16px 0}
+  .tag{display:inline-block;background:#0969da;color:#fff;font-size:12px;padding:2px 9px;
+       border-radius:11px;margin-right:7px;vertical-align:middle}
+  .tag.g{background:#1a7f37}.tag.y{background:#9a6700}.tag.n{background:#8250df}
+  ol,ul{padding-left:22px;margin:10px 0}
+  li{margin:7px 0}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:15px}
+  th,td{border:1px solid #d8dce0;padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f0f2f4;font-weight:600}
+  code{background:#f0f2f4;padding:1px 6px;border-radius:4px;font-size:14px}
+  .warn{background:#fff8e5;border-left:4px solid #d4a72c;padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0}
+  .no{background:#fff5f5;border-left:4px solid #cf222e;padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0}
+  .ok{background:#f0fff4;border-left:4px solid #1a7f37;padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0}
+  .q{background:#fff;border:1px solid #d8dce0;border-radius:8px;padding:14px 18px;margin:10px 0}
+  .q b{color:#0969da}
+  .big{font-size:18px;font-weight:600}
+  footer{margin-top:40px;padding-top:18px;border-top:1px solid #e3e5e8;color:#57606a;font-size:14px}
+</style>
+</head>
+<body>
+<div class="w">
+
+<h1>我们让机器读了你司的数据库，想请你看看它读懂了吗</h1>
+<p class="lead">约 40 分钟 · 全程只看不改 · 你的判断直接决定这套东西能不能往下做</p>
+
+<div class="card">
+  <p style="margin-top:0"><b>背景一句话：</b>我们做的是「把客户系统里的数据结构和业务知识，变成 AI Agent 能看懂的业务语义」。</p>
+  <p style="margin-bottom:0">我们已经从你们的生产库（<b>只读，全程没写过任何东西</b>）读出 91 张表的结构，
+     抽成了一份「本体」—— 也就是用业务语言描述的：你们有<b>哪些东西</b>、它们<b>各有什么属性</b>、它们<b>之间是什么关系</b>。</p>
+</div>
+
+<div class="warn">
+  <b>但我们还不知道一件事：这份描述，你们看得懂吗？</b><br>
+  这就是找你的原因。技术上它跑通了、测试也过了，但
+  <b>「技术上对」和「业务上认」是两回事</b> —— 这个项目押的核心赌注就是后者，
+  而它<b>至今一次都没被真人验证过</b>。
+</div>
+
+<h2>要你做什么</h2>
+
+<p>打开一个网页，里面列着你司那 91 张表翻译成的业务对象（客户、订单、余额、套餐……）。</p>
+
+<ol>
+  <li>打开页面，<b>重点看标了 ★ 的 13 个</b>（其余也在页面上，只是这次不重点看）</li>
+  <li>我们问你 9 个问题，你<b>按自己的理解回答</b></li>
+  <li>大概 40 分钟</li>
+</ol>
+
+<div class="no">
+  <b>三条重要的，请务必做到：</b>
+  <ol style="margin:8px 0 0">
+    <li><b>不要看别人的答案</b> —— 找 3 个人<b>分别独立</b>做，各做各的</li>
+    <li><b>说真实想法</b> —— 觉得看不懂、觉得别扭、觉得不对，<b>直接说</b>。<br>
+        你的批评比我们自己的测试有用得多</li>
+    <li><b>不用客气，也不用照顾我们</b> —— 我们巴不得你骂，骂了才能改</li>
+  </ol>
+</div>
+
+<h2>你会看到什么</h2>
+
+<table>
+  <tr><th>项</th><th>说明</th></tr>
+  <tr><td>91 个对象</td><td>你们 91 张业务表，逐个翻译成了业务对象</td></tr>
+  <tr><td>★ 13 个</td><td>本次重点看的，全是业务对象（客户、订单、套餐、余额……）</td></tr>
+  <tr><td>约 9.7 个属性/对象</td><td>平均每个对象有近 10 个属性（数据库里平均 11 列）</td></tr>
+  <tr><td>51 条关系</td><td>写成「一个 X，有几个 Y」这种你能直接回答的话</td></tr>
+  <tr><td>单文件网页</td><td>双击即开，<b>不需要联网、不需要装任何东西</b></td></tr>
+</table>
+
+<h2>那 9 个问题</h2>
+
+<p>我们会<b>一次问一个</b>，你回答，我们记下你的<b>原话</b>。不提示、不引导、不解释。</p>
+
+<div class="q"><b>1.</b> 这个东西是什么？</div>
+<div class="q"><b>2.</b> 它有哪几个属性？</div>
+<div class="q"><b>3.</b> 这个页面上，<b>有没有哪个词是你看不懂的，或者读起来不像业务里会说的话？</b></div>
+<div class="q"><b>4.</b> 「A」和「B」是什么关系？是 A 有 B，还是 B 有 A？</div>
+<div class="q"><b>5.</b> <b>一个「A」，对应几个「B」？</b></div>
+<div class="q"><b>6.</b> <b>哪些对象你觉得是重复的、或者本来该是一个？</b>（想到几个说几个）</div>
+<div class="q"><b>7.</b> 这些名字里，有哪个你更习惯叫别的？</div>
+<div class="q"><b>8.</b> 一句话说：它帮你理解了什么？</div>
+<div class="q"><b>9.</b> 有没有什么是你觉得<b>根本不该出现在这儿的</b>？</div>
+
+<h2>为什么问这几个</h2>
+
+<table>
+  <tr><th>问题</th><th>我们要验证的</th></tr>
+  <tr><td>1 · 2</td><td>对象和属性<b>认不认得</b></td></tr>
+  <tr><td>3</td><td>有没有混进<b>技术黑话</b> —— 这条必须是 0 个</td></tr>
+  <tr><td>4 · 5</td><td>关系<b>方向和多少</b>对不对</td></tr>
+  <tr><td>6</td><td>哪些对象<b>本该合并</b> —— 这条会直接决定我们下一步怎么改</td></tr>
+  <tr><td>7</td><td>你们的<b>叫法</b>跟我们差在哪</td></tr>
+  <tr><td>8</td><td>整体有没有价值。<b>如果你说不出它帮你理解了什么，这本身就是重要反馈</b></td></tr>
+  <tr><td>9</td><td>什么<b>不该给客户看</b> —— 可能比合并更重要</td></tr>
+</table>
+
+<h2>我们已经知道的局限（先说在前面）</h2>
+
+<div class="card">
+  <ul style="margin:0">
+    <li>有 <b>8 个属性</b>因为名字带技术叫法，<b>没有显示</b>（页面上有告知）</li>
+    <li>「客户」这个对象<b>有 2 个属性被藏起来了</b>（那 2 个我们不认得，翻出来是技术串，
+        我们宁可不给也不给你看脏东西）</li>
+    <li>关系方向是<b>按命名约定猜的</b>（你们库里没有外键约束，只能从列名推）。
+        所以 <b>第 5 题请您特别留意</b> —— 如果方向反了，是我们的错，请直接说</li>
+    <li>还剩一些属性名没彻底翻译干净</li>
+  </ul>
+</div>
+
+<div class="ok">
+  <b>反过来，我们已经做到的：</b>页面上<b>零建模术语</b>（主键/外键/基数/快照这类词一个都没有），
+  零外部依赖，关系全部写成你我都看得懂的问句，外键叫法在同一个概念上<b>只有一种说法</b>。
+</div>
+
+<footer>
+  本页是判读入口。具体怎么问、怎么记，看
+  <code>BA/docs/reports/2026-10-03-ac013-judging-playbook.md</code>（主持人用）。<br>
+  判读对象本体：<code>BA/docs/judging/AC-013-客户视图-20261005.html</code>（评审人看这个）。<br>
+  生成于 2026-10-05 · 全程只读访问生产库，未写入任何数据
+</footer>
+
+</div>
+</body>
+</html>
