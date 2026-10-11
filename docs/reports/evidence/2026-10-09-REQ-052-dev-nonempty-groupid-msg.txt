@@ -1,7 +1,0 @@
-[TEMP-PROBE group_id="table:t_a"]
-组 table:t_a 的第 0 笔上报了两次且**用量不同**：上一读 used=120（没报费用），本次读 used=160（没报费用）。
-同一个 (group_id, attempt) 本该**只对应一笔钱**；撞出不同的值说明这个实现在同组重试时**没有递增 attempt**。**账已经错了**：这个 group_id 不是空的 ⇒ 被顶掉的那一笔是**这一组自己的**账，而它现在**不在账本任何地方**；于是 used **少计** ⇒ 闸门会按偏低的数放行 ⇒ **真的资金缺口**。
-test same_key_with_a_different_value_is_a_real_collision_and_must_trip ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
-
