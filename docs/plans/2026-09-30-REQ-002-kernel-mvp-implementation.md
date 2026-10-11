@@ -740,7 +740,7 @@ git commit -m "[Dev] Task9 快照 diff 引擎 (关联: REQ-002) [session: $SID]"
           { "name": "客户编号", "column": "customer_no", "nullable": false },
           { "name": "客户名称", "column": "customer_name", "nullable": true }
         ],
-        "evidence": [{ "table": "customers", "column": "customer_no", "claim": "客户主键" }]
+        "evidence": [{ "table": "t025", "column": "customer_no", "claim": "客户主键" }]
     }},
     { "kind": "add_entity_type", "target": "订阅", "payload": {
         "key": "subscription", "display_name": "客户订阅",
@@ -748,13 +748,13 @@ git commit -m "[Dev] Task9 快照 diff 引擎 (关联: REQ-002) [session: $SID]"
           { "name": "订阅编号", "column": "subscription_id", "nullable": false },
           { "name": "客户编号", "column": "customer_id", "nullable": false }
         ],
-        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+        "evidence": [{ "table": "t023", "column": "customer_id", "claim": "订阅挂客户" }]
     }},
     { "kind": "add_link_type", "target": "客户—订阅", "payload": {
         "key": "customer_has_subscription",
         "from_type": "customer", "to_type": "subscription",
         "cardinality": "1:N", "semantic": "has",
-        "evidence": [{ "table": "customer_subscriptions", "column": "customer_id", "claim": "订阅挂客户" }]
+        "evidence": [{ "table": "t023", "column": "customer_id", "claim": "订阅挂客户" }]
     }}
   ]
 }

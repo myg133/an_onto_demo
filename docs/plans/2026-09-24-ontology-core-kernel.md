@@ -3131,7 +3131,7 @@ Expected: PASS（10 passed）
 
 ```bash
 git add src/ontology/diff.py tests/test_diff.py
-git commit -m "feat: add snapshot diff engine with order-insensitive comparison"
+git commit -m "feat: add snapshot diff engine with t064-insensitive comparison"
 ```
 
 ---

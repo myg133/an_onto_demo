@@ -59,10 +59,10 @@
 
 ```
 A) multi-row INSERT
-  numeric-order keys = ["z_last", "m_mid", "a_first"]
+  numeric-t064 keys = ["z_last", "m_mid", "a_first"]
   ctids = ["(5641,16)", "(5641,17)", "(5641,18)"]
 B) per-row loop
-  numeric-order keys = ["z_last", "m_mid", "a_first"]
+  numeric-t064 keys = ["z_last", "m_mid", "a_first"]
   ctids = ["(5641,19)", "(5641,20)", "(5641,21)"]
 
 PROBE_RESULT call_order=["z_last", "m_mid", "a_first"] dict_order=["a_first", "m_mid", "z_last"]

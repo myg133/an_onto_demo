@@ -37,12 +37,12 @@
 
 ## 3. AC-002 为什么只是启发 —— 有反例，不是只有「没验证」
 
-只让 **2 张**表同名（91 张里把 `activity_recommendations` 改名成 `activity`），
+只让 **2 张**表同名（91 张里把 `t003` 改名成 `t001`），
 `req049/dup-two.json`：
 
 | 命令 | 结果 |
 | --- | --- |
-| preflight | EXIT=0 + 警告「activity ×2」 |
+| preflight | EXIT=0 + 警告「t001 ×2」 |
 | `cargo test --test drop_rate` | **EXIT=0，PASSED** |
 
 ⇒ **「重复表名 ⇒ 门禁会红」是假的**：部分重复时门禁**照样绿**。

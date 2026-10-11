@@ -316,51 +316,51 @@ record_evidence      → 无命中    config_key_extra   → 无命中
 
 | 列 | 注释 | 应指向 | 漏判原因 |
 | --- | --- | --- | --- |
-| `llm_provider.model_id` | 「关联模型ID(对应llm_model.model_id)」 | `llm_model` | 词干 `model` ≠ 表名 `llm_model` |
-| `llm_model_peak_config.model_id` / `llm_model_sort.model_id` / `llm_provider_back_20260701.model_id` / `llm_provider_groups.model_id` / `llm_routing_rules.model_id` | 「模型ID」「关联模型ID」 | `llm_model` | 同上（共 **6 条**指向最核心的大模型实体，全部漏） |
-| `admin_user_roles.role_id` | 「角色ID」 | `admin_roles`（表存在） | 词干 `role` ≠ `admin_roles` |
-| `balance_transfer.binding_id` / `frozen_assets.binding_id` | 「关联的绑定记录ID」 | `customer_account_binding`（表存在） | 词干 `binding` ≠ `customer_account_binding` |
+| `t055.model_id` | 「关联模型ID(对应llm_model.model_id)」 | `t052` | 词干 `model` ≠ 表名 `t052` |
+| `t053.model_id` / `t054.model_id` / `t056.model_id` / `t058.model_id` / `t059.model_id` | 「模型ID」「关联模型ID」 | `t052` | 同上（共 **6 条**指向最核心的大模型实体，全部漏） |
+| `t005.role_id` | 「角色ID」 | `t004`（表存在） | 词干 `role` ≠ `t004` |
+| `t014.binding_id` / `t032.binding_id` | 「关联的绑定记录ID」 | `t016`（表存在） | 词干 `binding` ≠ `t016` |
 | `main_customer_id` × **7 张表** | 「主账号ID」「主账号ID（冻结操作者）」 | 客户/主账号 | 词干 `main_customer` 无匹配表，**7 条全漏** |
-| `subscription_id` × 5 | 「订阅ID」 | `customer_subscriptions` | 词干 `subscription` ≠ 表名 |
-| `service_id` × 3 | 「服务标识」 | `service_apps` / `service_config` | 词干 `service` ≠ 表名 |
-| `llm_provider_group_items.provider_id` / `.group_id` | 「Provider ID」「Provider组ID」 | `llm_provider` / `llm_provider_groups` | 词干 `provider`/`group` ≠ 表名 |
-| `share_usage.shared_user_id` | 「被分享人ID」 | `customers` | 词干 `shared_user` 无匹配 |
+| `subscription_id` × 5 | 「订阅ID」 | `t023` | 词干 `subscription` ≠ 表名 |
+| `service_id` × 3 | 「服务标识」 | `t075` / `t076` | 词干 `service` ≠ 表名 |
+| `t057.provider_id` / `.group_id` | 「Provider ID」「Provider组ID」 | `t055` / `t058` | 词干 `provider`/`group` ≠ 表名 |
+| `t080.shared_user_id` | 「被分享人ID」 | `t025` | 词干 `shared_user` 无匹配 |
 
-**一个正面例子**：`customer_interests.pre_order_id`（「第三方订单id」）目标表不存在 → **正确跳过**，未误判成 `order`。这证明「目标表必须存在」这道闸有效 —— 但正如需求 §5.1 所说，**目标表存在不等于真是关系**（见 M5）。
+**一个正面例子**：`t018.pre_order_id`（「第三方订单id」）目标表不存在 → **正确跳过**，未误判成 `t064`。这证明「目标表必须存在」这道闸有效 —— 但正如需求 §5.1 所说，**目标表存在不等于真是关系**（见 M5）。
 
-**一个结构性后果**：`family_high_risk_records`（同设备高风险记录）全表只有 `main_customer_id`、没有 `customer_id` → **0 条关系**，在客户视图里与其它 90 个对象**完全孤立**，无任何上下文。
+**一个结构性后果**：`t029`（同设备高风险记录）全表只有 `main_customer_id`、没有 `customer_id` → **0 条关系**，在客户视图里与其它 90 个对象**完全孤立**，无任何上下文。
 
-### 🟡 M5 · 41/51 关系指向 `customers`，把「客户/账号/主账号/子账号/用户」压平成一个概念
+### 🟡 M5 · 41/51 关系指向 `t025`，把「客户/账号/主账号/子账号/用户」压平成一个概念
 
-**分布实测**：51 条关系只有 **6 个不同目标表** —— `customers` **37**、`admin_users` 5、`licenses` 4、`order` 3、`activity` 1、`share_usage` 1。**全部 51 条都是 `N:1` + `belongs_to`**（`REL_SUFFIXES` 只有 `_id` 命中，见 M4）。
+**分布实测**：51 条关系只有 **6 个不同目标表** —— `t025` **37**、`t006` 5、`t047` 4、`t064` 3、`t001` 1、`t080` 1。**全部 51 条都是 `N:1` + `belongs_to`**（`REL_SUFFIXES` 只有 `_id` 命中，见 M4）。
 
 **源库注释明确区分了多种主体，但关系层把它们全压成「客户」**：
 
 | 列 | 注释原文 | 推断目标 | 问题 |
 | --- | --- | --- | --- |
-| `frozen_assets.customer_id` | 「**子账号ID**」 | `customers` | 🔴 注释明说是子账号，同表另有 `main_customer_id`（「主账号ID（冻结操作者）」）。指向 `customers` 很可能**错** |
-| `balance_operation_log.customer_id` | 「账号ID（余额所属账号）」 | `customers` | 存疑：「账号」≠「客户」 |
-| `customer_interests.customer_id` | 「**用户id**」 | `customers` | 存疑：终端用户 vs 客户账号 |
-| `operate_log.customer_id` | 「用户 ID」 | `customers` | 🟠 **审计日志表** —— 正是 briefing 点名的「日志 actor 字段」风险 |
-| `marketing_channel_log.customer_id` | 「用户id」 | `customers` | 🟠 变更日志表，同上 |
-| `dim_customer_binding.customer_id` | 「账号ID（统计维度账号）」 | `customers` | 🟠 **维表**：维度表按定义聚合多个账号，「归属于 客户」对客户是误导 |
-| `rpt_dim_customer.customer_id` | 「客户ID」 | `customers` | 🟠 **报表表**（`rpt_` 前缀）：把报表表暴露成业务对象并挂关系，是噪声不是业务语义 |
-| `app_billing_transactions.customer_id` | 「**被代扣Open用户ID**」 | `customers` | 🟠 注释说的是「Open 用户」，与 `customers` 未必同一集合 |
-| `internal_staff.customer_id` | 无注释 | `customers` | 🟡 内部员工表挂 customer_id，多租户下可能合理，但对客户是怪异语义 |
-| `usage_reconciliation_log.customer_id` | 无注释 | `customers` | 🟡 对账日志，同审计日志风险 |
+| `t032.customer_id` | 「**子账号ID**」 | `t025` | 🔴 注释明说是子账号，同表另有 `main_customer_id`（「主账号ID（冻结操作者）」）。指向 `t025` 很可能**错** |
+| `t013.customer_id` | 「账号ID（余额所属账号）」 | `t025` | 存疑：「账号」≠「客户」 |
+| `t018.customer_id` | 「**用户id**」 | `t025` | 存疑：终端用户 vs 客户账号 |
+| `t063.customer_id` | 「用户 ID」 | `t025` | 🟠 **审计日志表** —— 正是 briefing 点名的「日志 actor 字段」风险 |
+| `t062.customer_id` | 「用户id」 | `t025` | 🟠 变更日志表，同上 |
+| `t027.customer_id` | 「账号ID（统计维度账号）」 | `t025` | 🟠 **维表**：维度表按定义聚合多个账号，「归属于 客户」对客户是误导 |
+| `t072.customer_id` | 「客户ID」 | `t025` | 🟠 **报表表**（`rpt_` 前缀）：把报表表暴露成业务对象并挂关系，是噪声不是业务语义 |
+| `t012.customer_id` | 「**被代扣Open用户ID**」 | `t025` | 🟠 注释说的是「Open 用户」，与 `t025` 未必同一集合 |
+| `t042.customer_id` | 无注释 | `t025` | 🟡 内部员工表挂 customer_id，多租户下可能合理，但对客户是怪异语义 |
+| `t090.customer_id` | 无注释 | `t025` | 🟡 对账日志，同审计日志风险 |
 
-**`COLUMN_LABELS` 已有的区分没被用上**：`view.rs:13-25` 里 `main_customer_id`→「主客户」、`customer_id`/`cust_id`→「所属客户」是分开的，但**关系推断层没有对应的区分** —— 7 处 `main_customer_id` 全被跳过（M4），而 `customer_id` 一律指向 `customers`。
+**`COLUMN_LABELS` 已有的区分没被用上**：`view.rs:13-25` 里 `main_customer_id`→「主客户」、`customer_id`/`cust_id`→「所属客户」是分开的，但**关系推断层没有对应的区分** —— 7 处 `main_customer_id` 全被跳过（M4），而 `customer_id` 一律指向 `t025`。
 
 **对客户的影响**：客户视图里 41/51 条关系显示为「XX **归属于 客户**」，配合 B1 的原始记号 `N:1`，会把「子账号冻结资产归属于客户」「操作日志归属于客户」这类错误结构直接呈现给业务方。
 
 **关于基数 N:1 本身是否合理**（briefing 明确问了）：对**单列外键**而言 `N:1 belongs_to` 在「多个子行指向同一个父行」这个读法下是**正确的**（多条明细行 → 一个客户）。所以基数**取值本身不算错**，错的是 (a) 方向被原样透成 `N:1` 记号（B1），(b) `belongs_to` 的中文是「归属于」，对「订单 归属于 客户」自然，但「对账日志 归属于 客户」就误导，(c) 目标表选错（M5）。
 
 **关于 `singular_to_table` 够不够用**（briefing 问了两个具体例子）：
-- `activity_keys` → 目标 `activity`：`infer_link` 对列 `activity_keys` 先试 `_ids` 后缀 → 词干 `activity_key` → 候选 `activity_keys`（= 列名，被 `cand != c.name` 排除）、`activity_key`（无此表）、`singular_to_table("activity_key")` → 剥 `s` → `activity_key`（无此表）→ **无关系**。**注意：这里推断的是 `activity_keys.activity_id → activity`（正确），不是从表名反推。** 表名 `activity_keys` 复数还原没被用到。
-- `admin_user_roles` → 目标 `admin_users`：`admin_user_roles.admin_user_id` → 词干 `admin_user` → 候选 `admin_users` ✓ → 关系正确。**表名 `admin_user_roles` 的复数还原同样没被用到**（真正命中的是列名 `admin_user_id` → `admin_users`）。
+- `t002` → 目标 `t001`：`infer_link` 对列 `t002` 先试 `_ids` 后缀 → 词干 `activity_key` → 候选 `t002`（= 列名，被 `cand != c.name` 排除）、`activity_key`（无此表）、`singular_to_table("activity_key")` → 剥 `s` → `activity_key`（无此表）→ **无关系**。**注意：这里推断的是 `t002.activity_id → t001`（正确），不是从表名反推。** 表名 `t002` 复数还原没被用到。
+- `t005` → 目标 `t006`：`t005.admin_user_id` → 词干 `admin_user` → 候选 `t006` ✓ → 关系正确。**表名 `t005` 的复数还原同样没被用到**（真正命中的是列名 `admin_user_id` → `t006`）。
 - 结论：两个例子都**推断正确**，但都**不是靠 `singular_to_table` 答对的** —— 是靠「列名词干 + 简单加 `s`」这条候选顺序。该函数在本 schema 上一次都没被真正需要（`*_ids` 列数为 0）。
 
-### 🟡 M6 · 翻译表错译：`customer_interests` → 「客户意向」
+### 🟡 M6 · 翻译表错译：`t018` → 「客户意向」
 
 **证据**（同表列注释）：
 ```
@@ -374,11 +374,11 @@ order_id     '系统订单序列号id'
 ```
 这是**客户已购权益（订阅/会员权益）**表，不是「客户意向 / 销售线索」。正确译名应为「客户权益」或「客户已购权益」。
 
-**佐证**：同一 schema 里 `interest_configs` → 「利息配置」（金融利息）。同一个英文词在两处被译成两种完全不同的中文含义（意向 vs 利息），**至少一处是错的** —— 而 `customer_interests` 这一处可由同表列注释确定为错。
+**佐证**：同一 schema 里 `t039` → 「利息配置」（金融利息）。同一个英文词在两处被译成两种完全不同的中文含义（意向 vs 利息），**至少一处是错的** —— 而 `t018` 这一处可由同表列注释确定为错。
 
 **影响**：「客户意向」在中文商业语境里指销售线索/购买意愿。一个显示「客户意向」的对象，属性是「权益ID/购买时间/到期时间/是否激活」，会严重误导读图的人 —— 这恰好是 AC-013（3 人判读）要抓的东西，而 AC-013 尚未执行。
 
-### 🟡 M6b · 存疑翻译：`family_high_risk_records` → 「同设备高风险记录」
+### 🟡 M6b · 存疑翻译：`t029` → 「同设备高风险记录」
 
 全表 11 列（`id` / `main_customer_id` / `negative_debt_rmb` / `threshold_rmb` / `status` / `created_by` / `created_at` / `cleared_at` / `cleared_by` / `remark` / `whitelist_until`）—— **没有任何 device 相关列**，也没有 customer_id。「同设备」这个译法在 schema 里**找不到依据**。
 
@@ -399,9 +399,9 @@ order_id     '系统订单序列号id'
 | 中文名含守门词（外键/基数/主键/证据） | **0** |
 | 中文名会被 `usable_as_human_name` 判退化（词元撞实体 key） | **0**（中文名分词后不撞 ASCII 表名 key） |
 | 中文名含拉丁字母 | 4 条：`AI 检索流水线`、`API 调用日志`、`IP 黑名单`、`IP 白名单` —— 守门器不误杀，但半中半英，AC-013 判读时可能被质疑 |
-| 源库拼写错误处理 | ✅ **正确**：`seetings`→系统设置、`intance_task_plans`→实例任务计划。翻译表以**源库表名为 key 精确匹配**，不做拼写纠正，因此源库侧的 typo 不会造成漏译（briefing 特别问的两个例子都正确） |
+| 源库拼写错误处理 | ✅ **正确**：`t074`→系统设置、`t038`→实例任务计划。翻译表以**源库表名为 key 精确匹配**，不做拼写纠正，因此源库侧的 typo 不会造成漏译（briefing 特别问的两个例子都正确） |
 
-**抽查的合理翻译**（确认无错译）：`order`→订单、`licenses`→授权凭证、`licenses_archive`→历史授权凭证、`license_quota`→授权额度配置、`deductions`→扣费流水、`refund_operations`→退款操作、`gift_codes`→兑换码、`usage_quotas`→用量额度、`alembic_version`→数据库迁移版本、`proxy_operation_records`→代理操作记录。
+**抽查的合理翻译**（确认无错译）：`t064`→订单、`t047`→授权凭证、`t048`→历史授权凭证、`t046`→授权额度配置、`t026`→扣费流水、`t071`→退款操作、`t034`→兑换码、`t089`→用量额度、`t010`→数据库迁移版本、`t069`→代理操作记录。
 
 ### 🟡 M8 · AC-104 的判定口径被替换，报告里的数字自相矛盾
 
@@ -454,7 +454,7 @@ order_id     '系统订单序列号id'
 ### 🟢 M11 · `sanitize_comment`：真实库上只影响 2 列，且行为符合设计意图
 
 `propose.rs:320-329` 按 `|` 和换行切分取首段。**全库实测**：
-- 含 `|` 的列注释：**仅 2 条** —— `customers.customer_name` = 「真实姓名|企业名称」、`customers.customer_no` = 「身份证号码|三证合一编号」
+- 含 `|` 的列注释：**仅 2 条** —— `t025.customer_name` = 「真实姓名|企业名称」、`t025.customer_no` = 「身份证号码|三证合一编号」
 - 含换行的列注释：**0 条**
 
 **设计意图正确**（`propose.rs:242-247`）：首段做展示名，**完整内容留 `note`**，客户视图里 `note` 不丢信息。实测产物确认 `note` 保留了完整原文。
@@ -610,7 +610,7 @@ if agent_version == "unknown" { agent_version = names.version.clone(); }
 | 4 | **词表覆盖率 546/1051 = 51%（自述 #6）** | 探针测试与变异 harness 争用同一源码目录（harness 运行期间源码处于变异态）。为不污染已完成的变异结果，我**主动放弃**了这次复算 | 独立跑一次只读探针（`project()` 对 1051 列强制走词表兜底，统计留存数）。**注：端到端数字 793/1051=75.5% 我已独立算出并采信**；未复算的只是 546 这个中间值 |
 | 5 | **「零编译警告」（自述 #8）** | 未单独跑 `-W` 统计。我的测试构建未见 `warning:` 输出到失败，但**没有系统性统计过警告数** | `cargo build 2>&1 \| grep -c warning` / `cargo clippy` |
 | 6 | **AC-013 客户视图 3 人判读** | 按 briefing 要求**不判** —— 需 3 名**非开发者**外部评审人 | 组织外部评审。**但我已指出 M12 会显著影响它的结果**：8 个属性名完全无中文、34 个超 20 字符、145 个含拉丁技术词。建议**在组织判读前先处理 M12**，否则大概率浪费 3 名评审人的时间 |
-| 7 | **`M6b`（`family_high_risk_records`→「同设备高风险记录」）是否真错** | 全表 11 列无任何 device 依据，但「family」的真实业务含义需业务知识 | 业务方确认 `family` 的含义。**标注为「存疑」而非「错译」** |
+| 7 | **`M6b`（`t029`→「同设备高风险记录」）是否真错** | 全表 11 列无任何 device 依据，但「family」的真实业务含义需业务知识 | 业务方确认 `family` 的含义。**标注为「存疑」而非「错译」** |
 | 8 | **本体库并发写入下的测试稳定性** | 测试期间出现 1 次 `test_apply` 失败，我判定为环境噪声（30432 代理重置连接）并做了重跑确认（3/3 通过 + m6b 复现），但**未做多次全量套件重复运行**来量化整体 flake 率 | 在低并发时段连跑 3–5 次全量 `cargo test`，统计 flake 率 |
 | 9 | **`--accept-all` 在含 G-5 场景（同轨 Rejected 被抹除）下的行为** | 需构造 G-5 场景；且 G-5 按需求 §6 是「待产品拍板，不擅自决定」 | 产品先对 G-5 拍板 |
 
@@ -648,12 +648,12 @@ if agent_version == "unknown" { agent_version = names.version.clone(); }
 | 8 | **`out/proposal.json` / `out/extract-stats.json` 是陈旧产物**（M9） | 与当前代码形状不符，且 `proposal.json` 会被 `ontok propose import` 拒收 —— 审阅者拿到的是误导性证据 | 删除或重新生成；`ontok-propose.rs:7-8` 的注释文件名与 E2E 实际产物对齐 |
 | 9 | **交付物缺 `BA/verify-req003.sh`**（M15） | `demand.md:185` 明确要求；`verify_selftest.sh:18` 指向不存在的文件；判据与 E2E 耦合导致回归检查需要完整环境 | 抽出独立判据脚本，或修正 `demand.md` 与 `verify_selftest.sh` 的指引 |
 | 10 | **AC-002 判据两份副本已漂移，而注释自称逐字一致**（M13） | 自测测的不是 `verify.sh` 真正在跑的判据 —— 正是该注释要防的缺陷 | 把 `verify.sh:125` 的三段 sed 与 `verify_selftest.sh:51` 对齐；更好的做法是让自测**直接调用 `verify.sh` 里的判据函数**而非复制 |
-| 11 | **翻译表错译 `customer_interests`→「客户意向」**（M6） | 列注释（权益id/购买时间/到期时间/已激活）证明这是「客户已购权益」表；「客户意向」= 销售线索，严重误导 | 改为「客户权益」/「客户已购权益」；顺手复核 `interest_configs`→「利息配置」是否也应统一（同一词两种译法必有一错） |
+| 11 | **翻译表错译 `t018`→「客户意向」**（M6） | 列注释（权益id/购买时间/到期时间/已激活）证明这是「客户已购权益」表；「客户意向」= 销售线索，严重误导 | 改为「客户权益」/「客户已购权益」；顺手复核 `t039`→「利息配置」是否也应统一（同一词两种译法必有一错） |
 | 12 | **属性名质量未被任何判据检查**（M12） | 覆盖率靠「把源库注释原样当展示名」买来；8 个属性名完全无中文、34 个超 20 字符。**这直接决定 AC-013 成败，而 AC-013 尚未执行** | 在 AC-104 判据里加一条「属性名可读性」检查（中文占比 / 长度上限 / 技术记号黑名单含 `ID`/`JSON`/`Token`/`URL`/`API`/`IP`）。**建议在组织 AC-013 判读前先做这个**，否则大概率浪费 3 名评审人 |
 
 ### 建议但不属于本轮范围
 
-- **关系推断质量**（M4/M5）：51 条关系只覆盖 31% 的约定列，漏的包含 6 条指向 `llm_model` 的真关系（注释明写目标）和 7 条 `main_customer_id`；同时 `*_ids` 分支与 `singular_to_table` 的复数规则在本 schema 上是死代码。建议按「词干 ≠ 表名是主要失败模式」重新设计（可利用已有列注释做目标表消歧 —— 注释里直接写着「对应 llm_model.model_id」）。另外 41/51 指向 `customers`，把客户/账号/主账号/子账号/用户压平了，应引入主体类型区分。**但这属零外键环境的固有限制，需求 §5.1 已预告，且作者在 E2E 报告 §6 主动列了「关系准确率需人工抽查」—— 态度可取，不宜作为本轮阻断项。**
+- **关系推断质量**（M4/M5）：51 条关系只覆盖 31% 的约定列，漏的包含 6 条指向 `t052` 的真关系（注释明写目标）和 7 条 `main_customer_id`；同时 `*_ids` 分支与 `singular_to_table` 的复数规则在本 schema 上是死代码。建议按「词干 ≠ 表名是主要失败模式」重新设计（可利用已有列注释做目标表消歧 —— 注释里直接写着「对应 t052.model_id」）。另外 41/51 指向 `t025`，把客户/账号/主账号/子账号/用户压平了，应引入主体类型区分。**但这属零外键环境的固有限制，需求 §5.1 已预告，且作者在 E2E 报告 §6 主动列了「关系准确率需人工抽查」—— 态度可取，不宜作为本轮阻断项。**
 - **`sanitize_comment` 对 `真实姓名|企业名称` 的截断**（M11）：影响 2/681，可留待后续。
 - **翻译表版本的强制机制**（M16）与 **`extracted_by.agent` 硬编码**（M16）：溯源链已通，但约定无执行、可被静默错标。
 

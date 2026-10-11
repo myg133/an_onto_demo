@@ -79,20 +79,20 @@ $ ontok-propose --schema fix-props/schema.json --names src/extract/table_names.j
 
 | 属性 | 修复前客户视图 | 修复后客户视图 | 判定 |
 | --- | --- | --- | --- |
-| `activity_keys.license_key` | `license key` | **「授权标识」** | ✅ |
-| `licenses.license_key` | `license key` | **「授权标识」** | ✅ |
-| `api_call_logs.license_id` | `License ID` | **「所属授权」** | ✅ |
-| `instance_manager.session_id` | `SessionId` | **「会话」** | ✅（`a9e197f` 补词条后达成） |
-| `customer_provider_permissions.customer_quota_policies` | `user quota policies in JSON array format` | **属性被丢弃** | ⚠️ 妥协 (a)，见 §3.1 |
+| `t002.license_key` | `license key` | **「授权标识」** | ✅ |
+| `t047.license_key` | `license key` | **「授权标识」** | ✅ |
+| `t011.license_id` | `License ID` | **「所属授权」** | ✅ |
+| `t035.session_id` | `SessionId` | **「会话」** | ✅（`a9e197f` 补词条后达成） |
+| `t020.customer_quota_policies` | `user quota policies in JSON array format` | **属性被丢弃** | ⚠️ 妥协 (a)，见 §3.1 |
 
 **类 B 两处 —— 逐字节确认未被改动**：
 
 | 属性 | 修复前 | 修复后 |
 | --- | --- | --- |
-| `app_billing_transactions.status` | `('processing/charged/failed', 'processing/charged/failed')` | **完全相同** |
-| `llm_model.type` | `('0: llm, 1: emb', '0: llm, 1: emb')` | **完全相同** |
+| `t012.status` | `('processing/charged/failed', 'processing/charged/failed')` | **完全相同** |
+| `t052.type` | `('0: llm, 1: emb', '0: llm, 1: emb')` | **完全相同** |
 
-**类 C 一处**：`llm_provider_group_items.provider_id` = `Provider ID` → **「服务商」** ✅
+**类 C 一处**：`t057.provider_id` = `Provider ID` → **「服务商」** ✅
 
 **混排属性零误伤 —— 用逐属性 diff 证明，不靠推断**：
 
@@ -338,8 +338,8 @@ briefing 里的 4 个问题**全部有测试接住**。
 
 **我的独立核对：51/51 全部正确**（不是 12/12）。判据比 BA 用的更硬 —— 我不看列注释，直接用 `schema.json` 的真实列清单做结构验证：
 
-- 51 条关系的证据列（如 `api_call_logs.customer_id`）**确实物理存在于 `from` 表**
-- `to` 表名与外键列词根**确实吻合**（`customer_id`→`customers`、`order_id`→`order`、`admin_user_id`→`admin_users`）
+- 51 条关系的证据列（如 `t011.customer_id`）**确实物理存在于 `from` 表**
+- `to` 表名与外键列词根**确实吻合**（`customer_id`→`t025`、`order_id`→`t064`、`admin_user_id`→`t006`）
 - ⇒ `from` 是"多"的一侧 ⇒ **`N:1` 标注正确，51/51 无一例外**
 
 **BA 的自查结论「N:1 标注正确、只是挂在哪一端没说清」成立。**
@@ -351,7 +351,7 @@ briefing 里的 4 个问题**全部有测试接住**。
 
 手册第 134-136 行论证的是 to 端那种（更難、更真实），但**没把这条写成对组织者的硬要求**。建议直接写死：「A 一律取**被包含的那一端**（即视图里『多对一』的『对』字那一边），B 取『多』的那一端」，并规定正确答案为「1」还是「多个」由手册预先算好发给组织者。
 
-**另一个我必须提醒的风险（存疑）**：51 条全标 `N:1` 是**命名约定启发式**的结果，而这个库**零外键约束**。方向我验证了，但**「多」的程度无法验证** —— 比如 `rpt_dim_customer`（列 `id*, customer_id, customer_name, channel_code, begin_at, end_at, create_at`）带 `begin_at/end_at`，像 SCD2 历史表，一个客户多行是对的；但 `dim_customer_binding`（`id*, customer_id, main_customer_id, channel_code, main_channel_code, ...`）如果实际是一客户一行，那 N:1 就是**事实错误**。我无数据权限，**无法证实也无法排除**。
+**另一个我必须提醒的风险（存疑）**：51 条全标 `N:1` 是**命名约定启发式**的结果，而这个库**零外键约束**。方向我验证了，但**「多」的程度无法验证** —— 比如 `t072`（列 `id*, customer_id, customer_name, channel_code, begin_at, end_at, create_at`）带 `begin_at/end_at`，像 SCD2 历史表，一个客户多行是对的；但 `t027`（`id*, customer_id, main_customer_id, channel_code, main_channel_code, ...`）如果实际是一客户一行，那 N:1 就是**事实错误**。我无数据权限，**无法证实也无法排除**。
 
 **这带出一个手册级缺陷：Q5 的判据无法区分"评审人没理解"和"模型标错了"。** 如果某个维表关系真是 1:1，评审人答"1 个"会被判为**错**，而正确答案是"1"—— 一次**模型错误会伪装成客户理解失败**，直接污染 AC-013 的核心结论。手册必须加一条兜底：Q5 出现与常识冲突的答案时，**先复核模型再计分**。
 
@@ -371,7 +371,7 @@ briefing 里的 4 个问题**全部有测试接住**。
 ### 5.3 分层抽样 13 个 —— 族内分配合理，但有两个隐患
 
 - **族内分配（客户 4 / 套餐 3 / 子账号 2 / 稀疏 2 / 技术事件流 2）合理**：客户族是 Q6 主战场且现状最碎，给 4 个对；套餐/子账号是"该合"的正例，全抽保证对照完整。
-- ⚠️ **隐患 1：「稀疏对象 2 个 · 属性数最少的 2 个」会选到客户答不上来的对象。** 我实测最稀疏的几个对象里，`app_billing_transactions`（17 个属性）里有 `processing/charged/failed` 这种纯英文属性名。如果抽中属性数最少的对象，Q1「这个东西是什么？」的答对率会被**属性极少**这件事本身压低 —— 评审人没有属性可参照。**建议「稀疏」改为「属性数少但 ≥5 个」**，或明确说明稀疏样本只用于 Q2/Q3、不计入 Q1 答对率。
+- ⚠️ **隐患 1：「稀疏对象 2 个 · 属性数最少的 2 个」会选到客户答不上来的对象。** 我实测最稀疏的几个对象里，`t012`（17 个属性）里有 `processing/charged/failed` 这种纯英文属性名。如果抽中属性数最少的对象，Q1「这个东西是什么？」的答对率会被**属性极少**这件事本身压低 —— 评审人没有属性可参照。**建议「稀疏」改为「属性数少但 ≥5 个」**，或明确说明稀疏样本只用于 Q2/Q3、不计入 Q1 答对率。
 - ⚠️ **隐患 2：13 个样本里有 2 个（14%）是纯技术对象**（鉴权缓存变更事件 / 鉴权缓存触发状态）。它们被明确标注为"反例"来验准入边界，**但 Q1/Q2/Q4/Q5 的分母如果包含它们，会系统性拉低通过率** —— 客户本来就该答不出"鉴权缓存触发状态是什么"。**建议 Q1~Q5 的分母只用 11 个业务对象，2 个技术对象只用于 Q6c。**
 
 ### 5.4 9 个问题 —— 无遗漏，但有重复和记录缺口
@@ -408,7 +408,7 @@ briefing 里的 4 个问题**全部有测试接住**。
 | 位置 | 内容 | 判定 |
 | --- | ---| --- |
 | §1 前置表 | 「零外键下大概率反了」 | ✅ 组织者段落，可接受（但结论已过时，见 5.8） |
-| §1 第 30 行 | `ai_search_pipelines` | ✅ 组织者段落 |
+| §1 第 30 行 | `t009` | ✅ 组织者段落 |
 | **§5 Q6b** | **「技术事件流」** | ❌ **念给评审人**，客户方业务人员听不懂 |
 | **§5 Q6b / §3.1** | **「鉴权缓存变更事件」「鉴权缓存触发状态」** | ⚠️ 是对象名，评审人会在页面上看到，**无法回避**；但"鉴权缓存"本身是技术词，建议组织者准备一句不解释的中性念法 |
 | §5 Q5 | 「挂在哪一端」「外键在 from 表」 | ✅ 组织者段落 |
@@ -455,12 +455,12 @@ briefing 里的 4 个问题**全部有测试接住**。
 ```
 属性键总数 old=964 new=964
 ★ 改动的属性共 6 个：
-   activity_keys.license_key          ('license key', ...) -> ('', None)
-   api_call_logs.license_id           ('License ID', ...)  -> ('', None)
-   customer_provider_permissions.customer_quota_policies    -> ('', None)
-   instance_manager.session_id         ('SessionId', ...)  -> ('', None)
-   licenses.license_key                ('license key', ...) -> ('', None)
-   llm_provider_group_items.provider_id ('Provider ID', ...) -> ('', None)
+   t002.license_key          ('license key', ...) -> ('', None)
+   t011.license_id           ('License ID', ...)  -> ('', None)
+   t020.customer_quota_policies    -> ('', None)
+   t035.session_id         ('SessionId', ...)  -> ('', None)
+   t047.license_key                ('license key', ...) -> ('', None)
+   t057.provider_id ('Provider ID', ...) -> ('', None)
 ```
 
 **变化恰好是预期的 6 个属性**（类 A 5 + 类 C 1），**没有一个多、一个不少**。类 B 两处逐字节未动。137 个混排属性零改动。

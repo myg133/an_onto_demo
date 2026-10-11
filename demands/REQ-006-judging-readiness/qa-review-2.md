@@ -46,7 +46,7 @@
 ### 1.1 逐列核对结果
 
 全库 `*_id` / `*_ids` / `*_no` / `*_code` 共 **163** 列。按 `src/extract/propose.rs:707` `infer_link` 的真实算法复算：
-**52** 条能推出关系，其中 `customers.customer_no` 被 `propose.rs:290` 的 `.filter(|t| t != &table_name)` 自引用守卫滤掉 → 实得 **51** 条（与 `links_inferred: 51` 吻合）。
+**52** 条能推出关系，其中 `t025.customer_no` 被 `propose.rs:290` 的 `.filter(|t| t != &table_name)` 自引用守卫滤掉 → 实得 **51** 条（与 `links_inferred: 51` 吻合）。
 
 再对 51 条跑真实 `extract()`，结果分三组：
 
@@ -54,25 +54,25 @@
 
 | 目标 | 条数 | 显示名 | 判定 |
 | --- | --- | --- | --- |
-| `customers` | 33 | 所属客户 | ✅ 正确 |
-| `admin_users` | 3 | 所属后台管理员 | ✅ 正确 |
-| `licenses` | 3 | 所属授权 | ✅ 正确（含 `license 标识`→英文名复述，`300e2cd` 修的正是这个） |
-| `order` | 2 | 所属订单 | ✅ 正确 |
-| `activity` | 1 | 所属活动 | ✅ 正确 |
+| `t025` | 33 | 所属客户 | ✅ 正确 |
+| `t006` | 3 | 所属后台管理员 | ✅ 正确 |
+| `t047` | 3 | 所属授权 | ✅ 正确（含 `license 标识`→英文名复述，`300e2cd` 修的正是这个） |
+| `t064` | 2 | 所属订单 | ✅ 正确 |
+| `t001` | 1 | 所属活动 | ✅ 正确 |
 
 **B) 保留原注释 = 9 条，全部该保留**
 
 | 列 | 保留下来 | 判定 |
 | --- | --- | --- |
-| `app_billing_transactions.customer_id` | 被代扣Open用户ID | ✅ **正是 briefing 点名的那条，没被误统一**（含拉丁 `Open` → 剥不出纯对象名 → 保守保留） |
-| `balance_operation_log.customer_id` | 账号ID（余额所属账号） | ✅ 括号限定 |
-| `dim_customer_binding.customer_id` | 账号ID（统计维度账号） | ✅ 括号限定 |
-| `frozen_assets.customer_id` | 子账号ID | ✅ `子账号` 不是对象名/词表值 → 保留 |
-| `customer_interests.order_id` | 系统订单序列号id | ✅ |
-| `free_amounts.share_usage_id` | 关联的分享使用记录ID | ✅ |
-| `proxy_operation_auths.admin_user_id` | 授权管理员ID | ✅ |
-| `proxy_operation_records.admin_user_id` | 操作管理员ID | ✅ |
-| `api_call_logs.license_id` | （LowQuality→词表兜底） | ✅ `License ID` 没借外键身份绕过门槛 |
+| `t012.customer_id` | 被代扣Open用户ID | ✅ **正是 briefing 点名的那条，没被误统一**（含拉丁 `Open` → 剥不出纯对象名 → 保守保留） |
+| `t013.customer_id` | 账号ID（余额所属账号） | ✅ 括号限定 |
+| `t027.customer_id` | 账号ID（统计维度账号） | ✅ 括号限定 |
+| `t032.customer_id` | 子账号ID | ✅ `子账号` 不是对象名/词表值 → 保留 |
+| `t018.order_id` | 系统订单序列号id | ✅ |
+| `t031.share_usage_id` | 关联的分享使用记录ID | ✅ |
+| `t068.admin_user_id` | 授权管理员ID | ✅ |
+| `t069.admin_user_id` | 操作管理员ID | ✅ |
+| `t011.license_id` | （LowQuality→词表兜底） | ✅ `License ID` 没借外键身份绕过门槛 |
 
 **C) 该改没改 = 0 条**（51 条里没有一条「能推出关系却没改名」）。
 
@@ -82,17 +82,17 @@
 
 | 列 | 表 | 原注释 | `infer_link` | 提案名 |
 | --- | --- | --- | --- | --- |
-| `main_customer_id` | customer_account_binding / deductions / sub_account_quota | 主账号ID | None | 主账号ID |
-| `main_customer_id` | dim_customer_binding | 主账号ID（独立账号时为NULL） | None | 原样 |
-| `main_customer_id` | frozen_assets | 主账号ID（冻结操作者） | None | 原样 |
-| `main_customer_id` | sub_account_bind_permission | 绑定的主账号ID | None | 原样 |
-| `main_customer_id` | family_high_risk_records | （无注释） | None | 空→词表 `主客户` |
+| `main_customer_id` | t016 / t026 / t085 | 主账号ID | None | 主账号ID |
+| `main_customer_id` | t027 | 主账号ID（独立账号时为NULL） | None | 原样 |
+| `main_customer_id` | t032 | 主账号ID（冻结操作者） | None | 原样 |
+| `main_customer_id` | t083 | 绑定的主账号ID | None | 原样 |
+| `main_customer_id` | t029 | （无注释） | None | 空→词表 `主客户` |
 | `sub_customer_id` | 4 张表 | 子账号ID | None | 子账号ID |
-| `source_customer_id` | balances | 划拨来源主账号ID | None | 原样 |
-| `from_customer_id` | balance_transfer | 转出账号（主账号） | None | 原样 |
-| `to_customer_id` | balance_transfer | 转入账号（子账号） | None | 原样 |
-| `target_customer_id` | simulate_login_sessions | 被模拟用户ID | None | 原样 |
-| `related_customer_id` | balance_operation_log | 关联账号ID | None | 原样 |
+| `source_customer_id` | t015 | 划拨来源主账号ID | None | 原样 |
+| `from_customer_id` | t014 | 转出账号（主账号） | None | 原样 |
+| `to_customer_id` | t014 | 转入账号（子账号） | None | 原样 |
+| `target_customer_id` | t082 | 被模拟用户ID | None | 原样 |
+| `related_customer_id` | t013 | 关联账号ID | None | 原样 |
 
 **Dev 的说法成立，且比他自己说的更彻底**：不只是 7 类，还有 `related_customer_id` / `binding_id` / `share_usage_id` / `original_record_id` 等带角色的列，共 **73 条**未解析的 `*_id` 带中文注释列**逐条保留**。
 
@@ -103,13 +103,13 @@
 | 页面显示 | 出自 | 次数 |
 | --- | --- | --- |
 | 主账号 / 主账号（冻结操作者）/ 主账号（独立账号时为NULL）/ 绑定的主账号 | `main_customer_id` 6 处 + 注释变体 | ~7 |
-| 子账号 | `sub_customer_id` 4 + `frozen_assets.customer_id` 1 | 5 |
+| 子账号 | `sub_customer_id` 4 + `t032.customer_id` 1 | 5 |
 | 划拨来源主账号 | `source_customer_id` | 1 |
 | 转出账号（主账号）/ 转入账号（子账号） | `from_/to_customer_id` | 1+1 |
 | 被模拟用户 / 关联账号 / 账号（余额所属账号）/ 账号（统计维度账号） | 限定型 `customer_id` | 各 1 |
 | 系统订单序列号 / 关联的分享使用记录 | 限定型 | 各 1 |
 
-**命名不再统一，但每一处都更准确。** 评审人看到「主账号/子账号」比看到统一成「所属客户」更能对上行（`balance_transfer` 的转出/转入方向、划拨来源都保住了）。这一项**不构成缺陷**。
+**命名不再统一，但每一处都更准确。** 评审人看到「主账号/子账号」比看到统一成「所属客户」更能对上行（`t014` 的转出/转入方向、划拨来源都保住了）。这一项**不构成缺陷**。
 
 ---
 
@@ -293,14 +293,14 @@ Dev 的**结论是真的，只是他引以为据的日志证据是空的**。这
 
 #### 🔴 阻断项 2：★「客户」对象上 4 个「属性」根本不是属性
 
-`customers` 对象的 15 项里有 **4 项是值域列表冒充属性名**：
+`t025` 对象的 15 项里有 **4 项是值域列表冒充属性名**：
 
 | 页面上的「属性名」 | 真实列 | 评审人看到的 |
 | --- | --- | --- |
-| `0: 未分类, 1: 个人用户, 2: 企业用户` | `customers.type` | 不知道这一列叫**客户类型** |
-| `0: 未认证, 1: 已认证` | `customers.verify` | 不知道是**认证状态** |
-| `0: 已停用, 1: 已启用` | `customers.status` | 不知道是**启用状态** |
-| `0: 不允许, 1: 允许` | `customers.is_foreign_model_allowed` | 不知道是**是否允许外部模型** |
+| `0: 未分类, 1: 个人用户, 2: 企业用户` | `t025.type` | 不知道这一列叫**客户类型** |
+| `0: 未认证, 1: 已认证` | `t025.verify` | 不知道是**认证状态** |
+| `0: 已停用, 1: 已启用` | `t025.status` | 不知道是**启用状态** |
+| `0: 不允许, 1: 允许` | `t025.is_foreign_model_allowed` | 不知道是**是否允许外部模型** |
 
 - 根因：`propose.rs:693-695` `classify_comment` **先判有没有汉字**，而 `is_value_atom`（`propose.rs:493`）只收 ASCII，所以**中文值域永远走不到 EnumDomain 分支**。REQ-007 的「值域不许占属性名」只对 ASCII 值域生效。
 - **全页共 63 处这种属性名**（含 ★客户意向、★客户折扣返利、★子账号额度）。
@@ -317,7 +317,7 @@ Dev 的**结论是真的，只是他引以为据的日志证据是空的**。这
 根源在翻译表 `feature-REQ-008/src/extract/table_names.json:90`：
 
 ```json
-"sub_account_bind_permission": "子账号绑定权限快照"
+"t083": "子账号绑定权限快照"
 ```
 
 **这是一张真业务表**（主账号↔子账号绑定关系，含 `绑定的主账号ID` / `子账号ID`），翻译时多塞了「快照」二字，被建模用语守卫整对象滤掉。页面告知**不说是哪一个**，评审人无从知道「子账号绑定」这件事整体缺席 —— 而主账号/子账号恰好是 Q1/Q2 最可能被追问的点。
@@ -378,7 +378,7 @@ Dev 的**结论是真的，只是他引以为据的日志证据是空的**。这
 | --- | --- | --- | --- | --- |
 | **B1** | ★ 重点对象里 3 个是技术设施（数据库迁移版本 / 鉴权缓存变更事件 / 鉴权缓存触发状态） | 抽样高亮名单 | 把这 3 个从 ★ 里去掉或换成业务对象 | 极小（改抽样名单） |
 | **B2** | ★「客户」对象 4 个属性名是中文值域，全页共 63 处 | `propose.rs:693` 汉字门槛 + `propose.rs:493` `is_value_atom` 只收 ASCII | 让 `is_value_atom` / 值域判定支持中文原子，或在 HumanReadable 之前先试中文值域形态 | **中**（要防误伤 63 处里的正常中文属性名） |
-| **B3** | 业务对象 `sub_account_bind_permission` 因翻译表里的「快照」二字被整对象剔除，且告知不点名 | `src/extract/table_names.json:90` | 改成「子账号绑定权限」（去掉「快照」），同步 bump `version` | **极小**（翻译表改动，但按 `names.rs:19-23` 的规矩要升 version） |
+| **B3** | 业务对象 `t083` 因翻译表里的「快照」二字被整对象剔除，且告知不点名 | `src/extract/table_names.json:90` | 改成「子账号绑定权限」（去掉「快照」），同步 bump `version` | **极小**（翻译表改动，但按 `names.rs:19-23` 的规矩要升 version） |
 
 **B2 是三项里唯一有技术风险的**，建议改完重跑 `drop_rate`（上限 10%）并重新生成页面比对 —— 值域形态判定放宽最容易连带误杀正常属性名。
 

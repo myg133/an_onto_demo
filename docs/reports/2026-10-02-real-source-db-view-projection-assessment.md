@@ -27,9 +27,9 @@
 | **外键约束** | **0** |
 | 主键约束 | 91 |
 | 其他 schema | `ods_logs` 477 表 · `dwd` 58 · `ads` 9 · `meta` 3 |
-| 注释覆盖 | 极不均匀。`balances` 27/27、`customers` 16/18、`order` 16/19 有注释；`package_templates`、`llm_auth_cache_*`、`internal_operation_records` **零注释** |
-| 命名风格 | 表名列名**全为英文技术命名**（`customers`、`rewrite_times`、`aisearch_times`） |
-| 保留字表名 | 存在 `order` 表 |
+| 注释覆盖 | 极不均匀。`t015` 27/27、`t025` 16/18、`t064` 16/19 有注释；`t067`、`llm_auth_cache_*`、`t041` **零注释** |
+| 命名风格 | 表名列名**全为英文技术命名**（`t025`、`rewrite_times`、`aisearch_times`） |
+| 保留字表名 | 存在 `t064` 表 |
 
 ---
 
@@ -55,8 +55,8 @@
 未覆盖列名前 6 名全是标准审计字段：`id`(88) · `created_at`(83) · `updated_at`(55) · `created_by`(52) · `updated_by`(16) · `model_id`(8)。
 
 **丢弃率 100% 的表**（客户端点不出任何属性）：
-`rpt_dws_channel`(17 列) · `website_notice_config`(16) · `simulate_login_sessions`(15) ·
-`llm_auth_cache_trigger_state`(9) · `proxy_operation_records`(9) · `service_config`(9) · `simulate_login_operations`(9)
+`t073`(17 列) · `t091`(16) · `t082`(15) ·
+`t051`(9) · `t069`(9) · `t076`(9) · `t081`(9)
 
 ### 🔴 发现 2 · **64% 被丢弃的列其实有中文注释，而投影算法完全不看注释**
 
@@ -82,7 +82,7 @@
 
 `scan_modeling_terms` 用 `low.contains(term)` 匹配，守门词含 `"key"`。真实库里含 `key` 的对象：
 
-- **表名 2 张**：`activity_keys`、`keyword_filter_config`
+- **表名 2 张**：`t002`、`t045`
 - **列名 9 种**：`aggregate_key` · `cache_key` · `config_key` · `idempotency_key` · `keywords` · `license_key` · `public_key` · `record_key` · …
 
 当前**中文投影结果里 400 条抽样 0 命中**，所以 AC-005 仍然安全。
@@ -141,7 +141,7 @@ c = pg8000.native.Connection(user=os.environ["PGUSER"], host=os.environ["PGHOST"
     password=os.environ["PGPASSWORD"])
 c.run("SET default_transaction_read_only = on")
 print(list(c.run("""select table_name, column_name from information_schema.columns
-  where table_schema='public' order by 1,2"""))[:20])
+  where table_schema='public' t064 by 1,2"""))[:20])
 PY
 ```
 

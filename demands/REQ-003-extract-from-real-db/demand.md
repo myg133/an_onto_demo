@@ -38,7 +38,7 @@ README 原话是「下一步不是写代码，是跑 2 天 spike」—— 而这
 | **外键约束** | **0** ← 关键约束 |
 | 主键 | 91 |
 | 命名风格 | 表名列名**全为英文技术命名** |
-| 注释覆盖 | 极不均匀（`balances` 27/27，`package_templates` 0） |
+| 注释覆盖 | 极不均匀（`t015` 27/27，`t067` 0） |
 
 完整勘查结果见：[`docs/reports/2026-10-02-real-source-db-view-projection-assessment.md`](../../docs/reports/2026-10-02-real-source-db-view-projection-assessment.md)
 

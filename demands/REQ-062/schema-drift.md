@@ -44,9 +44,9 @@ VPN 实例：`PostgreSQL 16.14`（Debian 16.14-1.pgdg13+1）。
 
 | 表 | 缺失列 |
 | --- | --- |
-| `deductions` | `model_id`、`provider` |
-| `package_templates` | `sale_limit` |
-| `service_config_peak` | `status`、`weekdays` |
+| `t026` | `model_id`、`provider` |
+| `t067` | `sale_limit` |
+| `t077` | `status`、`weekdays` |
 
 逐表列数：26→24、23→22、14→12，合计 **-5**。
 
@@ -80,8 +80,8 @@ VPN 实例：`PostgreSQL 16.14`（Debian 16.14-1.pgdg13+1）。
 
 | 表.列 | 登记基线 | 现拉 |
 | --- | --- | --- |
-| `llm_model_peak_config.peak_periods` | `jsonb` | `json` |
-| `service_config_peak.llm_metadata` | `jsonb` | `json` |
+| `t053.peak_periods` | `jsonb` | `json` |
+| `t077.llm_metadata` | `jsonb` | `json` |
 
 全库 `jsonb` 列数：**基线 9 → 现拉 6**（差 3 = 2 处变形 + 1 条整体缺失的 jsonb 列）。
 
@@ -155,7 +155,7 @@ cargo run --bin ontok-gate-preflight -- --out <仓库根>/.review-workspace/req0
 | --- | --- |
 | 基线独有表（形态 a） | **0 张** |
 | 现拉独有表 | **5 张**（3 × `_volc_dts_pg_ddl_*` + `llm_provider_back` ×2） |
-| 少列的表（形态 b） | **3 张**：`deductions`（`model_id`/`provider`）、`package_templates`（`sale_limit`）、`service_config_peak`（`status`/`weekdays`） |
+| 少列的表（形态 b） | **3 张**：`t026`（`model_id`/`provider`）、`t067`（`sale_limit`）、`t077`（`status`/`weekdays`） |
 
 ### 5.2 三条对实现有直接影响的结论
 

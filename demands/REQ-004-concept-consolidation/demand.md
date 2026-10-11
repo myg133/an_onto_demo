@@ -43,8 +43,8 @@ REQ-003 从真实源库（`<业务库名>`，91 表 / 1051 列）抽出
 
 考虑过直接在抽取层把同前缀的表合成一个实体。**三条理由否决它**：
 
-1. **物理结构是事实，归并是判断。** `package_templates`/`package_products`/`package_benefits`
-   确实同属「套餐」；但 `activity` / `activity_recommendations`（活动 / 活动推荐）
+1. **物理结构是事实，归并是判断。** `t067`/`t066`/`t065`
+   确实同属「套餐」；但 `t001` / `t003`（活动 / 活动推荐）
    **该不该合？前缀匹配回答不了。**
 2. **零外键下自动聚合准确率上不去。** 91 表、0 外键、注释覆盖不均。
    聚合要靠语义推理 —— **错了比不聚合更糟**：
@@ -92,11 +92,11 @@ REQ-003 从真实源库（`<业务库名>`，91 表 / 1051 列）抽出
   "payload": {
     "key": "package",
     "display_name": "套餐",
-    "members": ["package_templates", "package_products", "package_benefits"],
+    "members": ["t067", "t066", "t065"],
     "extracted_by": { "agent": "...", "version": "...", "round": 1 },
     "evidence": [
-      { "table": "package_products", "claim": "套餐下可买的产品" },
-      { "table": "package_benefits",  "claim": "套餐包含的权益" }
+      { "table": "t066", "claim": "套餐下可买的产品" },
+      { "table": "t065",  "claim": "套餐包含的权益" }
     ]
   }
 }

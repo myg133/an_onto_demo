@@ -22,9 +22,9 @@
 
 | 类 | 数量 | 清单 |
 | --- | --- | --- |
-| **A 真问题** | 5 处 | `activity_keys.license_key`、`licenses.license_key`、`api_call_logs.license_id`、`instance_manager.session_id`、`customer_provider_permissions.customer_quota_policies` |
-| **B 不是问题** | 2 个 | `app_billing_transactions.status` → `processing/charged/failed`；`llm_model.type` → `0: llm, 1: emb` —— **枚举值域本身**，翻译反而破坏信息（客户看到中文状态但回库查到的是英文） |
-| **C 待判断** | 1 个 | `llm_provider_group_items.provider_id` → `Provider ID`（`Provider` 是内部外号 → 已翻成「服务商」） |
+| **A 真问题** | 5 处 | `t002.license_key`、`t047.license_key`、`t011.license_id`、`t035.session_id`、`t020.customer_quota_policies` |
+| **B 不是问题** | 2 个 | `t012.status` → `processing/charged/failed`；`t052.type` → `0: llm, 1: emb` —— **枚举值域本身**，翻译反而破坏信息（客户看到中文状态但回库查到的是英文） |
+| **C 待判断** | 1 个 | `t057.provider_id` → `Provider ID`（`Provider` 是内部外号 → 已翻成「服务商」） |
 
 > 另：**145 个「含英文但不全是英文」的属性**（「客户ID」「请求Token数」「API端点」
 > 「RSA 公钥 PEM」等）**不是泄露** —— 中文里本来就用这些词。

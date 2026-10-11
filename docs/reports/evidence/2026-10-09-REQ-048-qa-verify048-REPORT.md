@@ -39,7 +39,7 @@
 | **绕过2 表名全重复** | 91 张同名表、列保留 | **0** | **未被杀死 —— 见 §5 发现 D1** |
 | 绕过3 UTF-16 编码 | 合法 JSON 转 UTF-16 | 1 | `读不到门禁输入 …（stream did not contain valid UTF-8）` |
 | 绕过4 只读留痕 off | `transaction_read_only="off"` | 1 | `只读留痕不对：transaction_read_only = "off"` |
-| 绕过5 单表列数撒谎 | 一张表 `column_count` +7 | 1 | `各表自称的列数加起来 = 1058，与表头 1051 不符` + `表 activity 自称 18 列，columns 里只有 11 个` |
+| 绕过5 单表列数撒谎 | 一张表 `column_count` +7 | 1 | `各表自称的列数加起来 = 1058，与表头 1051 不符` + `表 t001 自称 18 列，columns 里只有 11 个` |
 | 绕过6 注释列数撒谎 | `commented_column_count` +3 | 1 | `各表自称的注释列加起来 = 681，与表头 684 不符` |
 | 符号链接（好目标） | 软链指向真实产物 | 0 | 跟随读取，判据作用于内容 |
 | 符号链接（悬空） | 软链指向不存在文件 | 1 | `读不到门禁输入 …（No such file or directory）` |
