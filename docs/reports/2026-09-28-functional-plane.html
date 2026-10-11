@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本体平台 · 功能面架构</title>
+<style>
+:root{
+  --ink:#161513;
+  --paper:#f2f2f0;
+  --navy:#082d4f;
+  --card:#fdfdfa;
+  --mut:#6f6c66;
+  --hair:#c9c6c0;
+  --wash:#f4f7fa;
+  --mono:"SF Mono",Menlo,Monaco,Consolas,"Courier New",monospace;
+  --serif:Georgia,"Times New Roman","Songti SC","STSong","Noto Serif SC","SimSun",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{
+  font-size:calc(14px + (17 - 14) * ((100vw - 768px) / (1600 - 768)));
+  scroll-behavior:smooth;
+  scroll-padding-top:64px;
+}
+@media(max-width:820px){html{font-size:15px}}
+body{
+  background:var(--paper);color:var(--ink);font-family:var(--sans);
+  line-height:1.8;font-variant-numeric:tabular-nums;
+}
+::selection{background:var(--ink);color:var(--paper)}
+a{color:var(--navy);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── top bar ── */
+header.top{
+  position:sticky;top:0;z-index:50;background:var(--paper);
+  border-bottom:1px solid var(--ink);
+  display:flex;align-items:stretch;justify-content:space-between;
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
+}
+header.top .cell{padding:.75rem 1.1rem;display:flex;align-items:center;gap:.6rem}
+header.top .cell + .cell{border-left:1px solid var(--ink)}
+header.top .dot{width:.5rem;height:.5rem;background:var(--navy);border-radius:50%}
+header.top .muted{color:var(--mut)}
+
+/* ── layout ── */
+.shell{
+  max-width:1400px;margin:0 auto;
+  display:grid;grid-template-columns:1fr;gap:0;
+  padding:0 1.5rem 6rem;
+}
+@media(min-width:1180px){
+  .shell{grid-template-columns:200px minmax(0,1fr);gap:3.5rem;padding-right:2rem}
+}
+nav.toc{display:none}
+@media(min-width:1180px){
+  nav.toc{
+    display:block;position:sticky;top:4.2rem;align-self:start;
+    padding-top:4rem;font-size:.74rem;line-height:1.5;
+    border-right:1px solid var(--hair);padding-right:1rem;margin-right:-1.5rem;
+  }
+  nav.toc a{display:block;padding:.34rem 0;color:var(--mut);font-family:var(--mono);letter-spacing:.02em}
+  nav.toc a.on{color:var(--navy);font-weight:600}
+  nav.toc a:hover{color:var(--ink);text-decoration:none}
+}
+main{min-width:0;padding-top:3.4rem}
+
+/* ── typography ── */
+.eyebrow{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--mut);margin-bottom:.9rem;
+}
+h1{
+  font-family:var(--serif);font-weight:400;font-size:2.5rem;line-height:1.25;
+  letter-spacing:-.01em;margin-bottom:1.1rem;
+}
+h1 .cn{display:block;font-size:.44em;color:var(--mut);margin-top:.5rem;letter-spacing:.04em}
+.lead{font-size:1.02rem;color:#2c2a26;max-width:62ch}
+.lead strong{background:linear-gradient(transparent 62%, #dfe6ec 62%)}
+h2{
+  font-family:var(--serif);font-weight:400;font-size:1.7rem;
+  margin:3.6rem 0 1.1rem;padding-bottom:.5rem;border-bottom:1px solid var(--ink);
+  letter-spacing:-.005em;
+}
+h2 .n{font-family:var(--mono);font-size:.72rem;color:var(--navy);letter-spacing:.1em;margin-right:.7rem;vertical-align:.18em}
+h3{
+  font-size:1.06rem;font-weight:600;margin:2.2rem 0 .7rem;
+  letter-spacing:.005em;
+}
+h3 .en{font-family:var(--mono);font-size:.78rem;color:var(--mut);font-weight:400;letter-spacing:.06em;margin-left:.5rem}
+h4{
+  font-family:var(--mono);font-size:.72rem;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--navy);margin:2.4rem 0 .5rem;
+}
+p{margin:.75rem 0;max-width:66ch}
+ul,ol{margin:.7rem 0 .7rem 1.2rem;max-width:66ch}
+li{margin:.32rem 0}
+code{
+  font-family:var(--mono);font-size:.86em;background:#e9e9e5;
+  padding:.1em .35em;border-radius:2px;color:#33302b;
+}
+blockquote{
+  border-left:2px solid var(--navy);padding:.1rem 0 .1rem 1.1rem;
+  margin:1.2rem 0;color:#3a3833;font-size:.95rem;
+}
+hr{border:0;border-top:1px solid var(--hair);margin:2.6rem 0}
+
+/* ── hero meta ── */
+.meta-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.6rem 0 0}
+.tag{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;
+  border:1px solid var(--hair);padding:.2rem .6rem;color:var(--mut);
+  background:var(--card);
+}
+.tag.navy{border-color:var(--navy);color:var(--navy)}
+
+/* ── note callout ── */
+.note{
+  border-left:2px solid var(--navy);background:var(--wash);
+  padding:1rem 1.2rem;margin:1.5rem 0;font-size:.93rem;
+}
+.note .lbl{
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--navy);display:block;margin-bottom:.4rem;
+}
+.note p{margin:.4rem 0}
+.note p:first-child{margin-top:0}
+.note p:last-child{margin-bottom:0}
+
+/* ── capability cards ── */
+.cap{
+  border:1px solid var(--ink);background:var(--card);
+  padding:1.3rem 1.5rem;margin:1.1rem 0;
+}
+.cap-hd{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap;margin-bottom:.2rem}
+.cap-hd .zh{font-family:var(--serif);font-size:1.32rem}
+.cap-hd .en{font-family:var(--mono);font-size:.76rem;color:var(--navy);letter-spacing:.14em;text-transform:uppercase}
+.cap-hd .slice{
+  margin-left:auto;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;
+  border:1px solid var(--hair);padding:.12rem .5rem;color:var(--mut);white-space:nowrap;
+}
+.cap-hd .slice.now{border-color:var(--navy);color:var(--navy)}
+.cap .one{font-size:.98rem;color:#2c2a26;margin:.1rem 0 .8rem;border-bottom:1px solid var(--hair);padding-bottom:.7rem}
+.cap dl{display:grid;grid-template-columns:auto 1fr;gap:.3rem .9rem;font-size:.9rem;max-width:70ch}
+.cap dt{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--mut);padding-top:.28em;white-space:nowrap;
+}
+.cap dd{margin:0}
+.cap dd.hide{color:var(--mut)}
+.cap dd.core{color:var(--navy);font-weight:500}
+
+/* ── table ── */
+.tbl-wrap{overflow-x:auto;margin:1.4rem 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:520px}
+th,td{border:1px solid var(--hair);padding:.55rem .75rem;text-align:left;vertical-align:top}
+th{
+  background:#e9e9e5;font-weight:600;font-size:.76rem;
+  font-family:var(--mono);letter-spacing:.06em;color:#33302b;
+}
+tbody tr:nth-child(even){background:var(--card)}
+td.hl{color:var(--navy);font-weight:600}
+td.dim{color:var(--mut)}
+
+/* ── pillars ── */
+.pillars{list-style:none;margin:1.4rem 0;counter-reset:p;max-width:70ch}
+.pillars li{
+  counter-increment:p;position:relative;padding:1rem 0 1rem 3rem;
+  border-bottom:1px solid var(--hair);margin:0;
+}
+.pillars li::before{
+  content:counter(p);position:absolute;left:.2rem;top:1.05rem;
+  font-family:var(--serif);font-size:1.4rem;color:var(--navy);line-height:1;
+}
+.pillars .t{font-family:var(--serif);font-size:1.04rem;display:block;margin-bottom:.3rem}
+.pillars .d{font-size:.9rem;color:#3a3833;display:block}
+
+/* ── diagram ── */
+figure.diagram{
+  margin:1.8rem 0;border:1px solid var(--hair);background:var(--card);
+  padding:1.2rem .9rem .7rem;overflow-x:auto;
+}
+figure.diagram.wide{padding:1.4rem .6rem .7rem}
+figure.diagram svg{display:block;width:100%;height:auto;min-width:640px}
+figure.diagram figcaption{
+  font-family:var(--mono);font-size:.67rem;color:var(--mut);
+  letter-spacing:.07em;margin-top:.9rem;text-align:center;
+}
+
+/* ── flow strip (切片) ── */
+.strip{display:flex;flex-wrap:wrap;align-items:stretch;gap:.6rem;margin:1.4rem 0}
+.strip .step{
+  flex:1 1 150px;border:1px solid var(--ink);background:var(--card);
+  padding:.9rem 1rem;
+}
+.strip .step .t{font-family:var(--serif);font-size:1.05rem;display:block;margin-bottom:.25rem}
+.strip .step .s{font-size:.82rem;color:var(--mut);line-height:1.5}
+.strip .step.s2{border-style:dashed;border-color:var(--hair);opacity:.72}
+.strip .arw{align-self:center;font-family:var(--mono);color:var(--mut);font-size:1rem}
+
+/* ── mapping ── */
+.map{display:grid;grid-template-columns:1fr;gap:.55rem;margin:1.3rem 0}
+@media(min-width:760px){.map{grid-template-columns:1fr auto 1fr}}
+.map .l,.map .r{
+  border:1px solid var(--hair);background:var(--card);padding:.6rem .8rem;
+  font-size:.87rem;display:flex;align-items:center;
+}
+.map .l{color:var(--mut)}
+.map .r{border-color:var(--ink);color:var(--ink);font-weight:600}
+.map .m{
+  font-family:var(--mono);color:var(--navy);font-size:.8rem;
+  display:flex;align-items:center;justify-content:center;padding:0 .3rem;
+}
+@media(max-width:759px){.map .m{justify-content:flex-start;padding-left:.9rem}}
+
+/* ── answer list ── */
+.answers{counter-reset:a;list-style:none;margin:1.4rem 0 0 0;max-width:70ch}
+.answers li{
+  counter-increment:a;position:relative;padding:.85rem 0 .85rem 2.6rem;
+  border-bottom:1px solid var(--hair);margin:0;
+}
+.answers li::before{
+  content:counter(a,decimal-leading-zero);
+  position:absolute;left:0;top:.85rem;
+  font-family:var(--mono);font-size:.7rem;color:var(--navy);letter-spacing:.06em;
+}
+.answers .q{font-family:var(--serif);font-size:1rem;display:block;margin-bottom:.28rem}
+.answers .a{font-size:.89rem;color:#3a3833;display:block}
+
+/* ── footer ── */
+footer{
+  margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--ink);
+  font-family:var(--mono);font-size:.7rem;color:var(--mut);letter-spacing:.06em;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:.6rem;
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="cell"><span class="dot"></span><span>本体平台</span></div>
+  <div class="cell muted">功能面架构 · Functional Plane</div>
+  <div class="cell muted">2026-09-28</div>
+</header>
+
+<div class="shell">
+
+<nav class="toc" id="toc">
+  <a href="#s1">01 · 一句话</a>
+  <a href="#s2">02 · 为什么再上一层</a>
+  <a href="#s3">03 · 总图</a>
+  <a href="#s4">04 · 七个功能域 + 决策闸门</a>
+  <a href="#s5">05 · 交付旅程</a>
+  <a href="#s6">06 · POC 与生产</a>
+  <a href="#s7">07 · 功能域 × 角色</a>
+  <a href="#s8">08 · 三张图的分工</a>
+  <a href="#s9">09 · 回应了什么</a>
+</nav>
+
+<main>
+
+<p class="eyebrow">本体平台 · 交付视角</p>
+<h1>功能面架构<span class="cn">Functional Plane — FDE 拿这套平台怎么完成一次交付</span></h1>
+
+<p class="lead">这个平台只做一件事：<strong>把客户系统里的数据与 know-how，变成 Agent 能理解的业务语义。</strong></p>
+
+<div class="meta-row">
+  <span class="tag navy">读者 · 老板 / 产品 / FDE</span>
+  <span class="tag">语言 · 产品语言，不含技术选型</span>
+  <span class="tag">上一层 · 能力面</span>
+  <span class="tag">下一层 · 组件面</span>
+  <span class="tag">事实源 · docs/design/ontology-platform-spec.md</span>
+  <span class="tag">2026-09-28</span>
+</div>
+
+<div class="note" style="margin-top:1.8rem">
+  <span class="lbl">本文的由来</span>
+  <p>2026-09-24 对齐会议：「过于偏向底层技术实现，与本体核心逻辑关联度不足，需进一步向上抽象调整」。</p>
+  <p>能力面把主视觉从<strong>模块</strong>换成了<strong>能力</strong>；本文再上一层，把主视觉从<strong>能力</strong>换成<strong>交付</strong>。</p>
+</div>
+
+<!-- ══════════════════ 01 ══════════════════ -->
+<h2 id="s1"><span class="n">01</span>一句话</h2>
+
+<p>这句话里有两个词是全部价值的来源：</p>
+
+<ul>
+  <li><strong>速度</strong> —— FDE 第一次进客户现场，多久能拿出第一版可讨论的本体？</li>
+  <li><strong>可信度</strong> —— 每一条语义，有没有证据、有没有人签字？</li>
+</ul>
+
+<p>功能面上的七个功能域，全部围绕这两个词展开。<strong>任何一个功能域，如果既不加快速度、也不提高可信度，就不该出现在这张图上。</strong></p>
+<p>此外还有一道 <strong>⓪ 决策清单</strong> 范围闸门 —— 它不是第八个功能域，而是 <strong>④ 的输入约束</strong>：先定「本轮服务哪条决策」，再决定抽什么。</p>
+
+<!-- ══════════════════ 02 ══════════════════ -->
+<h2 id="s2"><span class="n">02</span>为什么还要再上一层</h2>
+
+<p>能力面已经讲了「平台能做什么」，为什么不够？因为它回答的是<strong>平台自己</strong>的问题，没回答<strong>交付这件事</strong>的问题。</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>问题</th><th>谁在问</th><th>哪一层回答</th></tr></thead>
+  <tbody>
+    <tr><td>系统由哪些模块组成</td><td>工程师</td><td class="dim">组件面</td></tr>
+    <tr><td>平台对外能做什么</td><td>老板、客户</td><td class="dim">能力面</td></tr>
+    <tr><td>为什么需要这个平台</td><td>老板、客户、销售</td><td class="hl">功能面</td></tr>
+    <tr><td>FDE 拿它怎么完成一次交付</td><td>FDE、交付负责人</td><td class="hl">功能面</td></tr>
+    <tr><td>客户凭什么签字、凭什么续约</td><td>客户</td><td class="hl">功能面</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>关键的差别是<strong>视角的方向</strong>：</p>
+
+<ul>
+  <li>能力面是<strong>共时</strong>的 —— 站在平台外面往里看，此刻平台有哪些牌。</li>
+  <li>功能面是<strong>历时</strong>的 —— 站在交付里面往外看，一个项目从头到尾走一遍，每一步谁在干活、产出什么、什么时候停。</li>
+</ul>
+
+<div class="note">
+  <span class="lbl">一句话区别</span>
+  <p>能力面像一张<strong>名片</strong>（我们有什么）；功能面像一张<strong>作战地图</strong>（这一仗怎么打）。</p>
+</div>
+
+<!-- ══════════════════ 03 ══════════════════ -->
+<h2 id="s3"><span class="n">03</span>总图：本体在中间</h2>
+
+<p>这张图的画法是<strong>从客户价值往下倒推</strong>，而不是从模块往上堆 —— 倒推才能保证每一层都有存在的理由。</p>
+
+<figure class="diagram wide">
+<svg viewBox="0 0 980 900" role="img" aria-label="功能面总图：客户价值层、本体层、交付工具层自下而上堆叠">
+  <defs>
+    <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#082d4f"></path>
+    </marker>
+    <marker id="ar1g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f6c66"></path>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="900" fill="#fdfdfa"></rect>
+
+  <!-- Q -->
+  <rect x="250" y="24" width="480" height="76" rx="3" fill="#f4f7fa" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="5 4"></rect>
+  <text x="490" y="52" text-anchor="middle" font-size="13" font-weight="600" fill="#082d4f">客户真正想解决的问题</text>
+  <text x="490" y="78" text-anchor="middle" font-size="11.5" fill="#3a3833">「这台设备最近为什么老报警？」　「这批工单到底卡在哪一环？」</text>
+
+  <!-- arrow TOP -> Q -->
+  <line x1="490" y1="156" x2="490" y2="104" stroke="#6f6c66" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#ar1g)"></line>
+  <text x="502" y="132" font-size="10.5" fill="#6f6c66">答案与行动</text>
+
+  <!-- TOP -->
+  <rect x="60" y="156" width="860" height="120" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1"></rect>
+  <text x="80" y="180" font-size="12.5" font-weight="600" fill="#082d4f">客户价值层 · 客户买到的东西</text>
+  <rect x="110" y="196" width="368" height="56" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="294" y="220" text-anchor="middle" font-size="13" fill="#161513">业务 Agent 应用</text>
+  <text x="294" y="240" text-anchor="middle" font-size="11" fill="#6f6c66">对话问答 · 报表 · 告警</text>
+  <rect x="502" y="196" width="368" height="56" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="5 4"></rect>
+  <text x="686" y="220" text-anchor="middle" font-size="13" fill="#3a3833">业务系统写回</text>
+  <text x="686" y="240" text-anchor="middle" font-size="11" fill="#6f6c66">Action（切片 2）</text>
+
+  <!-- arrow MID -> TOP -->
+  <line x1="490" y1="340" x2="490" y2="280" stroke="#082d4f" stroke-width="1.6" marker-end="url(#ar1)"></line>
+  <text x="502" y="314" font-size="10.5" fill="#082d4f">语义上下文</text>
+
+  <!-- MID -->
+  <rect x="60" y="340" width="860" height="170" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="2.4"></rect>
+  <text x="80" y="366" font-size="12.5" font-weight="600" fill="#082d4f">本体层 · 平台真正在造的东西</text>
+
+  <rect x="115" y="380" width="165" height="54" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="197" y="404" text-anchor="middle" font-size="12.5" fill="#161513">对象</text>
+  <text x="197" y="424" text-anchor="middle" font-size="10" fill="#6f6c66">ObjectType</text>
+
+  <rect x="310" y="380" width="165" height="54" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="392" y="404" text-anchor="middle" font-size="12.5" fill="#161513">关系</text>
+  <text x="392" y="424" text-anchor="middle" font-size="10" fill="#6f6c66">LinkType</text>
+
+  <rect x="505" y="380" width="165" height="54" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="5 4"></rect>
+  <text x="587" y="404" text-anchor="middle" font-size="12.5" fill="#3a3833">动作</text>
+  <text x="587" y="424" text-anchor="middle" font-size="10" fill="#6f6c66">ActionType</text>
+
+  <rect x="700" y="380" width="165" height="54" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="5 4"></rect>
+  <text x="782" y="404" text-anchor="middle" font-size="12.5" fill="#3a3833">函数</text>
+  <text x="782" y="424" text-anchor="middle" font-size="10" fill="#6f6c66">Function</text>
+
+  <rect x="115" y="448" width="750" height="44" rx="3" fill="#e9eef4" stroke="#082d4f" stroke-width="1.2"></rect>
+  <text x="490" y="475" text-anchor="middle" font-size="11.5" fill="#082d4f">治理三件 · 提案 Proposal　|　版本 Version　|　证据 Provenance</text>
+
+  <!-- arrow BOT -> MID -->
+  <line x1="490" y1="574" x2="490" y2="514" stroke="#082d4f" stroke-width="1.6" marker-end="url(#ar1)"></line>
+  <text x="502" y="548" font-size="10.5" fill="#082d4f">抽出 &#8594; 审核 &#8594; 冻结</text>
+
+  <!-- BOT -->
+  <rect x="60" y="574" width="860" height="170" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1"></rect>
+  <text x="80" y="598" font-size="12.5" font-weight="600" fill="#082d4f">交付工具层 · FDE 用的平台功能（本文主体）</text>
+
+  <rect x="92" y="614" width="245" height="110" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="214" y="656" text-anchor="middle" font-size="13.5" fill="#161513">进场组</text>
+  <text x="214" y="684" text-anchor="middle" font-size="11" fill="#6f6c66">决策清单 · 项目管理</text>
+  <text x="214" y="702" text-anchor="middle" font-size="11" fill="#6f6c66">系统接入 · 知识装载</text>
+
+  <rect x="367" y="614" width="245" height="110" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="2.2"></rect>
+  <text x="489" y="656" text-anchor="middle" font-size="13.5" font-weight="600" fill="#082d4f">成体组</text>
+  <text x="489" y="684" text-anchor="middle" font-size="11" fill="#082d4f">语义抽取 · 双轨审核</text>
+  <text x="489" y="702" text-anchor="middle" font-size="11" fill="#082d4f">收敛冻结</text>
+
+  <rect x="642" y="614" width="245" height="110" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="764" y="656" text-anchor="middle" font-size="13.5" fill="#161513">出品组</text>
+  <text x="764" y="692" text-anchor="middle" font-size="11" fill="#6f6c66">本体服务</text>
+
+  <!-- arrow SRC -> BOT -->
+  <line x1="490" y1="800" x2="490" y2="748" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar1g)"></line>
+
+  <!-- SRC -->
+  <rect x="250" y="800" width="480" height="60" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="490" y="826" text-anchor="middle" font-size="13" fill="#161513">客户侧原料</text>
+  <text x="490" y="846" text-anchor="middle" font-size="11" fill="#6f6c66">DB · m365 · IM · 业务 know-how</text>
+</svg>
+<figcaption>图 1 · 交付工具层为「本体层」供货，本体层为客户价值层供货 —— 本体始终在正中间</figcaption>
+</figure>
+
+<p><strong>读这张图，三句话</strong>：</p>
+
+<ol>
+  <li><strong>客户买的不是平台，是一个能回答他问题的 Agent。</strong> 平台本身不产生价值，它只是这条价值链的中段。</li>
+  <li><strong>Agent 需要的是语义，不是数据表。</strong> 把表给 Agent，它给出的是查询幻觉；把本体给 Agent，它才能回答业务问题。中间这一层才是平台存在的理由。</li>
+  <li><strong>本体不是人手画的，是 FDE 用平台从客户系统里抽出来的。</strong> 底部那一层（进场组 / 成体组 / 出品组）就是本文要讲的全部内容。</li>
+</ol>
+
+<h3>3.1　本体核心逻辑 —— 为什么「本体」必须在正中间</h3>
+
+<p>会议指出上一版架构「与本体核心逻辑关联度不足」。这里把它讲透。本体之所以不是「高级版的数据字典」，靠的是三条：</p>
+
+<ul class="pillars">
+  <li>
+    <span class="t">对象是从数据里认出来的，不是搬过来的</span>
+    <span class="d">把表搬进平台，它还是表。只有「这几张表说的其实是同一种设备」这个判断被做出来，意义才出现。<strong>抽取不是一个搬运动作，是一个认知动作。</strong></span>
+  </li>
+  <li>
+    <span class="t">企业的真相在关系里，不在单表里</span>
+    <span class="d">设备、工单、合同各自躺在各自的系统里，业务价值全在它们之间的连线上 —— 「这台设备的故障史」「这批工单关联的合同」。<strong>关系必须是一等公民</strong>，能单独带基数、带语义、带证据。</span>
+  </li>
+  <li>
+    <span class="t">本体最终要驱动行动，不能只是被读</span>
+    <span class="d">一个只能回答问题的本体是知识图谱；一个能驱动业务系统发生真实变更（派单、审批、冻结）的本体，才是运营层。<strong>这是客户续约的理由。</strong></span>
+  </li>
+</ul>
+
+<div class="note">
+  <span class="lbl">本层的一条硬约束</span>
+  <p>功能面上的七个功能域，<strong>只有三个（④⑤⑥）直接作用于本体</strong>，其余四个全部是在为这三个供货或消化产物；<strong>⓪ 决策清单</strong>是 ④ 的范围闸门。<strong>本体始终在画面中央。</strong></p>
+</div>
+
+<!-- ══════════════════ 04 ══════════════════ -->
+<h2 id="s4"><span class="n">04</span>七个功能域</h2>
+
+<p>分三组：<strong>进场</strong>（把客户的世界装进平台）· <strong>成体</strong>（本体从这里长出来）· <strong>出品</strong>（本体被用上）。</p>
+
+<figure class="diagram wide">
+<svg viewBox="0 0 980 640" role="img" aria-label="七个功能域结构：进场组、成体组、出品组，加溯源的纵切与沉淀的后验">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#082d4f"></path>
+    </marker>
+    <marker id="ar2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f6c66"></path>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="640" fill="#fdfdfa"></rect>
+
+  <!-- IN -->
+  <rect x="60" y="50" width="260" height="360" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1.2"></rect>
+  <text x="80" y="76" font-size="12" font-weight="600" fill="#3a3833">进场组 · 把客户的世界装进平台</text>
+  <rect x="80" y="92" width="220" height="66" rx="3" fill="#e9eef4" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="190" y="120" text-anchor="middle" font-size="13" font-weight="600" fill="#082d4f">⓪ 决策清单</text>
+  <text x="190" y="140" text-anchor="middle" font-size="10" fill="#3a3833">Scope Gate · 限本轮抽什么</text>
+  <line x1="190" y1="158" x2="190" y2="170" stroke="#082d4f" stroke-width="1.2" marker-end="url(#ar2)"></line>
+  <rect x="80" y="170" width="220" height="66" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="190" y="198" text-anchor="middle" font-size="13" fill="#161513">① 项目管理</text>
+  <text x="190" y="218" text-anchor="middle" font-size="10" fill="#6f6c66">Project</text>
+  <line x1="190" y1="236" x2="190" y2="248" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar2g)"></line>
+  <rect x="80" y="248" width="220" height="66" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="190" y="276" text-anchor="middle" font-size="13" fill="#161513">② 系统接入</text>
+  <text x="190" y="296" text-anchor="middle" font-size="10" fill="#6f6c66">Connect</text>
+  <line x1="190" y1="314" x2="190" y2="326" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar2g)"></line>
+  <rect x="80" y="326" width="220" height="66" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="190" y="354" text-anchor="middle" font-size="13" fill="#161513">③ 知识装载</text>
+  <text x="190" y="374" text-anchor="middle" font-size="10" fill="#6f6c66">Load</text>
+
+  <!-- IN -> CORE -->
+  <line x1="320" y1="230" x2="356" y2="230" stroke="#082d4f" stroke-width="1.6" marker-end="url(#ar2)"></line>
+
+  <!-- CORE -->
+  <rect x="360" y="50" width="260" height="360" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="2.4"></rect>
+  <text x="380" y="76" font-size="12" font-weight="600" fill="#082d4f">成体组 · 本体从这里长出来</text>
+  <rect x="380" y="92" width="220" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="490" y="126" text-anchor="middle" font-size="13" fill="#161513">④ 语义抽取</text>
+  <text x="490" y="148" text-anchor="middle" font-size="10" fill="#6f6c66">Extract</text>
+  <line x1="490" y1="168" x2="490" y2="192" stroke="#082d4f" stroke-width="1.4" marker-end="url(#ar2)"></line>
+  <rect x="380" y="196" width="220" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="490" y="230" text-anchor="middle" font-size="13" fill="#161513">⑤ 双轨审核</text>
+  <text x="490" y="252" text-anchor="middle" font-size="10" fill="#6f6c66">Review</text>
+  <line x1="490" y1="272" x2="490" y2="296" stroke="#082d4f" stroke-width="1.4" marker-end="url(#ar2)"></line>
+  <rect x="380" y="300" width="220" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="490" y="334" text-anchor="middle" font-size="13" fill="#161513">⑥ 收敛冻结</text>
+  <text x="490" y="356" text-anchor="middle" font-size="10" fill="#6f6c66">Freeze</text>
+
+  <!-- CORE -> OUT -->
+  <line x1="620" y1="230" x2="656" y2="230" stroke="#082d4f" stroke-width="1.6" marker-end="url(#ar2)"></line>
+
+  <!-- OUT -->
+  <rect x="660" y="50" width="260" height="360" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1.2"></rect>
+  <text x="680" y="76" font-size="12" font-weight="600" fill="#3a3833">出品组 · 本体被用上</text>
+  <rect x="680" y="196" width="220" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="790" y="230" text-anchor="middle" font-size="13" fill="#161513">⑦ 本体服务</text>
+  <text x="790" y="252" text-anchor="middle" font-size="10" fill="#6f6c66">Serve</text>
+
+  <!-- TR -->
+  <rect x="60" y="445" width="860" height="70" rx="3" fill="#e9eef4" stroke="#082d4f" stroke-width="1.4" stroke-dasharray="6 4"></rect>
+  <text x="490" y="474" text-anchor="middle" font-size="13" font-weight="600" fill="#082d4f">纵切 · 溯源 Trace</text>
+  <text x="490" y="498" text-anchor="middle" font-size="11" fill="#3a3833">谁提的　·　依据什么　·　谁批的　·　何时　　—— 横跨以上全部</text>
+  <line x1="190" y1="445" x2="190" y2="414" stroke="#6f6c66" stroke-width="1" stroke-dasharray="4 3"></line>
+  <line x1="490" y1="445" x2="490" y2="414" stroke="#6f6c66" stroke-width="1" stroke-dasharray="4 3"></line>
+  <line x1="790" y1="445" x2="790" y2="414" stroke="#6f6c66" stroke-width="1" stroke-dasharray="4 3"></line>
+
+  <!-- CP -->
+  <rect x="60" y="545" width="860" height="62" rx="3" fill="#f2f2f0" stroke="#c9c6c0" stroke-width="1.2" stroke-dasharray="6 4"></rect>
+  <text x="490" y="572" text-anchor="middle" font-size="12.5" fill="#3a3833">后验 · 沉淀 Compound</text>
+  <text x="490" y="594" text-anchor="middle" font-size="11" fill="#6f6c66">项目快照导出 &#8594; 跨项目的建模逻辑复用　（不在交付周期内）</text>
+  <line x1="490" y1="545" x2="490" y2="519" stroke="#6f6c66" stroke-width="1" stroke-dasharray="4 3"></line>
+</svg>
+<figcaption>图 2 · 七个功能域分三组；溯源是纵切，沉淀是后验 —— 两者都不是「第八、第九个功能域」</figcaption>
+</figure>
+
+<h4>进场组 —— 把客户的世界装进平台</h4>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">⓪ 决策清单</span><span class="en">Scope Gate</span>
+    <span class="slice now">POC 起就要</span>
+  </div>
+  <p class="one"><strong>先定「本轮服务哪条决策」，再决定抽什么。</strong>这是抽取范围的唯一闸门。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（主产出）；客户业务专家（确认）</dd>
+    <dt>解决什么</dt><dd>系统里数据很多，但客户真正要改善的决策只有几条。<strong>不先定边界，抽取就会摊薄成「把库扫一遍」</strong> —— 类型数量不可控，客户审不动，最后变成一个昂贵的仪表盘</dd>
+    <dt>输入</dt><dd>与客户首轮沟通：这个业务里<strong>最贵、最频繁、最常出错</strong>的决策是什么？谁在什么场景下做？</dd>
+    <dt>产出</dt><dd class="core">一份决策清单 —— 业务决策 / 决策人 / 当前基线 / 所需信息 / 遵循的规则 / 决策后谁执行。<strong>清单里没提到的数据源字段，本轮不抽</strong></dd>
+    <dt>取舍</dt><dd>这是<strong>范围闸门，不是第八个功能域</strong>。它是 ④ 的输入约束，成本几乎为零，但它是防止过度抽取最有效的一道闸门</dd>
+  </dl>
+</div>
+
+<div class="note">
+  <span class="lbl">为什么要倒推</span>
+  <p>一条系统的原子单位不是数据记录，而是<strong>决策</strong>。因此建模的起点不是「这个库里有什么」，而是<strong>「你希望操作员下个季度做出什么不同的决策？」</strong>——再从这条决策倒推，需要哪些对象、关系、动作。</p>
+  <p>决策清单最后三行（所需信息 / 遵循的规则 / 决策后谁执行）恰好对应本体的<strong>对象、函数、动作</strong>三根柱子：<strong>一份决策清单，顺手就把本体该长什么样点齐了。</strong></p>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">① 项目管理</span><span class="en">Project</span>
+    <span class="slice now">POC 起就要</span>
+  </div>
+  <p class="one">SaaS 上同时跑着好几个客户的项目，谁也别看见谁。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（主）；客户 IT（被邀请）</dd>
+    <dt>输入</dt><dd>客户信息、部署形态选择（SaaS / 私有化）</dd>
+    <dt>产出</dt><dd class="core">一个项目空间 —— 该客户的本体、KH Agent 配置、数据连接、全部迭代记录都归属它</dd>
+    <dt>取舍</dt><dd>项目<strong>之间</strong>强隔离（安全刚需）；项目<strong>内部</strong>不做细粒度权限（使用者就是 FDE 自己，省掉）</dd>
+  </dl>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">② 系统接入</span><span class="en">Connect</span>
+    <span class="slice now">POC 起就要</span>
+  </div>
+  <p class="one">让平台「看得见」客户的数据。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（主操作）；客户 IT（提供凭据 / 放行）</dd>
+    <dt>输入</dt><dd>数据源凭据、connector 选装清单</dd>
+    <dt>产出</dt><dd class="core">一份数据地图 —— 有哪些表 / 字段 / 文档 / 会话，样本长什么样</dd>
+    <dt>取舍</dt><dd>connector 按<strong>能力标签</strong>选装（读结构 / 读行 / 读文本 / 读对话，共四个），<strong>不建继承树</strong> —— 因为 m365 这种东西既有文档又有日历，单继承归不了类。<br><strong>「读使用痕迹」不是 connector 能力标签</strong> —— 它是<strong>与 connector 平行的第二条输入通道</strong>：connector 抽的是本体要描述的对象（进本体），使用痕迹描述这些对象在业务里怎么被用（不进本体，只作抽取上下文）。切片 3 接入。<br><strong>原始数据不出客户环境</strong> —— 合规刚需（尤其 IM 内容），也是对客户沟通时的核心话术。</dd>
+  </dl>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">③ 知识装载</span><span class="en">Load</span>
+    <span class="slice now">POC 起就要</span>
+  </div>
+  <p class="one"><strong>数据里没有的东西</strong> —— 业务规则、行业暗语、约定俗成、历史包袱。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（主）；客户业务专家（供给 know-how）</dd>
+    <dt>输入</dt><dd>客户访谈、领域文档、术语表、历史工单</dd>
+    <dt>产出</dt><dd class="core">一个装好的 KH Agent（connector 选装 + 领域提示 + 约束）</dd>
+    <dt>取舍</dt><dd><strong>KH Agent 是被迭代的对象，不是一次性的配置。</strong>这是整套方法论的核心 —— FDE 调的是 Agent，不是本体；因为 Agent 里装的是「怎么从一堆表里认出设备 / 工单」这套方法，<strong>方法是跨项目可复用的</strong>，而本体不是。</dd>
+  </dl>
+</div>
+
+<h4>成体组 —— 本体从这里长出来（核心）</h4>
+
+<div class="note">
+  <span class="lbl">为什么这一组要单独成段</span>
+  <p>这三个功能域是<strong>唯一直接作用于本体</strong>的部分。前面三个在给这里备料，后面一个在消化这里的产物。<strong>整个平台的价值，收敛在这三个功能域上。</strong></p>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">④ 语义抽取</span><span class="en">Extract</span>
+    <span class="slice now">核心</span>
+  </div>
+  <p class="one">从表和文档里<strong>认出</strong>业务对象 —— 而不是等客户坐下来定义。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（触发）；抽取 agent（执行，可为外部）</dd>
+    <dt>输入</dt><dd>上一版本体快照 + 人工反馈 + connector 拉到的数据</dd>
+    <dt>产出</dt><dd class="core">本体提案 —— 候选的对象与关系清单，每条带<strong>经代码验证过</strong>的证据</dd>
+    <dt>取舍</dt><dd>
+      一、<strong>产出的是提案，不是直接改本体。</strong>Agent 是提议者，不是决定者。<br>
+      二、<strong>基于上一版做增量，不重新生成。</strong>每轮都重生成，模型的随机性会让结果来回漂移，永远收敛不了。<br>
+      三、<strong>一次抽取会话内，connector 集合与 agent 版本都固定。</strong>中途换输入或换 agent，此前的收敛判定作废。
+    </dd>
+  </dl>
+</div>
+
+<div class="note">
+  <span class="lbl">抽取能力外置，但验证权不在外</span>
+  <p>产出候选的<strong>生成能力通过 A2A 协议外置</strong>给外部抽取 agent —— 抽取的<strong>方法</strong>是市场已归纳过的东西，不必等我们做满 5 个项目。</p>
+  <p>但<strong>证据验证留在我们手里</strong>：agent 说「设备.序列号 ← t_dev.sn」，由我们的代码去查 t_dev 是否真的有 sn 列。<strong>外置「怎么想」，不外置「想得对不对」。</strong></p>
+  <p>对 FDE 的实际影响：<strong>能接现成的行业抽取能力</strong>，但每轮抽取用的 agent 及其版本会被记录进快照 —— 出问题时能查到是哪一版 agent 抽的。</p>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">⑤ 双轨审核</span><span class="en">Review</span>
+    <span class="slice">POC 可单轨代签</span>
+  </div>
+  <p class="one"><strong>客户看不懂主键和基数，FDE 看不出业务对错 —— 一轨审不了。</strong></p>
+  <p>让客户审建模质量，他只会随便点「通过」；让 FDE 替客户判断业务含义，等于没审。</p>
+  <dl>
+    <dt>谁用</dt><dd>客户业务专家（业务轨）+ FDE（建模轨）</dd>
+    <dt>输入</dt><dd>本体提案</dd>
+    <dt>产出</dt><dd class="core">逐条结论（通过 / 打回 / 需修改）</dd>
+    <dt>取舍</dt><dd>同一版本体，<strong>两个视图</strong>：客户看的是「这些是你们说的设备吗？名字对吗？」；FDE 看的是「这个主键对吗？这对关系的基数对吗？」。<strong>客户视图里不得出现任何建模术语。</strong></dd>
+  </dl>
+</div>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">⑥ 收敛冻结</span><span class="en">Freeze</span>
+    <span class="slice now">交付判据</span>
+  </div>
+  <p class="one"><strong>不说停，这个循环就是无底洞。</strong>FDE 会永远觉得「再调一版会更好」。</p>
+  <dl>
+    <dt>谁用</dt><dd>FDE（判断）；客户（签字）</dd>
+    <dt>输入</dt><dd>多轮迭代记录 + 覆盖率与稳定性指标</dd>
+    <dt>产出</dt><dd class="core">冻结的本体版本 + 客户签字</dd>
+    <dt>取舍</dt><dd>三个终止信号，<strong>任一满足即可收</strong>：<br>
+      一、<strong>覆盖率</strong> —— 数据源里有多少被打进本体，未映射率降到阈值以下<br>
+      二、<strong>稳定性</strong> —— 连续两轮的版本差异小于阈值<br>
+      三、<strong>验收</strong> —— 客户签字
+    </dd>
+  </dl>
+</div>
+
+<div class="note">
+  <span class="lbl">认知对齐（对客户也要这么讲）</span>
+  <p>不存在「正确的本体」，只有「够用的本体」。目标是<strong>让 Agent 能可靠回答客户的业务问题</strong>，不是完美刻画客户的业务。这条认知不摆正，项目会在「再改改」里无限期拖延。</p>
+</div>
+
+<h4>出品组 —— 本体被用上</h4>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">⑦ 本体服务</span><span class="en">Serve</span>
+    <span class="slice now">交付即兑现</span>
+  </div>
+  <p class="one"><strong>本体被用上，交付才算完成。</strong>前面六个功能域都是在为这里供货。</p>
+  <dl>
+    <dt>谁用</dt><dd>外部 Agent（Claude Desktop / Cursor / 自研）、业务系统</dd>
+    <dt>输入</dt><dd>冻结的本体版本</dd>
+    <dt>产出</dt><dd class="core">Agent 可用的语义上下文 —— 客户真正买单的东西；（切片 2）业务系统的真实变更</dd>
+    <dt>取舍</dt><dd><strong>只读冻结版本，不读未审提案</strong> —— 未审的东西不能给 Agent 用。不写 agent runtime、不写 SDK、不绑任何模型厂商，接入面与后端实现完全解耦。</dd>
+  </dl>
+</div>
+
+<h4>纵切与后验</h4>
+
+<div class="cap">
+  <div class="cap-hd">
+    <span class="zh">纵切 · 溯源</span><span class="en">Trace</span>
+    <span class="slice now">横跨全部</span>
+  </div>
+  <p class="one">溯源不是第八个功能域 —— 不是一步操作，而是每个操作都必须写下的属性。</p>
+  <p>每个对象 / 关系 / 动作都挂四个字段：<strong>谁提的 · 依据哪条数据 · 谁批的 · 何时</strong>。</p>
+  <p>没有这条纵切，双轨审核会退化成盲审，客户签字也会签得心里没底。</p>
+</div>
+
+<div class="cap" style="border-style:dashed;border-color:var(--hair)">
+  <div class="cap-hd">
+    <span class="zh">后验 · 沉淀</span><span class="en">Compound</span>
+    <span class="slice">不在交付周期内</span>
+  </div>
+  <p class="one">一个项目交付完成后，其本体（含版本历史与证据链）一键导出为结构化文件，成本几乎为零。</p>
+  <p>但要说清楚：<strong>这是做了 N 个项目之后回过头来做的事，不是交付流程的一环。</strong></p>
+  <ul>
+    <li>可以复用的是<strong>建模逻辑</strong>（KH Agent 里那套方法、connector 库）</li>
+    <li>不好复用的是<strong>模型本身</strong>（每个客户的本体是客户特有的）</li>
+    <li><strong>行业的建模抽象，只能在一个行业做了多个项目之后再归纳</strong> —— 这是后验的，现在做就是拍脑袋</li>
+  </ul>
+  <p>功能面上给它留一个出口即可，不做更多。</p>
+</div>
+
+<!-- ══════════════════ 05 ══════════════════ -->
+<h2 id="s5"><span class="n">05</span>一个 FDE 项目的完整旅程</h2>
+
+<p>把七个功能域按时间排开，就是 FDE 实际干活的样子。</p>
+
+<figure class="diagram wide">
+<svg viewBox="0 0 980 430" role="img" aria-label="交付旅程：POC 阶段七个步骤，演进到生产落地阶段七个步骤">
+  <defs>
+    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f6c66"></path>
+    </marker>
+    <marker id="ar3n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#082d4f"></path>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="430" fill="#fdfdfa"></rect>
+
+  <!-- POC band -->
+  <rect x="60" y="40" width="860" height="150" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="80" y="66" font-size="12" font-weight="600" fill="#082d4f">POC 阶段 · 短周期 · 低门槛 · 局部数据 · 无需全量建模</text>
+
+  <!-- ⓪ decision inventory (range gate) -->
+  <rect x="80" y="90" width="92" height="76" rx="3" fill="#e9eef4" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="126" y="112" text-anchor="middle" font-size="10" font-weight="600" fill="#082d4f">⓪ 定决策</text>
+  <text x="126" y="130" text-anchor="middle" font-size="10" font-weight="600" fill="#082d4f">范围闸门</text>
+  <text x="126" y="148" text-anchor="middle" font-size="9" fill="#6f6c66">限本轮抽什么</text>
+  <line x1="172" y1="128" x2="184" y2="128" stroke="#082d4f" stroke-width="1.4" marker-end="url(#ar3n)"></line>
+
+  <rect x="184" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="230" y="124" text-anchor="middle" font-size="11.5" fill="#161513">① 建项目</text>
+  <line x1="276" y1="128" x2="288" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="288" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="334" y="118" text-anchor="middle" font-size="11.5" fill="#161513">② 接</text>
+  <text x="334" y="136" text-anchor="middle" font-size="11.5" fill="#161513">1 个源</text>
+  <line x1="380" y1="128" x2="392" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="392" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="438" y="118" text-anchor="middle" font-size="11.5" fill="#161513">③ 装第一版</text>
+  <text x="438" y="136" text-anchor="middle" font-size="11.5" fill="#161513">KH Agent</text>
+  <line x1="484" y1="128" x2="496" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="496" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="542" y="118" text-anchor="middle" font-size="11.5" fill="#161513">④ 抽取出</text>
+  <text x="542" y="136" text-anchor="middle" font-size="11.5" fill="#161513">本体提案</text>
+  <line x1="588" y1="128" x2="600" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="600" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="646" y="118" text-anchor="middle" font-size="11.5" fill="#161513">⑤ 客户看一眼</text>
+  <text x="646" y="136" text-anchor="middle" font-size="11.5" fill="#161513">FDE 代签</text>
+  <line x1="692" y1="128" x2="704" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="704" y="90" width="92" height="76" rx="3" fill="#fdfdfa" stroke="#082d4f" stroke-width="1.3"></rect>
+  <text x="750" y="118" text-anchor="middle" font-size="11.5" fill="#161513">⑥ 轻量</text>
+  <text x="750" y="136" text-anchor="middle" font-size="11.5" fill="#161513">冻结</text>
+  <line x1="796" y1="128" x2="808" y2="128" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="808" y="90" width="92" height="76" rx="3" fill="#e9eef4" stroke="#082d4f" stroke-width="1.6"></rect>
+  <text x="854" y="118" text-anchor="middle" font-size="11.5" font-weight="600" fill="#082d4f">⑦ 接上 Agent</text>
+  <text x="854" y="136" text-anchor="middle" font-size="11.5" font-weight="600" fill="#082d4f">能答问题</text>
+
+  <!-- transition -->
+  <path d="M854,166 V218 H154 V296" fill="none" stroke="#082d4f" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar3n)"></path>
+  <text x="490" y="208" text-anchor="middle" font-size="11" fill="#082d4f">POC 跑通 · 客户认可</text>
+
+  <!-- PROD band -->
+  <rect x="60" y="250" width="860" height="150" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1.2"></rect>
+  <text x="80" y="276" font-size="12" font-weight="600" fill="#3a3833">生产落地阶段 · 专门团队 · 全量建模 · 正式交付</text>
+
+  <rect x="104" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="154" y="334" text-anchor="middle" font-size="11.5" fill="#161513">扩源</text>
+  <line x1="204" y1="338" x2="212" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="216" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="266" y="328" text-anchor="middle" font-size="11.5" fill="#161513">多 KH Agent</text>
+  <text x="266" y="346" text-anchor="middle" font-size="11.5" fill="#161513">分域建模</text>
+  <line x1="316" y1="338" x2="324" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="328" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="378" y="328" text-anchor="middle" font-size="11.5" fill="#161513">正式</text>
+  <text x="378" y="346" text-anchor="middle" font-size="11.5" fill="#161513">语义建模</text>
+  <line x1="428" y1="338" x2="436" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="440" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="490" y="328" text-anchor="middle" font-size="11.5" fill="#161513">双轨审核</text>
+  <text x="490" y="346" text-anchor="middle" font-size="11.5" fill="#161513">各自签字</text>
+  <line x1="540" y1="338" x2="548" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="552" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="602" y="328" text-anchor="middle" font-size="11.5" fill="#161513">冻结 v1.0</text>
+  <text x="602" y="346" text-anchor="middle" font-size="11.5" fill="#161513">客户签字</text>
+  <line x1="652" y1="338" x2="660" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="664" y="300" width="100" height="76" rx="3" fill="#f2f2f0" stroke="#161513" stroke-width="1.2"></rect>
+  <text x="714" y="328" text-anchor="middle" font-size="11.5" fill="#161513">Action</text>
+  <text x="714" y="346" text-anchor="middle" font-size="11.5" fill="#161513">写回系统</text>
+  <line x1="764" y1="338" x2="772" y2="338" stroke="#6f6c66" stroke-width="1.2" marker-end="url(#ar3)"></line>
+  <rect x="776" y="300" width="100" height="76" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1.2" stroke-dasharray="5 4"></rect>
+  <text x="826" y="334" text-anchor="middle" font-size="11.5" fill="#6f6c66">快照导出</text>
+</svg>
+<figcaption>图 3 · 同一套功能域的两种开启深度 —— POC 阶段一个人跑通，生产阶段正式交付</figcaption>
+</figure>
+
+<h3>5.1　迭代闭环长什么样</h3>
+
+<p>POC 阶段里，③④⑤ 会循环好几轮。这个环跑几轮、什么时候停，是项目成败的关键。</p>
+
+<figure class="diagram wide">
+<svg viewBox="0 0 980 580" role="img" aria-label="迭代闭环：FDE、客户、KH Agent、平台四方交互，多轮增量提案直到冻结">
+  <defs>
+    <marker id="aseq1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#161513"></path>
+    </marker>
+    <marker id="aseq2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f6c66"></path>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="580" fill="#fdfdfa"></rect>
+
+  <!-- lifelines -->
+  <line x1="150" y1="54" x2="150" y2="560" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="4 4"></line>
+  <line x1="400" y1="54" x2="400" y2="560" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="4 4"></line>
+  <line x1="640" y1="54" x2="640" y2="560" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="4 4"></line>
+  <line x1="860" y1="54" x2="860" y2="560" stroke="#c9c6c0" stroke-width="1" stroke-dasharray="4 4"></line>
+
+  <!-- participants -->
+  <rect x="90" y="16" width="120" height="38" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="150" y="40" text-anchor="middle" font-size="12" font-weight="600" fill="#082d4f">FDE</text>
+  <rect x="324" y="16" width="152" height="38" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="400" y="40" text-anchor="middle" font-size="12" font-weight="600" fill="#082d4f">客户业务专家</text>
+  <rect x="576" y="16" width="128" height="38" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="640" y="40" text-anchor="middle" font-size="12" font-weight="600" fill="#082d4f">KH Agent</text>
+  <rect x="810" y="16" width="100" height="38" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.4"></rect>
+  <text x="860" y="40" text-anchor="middle" font-size="12" font-weight="600" fill="#082d4f">平台</text>
+
+  <!-- 1 -->
+  <line x1="150" y1="96" x2="394" y2="96" stroke="#161513" stroke-width="1.2" marker-end="url(#aseq1)"></line>
+  <text x="272" y="88" text-anchor="middle" font-size="11.5" fill="#161513">FDE 与客户第一轮沟通，理解业务</text>
+
+  <!-- 2 -->
+  <line x1="150" y1="136" x2="854" y2="136" stroke="#161513" stroke-width="1.2" marker-end="url(#aseq1)"></line>
+  <text x="505" y="128" text-anchor="middle" font-size="11.5" fill="#161513">组装第一版 KH Agent（选 connector + 写领域提示）</text>
+
+  <!-- 3 -->
+  <line x1="640" y1="180" x2="854" y2="180" stroke="#161513" stroke-width="1.2" marker-end="url(#aseq1)"></line>
+  <text x="747" y="172" text-anchor="middle" font-size="11.5" fill="#161513">跑抽取 → 本体提案 v1 · 每条带证据</text>
+
+  <!-- par -->
+  <rect x="100" y="204" width="840" height="100" fill="none" stroke="#c9c6c0" stroke-width="1"></rect>
+  <text x="112" y="222" font-size="11" fill="#6f6c66">两轨并行 · 同一份提案，两批人各看一轨</text>
+
+  <!-- 4 -->
+  <line x1="860" y1="248" x2="406" y2="248" stroke="#6f6c66" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#aseq2)"></line>
+  <text x="633" y="240" text-anchor="middle" font-size="11.5" fill="#6f6c66">业务轨：这是你们说的设备 / 工单吗？</text>
+
+  <!-- 5 -->
+  <line x1="860" y1="286" x2="156" y2="286" stroke="#6f6c66" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#aseq2)"></line>
+  <text x="505" y="278" text-anchor="middle" font-size="11.5" fill="#6f6c66">建模轨：主键 / 基数 / 拆分对不对？</text>
+
+  <!-- 6 -->
+  <line x1="400" y1="344" x2="156" y2="344" stroke="#6f6c66" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#aseq2)"></line>
+  <text x="278" y="336" text-anchor="middle" font-size="11.5" fill="#6f6c66">业务反馈：命名、边界、缺失的类型</text>
+
+  <!-- 7 -->
+  <line x1="150" y1="388" x2="634" y2="388" stroke="#161513" stroke-width="1.2" marker-end="url(#aseq1)"></line>
+  <text x="392" y="380" text-anchor="middle" font-size="11.5" fill="#161513">调整 KH Agent —— 调的是 Agent，不是本体</text>
+
+  <!-- 8 -->
+  <line x1="640" y1="432" x2="854" y2="432" stroke="#161513" stroke-width="1.2" marker-end="url(#aseq1)"></line>
+  <text x="747" y="424" text-anchor="middle" font-size="11.5" fill="#161513">基于 v1 快照 → 增量提案 v2</text>
+
+  <text x="490" y="474" text-anchor="middle" font-size="11.5" fill="#6f6c66">上面这些会循环多轮：每一轮只在前一轮的快照上做增量，不整体重生成</text>
+
+  <rect x="100" y="496" width="840" height="56" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="1.2"></rect>
+  <text x="490" y="518" text-anchor="middle" font-size="11.5" font-weight="600" fill="#082d4f">终止信号：映射覆盖率达标 · 两轮差异收敛 · 客户签字 —— 任一满足即冻结</text>
+  <text x="490" y="538" text-anchor="middle" font-size="11.5" fill="#3a3833">冻结为确定版本；此后本体只接受增量提案，不可覆盖</text>
+</svg>
+<figcaption>图 4 · 迭代闭环 —— 每一轮被调整的是 KH Agent，不是本体</figcaption>
+</figure>
+
+<ol class="answers" style="max-width:70ch">
+  <li><span class="q">FDE 与客户第一轮沟通，理解业务</span><span class="a">这是唯一的非平台环节，也是后面所有事情的起点。</span></li>
+  <li><span class="q">FDE 组装第一版 KH Agent</span><span class="a">选 connector、写领域提示、加约束。产出一个可跑的 Agent，不是一个配置项。</span></li>
+  <li><span class="q">KH Agent 跑抽取，产出本体提案 v1</span><span class="a">候选对象与关系，<strong>每条带证据</strong> —— 没有证据，后面两轨都没法审。</span></li>
+  <li><span class="q">两轨并行看同一份提案</span><span class="a">业务轨问客户「这是你们说的设备 / 工单吗」；建模轨问 FDE「主键、基数、拆分对不对」。</span></li>
+  <li><span class="q">FDE 根据反馈调整 KH Agent（不是改本体）</span><span class="a">这是整套方法论的关键动作 —— 调 Agent 产出的是可复用的<strong>方法</strong>。</span></li>
+  <li><span class="q">基于 v1 快照产出增量提案 v2</span><span class="a">客户对比的是增量，不是两个全新产物。这是能收敛的前提。</span></li>
+  <li><span class="q">满足任一终止信号 → 冻结</span><span class="a">覆盖率达标 / 两轮差异收敛 / 客户签字。冻结之后只接受增量，不可覆盖。</span></li>
+</ol>
+
+<div class="note">
+  <span class="lbl">注意</span>
+  <p>环里被调整的是 <strong>KH Agent</strong>，不是本体。原因在 ③ 的取舍里：<strong>调 Agent 是可复用的方法，改本体是一次性的产物。</strong></p>
+</div>
+
+<!-- ══════════════════ 06 ══════════════════ -->
+<h2 id="s6"><span class="n">06</span>POC 与生产：同一套功能，两种开启深度</h2>
+
+<p>会议确定：POC 阶段轻量快速跑通、<strong>不得设置过高的人员能力要求</strong>、<strong>无需全量语义建模</strong>；生产落地阶段再由专门团队正式建模。</p>
+
+<p>落到功能面上，就是同一套功能域的两种开启深度 —— <strong>不是两套系统，也不维护两套交付流程。</strong></p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>维度</th><th>POC 阶段</th><th>生产落地阶段</th></tr></thead>
+  <tbody>
+    <tr><td>目标</td><td>证明「能跑通、真能用」</td><td>正式交付并持续运营</td></tr>
+    <tr><td>人员</td><td class="hl">1 个 FDE 即可，无建模专家要求</td><td>专门团队（含语义建模）</td></tr>
+    <tr><td>数据</td><td>局部必要验证数据</td><td>全量</td></tr>
+    <tr><td>① 项目管理</td><td>单项目</td><td>多项目并行</td></tr>
+    <tr><td>② 系统接入</td><td>单数据源，一类 connector</td><td>多源，多类 connector</td></tr>
+    <tr><td>③ 知识装载</td><td>单 KH Agent</td><td>多 KH Agent，分域</td></tr>
+    <tr><td>④ 语义抽取</td><td>范围由<strong>决策清单限定</strong>；对象 + 关系（动作/函数<strong>占位</strong>）</td><td>决策清单 + 全量补充；对象 + 关系 + <strong>动作 + 函数</strong></td></tr>
+    <tr><td>⑤ 双轨审核</td><td class="hl">建模轨 FDE 全责 + 业务轨<strong>可代签</strong>（客户须过目）</td><td>双轨，客户与 FDE <strong>各自独立签字</strong></td></tr>
+    <tr><td>⑥ 收敛冻结</td><td>轻量：覆盖率达标 + 客户认可</td><td>双阈值 + 客户正式签字</td></tr>
+    <tr><td>⑦ 本体服务</td><td>只读 MCP</td><td>只读 + <strong>Action 写回 + 权限 + 审计</strong></td></tr>
+    <tr><td>溯源</td><td>最小形态：点开类型能看见来源</td><td>完整证据链，出口对齐标准格式</td></tr>
+    <tr><td>交付物</td><td>一页纸本体文档 + 能问答的 Agent</td><td>正式本体 + 可写回的业务闭环</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>POC 阶段的审核规则（唯一口径）</h3>
+
+<div class="note">
+  <span class="lbl">审核规则</span>
+  <p><strong>1. 建模轨（FDE）必须完整执行。</strong>主键、基数、拆分合并由 FDE 自己审，FDE 对建模质量负全责。</p>
+  <p><strong>2. 业务轨（客户）POC 阶段可由 FDE 代签</strong>，但客户<strong>必须看</strong>提案并有机会提出异议 —— 不是免审。</p>
+  <p><strong>3. 客户签字是收敛冻结的必要条件之一</strong>（覆盖率 / 稳定性 / 验收三个信号之一）。交付完成的判据不在 FDE 自己的感觉里。</p>
+  <p><strong>4. FDE 代签时必须显式记录「已代签」及依据</strong>，不得静默跳过。</p>
+  <p>生产阶段升级为：客户与 FDE <strong>各自独立签字</strong>，谁也不能替谁签。</p>
+</div>
+
+<div class="note">
+  <span class="lbl">口径修正</span>
+  <p>早期版本曾要求「客户能在业务轨<strong>独立完成审核</strong>、无需 FDE 解释建模概念」，与会议「不得设置过高人员能力要求」直接冲突。<strong>2026-09-28 已统一为上述口径。</strong></p>
+</div>
+
+<div class="note">
+  <span class="lbl">POC 的门槛只有三条</span>
+  <p>一、FDE 能在<strong>一个数据源</strong>上跑通一次抽取，产出一份本体提案。</p>
+  <p>二、客户能在<strong>一页纸</strong>上看懂「有哪些对象、什么关系、每条从哪来」，并认可。</p>
+  <p>三、接上 Agent，能回答<strong>至少 5 个客户级业务问题</strong>。</p>
+</div>
+
+<h3>已明示的一处有意偏离：POC 不含写回</h3>
+
+<p>参考方法论把「<strong>交付没有动作类型的应用 —— 造出昂贵的仪表盘，把写回问题留给永远不会被资助的二期</strong>」列为五大失败模式之一，并主张<strong>动作先行</strong>。本项目<strong>在 POC 阶段明确偏离该主张</strong>，Action 推迟到生产阶段。这是有意识的决策，不是遗漏。</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:16%">项</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>理由</strong></td><td>① 客户首轮签字的判据是「能回答我的业务问题」，问答价值先于写回价值；② 写回必须先解决权限与审计，POC 阶段客户 IT 未授权时硬塞写回会卡在审批上；③ 信任建立的顺序是先证明「只读也答得好」，反序反而更快获得授权</td></tr>
+    <tr><td><strong>代价</strong></td><td>POC 交付物<strong class="hl">有沦为昂贵仪表盘的风险</strong> —— 这是被警告的失败模式，本项目并未消除它，只是推迟</td></tr>
+    <tr><td><strong>缓释</strong></td><td>POC 交付物必须含：① 一页纸本体文档；② 决策清单驱动的问答演示（≥5 个客户级业务问题）；③ 交付时向客户明确呈现「下一步能写回什么」的能力路线</td></tr>
+    <tr><td><strong>红线</strong></td><td><strong>生产阶段的 Action 不得再次顺延。</strong>若无法启动，须回到设计规格重新评估是否收缩本体范围，而不是把 Action 永久推迟</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>实体对齐的降级方案</h3>
+
+<p>本体<strong>不做实例层实体对齐</strong>（把文档里的「张三」对到库里的员工记录，是公认的无底洞）。但必须预先约定遇到该问题怎么办，否则会在客户现场临时决策。</p>
+
+<div class="note">
+  <span class="lbl">降级策略：单库优先 + 显式声明</span>
+  <p><strong>1.</strong> 客户现场只有一个数据源 → 不触发该问题，正常推进。</p>
+  <p><strong>2.</strong> 客户主库与业务库对同一实体（如「设备」）定义不一致 → <strong>本轮不做跨库对齐</strong>，改为：</p>
+  <p style="padding-left:1.4em">· 抽取范围<strong>收窄到决策清单涉及的那一个库</strong>（⓪ 范围闸门在此再次生效）<br>
+     · 在交付物的一页纸本体文档中<strong>显式列出「本轮未解决的实体边界问题」</strong>：哪两个源、哪类实体、冲突在哪<br>
+     · 该问题转为<strong>生产阶段的立项输入</strong>，不是 POC 的阻塞项</p>
+  <p><strong>3. 禁止的做法</strong>：为了让问答跑通而在 POC 临时用规则硬合并两个源 —— 这会造出一个客户不认的本体，且违反「Agent 不能直写本体」。</p>
+</div>
+
+<p>「动作」和「完整溯源」在 POC 阶段<strong>不实现，但位置必须留着</strong> —— 否则生产阶段要推翻 POC 重来。</p>
+
+<!-- ══════════════════ 07 ══════════════════ -->
+<h2 id="s7"><span class="n">07</span>功能域 × 角色</h2>
+
+<div class="tbl-wrap">
+<table>
+  <thead>
+    <tr><th>功能域</th><th>客户业务专家</th><th>FDE 工程师</th><th>客户 IT</th><th>外部 Agent / 业务系统</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>⓪ 决策清单</td><td class="hl">确认</td><td class="hl">主（产出）</td><td class="dim">—</td><td class="dim">—</td></tr>
+    <tr><td>① 项目管理</td><td class="dim">—</td><td class="hl">主</td><td>被邀请</td><td class="dim">—</td></tr>
+    <tr><td>② 系统接入</td><td class="dim">—</td><td class="hl">主</td><td>放行 · 凭据</td><td class="dim">—</td></tr>
+    <tr><td>③ 知识装载</td><td>供给</td><td class="hl">主</td><td class="dim">—</td><td class="dim">—</td></tr>
+    <tr><td>④ 语义抽取</td><td class="dim">—</td><td class="hl">主（触发）</td><td class="dim">—</td><td class="dim">—</td></tr>
+    <tr><td>⑤ 双轨审核</td><td><strong>主（业务轨）<br>POC 可由 FDE 代签</strong></td><td class="hl">主（建模轨）</td><td class="dim">—</td><td class="dim">—</td></tr>
+    <tr><td>⑥ 收敛冻结</td><td class="hl">签字</td><td class="hl">主（判断）</td><td class="dim">—</td><td class="dim">—</td></tr>
+    <tr><td>⑦ 本体服务</td><td>受益</td><td>调试</td><td>授权</td><td class="hl">主（读 / 调）</td></tr>
+    <tr><td>溯源（纵切）</td><td>看</td><td>看</td><td>看</td><td class="dim">—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>读法</strong>：</p>
+
+<ul>
+  <li><strong>⓪①②③④ 是 FDE 的单人区</strong> —— 这是 POC 阶段一个人就能跑通的结构保证</li>
+  <li><strong>⑤ 被拆成两个位置</strong> —— 生产阶段强制客户和 FDE 各签各的，谁也不能替谁签；<strong>POC 阶段客户侧可代签，但客户必须过目，且代签须留痕</strong></li>
+  <li><strong>⑥ 的签字权在客户手里</strong> —— 交付完成的判据不在 FDE 自己的感觉里</li>
+  <li><strong>⑦ 的写回钥匙在客户 IT 手里</strong> —— 不在 FDE 手里</li>
+  <li><strong>⓪ 是闸门不是环节</strong> —— 它不产出本体，只限定 ④ 该抽什么；没有它，抽取会摊薄成「把库扫一遍」</li>
+</ul>
+
+<!-- ══════════════════ 08 ══════════════════ -->
+<h2 id="s8"><span class="n">08</span>三张图的分工</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 980 300" role="img" aria-label="功能面、能力面、组件面三层关系">
+  <defs>
+    <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f6c66"></path>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="300" fill="#fdfdfa"></rect>
+
+  <rect x="180" y="30" width="620" height="60" rx="3" fill="#f4f7fa" stroke="#082d4f" stroke-width="2.4"></rect>
+  <text x="490" y="56" text-anchor="middle" font-size="14" font-weight="600" fill="#082d4f">功能面（本文）</text>
+  <text x="490" y="76" text-anchor="middle" font-size="11" fill="#3a3833">FDE 交付时用它做什么　·　产品语言</text>
+
+  <line x1="490" y1="90" x2="490" y2="118" stroke="#6f6c66" stroke-width="1.3" marker-end="url(#ar4)"></line>
+  <text x="502" y="109" font-size="10.5" fill="#6f6c66">由这些能力组装而成</text>
+
+  <rect x="180" y="122" width="620" height="60" rx="3" fill="#fdfdfa" stroke="#161513" stroke-width="1.4"></rect>
+  <text x="490" y="148" text-anchor="middle" font-size="14" fill="#161513">能力面</text>
+  <text x="490" y="168" text-anchor="middle" font-size="11" fill="#6f6c66">平台对外能做什么　·　能力清单语言</text>
+
+  <line x1="490" y1="182" x2="490" y2="210" stroke="#6f6c66" stroke-width="1.3" marker-end="url(#ar4)"></line>
+  <text x="502" y="201" font-size="10.5" fill="#6f6c66">由这些模块实现</text>
+
+  <rect x="180" y="214" width="620" height="60" rx="3" fill="#fdfdfa" stroke="#c9c6c0" stroke-width="1.2"></rect>
+  <text x="490" y="240" text-anchor="middle" font-size="14" fill="#3a3833">组件面</text>
+  <text x="490" y="260" text-anchor="middle" font-size="11" fill="#6f6c66">系统由哪些模块组成　·　工程语言</text>
+</svg>
+<figcaption>图 5 · 同一套系统的三种读法，面向三批不同读者</figcaption>
+</figure>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>功能面（本文）</th><th>落在能力面的哪里</th></tr></thead>
+  <tbody>
+    <tr><td>⓪ 决策清单</td><td>「建」的前置（范围闸门，非独立能力）</td></tr>
+    <tr><td>① 项目管理</td><td>「建」的前置（项目容器）</td></tr>
+    <tr><td>② 系统接入 + ③ 知识装载 + ④ 语义抽取</td><td class="hl">建 Build</td></tr>
+    <tr><td>⑤ 双轨审核 + ⑥ 收敛冻结</td><td class="hl">审 Review</td></tr>
+    <tr><td>⑦ 本体服务（只读部分）</td><td class="hl">用 Use</td></tr>
+    <tr><td>⑦ 本体服务（写回部分）</td><td class="hl">动 Act</td></tr>
+    <tr><td>溯源（纵切）</td><td class="hl">溯 Trace</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>两层的真实差别</strong>：能力面把「建」当成<strong>一个</strong>动作；功能面把它拆成<strong>四个</strong>功能域，因为 FDE 干这四件事时用的是四套不同的界面、见的是四批不同的人。</p>
+
+<div class="map">
+  <div class="l">能力面告诉老板</div><div class="m">&#8594;</div>
+  <div class="r">「这个平台能建、能审、能用、能动」</div>
+</div>
+<div class="map">
+  <div class="l">功能面告诉老板</div><div class="m">&#8594;</div>
+  <div class="r">「FDE 第一周干什么、第几周能让客户签字、签字之后客户能拿到什么」</div>
+</div>
+
+<p>三张图不冲突，是同一套系统的三种读法，各自面向不同的读者。</p>
+
+<!-- ══════════════════ 09 ══════════════════ -->
+<h2 id="s9"><span class="n">09</span>功能面的三条设计主线</h2>
+
+<p>如果只记三句话：</p>
+
+<ul class="pillars">
+  <li>
+    <span class="t">本体始终在画面中央</span>
+    <span class="d">七个功能域里，只有三个（④⑤⑥）真正作用于本体，其余四个都在为它们供货或消化它们的产物。任何偏离这条线的功能需求，都应该被问一句：<strong>它加速了速度，还是提高了可信度？</strong></span>
+  </li>
+  <li>
+    <span class="t">速度与可信度是两条主脉，且它们有张力</span>
+    <span class="d">追速度就会想「让 Agent 全自动跑完」，追可信度就会想「每条都让人审」。功能面的解法是<strong>把它们分到不同的位置</strong>：抽取（④）全自动、审核（⑤）强制人工、冻结（⑥）用指标而不是用感觉来判停。</span>
+  </li>
+  <li>
+    <span class="t">POC 轻、生产全，但底座是同一套</span>
+    <span class="d">⑤ 在 POC 阶段业务轨可由 FDE 代签（客户须过目、代签须留痕）、⑦ 可以只读 —— 但<strong>位置不能省</strong>。省掉位置，生产阶段就得推翻重来，而推翻重来对一个已经交付过的客户项目是不可接受的。</span>
+  </li>
+</ul>
+
+<h3>9.1　本文回应了会议纪要什么</h3>
+
+<ul class="answers">
+  <li>
+    <span class="q">「过于偏向底层技术实现」</span>
+    <span class="a">本文全文不出现任何技术选型词，主视觉是<strong>七个业务功能域</strong>和<strong>一条交付旅程</strong>。</span>
+  </li>
+  <li>
+    <span class="q">「与本体核心逻辑关联度不足」</span>
+    <span class="a">§3.1 把本体核心逻辑三条讲透，并作为一条硬约束写进 §4：<strong>七个功能域里只有三个直接作用于本体，本体始终在画面中央</strong>。</span>
+  </li>
+  <li>
+    <span class="q">「需进一步向上抽象调整」</span>
+    <span class="a">抽象的终点是<strong>交付</strong>，不是更抽象的技术分层。功能面的主语是「FDE 在做的事」，不是「平台有的东西」。</span>
+  </li>
+  <li>
+    <span class="q">「为什么需要这个平台」（此前没人回答的问题）</span>
+    <span class="a">§3 总图从客户价值倒推：客户买的不是平台，是一个能回答业务问题的 Agent；而 Agent 需要的是语义，不是数据表。</span>
+  </li>
+  <li>
+    <span class="q">「POC 轻量、快速跑通、不得设置过高人员能力要求」</span>
+    <span class="a">§6 给出同一套功能的两种开启深度：POC 只需 1 个 FDE、单源、只读；<strong>建模轨由 FDE 全责，业务轨客户侧可代签但须过目留痕</strong>；§7 显示 ⓪①②③④ 是 FDE 单人区，结构上保证了一个人跑得通。</span>
+  </li>
+  <li>
+    <span class="q">「生产落地阶段再由专门团队开展正式语义建模」</span>
+    <span class="a">§6 右侧列：动作、函数、完整证据链、Action 写回都是为这一阶段预留的位置，POC 阶段只占位不实现 —— <strong>且占位是硬性要求</strong>，不能省。</span>
+  </li>
+  <li>
+    <span class="q">「迭代终止条件：数据源映射阈值 + 版本间差异收敛阈值，达标后客户签字」</span>
+    <span class="a">落在 ⑥ 收敛冻结，三个信号并列，<strong>客户签字是其中之一</strong>。</span>
+  </li>
+  <li>
+    <span class="q">「复用」的边界</span>
+    <span class="a">§4 后验沉淀：可复用的是建模逻辑（KH Agent 里的方法），不是模型本身；行业抽象必须等一个行业做了多个项目之后再归纳。</span>
+  </li>
+  <li>
+    <span class="q">2026-09-28 新增 · 决策倒推</span>
+    <span class="a">⓪ 决策清单作为范围闸门。不先定「本轮服务哪条决策」，抽取会摊薄成「把库扫一遍」—— 这是防止过度抽取最有效的一道闸门，也让收敛有了业务边界。</span>
+  </li>
+  <li>
+    <span class="q">2026-09-28 新增 · 与「动作先行」的有意偏离</span>
+    <span class="a">§6 明示 POC 不含写回的理由、代价、缓释与红线。<strong>这是有意识的决策，不是遗漏</strong> —— 对外讲解时不必回避。</span>
+  </li>
+  <li>
+    <span class="q">2026-09-28 新增 · 实体对齐降级方案</span>
+    <span class="a">§6 约定多源实体定义冲突时怎么办：收窄到单库 + 显式声明未解边界 + 转生产阶段立项，<strong>禁止临时硬合并</strong>。</span>
+  </li>
+</ul>
+
+<footer>
+  <span>本体平台 · 功能面架构 · Functional Plane</span>
+  <span>2026-09-28</span>
+  <span>上层 · 能力面　｜　下层 · 组件面</span>
+</footer>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var secs = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function onScroll(){
+    var y = window.scrollY + 140;
+    var idx = 0;
+    for (var i = 0; i !== secs.length; i++){
+      if (secs[i] && secs[i].offsetTop <= y) idx = i;
+    }
+    links.forEach(function(a, i){ a.classList.toggle('on', i === idx); });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+
+</body>
+</html>

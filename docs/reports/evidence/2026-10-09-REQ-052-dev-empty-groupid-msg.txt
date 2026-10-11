@@ -1,0 +1,16 @@
+[TEMP-PROBE group_id=""]
+组  的第 0 笔上报了两次且**用量不同**：上一读 used=120（没报费用），本次读 used=160（没报费用）。
+同一个 (group_id, attempt) 本该**只对应一笔钱**；撞出不同的值说明这个实现在同组重试时**没有递增 attempt**。**这一轮的钱数仍可能是对的**：空 group_id ⇒ 整个 round 只占一个键 ("", attempt)，totals() 取最后一次读到的值。若这个实现报的是**整轮累计**，那正是本轮的正确总额（单键覆盖不会把各组的账叠起来 ⇒ 不会出现 N 倍计入）。坏掉的是 `UsageReport.used` 的**增量契约**，**不是这一轮的账**。⚠️ 但若它报的是**增量**，前面的组已被顶掉、账就少计了 —— 去核对这个实现到底报的是累计还是增量。
+
+thread 'same_key_with_a_different_value_is_a_real_collision_and_must_trip' (2430387) panicked at tests/test_attempt_numbering.rs:517:5:
+碰撞信息必须点名**哪一组、哪个键、两个数各是多少**，否则人看不懂：组  的第 0 笔上报了两次且**用量不同**：上一读 used=120（没报费用），本次读 used=160（没报费用）。
+同一个 (group_id, attempt) 本该**只对应一笔钱**；撞出不同的值说明这个实现在同组重试时**没有递增 attempt**。**这一轮的钱数仍可能是对的**：空 group_id ⇒ 整个 round 只占一个键 ("", attempt)，totals() 取最后一次读到的值。若这个实现报的是**整轮累计**，那正是本轮的正确总额（单键覆盖不会把各组的账叠起来 ⇒ 不会出现 N 倍计入）。坏掉的是 `UsageReport.used` 的**增量契约**，**不是这一轮的账**。⚠️ 但若它报的是**增量**，前面的组已被顶掉、账就少计了 —— 去核对这个实现到底报的是累计还是增量。
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test same_key_with_a_different_value_is_a_real_collision_and_must_trip ... FAILED
+
+failures:
+
+failures:
+    same_key_with_a_different_value_is_a_real_collision_and_must_trip
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s

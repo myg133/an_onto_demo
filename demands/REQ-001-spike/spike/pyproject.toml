@@ -1,0 +1,38 @@
+[project]
+name = "ontology-spike"
+version = "0.1.0"
+description = "抽取可信度 spike（REQ-001）—— 验证「LLM 能否抽出客户认得的候选本体」"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# ⚠ 基础依赖刻意留空。
+#   阶段 0（准备）/ 阶段 2（证据验证）/ 一页纸渲染 全是纯 stdlib，
+#   所以 `uv run run.py --self-test` 零安装即可跑通。
+#   下面这些只在真正需要时才装。
+dependencies = []
+
+[project.optional-dependencies]
+# 读真实库
+postgres = ["psycopg[binary]>=3.2"]
+mysql = ["pymysql>=1.1"]
+
+# 阶段 1 抽取器：按需选一（或多）个
+#  · anthropic —— 原生 Claude（用官方 SDK）
+#  · openai    —— 任意 OpenAI 兼容端点：OpenAI / DeepSeek / 通义千问 / 智谱 GLM
+#                 / Kimi / Ollama / vLLM / 任何自建兼容网关
+#  · a2a       —— 外部抽取 agent（此时模型由对方选，与上面两个互不冲突）
+anthropic = ["anthropic>=0.40"]
+openai = ["httpx>=0.27"]
+a2a = ["httpx>=0.27"]
+
+# 一次装全
+full = [
+    "psycopg[binary]>=3.2",
+    "pymysql>=1.1",
+    "anthropic>=0.40",
+    "httpx>=0.27",
+]
+
+[tool.uv]
+# 避免把 uv 缓存里的构建产物带进版本库
+package = false

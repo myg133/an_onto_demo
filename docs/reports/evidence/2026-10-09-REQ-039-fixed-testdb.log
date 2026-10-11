@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/test_db.rs (target/debug/deps/test_db-1f2c466192d32e2d)
+
+running 11 tests
+test test_db_missing_env_is_error_not_silent_default ... ok
+test test_db_pg_is_postgres_16 ... ok
+test test_db_pg_pool_connects ... ok
+test test_req030_wide_pool_actually_allows_concurrency ... ok
+test test_db_migrate_future_is_send ... ok
+test test_req030_test_pool_caps_connections_at_one ... ok
+test test_db_migrate_is_idempotent ... ok
+test test_migrate_still_alters_when_table_exists_but_column_does_not ... ok
+test test_migrate_on_empty_schema_builds_every_table_and_column ... ok
+test test_migrate_takes_no_access_exclusive_lock_on_settled_schema ... ok
+test test_migrate_on_empty_schema_survives_concurrent_first_run ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.67s
+

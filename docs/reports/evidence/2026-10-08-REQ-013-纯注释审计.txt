@@ -1,0 +1,14 @@
+总增删行: +86 / -28
+非注释(疑似可执行)新增行: 0
+非注释(疑似可执行)删除行: 0
+
+=== 结论 ===
+PURE COMMENT ONLY
+OK    src/agent/group.rs   (comment-stripped len 5441 vs 5441)
+OK    src/agent/mod.rs   (comment-stripped len 1149 vs 1149)
+OK    src/db/agent_registry.rs   (comment-stripped len 5653 vs 5653)
+OK    src/db/mod.rs   (comment-stripped len 244 vs 244)
+OK    src/db/pg.rs   (comment-stripped len 4890 vs 4890)
+OK    src/extract/propose.rs   (comment-stripped len 13845 vs 13845)
+
+=== 强验证结论: 全部文件注释剥离后逐字节等价 → 纯注释改动成立
