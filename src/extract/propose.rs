@@ -221,7 +221,7 @@ pub struct ExtractionStats {
     pub tables_without_cn_name: Vec<String>,
 }
 
-/// 关系后缀 → (cardinality, semantic)。零外键下靠 `*_id` 命名约定推断。
+/// 关系后缀 → (cardinality, semantic)。零外键下靠 `*_id` 命名约定推断。（REQ-087：这里的 `N:1` 是命名约定的复述，**不是观测结论** —— 本表主键列的覆写与全部已知限制登记见 [`crate::extract::cardinality`]）
 const REL_SUFFIXES: &[(&str, &str, &str)] = &[
     ("_ids", "1:N", "has"),
     ("_id", "N:1", "belongs_to"),
@@ -561,7 +561,7 @@ pub(crate) fn links_for_table(
                 evidence: vec![serde_json::json!({
                     "table": t.name,
                     "column": c.name,
-                    "claim": tier.claim(),
+                    "claim": tier.claim(c.is_primary_key),
                     "inference": match tier {
                         LinkEvidence::Exact => "exact",
                         LinkEvidence::TailMatch => "tail_match",
@@ -1147,13 +1147,13 @@ enum LinkEvidence {
 }
 
 impl LinkEvidence {
-    fn claim(self) -> &'static str {
-        match self {
-            LinkEvidence::Exact => "零外键库，按 *_id 命名约定推断（词干直接展开命中已知表名）",
-            LinkEvidence::TailMatch => {
-                "零外键库，按 *_id 命名约定推断（词干是已知表名的**唯一**尾缀匹配，表名带业务前缀）"
-            }
-        }
+    fn claim(self, by_pk: bool) -> &'static str {
+        crate::extract::cardinality::evidence_claim(
+            // 「目标表怎么找到的」（尾缀档）与「基数怎么定的」（主键）
+            // 是**两件独立的事**，各有各的措辞 —— 合成一档就得分不清了。
+            matches!(self, LinkEvidence::TailMatch),
+            by_pk,
+        )
     }
 }
 
@@ -1204,7 +1204,7 @@ fn infer_link(
     known: &std::collections::HashSet<&str>,
 ) -> Option<(String, &'static str, &'static str, LinkEvidence)> {
     // `*_ids`（复数）必须先判，否则会被 `*_id` 后缀吃掉
-    for (suffix, card, sem) in REL_SUFFIXES {
+    for (suffix, card, sem) in REL_SUFFIXES.iter().map(|(suf, cc, mm)| crate::extract::cardinality::card_for(*suf, cc, mm, c.is_primary_key)) {
         // 匹配不上这个后缀 → 试下一个，**不是放弃整列**
         let Some(stem) = c.name.strip_suffix(suffix) else { continue };
         if stem.is_empty() {
@@ -1807,7 +1807,7 @@ mod tests {
     /// 证据档次要能落进 `evidence`，让读提案的人知道这条是怎么来的。
     #[test]
     fn test_link_evidence_records_the_tier() {
-        assert!(LinkEvidence::Exact.claim().contains("直接展开"));
-        assert!(LinkEvidence::TailMatch.claim().contains("尾缀"));
+        assert!(LinkEvidence::Exact.claim(false).contains("直接展开"));
+        assert!(LinkEvidence::TailMatch.claim(false).contains("尾缀"));
     }
 }

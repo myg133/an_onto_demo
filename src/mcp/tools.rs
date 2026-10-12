@@ -30,7 +30,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::domain::view::{CustomerView, PropertyView};
+use crate::domain::html_view::count_phrase;
+use crate::domain::view::{CustomerView, PropertyView, RelationView};
 
 /// 一个概念分组的确认状态。
 ///
@@ -180,22 +181,91 @@ impl OntologyContext {
     }
 
     /// 关系表按展示名反查成可读的一问一答。
+    ///
+    /// 视角 = 本次问的 `object`，所以每行都带得出 `count`。
     fn relations_of(&self, object: &str) -> Vec<Value> {
         self.view
             .relations
             .iter()
             .filter(|r| r.from == object || r.to == object)
-            .map(|r| {
-                json!({
-                    "from": r.from,
-                    "relation": r.meaning,
-                    "to": r.to,
-                    "how_many": r.how_many,
-                })
-            })
+            .map(|r| relation_row(r, Some(object)))
             .collect()
     }
 }
+
+// ──────────────────────────────────────────────────────────
+// 关系行（REQ-086）—— 数量词**只此一处**出口
+// ──────────────────────────────────────────────────────────
+
+/// 一条关系的**一行**输出。`list_relations` 与 `describe_object` 共用这一个函数。
+///
+/// # 为什么数量词必须走 [`count_phrase`]
+///
+/// 页面（`html_view::render_html`）与业务总览（`overview::build_overview`）
+/// 讲的是同一句话的两端重述，那份判据只在
+/// [`crate::domain::html_view::count_phrase`] 一处。
+/// MCP 是**第三条**外送路径 —— 它过去把裸的 `how_many` 直接透给客户，
+/// 客户得自己判断那是「我有 N 个」还是「它只有 1 个我」。
+///
+/// 在这里**另写一份「基数 → 人话」对照表**的收益是零、代价是真：
+/// 改了一处、另一处不改，页面说「多个」而 MCP 说「1 个」，
+/// 判读人当场就会发现两处对不上 —— 那正是 `count_phrase` 注释里警告的那一幕。
+///
+/// # 五个数量词字段的关系（AC-006 要求的字段说明）
+///
+/// | 字段 | 含义 | 什么时候有值 |
+/// | --- | --- | --- |
+/// | `how_many` | 原始基数词（`多对一`/`一对多`/…），**存储方向**口径 | 永远 |
+/// | `count_from` | 站在 `from` 端看过去有几个 | 永远 |
+/// | `count_to` | 站在 `to` 端看过去有几个 | 永远 |
+/// | `count` | 站在**本次查询那一端**看过去有几个 | **有视角时** |
+/// | `count_side` | `count` 站在哪一端（`from` / `to`） | **有视角时** |
+///
+/// `how_many` 保留是为了不破坏既有调用方；它与 `count` 的关系是
+/// 「**同一句话的两种写法**」：`how_many` 说关系本身，`count` 说站在某一端有几个。
+///
+/// # 「没有视角」时不静默兜底（AC-003）
+///
+/// `perspective = None`（`list_relations` 没传 `object`）时，
+/// `count` 与 `count_side` 都是 **`null`**，而不是随便挑一端填上。
+/// 80 条关系**没有单一视角**，硬填一个就是把歧义藏起来 —— 那等于
+/// 「静默沿用某一视角」，正是 AC-003 拒绝的做法。
+/// 两端的信息由 `count_from` / `count_to` 完整给出，**没有信息损失**。
+///
+/// `Some(_)` 兜底分支假定「传进来的 `perspective` 必是这一条关系的某一端」，
+/// 与两个调用点的过滤条件同源（都先 `r.from == object || r.to == object`）。
+fn relation_row(r: &RelationView, perspective: Option<&str>) -> Value {
+    let count_from = count_phrase(&r.how_many, true);
+    let count_to = count_phrase(&r.how_many, false);
+    let (count, count_side) = match perspective {
+        None => (Value::Null, Value::Null),
+        Some(p) if p == r.from => (json!(count_from), json!("from")),
+        Some(_) => (json!(count_to), json!("to")),
+    };
+    json!({
+        "from": r.from,
+        "relation": r.meaning,
+        "to": r.to,
+        "how_many": r.how_many,
+        "count_from": count_from,
+        "count_to": count_to,
+        "count": count,
+        "count_side": count_side,
+    })
+}
+
+/// 数量词字段的图例 —— 给读它的 LLM 一句能直接转述的话。
+///
+/// ⚠️ **刻意不插值客户端传进来的字符串**：`list_relations` 的 `object`
+/// 已经被原样放进 `filter` 了，若这里再插一次，就等于给守门器
+/// 「错误回显」那条防线多开一个口子（见 `error_echoing_client_input_also_passes_the_guard`）。
+const COUNT_NOTE_ONE_SIDE: &str = "count 是站在本次过滤的那个对象这一端看过去的数量词，\
+     count_side 说明它站在 from 端还是 to 端；count_from / count_to 则无条件给出两端。";
+
+const COUNT_NOTE_NO_SIDE: &str = "未按对象过滤：此时**没有单一视角**。\
+     每条关系的 count_from 是站在 from 端看过去的数量词，count_to 是站在 to 端看过去的；\
+     count 与 count_side 为 null —— 任何单值都会隐含一个未经声明的视角。\
+     要问「一个客户有几条订阅」，请按 object 过滤后再读 count。";
 
 // ──────────────────────────────────────────────────────────
 // 标识符清洗（MC-005 · B1）
@@ -353,7 +423,9 @@ pub fn catalog() -> Vec<ToolDef> {
             title: "介绍一个对象",
             description:
                 "某个对象是什么？返回它的说明、属性、所属上层对象、别名，\
-                 以及它和别的对象之间的所有关系。用它回答「订单这个对象有哪些信息」。",
+                 以及它和别的对象之间的所有关系。用它回答「订单这个对象有哪些信息」。\
+                 关系里的 count 是站在**本对象这一端**看过去的数量词（多个 / 1 个），\
+                 count_side 说明它站在 from 端还是 to 端。",
             input_schema: one_str_arg("name", "对象名，如「订单」"),
         },
         ToolDef {
@@ -361,11 +433,16 @@ pub fn catalog() -> Vec<ToolDef> {
             title: "列出对象之间的关系",
             description:
                 "哪些对象之间有关系、朝哪个方向、有多少？可选按某一个对象过滤。\
-                 用它回答「订单和什么有关系」。",
+                 用它回答「订单和什么有关系」。\
+                 每条关系里 how_many 是关系本身的原始说法（多对一/一对多…），\
+                 count 是站在本次查询那个对象这一端看过去的数量词（多个 / 1 个），\
+                 count_side 说明它站在哪一端。\
+                 不传 object 时返回全部关系，**没有单一视角**，\
+                 此时 count 为空，只有 count_from / count_to 两端可读。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "object": { "type": "string", "description": "只看与这个对象有关的关系；省略则全部" }
+                    "object": { "type": "string", "description": "只看与这个对象有关的关系；省略则全部。传了它，count 才是站在这一端看的数量词" }
                 },
                 "required": []
             }),
@@ -523,14 +600,7 @@ pub fn call(ctx: &OntologyContext, name: &str, arguments: &Value) -> Result<Valu
                     None => true,
                     Some(f) => &r.from == f || &r.to == f,
                 })
-                .map(|r| {
-                    json!({
-                        "from": r.from,
-                        "relation": r.meaning,
-                        "to": r.to,
-                        "how_many": r.how_many,
-                    })
-                })
+                .map(|r| relation_row(r, filter.as_deref()))
                 .collect();
             if filter.is_some() && rows.is_empty() {
                 return Err(ToolError::NotFound(format!(
@@ -538,10 +608,22 @@ pub fn call(ctx: &OntologyContext, name: &str, arguments: &Value) -> Result<Valu
                     filter.unwrap()
                 )));
             }
+            // ⚠️ 数量词的**视角**与图例（AC-003）。
+            //
+            // 没传 `object` 时返回全部关系 —— 80 条关系**没有单一视角**。
+            // 那时 `count` 是 `null`（见 `relation_row`），并且这里把原因说出来：
+            // 不说，下游 LLM 只会看到一列 null 然后自己瞎猜一个视角填上，
+            // 那是把歧义藏起来，正是 AC-003 拒绝的做法。
+            let count_note = match &filter {
+                Some(_) => COUNT_NOTE_ONE_SIDE,
+                None => COUNT_NOTE_NO_SIDE,
+            };
             Ok(json!({
                 "source": ctx.source_block(),
                 "filter": filter,
                 "count": rows.len(),
+                "count_perspective": filter,
+                "count_note": count_note,
                 "relations": rows,
             }))
         }
@@ -678,6 +760,9 @@ pub fn instructions(ctx: &OntologyContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::concept::ConceptGroup;
+    use crate::domain::html_view::render_html;
+    use crate::domain::view::EntityView;
 
     /// 判据是**形态**不是词表 —— 这条测试就是这句话的执行。
     ///
@@ -739,5 +824,320 @@ mod tests {
         // **误伤面**：前者是**样例值**、后者是 JSON 字段名，都不是表名/列名。
         // 形态判据分不出「列名」与「值」，所以一并隐去 ——
         // 宁可少一个样例值，不许漏一个源标识符（fail-closed 方向）。
+    }
+
+    // ── REQ-086：关系数量词 · MCP / 页面 / 总览说同一句话 ──────────
+
+    /// 一份手工搭的客户视图 + 上下文。
+    ///
+    /// 形态取自真实 E2E 产物的主力形态：**子表 → 主表**、多个子行指向同一父行。
+    /// 两条关系刻意让「客户」既当 `to` 端又当 `from` 端 ——
+    /// 否则「`count_side` 到底填哪一端」这件事根本没被测到。
+    fn req086_ctx() -> OntologyContext {
+        let obj = |name: &str| EntityView {
+            name: name.to_string(),
+            note: None,
+            belongs_to: None,
+            aliases: vec![],
+            properties: vec![PropertyView {
+                name: "示例属性".into(),
+                note: None,
+                required: false,
+                sample: None,
+            }],
+        };
+        let view = CustomerView {
+            objects: vec![obj("客户"), obj("客户订阅"), obj("订阅续费记录")],
+            relations: vec![
+                RelationView {
+                    from: "客户订阅".into(),
+                    to: "客户".into(),
+                    how_many: "多对一".into(),
+                    meaning: "归属于".into(),
+                },
+                RelationView {
+                    from: "客户".into(),
+                    to: "订阅续费记录".into(),
+                    how_many: "一对多".into(),
+                    meaning: "拥有".into(),
+                },
+            ],
+        };
+        let names: BTreeMap<String, String> =
+            [("k_cust", "客户"), ("k_sub", "客户订阅"), ("k_renew", "订阅续费记录")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let groups = vec![ConceptGroup {
+            key: "k_cust".into(),
+            display_name: "客户".into(),
+            members: vec!["k_cust".into()],
+            scope_hint: Some("客户主档".into()),
+            low_confidence: None,
+            extracted_by: None,
+            evidence: vec![],
+        }];
+        let overview = crate::domain::overview::build_overview(&view, &groups, &names);
+        OntologyContext {
+            project: "req086".into(),
+            version: 1,
+            frozen_at: "2026-10-12T00:00:00Z".into(),
+            view,
+            names,
+            confirmation: BTreeMap::new(),
+            overview,
+        }
+    }
+
+    /// 从渲染好的页面里抠出「一个 X，有几个 Y？」 → 答案。
+    ///
+    /// 读的是 [`render_html`] 的**真实输出**，不是另算一遍 ——
+    /// 另算一遍就变成「各自看起来对」，而 AC-004 要的是「同一句话」。
+    fn html_qa_pairs(html: &str) -> Vec<(String, String)> {
+        const Q: &str = "<span class=\"问\">";
+        const A: &str = "<span class=\"答\">";
+        const END: &str = "</span>";
+        let mut out = Vec::new();
+        let mut rest = html;
+        while let Some(i) = rest.find(Q) {
+            let after = &rest[i + Q.len()..];
+            let q_end = after.find(END).expect("问句必以 </span> 收尾");
+            let q = after[..q_end].to_string();
+            let after = &after[q_end + END.len()..];
+            let a_at = after.find(A).expect("每个问句后面必跟一个答案");
+            let a_body = &after[a_at + A.len()..];
+            let a_end = a_body.find(END).expect("答案必以 </span> 收尾");
+            out.push((q, a_body[..a_end].to_string()));
+            rest = &a_body[a_end + END.len()..];
+        }
+        out
+    }
+
+    /// 把「一个 X，有几个 Y？」拆回 (X, Y)。
+    fn split_question(q: &str) -> (String, String) {
+        let body = q.strip_prefix("一个 ").expect("问句以「一个 」开头");
+        let (self_name, other) = body.split_once("，有几个 ").expect("问句里有分隔");
+        (self_name.trim_end().to_string(), other.trim_end_matches('？').to_string())
+    }
+
+    fn page_answer(pairs: &[(String, String)], self_name: &str, other: &str) -> String {
+        let q = format!("一个 {self_name}，有几个 {other}？");
+        pairs
+            .iter()
+            .find(|(qq, _)| *qq == q)
+            .unwrap_or_else(|| panic!("页面上没有这个问句：{q}"))
+            .1
+            .clone()
+    }
+
+    /// MCP 问到某一端时 `count` 落在那一行上。
+    ///
+    /// 关系是**无向的一对**：`self_name` 既可能是 `from` 端也可能是 `to` 端，
+    /// 所以两个朝向都要认 —— 否则只测到一半的方向。
+    fn mcp_count(ctx: &OntologyContext, self_name: &str, other: &str) -> String {
+        let v = call(ctx, "list_relations", &json!({ "object": self_name })).unwrap();
+        v["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                (&r["from"] == &json!(self_name) && &r["to"] == &json!(other))
+                    || (&r["from"] == &json!(other) && &r["to"] == &json!(self_name))
+            })
+            .unwrap_or_else(|| panic!("{self_name} 与 {other} 之间的那一条不在结果里"))
+            ["count"]
+            .as_str()
+            .expect("有视角时 count 必须是字符串")
+            .to_string()
+    }
+
+    // ── AC-002 ─────────────────────────────────────────────
+
+    /// 有过滤时，`count` 必须**按查询端**重述。
+    ///
+    /// 钉的是 AC 点名的这一对：传「客户」得「多个」、传「客户订阅」得「1 个」。
+    #[test]
+    fn filtered_relations_restate_from_the_queried_end() {
+        let ctx = req086_ctx();
+
+        // 站在「客户订阅」这一端：一条订阅指向一个客户 ⇒ 1 个
+        let sub = call(&ctx, "list_relations", &json!({ "object": "客户订阅" })).unwrap();
+        let r = &sub["relations"][0];
+        assert_eq!(r["count"], "1 个", "一条订阅只指向一个客户");
+        assert_eq!(r["count_side"], "from", "客户订阅是这条关系的 from 端");
+        assert_eq!(r["count_from"], "1 个");
+        assert_eq!(r["count_to"], "多个");
+
+        // 站在「客户」这一端：一个客户有几条订阅 ⇒ 多个
+        let cust = call(&ctx, "list_relations", &json!({ "object": "客户" })).unwrap();
+        let rows = cust["relations"].as_array().unwrap();
+        let incoming = rows.iter().find(|r| r["from"] == "客户订阅").unwrap();
+        assert_eq!(incoming["count"], "多个", "一个客户有几条订阅 ⇒ 多个");
+        assert_eq!(incoming["count_side"], "to", "客户是这条关系的 to 端");
+
+        // 同一个「客户」在另一条关系里是 from 端 —— count_side 必须跟着变
+        let outgoing = rows.iter().find(|r| r["from"] == "客户").unwrap();
+        assert_eq!(outgoing["count_side"], "from");
+        assert_eq!(outgoing["count_to"], "1 个", "一条续费记录只属于一个客户");
+
+        assert_eq!(cust["count_perspective"], "客户", "有过滤 ⇒ 有唯一视角");
+    }
+
+    // ── AC-003 ─────────────────────────────────────────────
+
+    /// 无过滤时**不许**静默沿用某一视角。
+    ///
+    /// 80 条关系没有单一视角，硬填一个 `count` 就是把歧义藏起来。
+    /// 这条测试钉住的是「**不给**」，同时钉住「两端仍然给全」——
+    /// 否则「不给」很容易退化成「不给信息」。
+    #[test]
+    fn unfiltered_relations_declare_that_there_is_no_single_perspective() {
+        let ctx = req086_ctx();
+        let all = call(&ctx, "list_relations", &json!({})).unwrap();
+        assert_eq!(all["count"], 2, "无过滤 = 全部关系");
+        assert!(all["filter"].is_null());
+        assert!(all["count_perspective"].is_null(), "没有过滤就没有唯一视角");
+
+        let note = all["count_note"].as_str().expect("无视角时必须给说明");
+        assert!(note.contains("没有单一视角"), "必须把「为什么没有」说出来：{note}");
+
+        let mut ends = Vec::new();
+        for r in all["relations"].as_array().unwrap() {
+            assert!(r["count"].is_null(), "不许静默挑一端填上：{r}");
+            assert!(r["count_side"].is_null(), "没有视角就不该有 side：{r}");
+            ends.push((
+                r["from"].as_str().unwrap(),
+                r["to"].as_str().unwrap(),
+                r["count_from"].as_str().unwrap(),
+                r["count_to"].as_str().unwrap(),
+            ));
+        }
+        // 两端**完整**给出 ⇒ 没有信息损失（这正是选「双端」而不是「空着」的理由）
+        assert_eq!(
+            ends,
+            vec![("客户订阅", "客户", "1 个", "多个"), ("客户", "订阅续费记录", "多个", "1 个")],
+            "双端数量词必须都在"
+        );
+    }
+
+    // ── AC-004 · 一致性守卫 ─────────────────────────────────
+
+    /// **同一条关系，MCP / 页面 / 总览必须是同一句话。**
+    ///
+    /// 三处对不上，判读人当场就会发现 —— 这正是 `count_phrase` 注释里警告的那一幕。
+    /// 期望值全部取自**另外两处的真实输出**，不是在这里另算一遍。
+    #[test]
+    fn mcp_says_the_same_sentence_as_the_page_and_the_overview() {
+        let ctx = req086_ctx();
+        let pairs = html_qa_pairs(&render_html(&ctx.view, &[]).html);
+        assert!(!pairs.is_empty(), "页面上总该有关系问句");
+
+        // ① MCP 对上**页面**：每条关系的两端都查一遍
+        for rel in &ctx.view.relations {
+            for (self_name, other) in [(&rel.from, &rel.to), (&rel.to, &rel.from)] {
+                assert_eq!(
+                    mcp_count(&ctx, self_name, other),
+                    page_answer(&pairs, self_name, other),
+                    "MCP 与页面对不上：一个 {self_name}，有几个 {other}？"
+                );
+            }
+        }
+
+        // ② MCP 对上**总览**：总览那一问的答案，逐字相同
+        let mut checked = 0;
+        for concept in &ctx.overview.concepts {
+            for row in &concept.relations {
+                let (self_name, other) = split_question(&row.question);
+                assert_eq!(
+                    mcp_count(&ctx, &self_name, &other),
+                    row.answer,
+                    "MCP 与总览对不上：{}",
+                    row.question
+                );
+                assert_eq!(
+                    page_answer(&pairs, &self_name, &other),
+                    row.answer,
+                    "页面与总览对不上：{}",
+                    row.question
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "总览里一条关系都没有 ⇒ 这条测试是空过的（假绿）");
+    }
+
+    /// `describe_object` 那一问的视角 = 被问的那个对象。
+    #[test]
+    fn describe_object_relations_carry_that_objects_own_perspective() {
+        let ctx = req086_ctx();
+        let d = call(&ctx, "describe_object", &json!({ "name": "客户" })).unwrap();
+        let rows = d["relations"].as_array().unwrap();
+
+        let incoming = rows.iter().find(|r| r["from"] == "客户订阅").unwrap();
+        assert_eq!(incoming["count"], "多个", "问「客户」⇒ 一个客户有几条订阅 ⇒ 多个");
+        assert_eq!(incoming["count_side"], "to");
+
+        let outgoing = rows.iter().find(|r| r["from"] == "客户").unwrap();
+        assert_eq!(outgoing["count_side"], "from");
+        assert_eq!(outgoing["count"], "多个");
+    }
+
+    // ── AC-006 · 向后兼容 + 形状钉死 ────────────────────────
+
+    /// 整行**逐字**钉死：既有字段一个不少、一个没改名，新增字段全在。
+    ///
+    /// 用整行相等（而不是逐字段 assert）—— 少字段、多字段、改名字都会红。
+    #[test]
+    fn a_relation_row_has_exactly_this_shape() {
+        let ctx = req086_ctx();
+
+        let filtered = call(&ctx, "list_relations", &json!({ "object": "客户订阅" })).unwrap();
+        assert_eq!(
+            filtered["relations"][0],
+            json!({
+                "from": "客户订阅",
+                "relation": "归属于",
+                "to": "客户",
+                "how_many": "多对一",
+                "count_from": "1 个",
+                "count_to": "多个",
+                "count": "1 个",
+                "count_side": "from",
+            }),
+            "有过滤时这一行的完整形状"
+        );
+
+        let all = call(&ctx, "list_relations", &json!({})).unwrap();
+        assert_eq!(
+            all["relations"][0],
+            json!({
+                "from": "客户订阅",
+                "relation": "归属于",
+                "to": "客户",
+                "how_many": "多对一",
+                "count_from": "1 个",
+                "count_to": "多个",
+                "count": Value::Null,
+                "count_side": Value::Null,
+            }),
+            "无过滤时这一行的完整形状"
+        );
+    }
+
+    /// 新增的数量词字段不许被守门器当成建模术语打回。
+    ///
+    /// 守门器扫的是**序列化后的整段文本**（键和值都扫），
+    /// 所以新加的中文说明句本身就得能过闸。
+    #[test]
+    fn the_new_count_fields_survive_the_modeling_term_guard() {
+        let ctx = req086_ctx();
+        for args in [json!({}), json!({ "object": "客户" }), json!({ "object": "客户订阅" })] {
+            let v = call(&ctx, "list_relations", &args).unwrap();
+            if let Err(why) = guard(&v) {
+                panic!("新增的数量词字段过不了守门器（{args}）：{why}");
+            }
+        }
+        let d = call(&ctx, "describe_object", &json!({ "name": "客户" })).unwrap();
+        assert!(guard(&d).is_ok(), "describe_object 的关系行过不了守门器");
     }
 }
