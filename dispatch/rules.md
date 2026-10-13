@@ -275,5 +275,64 @@ worktree 与克隆仓库**拿到的是不同内容**。
 ⇒ 做「入库版 vs 本地版」对照时，必须用 `git show HEAD:<path>` 取入库版，
 **不能直接读工作区文件**（否则 A/B 两组用同一份文件，对照无效——本次就发生过）。
 
+### ⛔ 纪律 L · 「报环境不具备」前先查环境变量的**来源**（第 2 次犯）
+
+2026-10-12 两次同款错误：
+
+| 次数 | 谁 | 报的 | 实际 |
+| --- | --- | --- | --- |
+| 1 | REQ-087 的 Dev | 「146 失败是环境问题：无本地 postgres / docker 未运行」 | 库在**远端共享集群**，连接串在**仓库根 `.env`** |
+| 2 | REQ-090 的 Dev | 「本环境没有 `ONTOK_TEST_DATABASE_URL`」 | 键就在**仓库根 `.env`**（360 bytes，被 gitignore） |
+
+**两次的成因相同**：`.env` 被 `.gitignore` 忽略 ⇒ **任何 worktree 的工作区里都没有它**，
+它只存在于仓库根 `/home/myg133/Projects/Anchnet/Ontology/.env`。
+Dev 在 `feature-REQ-090`（新建 worktree）里 `env | grep` 找不到，就下了「本机不具备」的结论。
+
+⇒ **「本机没有服务」与「没有这个环境变量」是两个不同命题**，前者不蕴含后者。
+⇒ 报「环境不具备」之前，必须回答：**这个变量该从哪来？**（`grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' <仓库根>/.env` 只看键名、不回显值）
+
+⚠️ **本次更深的一层**：纪律 1 已经立在 `rules.md` 里（「别只看本机有无服务」），
+但**我派单时没把它写进 briefing** ⇒ 规则在仓库里、子 agent 看不见 ⇒ 等于不存在。
+**⇒ 纪律只有进了 briefing 才生效。** 见纪律 M。
+
+### ⛔ 纪律 M · briefing 必须携带纪律摘要，不能只丢一句「见 rules.md」
+
+子 agent **拿不到父会话历史**。briefing 里写「遵守 `rules.md`」等于没写：
+它没有那个文件的内容，也没有去读它的义务。
+
+⇒ 派单时凡涉及**已知反复踩的坑**（纪律 A–M），必须把**那几条原文**写进 briefing 的红线表。
+本次 REQ-090 派单的红线表写了口令纪律、没写「先查环境变量来源」⇒ 同一个坑 30 分钟内又踩一次。
+
+⇒ 自检：**写完 briefing 后问一句「这份 briefing 里，子 agent 会不会重蹈我栽过的那些坑？」**
+
+### ⛔ 纪律 N · skip-worktree 是**每个 worktree 独立**的位，建新 worktree 必须重放
+
+2026-10-12 REQ-090 实测踩中。
+
+| worktree | `git ls-files -v` 位 | `src/extract/table_names.json` |
+| --- | --- | --- |
+| `code/`（develop） | `S`（skip-worktree） | `version 1.2.0` · source `<业务库名>` —— **真版 91 条** |
+| `feature-REQ-090`（新建） | `H`（普通） | `version 1.3.0-desensitized` —— **脱敏占位** |
+
+⇒ **`git worktree add` 不传播 skip-worktree**。每个新 worktree 都**静默**拿到 committed 的脱敏占位版。
+
+**后果**：真实 schema 与占位翻译表 **91 个表名零重叠** ⇒ 覆盖率 0% ⇒ 丢弃率 96.9% ⇒
+`tests/drop_rate.rs` 与 `tests/test_fk_naming.rs` 两条**红线**测试必红。
+Dev 一度判为「仓库状态问题」并要求 BA 在三条路里选一条 —— **三条都不对**，
+真正成因是这个位没重放。
+
+⇒ **建 worktree 后第一件事**（或派 Dev 前）：
+
+```
+cp <develop worktree>/<资产路径> <新 worktree>/<资产路径>
+cd <新 worktree> && git update-index --skip-worktree <资产路径>
+git ls-files -v -- <资产路径>      # 必须显示 S
+git status --short                 # 必须为空
+```
+
+⇒ **基线数字必须标明在哪个 worktree 测的**。`780/0/1/59` 是 `code/` 的数；
+同一个提交在新 worktree 里可能是 `795/3/1/60`，**差的不是代码，是本地资产**。
+⇒ 这是纪律 K（「worktree 与克隆仓库拿到的是不同内容」）的**成因侧**，K 只说了现象，L 补了机制。
+
 
 
