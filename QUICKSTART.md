@@ -14,7 +14,7 @@
 
 ---
 
-## 2. 三个必踩的坑
+## 2. 四个必踩的坑
 
 ### 🔴 坑 1 · 仓库自带的翻译表是**脱敏占位版**，直接用会丢掉 71 张表
 
@@ -28,11 +28,14 @@
 | 真版（91 条真实表名） | **5 张** | 正常 |
 | 入库的脱敏版 | **71 张**（共 96 张） | 客户视图把 71 张全过滤掉 |
 
-> 翻译表是**部署方资产**，不入库。请用自己 schema 生成一份，覆盖 `src/extract/table_names.json`
-> 或用 `--names` 指向你自己的路径。
+> 翻译表是**部署方资产**，不入库。**从 REQ-090 起有生成器了**，
+> 不用手写 —— 见「第 2 步 · 生成翻译表」，一条命令。
 
 判定有没有踩到：抽取输出的 `⚠ 无中文名（会被客户视图过滤）` 这一行。
 **超过 5 张就说明翻译表没对上。**
+
+⚠️ **两条红线测试也会替你报警**：翻译表对不上时，
+`tests/drop_rate.rs` 与 `tests/test_fk_naming.rs` 必红（丢弃率闸被击穿）。
 
 ### 🔴 坑 2 · 项目名写在**提案 JSON 里**，不在 `import` 命令上
 
@@ -44,6 +47,32 @@
 `target/debug/ontok` 是编译产物，不会随 `git pull` 更新。
 pull 完代码**先 `cargo build`**，否则你可能在跑几天前的版本
 （本次就遇到二进制比代码旧了 18 小时，导致新功能完全看不到）。
+
+### 🔴 坑 4 · `table_names.json` 是 **skip-worktree** 的本地资产，**不跨 worktree 传播**
+
+坑 1 说过：真版翻译表**不入库**（它就是客户 schema 本身）。本地是用 git 的
+**skip-worktree 位**把它藏起来的 —— 但**这个位是每个 worktree 各自索引上的，
+`git worktree add` 不会带过去**。
+
+⇒ 后果：**任何新建的 worktree / feature 分支都会静默拿到仓库里的脱敏占位版**。
+表面上 `git status` 干干净净，两条红线测试却红了 —— 而红的原因跟你的改动**毫无关系**。
+（本次真被这件事坑过一次：Dev 跑出 3 条失败，判成「pre-existing 缺陷」，
+其实只是新 worktree 没带过那个位。）
+
+**新建 worktree 后先验这一条：**
+
+```bash
+git ls-files -v -- src/extract/table_names.json   # 期望行首是 S（S = skip-worktree）
+# 若是 H（普通跟踪），把它恢复：
+cp <你那个有真表的 worktree>/src/extract/table_names.json src/extract/
+git update-index --skip-worktree src/extract/table_names.json
+git ls-files -v -- src/extract/table_names.json   # 再确认变成 S
+git status --short                                # 期望空
+```
+
+**推论 · 跑测试前先认基线在哪**：同一个提交，在「有真表的 worktree」和「新 worktree」里
+**全量测试数字可以差好几十条**，差的是本地资产不是代码。
+所以**基线数字必须标明是在哪个 worktree 测的**，别拿 A 处的基线去卡 B 处的结果。
 
 ---
 
@@ -59,7 +88,7 @@ cd <仓库>/code
 #   ONTOK_TEST_DATABASE_URL=     ← 写入用（本体库）
 set -a && . ../.env && set +a
 
-cargo build --bin ontok --bin ontok-introspect --bin ontok-propose
+cargo build --bin ontok --bin ontok-introspect --bin ontok-propose --bin ontok-translate-names
 ```
 
 源码库**只读**：只访问 `information_schema` / `pg_catalog`，零业务数据行。
@@ -82,12 +111,53 @@ schema    : public
 外键约束   : 0
 ```
 
-### 第 2 步 · 抽取本体
+### 第 2 步 · 生成翻译表，再抽取本体
+
+> **2a · 生成翻译表**（REQ-090）。翻译表是**表名 → 中文显示名**的映射，
+> 抽取器靠它把英文表名变成客户看得懂的名字。**缺了它，96 张表里 71 张会被静默过滤**（坑 1）。
+
+```bash
+export ONTOK_LLM_API_KEY=...          # 只走环境变量，不入库、不进文件、不进日志
+export ONTOK_LLM_MODEL=...
+
+ontok-translate-names \
+  --schema ./schema.json \
+  --out    ./table_names.json \
+  --endpoint "$ONTOK_LLM_BASE_URL"    # OpenAI 兼容端点的 base_url
+```
+
+**退出码就是给脚本看的，四档互不重载**（脚本只看退出码就能决定处置方向，不必去匹配报错文案）：
+
+| 码 | 含义 | 你该做什么 |
+| --- | --- | --- |
+| **0** | 成功：**全覆盖、无残留、无退化** | 唯一能拿 0 的情形，放心用 |
+| **1** | 命令 / 环境 / 数据形状错 | 去修命令。**没有写出任何文件** |
+| **2** | 命令没问题，**但数据不完整**（有表没翻出来） | **没有写出任何文件**。stderr 会列出缺哪几张 |
+| **3** | 产物已写出，仍有缺口 / 残留 / 退化 | 读产物里的 `_coverage` 字段 |
+
+> 退出 2 **不写产物**是有意的：一份残缺的翻译表会让抽取器整批丢实体而**没人看见**，
+> 不如直接停下来报错。要强行落盘加 `--allow-gaps`（但**一张都没翻出来时加也没用**，
+> 空表过不了校验，仍是 2）。
+
+改完 schema 后要**增量**重跑（别从头翻，人工确认过的译名不该被机器覆盖）：
+
+```bash
+ontok-translate-names --schema ./schema.json --out ./table_names.json \
+  --names ./table_names.json --endpoint "$ONTOK_LLM_BASE_URL"
+# 只重翻指定表：          --overwrite <表名>
+# 全部重翻（仍不删条目）： --regenerate-all
+```
+
+⚠️ **一条翻译是人工确认过的知识资产，不是机器输出。** 不给 `--overwrite` / `--regenerate-all`
+时**旧条目逐字节原样保留**，schema 里已消失的表也**只进 `_coverage.absent_from_schema` 清单、
+绝不静默删除** —— 删除必须是人的显式动作。
+
+**2b · 抽取本体**
 
 ```bash
 ontok-propose \
   --schema ./schema.json \
-  --names  <你的翻译表.json> \
+  --names  ./table_names.json \      # ← 2a 刚生成的（坑 1）
   --out    ./proposal.json \
   --stats  ./stats.json \
   --project myproj          # ← 项目名在这里定（坑 2）
@@ -219,6 +289,8 @@ ontok mcp-server --project P --version V
 
 ```bash
 ontok-introspect       --out <schema.json>        # 源库只读勘查
+ontok-translate-names  --schema --out [--endpoint] [--names --overwrite|--regenerate-all]
+                                                 # 生成翻译表（REQ-090）
 ontok-propose          --schema --names --out --stats --project
 ontok-gate-preflight                            # 抽取质量门禁
 ```
@@ -229,7 +301,10 @@ ontok-gate-preflight                            # 抽取质量门禁
 
 | 症状 | 原因 | 怎么办 |
 | --- | --- | --- |
-| `⚠ 无中文名` 超过 5 张 | 翻译表是脱敏占位版（坑 1） | 换真版翻译表重抽 |
+| `⚠ 无中文名` 超过 5 张 | 翻译表是脱敏占位版（坑 1） | 用 `ontok-translate-names` 生成真版重抽 |
+| `ontok-translate-names` 退出码 **2** | 命令没问题，是**有表没翻出来** | stderr 会列缺哪几张；补齐后重跑，或 `--allow-gaps` 强行落盘 |
+| `ontok-translate-names` 退出码 **3** | 产物已写出，但有缺口 / 残留 / 退化译名 | 读产物的 `_coverage` 字段 |
+| 两条红线测试突然变红，`git status` 却干净 | 新 worktree 没带上 skip-worktree 的真翻译表（坑 4） | `git ls-files -v -- src/extract/table_names.json` 看行首是不是 `S` |
 | `提案基于的版本已被冻结` | 先 freeze 再 apply | 用新项目重来，顺序 apply → freeze |
 | `--proposal 认不出：1` | 只认 UUID 或 `p1/p2` 序号别名 | 用 `p1` |
 | `✗ 版本不存在` | 项目名/版本号错，或项目没建 | `ontok project list` / `ontok version list --project P` |
