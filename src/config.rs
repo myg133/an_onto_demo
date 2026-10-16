@@ -10,6 +10,14 @@ pub const TEST_DATABASE_URL_ENV: &str = "ONTOK_TEST_DATABASE_URL";
 /// 应用运行时连接串的环境变量名。
 pub const DATABASE_URL_ENV: &str = "ONTOK_DATABASE_URL";
 
+/// REQ-093 · 只读图服务的**访问令牌**。
+///
+/// **只从环境变量读，代码里不出现任何令牌值**（与上面两条同一纪律）。
+///
+/// ⚠️ **没有开发模式开关**：缺这个变量就**拒绝启动**，不留「本地调试时
+/// 可以先跳过」的旁路 —— 那正是三周后没人记得它还开着的那个开关。
+pub const VIEW_TOKEN_ENV: &str = "ONTOK_VIEW_TOKEN";
+
 /// 读一个必需的环境变量。
 ///
 /// 参数是 `&'static str` 而非 `&str` —— 错误信息要带上变量名，

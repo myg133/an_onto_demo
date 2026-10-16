@@ -64,6 +64,56 @@ pub enum Cmd {
         #[arg(long)]
         version: i32,
     },
+    /// REQ-093 · 起一个**只读** HTTP 服务，把本体图关系用浏览器看
+    ///
+    /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
+    /// 只接受 GET：任何「改动」类请求一律 405，没有可写的地方。
+    /// 监听地址只允许回环（`127.0.0.1` / `::1`），绑别处直接拒绝启动。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// export ONTOK_VIEW_TOKEN='换成你自己的口令'
+    /// cargo run --bin ontok -- serve \
+    /// --project demo3 --version 2 --bind 127.0.0.1:8787
+    ///
+    /// 然后浏览器打开 http://127.0.0.1:8787/
+    ///
+    /// ⚠️ **三个参数缺一不可。** 少了任何一个，clap 会**直接报错退出（exit 2）**，
+    /// 并把缺哪个、怎么写打出来 —— 不是安静地什么都不返回。
+    ///
+    /// 【还要带查询参数】页面顶部填入口令后才发请求，而请求是：
+    ///
+    /// /api/graph?project=demo3&version=2
+    ///
+    /// ⚠️ **查询参数漏了会得到一句人话 400**（同样不静默）：
+    /// `要说明看哪个项目：请带上 project 参数。`
+    ///
+    /// ⚠️ **访问口令从环境变量 `ONTOK_VIEW_TOKEN` 读**，缺了或短于 8 个字符
+    /// 都拒绝启动，**没有开发模式开关**。浏览器侧把它填进页面顶部的口令框，
+    /// 它只留在内存里，不进地址栏、不进页面源码、不进浏览器存储。
+    ///
+    /// ⚠️ **这个身份门是临时的、刻意不完整的**：只有一个静态共享令牌，
+    /// 没有过期、没有吊销、不能区分「谁在看」。完整的
+    /// subject → 本体 object key 解析是 REQ-099（决策 D1），不在本需求内。
+    // ⚠️ **示例必须顶格写、不能缩进** —— rustdoc 把 doc 注释里**缩进 4 格以上**
+    // 的块当成 **Rust 代码块**去编译，于是 `export …` / `cargo run … \`
+    // 会被当 Rust 解析、编译失败，`cargo test` 的 Doc-tests 直接红
+    // （实测踩过一次：`character literal may only contain one codepoint`）。
+    // 顶格写则只是普通段落，rustdoc 不碰它；`verbatim_doc_comment` 又让
+    // clap 原样保留换行 ⇒ `--help` 里仍然是一整条可照抄的命令。
+    #[command(verbatim_doc_comment)]
+    Serve {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 第几版（该版必须已冻结）
+        #[arg(long)]
+        version: i32,
+        /// 监听地址。**只允许回环地址**（如 127.0.0.1:8787）；
+        /// 绑到非回环地址会被拒绝启动
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        bind: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -682,6 +732,18 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 crate::mcp::tools::catalog().len()
             );
             crate::mcp::serve(ctx).await
+        }
+        Cmd::Serve { project, version, bind } => {
+            // 绑地址先解析：给错格式要报人话，不要把 axum 的栈倒给用户。
+            let addr: std::net::SocketAddr = bind.parse().with_context(|| {
+                format!("监听地址看不懂：{bind:?}。要写成 127.0.0.1:8787 这样的样子。")
+            })?;
+            let args = crate::server::http::ServeArgs {
+                project,
+                version,
+                bind: addr,
+            };
+            crate::server::http::serve(&pool, args).await
         }
     }
 }

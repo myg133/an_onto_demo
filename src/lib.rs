@@ -18,6 +18,10 @@ pub mod extract;
 // 理由与上面 agent 模块的同一条，详见 `src/mcp/mod.rs`。
 pub mod mcp;
 
+// REQ-093 · **只读** HTTP 服务（把本体图关系摆到浏览器里）。
+// **不放 domain/**：它要连库、要绑 socket，理由与上面 mcp 模块的同一条。
+pub mod server;
+
 // REQ-013 · 抽取 agent 抽象（规格 §7.1 阶段 1「可插拔」）。
 // **不放 domain/**：它要跑真实 agent（含将来的协议客户端与 DB 查询），
 // 而 `domain` 的 AC-002 判据是「零 I/O」。理由见 `src/agent/mod.rs`。
