@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE 本体论平台 · 设计规格</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --cream:#f7f5f0;
+  --card:#ffffff;
+  --line:#e9e3d6;
+  --line-soft:#f0ece2;
+  --ink:#14171e;
+  --ink-2:#3a4256;
+  --muted:#7c7a72;
+  --primary:#2f6f5e;
+  --primary-soft:rgba(47,111,94,.08);
+  --primary-line:rgba(47,111,94,.28);
+  --warn:#b06367;
+  --warn-soft:rgba(176,99,103,.09);
+  --amber:#c97b3f;
+  --amber-soft:rgba(201,123,63,.10);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--cream);
+  color:var(--ink);
+  font-family:'Outfit',-apple-system,sans-serif;
+  font-size:15px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(680px 420px at 8% -4%, rgba(47,111,94,.055), transparent 62%),
+    radial-gradient(620px 400px at 96% 4%, rgba(201,123,63,.045), transparent 60%);
+}
+.wrap{position:relative;z-index:1;max-w-1040px;margin:0 auto;padding:0 24px 96px}
+@media(min-width:768px){.wrap{padding:0 40px 120px}}
+
+/* ── hero ── */
+.hero{padding:72px 0 40px;border-bottom:1px solid var(--line)}
+.eyebrow{
+  font-family:'JetBrains Mono',monospace;font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--primary);margin-bottom:18px;
+}
+h1{
+  font-family:'DM Serif Display',serif;font-weight:400;
+  font-size:40px;line-height:1.16;letter-spacing:-.01em;margin-bottom:14px;
+}
+@media(max-width:640px){h1{font-size:29px}}
+.lede{font-size:16.5px;color:var(--ink-2);max-width:60ch;margin-bottom:24px}
+.metaline{display:flex;flex-wrap:wrap;gap:8px}
+.tag{
+  font-size:12.5px;color:var(--ink-2);background:var(--card);
+  border:1px solid var(--line);border-radius:999px;padding:5px 13px;
+}
+.tag b{font-weight:600;color:var(--ink)}
+.tag.mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
+
+.shortcut{
+  margin-top:28px;background:var(--primary-soft);border:1px solid var(--primary-line);
+  border-radius:12px;padding:14px 18px;font-size:14px;color:var(--ink-2);
+  display:flex;gap:11px;align-items:flex-start;
+}
+.shortcut svg{flex:none;margin-top:2px;color:var(--primary)}
+.shortcut b{color:var(--ink)}
+
+/* ── sections ── */
+section{padding-top:52px}
+@media(max-width:640px){section{padding-top:40px}}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+.sec-num{
+  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--primary);
+  border:1px solid var(--primary-line);background:var(--primary-soft);
+  border-radius:6px;padding:2px 8px;flex:none;align-self:center;
+}
+h2{
+  font-family:'DM Serif Display',serif;font-weight:400;
+  font-size:26px;letter-spacing:-.005em;line-height:1.25;
+}
+@media(max-width:640px){h2{font-size:21px}}
+.sec-sub{color:var(--muted);font-size:14px;margin-bottom:22px;max-width:74ch}
+hr.rule{border:none;border-top:1px solid var(--line);margin-top:56px}
+@media(max-width:640px){hr.rule{margin-top:40px}}
+
+/* ── cards ── */
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;
+  box-shadow:0 2px 8px rgba(0,0,0,.035);
+}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:768px){.grid2{grid-template-columns:1fr}}
+.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+@media(max-width:900px){.grid5{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){.grid5{grid-template-columns:1fr}}
+
+.bet{display:flex;flex-direction:column;gap:8px}
+.bet-id{
+  font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);
+  letter-spacing:.06em;
+}
+.bet-what{font-weight:600;font-size:14.5px;line-height:1.4;color:var(--ink)}
+.bet-why{font-size:13px;color:var(--ink-2);line-height:1.55}
+.bet-fail{
+  font-size:12.5px;color:var(--warn);background:var(--warn-soft);
+  border-radius:8px;padding:8px 10px;margin-top:auto;line-height:1.5;
+}
+.bet-fail b{font-weight:600}
+
+/* ── 骨架 vs 物种 隐喻 ── */
+.metaphor{
+  background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:26px 22px;box-shadow:0 4px 16px -2px rgba(0,0,0,.055);
+}
+.mph-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:18px;align-items:center}
+@media(max-width:720px){.mph-grid{grid-template-columns:1fr;gap:14px}}
+.mph-arrow{color:var(--muted);display:flex;align-items:center;justify-content:center}
+.mph-label{
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;
+  color:var(--muted);margin-bottom:10px;text-align:center;
+}
+.mph-box{
+  border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  background:var(--cream);
+}
+.mph-box .t{font-weight:600;font-size:14.5px;margin-bottom:5px}
+.mph-box .d{font-size:13px;color:var(--ink-2);line-height:1.55}
+.mph-box.done{border-color:var(--primary-line);background:var(--primary-soft)}
+.mph-box.todo{border-style:dashed}
+.mph-vs{
+  font-family:'DM Serif Display',serif;font-size:17px;color:var(--muted);
+  text-align:center;padding:0 2px;
+}
+
+/* ── 架构图（CSS 层 + SVG 箭头） ── */
+.arch{
+  background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:22px 20px;box-shadow:0 4px 16px -2px rgba(0,0,0,.055);
+}
+.arch-lane{
+  border:1px solid var(--line);border-radius:13px;padding:14px 16px;background:var(--cream);
+}
+.arch-lane.plat{border-color:var(--primary-line);background:var(--primary-soft)}
+.lane-h{
+  display:flex;align-items:center;gap:8px;
+  font-family:'JetBrains Mono',monospace;font-size:11.5px;letter-spacing:.08em;
+  color:var(--muted);margin-bottom:11px;text-transform:uppercase;
+}
+.lane-h.plat{color:var(--primary)}
+.node-row{display:flex;flex-wrap:wrap;gap:8px}
+.node{
+  background:var(--card);border:1px solid var(--line);border-radius:9px;
+  padding:9px 12px;font-size:13px;line-height:1.4;flex:1 1 130px;min-width:0;
+}
+.node b{font-weight:600;display:block;font-size:13.5px}
+.node span{color:var(--muted);font-size:11.5px;display:block;margin-top:2px}
+.node.store{border-color:var(--primary-line);background:var(--primary-soft)}
+.node.store b{color:var(--primary)}
+.arch-sub{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+@media(max-width:640px){.arch-sub{grid-template-columns:1fr}}
+.arrowband{height:56px;display:flex;justify-content:center;align-items:center}
+.arrowcap{
+  text-align:center;font-size:12px;color:var(--muted);margin-top:-4px;
+}
+.arrowcap b{color:var(--primary);font-weight:600}
+
+/* ── 双车道 ── */
+.lanes{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:720px){.lanes{grid-template-columns:1fr}}
+.lane{
+  border:1px solid var(--line);border-radius:14px;padding:16px 18px;background:var(--card);
+  box-shadow:0 2px 8px rgba(0,0,0,.035);
+}
+.lane.ctrl{border-color:var(--primary-line)}
+.lane-h2{
+  font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:3px;
+}
+.lane.ctrl .lane-h2{color:var(--primary)}
+.lane-note{font-size:12.5px;color:var(--muted);margin-bottom:12px}
+.steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.step{
+  font-size:12.5px;background:var(--cream);border:1px solid var(--line);
+  border-radius:7px;padding:5px 9px;
+}
+.ctrl .step{background:var(--primary-soft);border-color:var(--primary-line)}
+.steparrow{color:var(--muted);font-size:12px}
+
+/* ── tables ── */
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:4px}
+th{
+  text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);
+  padding:0 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:bottom;
+}
+td{padding:11px 12px 11px 0;border-bottom:1px solid var(--line-soft);vertical-align:top;color:var(--ink-2);line-height:1.55}
+td:first-child{color:var(--ink);font-weight:500}
+tr:last-child td{border-bottom:none}
+.tbl-wrap{
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;box-shadow:0 2px 8px rgba(0,0,0,.035);overflow-x:auto;
+}
+.ref{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--muted);white-space:nowrap}
+
+/* ── 红线 ── */
+.redlines{display:flex;flex-direction:column;gap:8px}
+.redline{
+  display:flex;gap:12px;align-items:flex-start;
+  background:var(--card);border:1px solid rgba(176,99,103,.34);
+  border-radius:10px;padding:12px 16px;
+  box-shadow:0 2px 8px rgba(0,0,0,.03);
+}
+.rl-ic{flex:none;color:var(--warn);margin-top:2px}
+.redline .what{font-weight:600;font-size:14px;line-height:1.45}
+.redline .cost{font-size:12.5px;color:var(--ink-2);margin-top:3px;line-height:1.5}
+.redline .cost em{color:var(--warn);font-style:normal;font-weight:600}
+
+/* ── 风险分层 ── */
+.risk-split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+@media(max-width:820px){.risk-split{grid-template-columns:1fr}}
+.risk-tier{border-radius:14px;padding:16px 18px;border:1px solid var(--line);background:var(--card)}
+.risk-tier.hi{border-color:rgba(176,99,103,.34);background:var(--warn-soft)}
+.risk-tier .t{font-weight:600;font-size:14.5px;margin-bottom:4px}
+.risk-tier.hi .t{color:var(--warn)}
+.risk-tier .d{font-size:12.5px;color:var(--ink-2);line-height:1.5;margin-bottom:10px}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{
+  font-size:11.5px;border-radius:6px;padding:3px 8px;
+  background:var(--cream);border:1px solid var(--line);color:var(--ink-2);
+}
+.hi .chip{background:rgba(255,255,255,.66);border-color:rgba(176,99,103,.28)}
+
+/* ── 边界 ── */
+.limits{display:flex;flex-direction:column;gap:9px}
+.limit{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.55fr);gap:16px;
+  background:var(--card);border:1px solid var(--line);border-radius:11px;
+  padding:13px 16px;align-items:start;
+}
+@media(max-width:700px){.limit{grid-template-columns:1fr;gap:5px}}
+.limit .what{font-weight:600;font-size:14px;line-height:1.4}
+.limit .why{font-size:13px;color:var(--ink-2);line-height:1.55}
+
+/* ── 时间线 ── */
+.timeline{list-style:none;padding:0;margin:0;position:relative}
+.timeline::before{
+  content:"";position:absolute;left:9px;top:8px;bottom:8px;width:2px;
+  background:var(--primary);opacity:.3;
+}
+.timeline li{position:relative;padding:0 0 26px 34px}
+.timeline li:last-child{padding-bottom:0}
+.timeline li::before{
+  content:"";position:absolute;left:3px;top:4px;width:14px;height:14px;
+  border-radius:50%;background:#fff;border:2px solid var(--primary);
+}
+.timeline li.now::before{background:var(--primary)}
+.tl-h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:3px}
+.tl-h strong{font-size:14.5px}
+.tl-badge{
+  font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.05em;
+  padding:2px 7px;border-radius:5px;background:var(--primary-soft);
+  color:var(--primary);border:1px solid var(--primary-line);
+}
+.tl-body{font-size:13.5px;color:var(--ink-2);line-height:1.6}
+.tl-why{
+  font-size:12.5px;color:var(--muted);margin-top:5px;line-height:1.5;
+  padding-left:10px;border-left:2px solid var(--line);
+}
+
+/* ── 收尾 ── */
+.unknown{
+  background:var(--card);border:1px solid var(--primary-line);
+  border-radius:16px;padding:28px 26px;
+  box-shadow:0 4px 16px -2px rgba(0,0,0,.055);
+}
+.unknown .big{
+  font-family:'DM Serif Display',serif;font-size:23px;line-height:1.42;
+  margin:14px 0 16px;color:var(--ink);letter-spacing:-.005em;
+}
+.unknown p{font-size:14px;color:var(--ink-2);max-width:72ch;margin-bottom:10px}
+.unknown .ask{
+  background:var(--amber-soft);border-radius:10px;padding:13px 16px;
+  font-size:13.5px;color:var(--ink-2);margin-top:16px;line-height:1.6;
+}
+.unknown .ask b{color:var(--amber);font-weight:600}
+.quote-mark{
+  font-family:'DM Serif Display',serif;font-size:54px;line-height:.6;
+  color:var(--primary);opacity:.28;
+}
+footer{
+  margin-top:56px;padding-top:22px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--muted);display:flex;
+  justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">FDE Ontology Platform · Design Spec</div>
+  <h1>本体论平台设计规格</h1>
+  <p class="lede">本体是运营层，不是分析层。抽取把发现成本从「几周」压到「几分钟」，但<strong>不承担决策责任</strong>——骨架是抽出来的，物种是定义的。</p>
+  <div class="metaline">
+    <span class="tag">日期 <b>2026-09-28</b></span>
+    <span class="tag">状态 <b>待评审</b></span>
+    <span class="tag">覆盖 <b>架构 · 本体模型 · KH Agent 闭环 · MVP 切片</b></span>
+    <span class="tag">读者 <b>工程师 / FDE / 客户</b></span>
+    <span class="tag mono">1480 行</span>
+  </div>
+  <div class="shortcut">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div><b>本文 1100 行，但下面每一屏就是全部。</b> 评审看 §0.1 的七张表就够；要动某一条的具体依据，再往下翻到对应小节。</div>
+  </div>
+</header>
+
+<!-- ═══ 核心赌注 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">A</span><h2>核心赌注</h2></div>
+  <p class="sec-sub">五条，全部设计决策的依据。每一张都写明了「押不起怎么办」——这是这份规格最不像 PPT 的地方。</p>
+  <div class="grid5">
+    <div class="card bet">
+      <span class="bet-id">§2.3</span>
+      <span class="bet-what">人比 LLM 更会「定义」，LLM 更擅长「发现」</span>
+      <span class="bet-why">让人凭空写出对象类型他写不出来；给一份候选，他一眼能说「这不对，我们管它叫 XX」。</span>
+      <span class="bet-fail"><b>押不起：</b>真实客户连候选都判断不了 ⇒ §2.3 前提不成立，这是第一个要验证的假设</span>
+    </div>
+    <div class="card bet">
+      <span class="bet-id">§8.3</span>
+      <span class="bet-what">双轨审核撑得住「客户审不了建模、FDE 审不了业务」这个夹缝</span>
+      <span class="bet-why">客户看主键会随便点通过；FDE 替客户判断业务等于没审。</span>
+      <span class="bet-fail"><b>押不起：</b>审核退化成盲审 → 证据链失效 → 整条链崩</span>
+    </div>
+    <div class="card bet">
+      <span class="bet-id">§8.4</span>
+      <span class="bet-what">收敛靠「快照 + 增量 diff + 冻结」，不是靠模型更聪明</span>
+      <span class="bet-why">每轮重新生成必然振荡。</span>
+      <span class="bet-fail"><b>押不起：</b>无退路 —— 这是唯一一条没有兜底的赌注</span>
+    </div>
+    <div class="card bet">
+      <span class="bet-id">§9.3</span>
+      <span class="bet-what">客户签字的判据是「能回答我的业务问题」，不是「有写回」</span>
+      <span class="bet-why">问答价值先于写回价值。</span>
+      <span class="bet-fail"><b>红线：</b>切片 2 不得再顺延</span>
+    </div>
+    <div class="card bet">
+      <span class="bet-id">§2.5</span>
+      <span class="bet-what">本体难以跨项目复用，所以不做行业模板</span>
+      <span class="bet-why">只有一个样本时做抽象，抽出来必然是那家客户的怪癖。</span>
+      <span class="bet-fail"><b>押不起：</b>做了 5 个同行业项目后再回头归纳</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 骨架 vs 物种 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">§2.3</span><h2>抽取结构，人定义语义</h2></div>
+  <p class="sec-sub">这是本平台与 Palantir 的分野，也是全文唯一一处用画面讲清楚的地方。</p>
+  <div class="metaphor">
+    <div class="mph-grid">
+      <div>
+        <div class="mph-label">LLM 能做的 · 抽取</div>
+        <div class="mph-box done">
+          <div class="t">从地层挖出骨头、拼出骨架</div>
+          <div class="d">把发现成本从「几周」压到「几分钟」。</div>
+        </div>
+      </div>
+      <div class="mph-arrow">
+        <svg width="34" height="16" viewBox="0 0 34 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 8h30"/><path d="M26 3l5 5-5 5"/></svg>
+      </div>
+      <div>
+        <div class="mph-label">人必须做的 · 定义</div>
+        <div class="mph-box todo">
+          <div class="t">这是什么物种、要不要进展厅、叫什么名</div>
+          <div class="d">需要馆长签字。抽取不承担决策责任。</div>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:18px;font-size:14px;color:var(--ink-2);line-height:1.65">
+      具体例子：<span class="ref">t_dev</span> <span class="ref">t_device_info</span> <span class="ref">dev_backup</span> 三张表，字段重叠但不完全相同。若它们是设备生命周期的三个阶段，应建 <b>3 个类型 + Link</b>；若只是历史遗留的冗余拆分，应<b>合并成 1 个类型</b>。
+      <strong style="color:var(--ink)">这两种判断所依据的数据长得一模一样</strong>——决定它的是业务语义，不是数据形态。
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 架构 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">§4</span><h2>系统架构</h2></div>
+  <p class="sec-sub">客户环境与 SaaS 之间只传「实体 + 关系 + 证据」，原始数据留在客户域内。</p>
+  <div class="arch">
+    <div class="arch-lane">
+      <div class="lane-h">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg>
+        客户环境（内网）
+      </div>
+      <div class="node-row">
+        <div class="node"><b>数据库</b><span>结构化</span></div>
+        <div class="node"><b>m365 / 文件</b><span>非结构化</span></div>
+        <div class="node"><b>IM 数据</b><span>对话式</span></div>
+        <div class="node"><b>日志 / 报表</b><span>使用痕迹</span></div>
+        <div class="node store"><b>采集器 Collector</b><span>轻量容器 · 本地抽取</span></div>
+      </div>
+    </div>
+
+    <div class="arrowband">
+      <svg width="420" height="56" viewBox="0 0 420 56" fill="none">
+        <defs><marker id="ah" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#2f6f5e"/></marker></defs>
+        <path d="M150 4v46" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#ah)"/>
+        <path d="M270 4v46" stroke="#2f6f5e" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#ah)"/>
+      </svg>
+    </div>
+    <div class="arrowcap"><b>实体 + 关系 + 证据</b>（出站 TLS） · · · 使用痕迹（只喂抽取引擎，不产实体）</div>
+
+    <div class="arch-lane plat" style="margin-top:10px">
+      <div class="lane-h plat">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+        本体论平台（SaaS）
+      </div>
+      <div class="node-row">
+        <div class="node"><b>connector</b><span>接入层 · 三类通道</span></div>
+        <div class="node"><b>元数据采集通道</b><span>接入层</span></div>
+      </div>
+      <div class="arch-sub">
+        <div class="node-row">
+          <div class="node"><b>数据面 pipeline</b><span>高频 · 自动 · 幂等</span></div>
+          <div class="node"><b>控制面 pipeline</b><span>低频 · 需审核</span></div>
+          <div class="node"><b>抽取引擎</b><span>产出只能是提案</span></div>
+        </div>
+        <div class="node-row">
+          <div class="node store"><b>ontology-store</b><span>存储抽象层</span></div>
+          <div class="node store"><b>agent-registry</b><span>只服务建侧</span></div>
+          <div class="node store"><b>mcp-server</b><span>对外唯一出口</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrowband">
+      <svg width="420" height="56" viewBox="0 0 420 56" fill="none">
+        <defs><marker id="ah2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#2f6f5e"/></marker></defs>
+        <path d="M210 4v46" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#ah2)"/>
+      </svg>
+    </div>
+    <div class="arrowcap"><b>只读消费</b> —— 外部 agent 不经过 agent-registry</div>
+
+    <div class="arch-lane" style="margin-top:10px">
+      <div class="node-row">
+        <div class="node"><b>外部 agent</b><span>Claude Desktop / Cursor / 自研</span></div>
+      </div>
+    </div>
+
+    <p style="margin-top:18px;font-size:13.5px;color:var(--ink-2);line-height:1.65">
+      两个容易混的点：<b>ontology-store 是存储抽象</b>，GraphDB 只是实现之一，上层无感；
+      <b>agent-registry 与读本体的 agent 名字里都有 agent，但一个是造本体的、一个是读本体的</b>，后者只经 mcp-server 进来。
+    </p>
+  </div>
+</section>
+
+<!-- ═══ 双车道 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">§4.3</span><h2>数据面与控制面必须分车道</h2></div>
+  <p class="sec-sub">进入 pipeline 的东西性质不同。混在一条流水线里的后果：无法区分「哪些变化需要人看」，以及本体结构一变是否触发历史数据重算变得不可控。</p>
+  <div class="lanes">
+    <div class="lane">
+      <div class="lane-h2">数据面</div>
+      <div class="lane-note">本体实例同步 · 高频 · 自动 · 幂等</div>
+      <div class="steps">
+        <span class="step">connector 抽取</span><span class="steparrow">→</span>
+        <span class="step">语义映射</span><span class="steparrow">→</span>
+        <span class="step">本体实例写入</span>
+      </div>
+      <table>
+        <tr><td style="width:74px">触发</td><td>自动（定时 / 增量）</td></tr>
+        <tr><td>幂等</td><td>是，可重放</td></tr>
+        <tr><td>需要人</td><td>否</td></tr>
+      </table>
+    </div>
+    <div class="lane ctrl">
+      <div class="lane-h2">控制面</div>
+      <div class="lane-note">本体结构变更 · 低频 · 人工签字</div>
+      <div class="steps">
+        <span class="step">KH Agent 抽取提案</span><span class="steparrow">→</span>
+        <span class="step">双轨审核</span><span class="steparrow">→</span>
+        <span class="step">版本快照 / 冻结</span>
+      </div>
+      <table>
+        <tr><td style="width:74px">触发</td><td>人工审核通过</td></tr>
+        <tr><td>幂等</td><td>否，有语义后果</td></tr>
+        <tr><td>需要人</td><td><b style="color:var(--primary)">是</b></td></tr>
+      </table>
+    </div>
+  </div>
+  <p style="margin-top:12px;font-size:13.5px;color:var(--ink-2);line-height:1.6">
+    本体变更后的历史数据重抽取，必须在图上<b>显式表达</b>（控制面 → 数据面的虚线），作为可观测、可审批的动作，<b>不能靠流水线自然流动</b>。
+  </p>
+</section>
+
+<!-- ═══ 有意偏离 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">B</span><h2>有意偏离（对外讲解时不必回避）</h2></div>
+  <p class="sec-sub">每一条都写明了代价与缓释——「有意」不等于「没有代价」。</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th style="width:21%">偏离了什么</th><th style="width:23%">我们的选择</th><th>理由 · 代价 · 缓释</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Palantir 的「动作先行」</td>
+          <td>POC 不含写回，推迟到切片 2</td>
+          <td>客户首轮签字判据是问答可用；写回需先解决权限与审计 <span class="ref">§9.3</span><br>
+          <span style="color:var(--warn)"><b>代价：</b>交付物有沦为昂贵仪表盘的风险</span>——报告警告的失败模式 #4，未消除、只是推迟<br>
+          <span style="color:var(--muted)"><b>缓释：</b>一页纸本体文档 + 决策清单驱动的问答演示（≥5 个业务问题）+ 呈现写回路线</span></td>
+        </tr>
+        <tr>
+          <td>OWL / SPARQL / SHACL 语义网栈</td>
+          <td>全部不进运行时</td>
+          <td>① <b>OWA 与封闭世界契约正面冲突</b> <span class="ref">§6.5</span>；② 团队仅一人、POC 目标一周；③ Palantir 自身也不用<br>
+          <span style="color:var(--muted)"><b>缓释：</b>内部用 LPG（Palantir 同源），出口处转标准；对照表已备</span></td>
+        </tr>
+        <tr>
+          <td>应用层推理</td>
+          <td>只读已冻结事实，推理结论一律进提案通道</td>
+          <td>未签字的结论没有责任人；推理直接进查询会拆掉「可测性」<br>
+          <span style="color:var(--muted)"><b>缓释：</b>规则引擎在生产阶段补，结论同样走审核</span></td>
+        </tr>
+        <tr>
+          <td>「涌现」→「抽取」</td>
+          <td>统一用「抽取」</td>
+          <td>「涌现」暗示模型自主发现真相，与「Agent 是提议者」矛盾 <span class="ref">§3</span><br>
+          <span style="color:var(--muted)"><b>缓释：</b>术语变更已记档，<b>勿改回</b></span></td>
+        </tr>
+        <tr>
+          <td>抽取能力自建</td>
+          <td>通过 <b>A2A</b> 协议调用外部抽取 agent</td>
+          <td>① 市场已归纳过这方法，不必等我们做满 5 个项目；② 主动让出编排，<b>换取「验证与决定」牢牢在手</b><br>
+          <span style="color:var(--warn)"><b>代价：</b>引入版本漂移、静默失败、成本不可控、数据出域四类新风险</span><br>
+          <span style="color:var(--muted)"><b>缓释：</b>四项强制义务 —— 版本冻结 / 失败可见 / 成本闸门 / 出域逐案确认</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ 红线 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">D</span><h2>必须守住的红线</h2></div>
+  <p class="sec-sub">这些不是建议，是<strong>违反即设计失效</strong>的约束。共同主题：现在不做，将来要推翻重来。</p>
+  <div class="redlines">
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">切片 1 必须为 ActionType / Function 占位 <span class="ref">§4.6</span></div>
+      <div class="cost"><em>违反后果：</em>切片 2 引入时必须改快照契约、diff 引擎、apply、双轨视图——推翻重来</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">切片 1 必须为 <code style="font-family:'JetBrains Mono',monospace;font-size:12.5px">parent</code> / <code style="font-family:'JetBrains Mono',monospace;font-size:12.5px">disjoint_with</code> 占位 <span class="ref">§4.6</span></div>
+      <div class="cost"><em>违反后果：</em>层级变更还要改 diff 语义——不是普通修改，是「重挂子树」</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">Agent 不得直接写生产本体 <span class="ref">§2.2 §4.3.1</span></div>
+      <div class="cost"><em>违反后果：</em>平台自我否定——整个可信度地基塌掉</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">所有自动化结论只进提案通道 <span class="ref">§4.3.1</span></div>
+      <div class="cost"><em>违反后果：</em>未经签字的语义进入查询 → 「可测性」崩塌</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">阶段 2 证据验证不可外包 <span class="ref">§7.1</span></div>
+      <div class="cost"><em>违反后果：</em>若连「依据是否属实」都由 agent 自判，「Agent 是提议者」就空转了</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">切片 2 写回时身份不确定 → 必须拒绝 <span class="ref">§5.4</span></div>
+      <div class="cost"><em>违反后果：</em>改错客户生产数据。<b>这是事故，不是体验问题</b></div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">一轮抽取内锁定 agent 版本 <span class="ref">§8.4</span></div>
+      <div class="cost"><em>违反后果：</em>中途换版 = 换了输入，收敛判定作废</div></div>
+    </div>
+    <div class="redline">
+      <svg class="rl-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      <div><div class="what">抽取失败不参与收敛判定 <span class="ref">§7.1 §8.4</span></div>
+      <div class="cost"><em>违反后果：</em>静默失败会把「什么都没抽」误判成「已收敛」</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 切片路线 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">§9</span><h2>切片路线</h2></div>
+  <p class="sec-sub">按「多快能证明价值」排序，而非按功能完整性。</p>
+  <ol class="timeline">
+    <li class="now">
+      <div class="tl-h"><strong>切片 1 · 只读闭环</strong><span class="tl-badge">目标：一周内可演示，且真能用</span></div>
+      <div class="tl-body">仅支持一种数据源（PG / MySQL）→ LLM 内省表结构 + 真实行样本 → 候选本体 → 双轨审核 → 落库 → <code style="font-family:'JetBrains Mono',monospace;font-size:12.5px">mcp-server</code> 暴露查询工具 → Claude Desktop 接上即可提问。</div>
+    </li>
+    <li>
+      <div class="tl-h"><strong>切片 2 · Action 写回与审计</strong><span class="tl-badge">运营层的分水岭</span></div>
+      <div class="tl-body">客户续约的理由。实现成本远低于实体对齐，所以排在切片 4 前面。</div>
+      <div class="tl-why"><b>红线：</b>不得再顺延。若无法启动，必须回到规格重新评估是否收缩本体范围，而不是把 Action 永久推迟 <span class="ref">§9.3</span></div>
+    </li>
+    <li>
+      <div class="tl-h"><strong>切片 3 · 对话式建模</strong><span class="tl-badge">领域文档 + 使用痕迹</span></div>
+      <div class="tl-body">补上「抽取质量」的缺失输入：缺领域文档时必猜错（风险 R4）。</div>
+    </li>
+    <li>
+      <div class="tl-h"><strong>切片 4 · m365 / IM 非结构化接入</strong><span class="tl-badge">故意放最后</span></div>
+      <div class="tl-body">实体对齐是无底洞——把文档里的「张三」对到数据库里的员工记录，能让人陷进去数月。</div>
+      <div class="tl-why">切片 1 已能证明价值，不必陪它一起沉 <span class="ref">§9.1</span></div>
+    </li>
+  </ol>
+</section>
+
+<!-- ═══ 能力边界 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">E</span><h2>明确的能力边界</h2></div>
+  <p class="sec-sub">别让人误以为我们能做。这一节的存在本身就是一种诚实。</p>
+  <div class="limits">
+    <div class="limit"><div class="what">本体不推理</div><div class="why"><code style="font-family:'JetBrains Mono',monospace;font-size:12.5px">disjoint_with</code> 只是审核提示 + 写入校验 + 导出，<b>不是推理公理</b>。不会从「A 与 B 互斥」推出「C 只能是 A 或 B」 <span class="ref">§4.6</span></div></div>
+    <div class="limit"><div class="what">应用层不给「大概」</div><div class="why">命中或明确失败，二值。「这台设备没有工单」我们答「确定没有」，OWL 只能答「未知」 <span class="ref">§6.5</span></div></div>
+    <div class="limit"><div class="what">不改非结构化内容</div><div class="why">IM / 文档不可被写回，只能作触发方与证据 <span class="ref">§5.7</span></div></div>
+    <div class="limit"><div class="what">不保证跨系统事务</div><div class="why">不追求「永不不一致」，追求「不一致<b>一定能被发现并列出</b>」 <span class="ref">§5.5</span></div></div>
+    <div class="limit"><div class="what">标准导出有损</div><div class="why">OWL 覆盖 3/4 根柱子的前两个 + 全部治理物；<b>缺口集中在「动作」</b>——语义网里没有这个位置 <span class="ref">§6.5</span></div></div>
+    <div class="limit"><div class="what">数据治理不做</div><div class="why">血缘 / 质量规则 / 元数据目录是另一个产品 <span class="ref">§11</span></div></div>
+  </div>
+</section>
+
+<!-- ═══ 风险 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">F</span><h2>16 条风险，分两档</h2></div>
+  <p class="sec-sub">分档的依据不是概率，是<b>最坏结果</b>。</p>
+  <div class="risk-split">
+    <div class="risk-tier">
+      <div class="t">前 12 条</div>
+      <div class="d">最坏结果是<b>交付不达标</b>。</div>
+      <div class="chips">
+        <span class="chip">收敛性</span><span class="chip">审核疲劳</span><span class="chip">采集器落地阻力</span>
+        <span class="chip">抽取质量</span><span class="chip">过度抽取</span><span class="chip">演示导向偏移</span>
+        <span class="chip">实体对齐阻塞</span><span class="chip">动作缺失→仪表盘化</span>
+      </div>
+    </div>
+    <div class="risk-tier hi">
+      <div class="t">后 4 条 · 严重程度更高</div>
+      <div class="d">最坏结果是<b>改坏客户生产数据</b>或<b>无法解释 diff</b>。全部由写回与外置带来。</div>
+      <div class="chips">
+        <span class="chip">外部 agent 版本漂移</span><span class="chip">外部 agent 静默失败</span>
+        <span class="chip">成本不可控</span><span class="chip">数据出域超预期</span>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:13.5px;color:var(--muted);line-height:1.6">完整 16 条及缓解措施见 <span class="ref">§12.2</span>。</p>
+</section>
+
+<!-- ═══ 主动放弃 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">C</span><h2>主动放弃的能力</h2></div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th style="width:46%">不做</th><th>理由</th><th style="width:17%">位置</th></tr></thead>
+      <tbody>
+        <tr><td>行业模板 / 跨项目本体引用</td><td>复用必须后验</td><td class="ref">§11</td></tr>
+        <tr><td>图数据库强依赖</td><td>存储是抽象层，切片 1 用 PG</td><td class="ref">§4.4 §11</td></tr>
+        <tr><td>项目内行级权限</td><td>使用者就是 FDE</td><td class="ref">§10.2 §11</td></tr>
+        <tr><td>实例层实体对齐</td><td>无底洞。<b>但切片 1 有降级策略</b>（收窄单库 + 显式声明）</td><td class="ref">§2.3 §9.4</td></tr>
+        <tr><td>跨系统逻辑编排</td><td>会退化成 ESB</td><td class="ref">§11</td></tr>
+        <tr><td>客户自助 UI</td><td>客户看的是交付的 agent 应用</td><td class="ref">§1.2 §11</td></tr>
+        <tr><td>多继承</td><td>企业场景 90% 是树；多继承的菱形歧义成本大于收益（RDF 支持，我们主动不做）</td><td class="ref">§4.6</td></tr>
+        <tr><td>跨系统回回的自动推导</td><td>加个字段会静默多写客户系统</td><td class="ref">§5.3</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ═══ 最大未知 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">G</span><h2>当前最大的未知</h2></div>
+  <div class="unknown">
+    <div class="quote-mark">“</div>
+    <div class="big">LLM 能否从真实客户库抽出客户认得的候选本体——<br>至今零验证。</div>
+    <p>全部计划覆盖的都是确定性工程（版本、diff、状态机、投影），而项目的核心赌注写在另一份计划里，<strong>一行代码没写</strong>。</p>
+    <p><strong>治理机制救不了客户不认的本体。</strong></p>
+    <div class="ask">建议先做 <b>2 天 spike</b>（一个脚本 + 一个 prompt + 一张真实库的 schema 与样本行 → 人工肉眼判断），再决定内核建多厚。见实现计划开头的顺序提示。</div>
+  </div>
+</section>
+
+<footer>
+  <span>本文件是 <code style="font-family:'JetBrains Mono',monospace">BA/docs/design/ontology-platform-spec.md</code> 的投影</span>
+  <span>规格 §0：HTML 汇报里出现规格没有的判断，视为缺陷，以规格为准</span>
+</footer>
+
+</div>
+</body>
+</html>
