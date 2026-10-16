@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本体平台 v2 · 详细设计</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --cream:#f7f5f0; --card:#fff; --line:#e9e3d6; --line-soft:#f0ece2;
+  --ink:#14171e; --ink-2:#3a4256; --muted:#7c7a72;
+  --primary:#2f6f5e; --primary-soft:rgba(47,111,94,.08); --primary-line:rgba(47,111,94,.28);
+  --amber:#c97b3f; --amber-soft:rgba(201,123,63,.10); --amber-line:rgba(201,123,63,.34);
+  --warn:#b06367; --warn-soft:rgba(176,99,103,.09); --warn-line:rgba(176,99,103,.34);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--cream);color:var(--ink);font-family:'Outfit',-apple-system,sans-serif;
+  font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(680px 420px at 8% -4%,rgba(47,111,94,.055),transparent 62%),
+             radial-gradient(620px 400px at 96% 4%,rgba(201,123,63,.045),transparent 60%)}
+.wrap{position:relative;z-index:1;max-w-1080px;margin:0 auto;padding:0 24px 100px}
+@media(min-width:768px){.wrap{padding:0 40px 120px}}
+
+.hero{padding:64px 0 34px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--primary);margin-bottom:16px}
+h1{font-family:'DM Serif Display',serif;font-weight:400;font-size:38px;line-height:1.16;
+  letter-spacing:-.01em;margin-bottom:12px}
+@media(max-width:640px){h1{font-size:28px}}
+.lede{font-size:16.5px;color:var(--ink-2);max-width:64ch;margin-bottom:22px}
+.metaline{display:flex;flex-wrap:wrap;gap:8px}
+.tag{font-size:12.5px;color:var(--ink-2);background:var(--card);border:1px solid var(--line);
+  border-radius:999px;padding:5px 13px}
+.tag b{font-weight:600;color:var(--ink)}
+.tag.mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.draftbar{margin-top:24px;background:var(--amber-soft);border:1px solid var(--amber-line);
+  border-radius:12px;padding:13px 17px;font-size:13.5px;color:var(--ink-2);line-height:1.6}
+.draftbar b{color:var(--amber)}
+.wic{width:13px;height:13px;vertical-align:-2px;display:inline-block;color:inherit;opacity:.9}
+
+section{padding-top:50px}
+@media(max-width:640px){section{padding-top:38px}}
+.sec-head{display:flex;align-items:baseline;gap:11px;margin-bottom:7px}
+.sec-num{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--primary);
+  border:1px solid var(--primary-line);background:var(--primary-soft);
+  border-radius:6px;padding:2px 8px;flex:none;align-self:center}
+h2{font-family:'DM Serif Display',serif;font-weight:400;font-size:25px;letter-spacing:-.005em;line-height:1.25}
+@media(max-width:640px){h2{font-size:21px}}
+.sec-sub{color:var(--muted);font-size:14px;margin-bottom:20px;max-width:76ch}
+h3{font-size:15px;font-weight:600;margin:22px 0 9px}
+p{font-size:14px;color:var(--ink-2);margin-bottom:9px;max-width:80ch}
+hr.rule{border:none;border-top:1px solid var(--line);margin-top:52px}
+@media(max-width:640px){hr.rule{margin-top:38px}}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;
+  box-shadow:0 2px 8px rgba(0,0,0,.035)}
+.fig{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 18px;
+  box-shadow:0 4px 16px -2px rgba(0,0,0,.055)}
+.fig-cap{font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.55;
+  padding-top:12px;border-top:1px dashed var(--line)}
+.fig-cap b{color:var(--ink-2);font-weight:600}
+
+.fb{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.fb{grid-template-columns:1fr}}
+.fbox{border:1px solid var(--line);border-radius:13px;padding:14px 16px;background:var(--cream)}
+.fbox.run{border-color:var(--primary-line);background:var(--primary-soft)}
+.fbox-h{display:flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;
+  font-size:11.5px;letter-spacing:.07em;color:var(--muted);margin-bottom:11px;text-transform:uppercase}
+.fbox.run .fbox-h{color:var(--primary)}
+.nrow{display:flex;flex-direction:column;gap:7px}
+.nd{border:1px solid var(--line);background:var(--card);border-radius:9px;padding:9px 12px}
+.nd.hi{border-color:var(--primary-line);background:var(--primary-soft)}
+.nd b{font-size:13.5px;font-weight:600;display:block}
+.nd span{font-size:11.5px;color:var(--muted);display:block;margin-top:2px;line-height:1.45}
+.nd em{font-style:normal;font-size:11px;color:var(--amber);font-family:'JetBrains Mono',monospace}
+
+/* pipeline */
+.pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+.pstep{flex:1 1 120px;border:1px solid var(--line);background:var(--card);border-radius:10px;
+  padding:11px 12px;min-width:0}
+.pstep b{font-size:13.5px;display:block;font-weight:600}
+.pstep span{font-size:11.5px;color:var(--muted);display:block;margin-top:2px;line-height:1.45}
+.pstep.key{border-color:var(--primary-line);background:var(--primary-soft)}
+.pstep.new{border-color:var(--amber-line);background:var(--amber-soft)}
+.parrow{align-self:center;color:var(--muted);padding:0 7px;font-size:13px;flex:none}
+@media(max-width:860px){.parrow{transform:rotate(90deg);padding:5px 0}}
+
+/* sequence */
+.seq{display:grid;grid-template-columns:auto 1fr;gap:0 14px;align-items:center}
+.seq-l{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);
+  text-align:right;white-space:nowrap}
+.seq-b{border:1px solid var(--line);border-radius:10px;padding:11px 14px;background:var(--card)}
+.seq-b.hi{border-color:var(--primary-line);background:var(--primary-soft)}
+.seq-b.risk{border-color:var(--warn-line);background:var(--warn-soft)}
+.seq-b b{font-size:13.5px;display:block}
+.seq-b span{font-size:12.5px;color:var(--ink-2);display:block;margin-top:3px;line-height:1.5}
+.seq-row{display:contents}
+
+/* three-layer identity */
+.layers{display:flex;flex-direction:column;gap:0}
+.layer{border:1px solid var(--line);border-radius:11px;padding:13px 16px;background:var(--card);
+  display:grid;grid-template-columns:130px 1fr;gap:14px;align-items:center}
+@media(max-width:700px){.layer{grid-template-columns:1fr;gap:5px}}
+.layer.snap{border-color:var(--primary-line);background:var(--primary-soft)}
+.layer .k{font-weight:600;font-size:14px}
+.layer .v{font-size:13px;color:var(--ink-2);line-height:1.55}
+.pill{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
+  padding:2px 7px;border-radius:5px;margin-top:4px}
+.pill.in{background:var(--primary-soft);color:var(--primary);border:1px solid var(--primary-line)}
+.pill.out{background:#fff;color:var(--muted);border:1px solid var(--line)}
+.snapline{position:relative;height:34px;margin:2px 0}
+.snapline::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:2px dashed var(--amber)}
+.snapline span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:var(--cream);padding:0 12px;font-family:'JetBrains Mono',monospace;
+  font-size:10.5px;color:var(--amber);white-space:nowrap}
+
+/* bench */
+.bench{display:grid;grid-template-columns:190px 1fr 1fr;gap:12px;align-items:center;padding:7px 0}
+.bench-h{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+  font-weight:600;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.bench-l{font-weight:600;font-size:13.5px;line-height:1.4}
+.bench-a{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fff;font-size:12.5px;line-height:1.5}
+.bench-a.good{border-color:var(--primary-line);background:var(--primary-soft)}
+.bench-a.bad{border-color:var(--warn-line);background:var(--warn-soft)}
+@media(max-width:820px){.bench{grid-template-columns:1fr;gap:4px}.bench-h:not(:first-child){display:none}}
+
+/* timeline */
+.timeline{list-style:none;padding:0;margin:0;position:relative}
+.timeline::before{content:"";position:absolute;left:9px;top:8px;bottom:8px;width:2px;
+  background:var(--primary);opacity:.3}
+.timeline li{position:relative;padding:0 0 22px 34px}
+.timeline li:last-child{padding-bottom:0}
+.timeline li::before{content:"";position:absolute;left:3px;top:4px;width:14px;height:14px;
+  border-radius:50%;background:#fff;border:2px solid var(--primary)}
+.timeline li.gate::before{background:var(--amber);border-color:var(--amber)}
+.tl-h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:3px}
+.tl-h strong{font-size:14.5px}
+.tl-badge{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:2px 7px;
+  border-radius:5px;background:var(--primary-soft);color:var(--primary);border:1px solid var(--primary-line)}
+.tl-badge.gate{background:var(--amber-soft);color:var(--amber);border-color:var(--amber-line)}
+.tl-body{font-size:13.5px;color:var(--ink-2);line-height:1.6}
+.tl-meta{font-size:12px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);padding:0 12px 9px 0;border-bottom:1px solid var(--line)}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line-soft);vertical-align:top;
+  color:var(--ink-2);line-height:1.55}
+td:first-child{color:var(--ink);font-weight:500}
+tr:last-child td{border-bottom:none}
+.tbl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;
+  box-shadow:0 2px 8px rgba(0,0,0,.035);overflow-x:auto}
+.ref{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--muted);white-space:nowrap}
+code,.mono{font-family:'JetBrains Mono',monospace;font-size:12.5px}
+
+.notes{display:flex;flex-direction:column;gap:9px}
+.note{border:1px solid var(--line);border-radius:11px;padding:13px 16px;background:var(--card)}
+.note.warn{border-color:var(--warn-line);background:var(--warn-soft)}
+.note.amber{border-color:var(--amber-line);background:var(--amber-soft)}
+.note .nt{font-weight:600;font-size:14px;margin-bottom:3px}
+.note .nb{font-size:13px;color:var(--ink-2);line-height:1.55}
+
+footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;
+  color:var(--muted);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.node-lbl{font-family:'Outfit',sans-serif;font-size:13px;font-weight:600}
+.node-sub{font-family:'Outfit',sans-serif;font-size:10.5px;fill:var(--muted)}
+.sv{width:100%;height:auto;display:block;overflow:visible}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Ontology Platform v2 · Detailed Design</div>
+  <h1>本体平台 v2 · 详细设计</h1>
+  <p class="lede">本体只存<strong>类型、关系、规则</strong>三层。实例不存 —— 用户 agent 接入时才按绑定现场物化。写操作永不走 DB，只走 API，并按操作人权限调用。</p>
+  <div class="metaline">
+    <span class="tag">状态 <b>草案 · 待拍板</b></span>
+    <span class="tag">基线代码 <b class="mono">develop 9043164</b></span>
+    <span class="tag">基线测试 <b class="mono">60 suite / 800 passed / 0 failed</b></span>
+    <span class="tag">取代关系 <b>与 v1 规格并存 · 3 处方向冲突</b></span>
+  </div>
+  <div class="draftbar">
+    <b><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 本文含 8 项未拍板决策（D1–D8）。</b>标注为 <b class="mono">待决</b> 的部分<b>禁止当作已定</b>；标注为 <b class="mono">新</b> 的部分在现有代码中<b>完全不存在</b>。
+  </div>
+</header>
+
+<!-- ═══ 1 架构 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>目标架构</h2></div>
+  <p class="sec-sub">左右两栏是两种完全不同性质的活动：左边是 <b>FDE 构建期</b>，产出冻结快照；右边是 <b>用户运行期</b>，现场物化实例并执行。两者只通过「本体库」这一个接缝相连。</p>
+  <div class="fig">
+    <div class="fb">
+
+      <div class="fbox">
+        <div class="fbox-h">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
+          构建期 · FDE
+        </div>
+        <div class="nrow">
+          <div class="nd"><b>非结构化接入</b><span>文档 / 聊天 → 名词聚类→实体、动词→action·function、关系、rule</span><em>新</em></div>
+          <div class="nd"><b>结构化接入</b><span>DB schema + API 目录 → 验证本体、生成读写绑定</span></div>
+          <div class="nd"><b>合并验证</b><span>非结构化提的实体，schema 里是否有对应物</span><em>新</em></div>
+          <div class="nd"><b>提案通道</b><span>沿用现有 ItemKind 与双轨审核，不改</span></div>
+          <div class="nd hi"><b>冻结快照</b><span>类型 / 关系 / rule —— 版本化，冻结</span></div>
+        </div>
+      </div>
+
+      <div class="fbox run">
+        <div class="fbox-h">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          运行期 · 最终用户
+        </div>
+        <div class="nrow">
+          <div class="nd hi"><b>MCP 端点（带身份）</b><span>用户经 agent 接入；平台 SSO 识别「谁」</span><em>改形态</em></div>
+          <div class="nd"><b>user view（HTTP）</b><span>只读：展示已构建本体的图关系</span><em>新</em></div>
+          <div class="nd hi"><b>推理层</b><span>规则求值 → 决定要查什么、调什么</span><em>新</em></div>
+          <div class="nd"><b>绑定解析器</b><span>类型 → SQL(读) / API(读写)</span><em>新</em></div>
+          <div class="nd"><b>权限校验</b><span>按操作人查授权范围，超范围拒绝</span><em>新</em></div>
+          <div class="nd"><b>审计落账</b><span>operator + 端点 + 动作 + 结果</span><em>新</em></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:44px;display:flex;align-items:center;justify-content:center;gap:0">
+      <svg width="300" height="44" viewBox="0 0 300 44" fill="none">
+        <defs>
+          <marker id="ar1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#2f6f5e"/></marker>
+          <marker id="ar2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#c97b3f"/></marker>
+        </defs>
+        <path d="M110 2v22" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <path d="M190 40V20" stroke="#c97b3f" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+      </svg>
+    </div>
+    <div style="display:flex;justify-content:center;gap:70px;font-size:12px;color:var(--muted);margin-bottom:6px">
+      <span><b style="color:var(--primary)">写入</b> 冻结快照</span>
+      <span><b style="color:var(--amber)">读出</b> 类型·关系·rule</span>
+    </div>
+
+    <svg class="sv" viewBox="0 0 900 210" style="margin-top:8px">
+      <defs>
+        <marker id="ar3" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#2f6f5e"/></marker>
+        <marker id="ar4" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#7c7a72"/></marker>
+      </defs>
+      <!-- platform boundary -->
+      <rect x="300" y="10" width="330" height="150" rx="13" fill="rgba(47,111,94,.05)" stroke="#2f6f5e" stroke-opacity=".35" stroke-dasharray="5 4"/>
+      <text x="465" y="30" text-anchor="middle" class="node-sub" style="font-size:11px;letter-spacing:.08em">本体平台</text>
+
+      <rect x="330" y="45" width="120" height="38" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="390" y="62" text-anchor="middle" class="node-lbl">本体库</text>
+      <text x="390" y="76" text-anchor="middle" class="node-sub">类型/关系/rule</text>
+
+      <rect x="480" y="45" width="120" height="38" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="540" y="62" text-anchor="middle" class="node-lbl">绑定注册表</text>
+      <text x="540" y="76" text-anchor="middle" class="node-sub">运行时·不进快照</text>
+
+      <rect x="405" y="110" width="120" height="34" rx="8" fill="rgba(47,111,94,.09)" stroke="#2f6f5e" stroke-opacity=".4"/>
+      <text x="465" y="132" text-anchor="middle" class="node-lbl" style="fill:#2f6f5e">身份与授权</text>
+
+      <path d="M540 83v24" stroke="#2f6f5e" stroke-opacity=".45" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <path d="M405 83v24" stroke="#2f6f5e" stroke-opacity=".45" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <path d="M450 127H390V83" stroke="#2f6f5e" stroke-opacity=".3" stroke-width="1.4" fill="none" marker-end="url(#ar3)"/>
+
+      <!-- business systems -->
+      <text x="125" y="34" text-anchor="middle" class="node-lbl">业务系统</text>
+      <rect x="35" y="48" width="180" height="34" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="125" y="70" text-anchor="middle" class="node-lbl">ERP / OA</text>
+      <rect x="35" y="94" width="180" height="34" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="125" y="116" text-anchor="middle" class="node-lbl">IoT / MES</text>
+      <rect x="35" y="140" width="180" height="34" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="125" y="162" text-anchor="middle" class="node-lbl">…一个本体可跨多个源</text>
+
+      <path d="M330 82h-35" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar4)"/>
+      <path d="M295 92h-35" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar4)"/>
+      <path d="M295 102h-35" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar4)"/>
+      <path d="M600 64h130v-16h35" stroke="#7c7a72" stroke-width="1.5" marker-end="url(#ar4)" opacity="0"/>
+
+      <text x="243" y="76" text-anchor="middle" style="font-size:11px;fill:#7c7a72">SQL 只读</text>
+      <text x="243" y="122" text-anchor="middle" style="font-size:11px;fill:#7c7a72">API 读写</text>
+
+      <text x="770" y="34" text-anchor="middle" class="node-lbl">终端</text>
+      <rect x="690" y="48" width="175" height="34" rx="8" fill="rgba(47,111,94,.09)" stroke="#2f6f5e" stroke-opacity=".4"/>
+      <text x="777" y="70" text-anchor="middle" class="node-lbl" style="fill:#2f6f5e">agent（MCP）· 用户入口</text>
+      <rect x="690" y="94" width="175" height="34" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="777" y="116" text-anchor="middle" class="node-lbl">user view · 只读检查</text>
+      <rect x="690" y="140" width="175" height="34" rx="8" fill="#fff" stroke="#e9e3d6"/>
+      <text x="777" y="162" text-anchor="middle" class="node-lbl">CLI / Skill</text>
+
+      <path d="M690 65h-50" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#ar3)"/>
+      <path d="M690 111h-50" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <path d="M690 157h-50" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#ar4)"/>
+    </svg>
+
+    <div class="fig-cap"><b>接缝只有一处</b>：构建期把冻结快照写进本体库；运行期只读本体库 + 读绑定注册表。运行时事实（身份、实例物化结果、审计）<b>一律不进快照</b>。</div>
+  </div>
+</section>
+
+<!-- ═══ 2 数据模型 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>数据模型：类型层 vs 运行时绑定</h2></div>
+  <p class="sec-sub">这是整个设计的地基 —— 什么进冻结快照、什么不进。分错了，改一次组织架构就要走一遍本体评审。</p>
+  <div class="fig">
+    <div class="layers">
+      <div class="layer snap">
+        <div><div class="k">类型</div><span class="pill in">进快照</span></div>
+        <div class="v"><b>object_types</b> — key、display_name、属性、完整性标记<br>
+          抽取 + 双轨审核得出，随版本冻结。<span class="mono" style="color:var(--muted)">现有 DDL 13 列，缺 source_system → 需加</span></div>
+      </div>
+      <div class="layer snap">
+        <div><div class="k">关系</div><span class="pill in">进快照</span></div>
+        <div class="v"><b>link_types</b> — from_type / to_type / cardinality / semantic<br>
+          存 key 不存 id。<span class="mono" style="color:var(--muted)">现有结构已符合</span></div>
+      </div>
+      <div class="layer snap">
+        <div><div class="k">规则</div><span class="pill in">进快照 · 待决 D2</span></div>
+        <div class="v"><b>rules</b> — when / then / 审批状态<br>
+          <span style="color:var(--warn)">全新表</span>。<span class="mono" style="color:var(--muted)">v1 规格 §6.5 明确「之后再定结构」，代码中零规则引擎</span></div>
+      </div>
+      <div class="snapline"><span>冻结边界 · 以下不进快照</span></div>
+      <div class="layer">
+        <div><div class="k">读绑定</div><span class="pill out">运行时</span></div>
+        <div class="v">类型 → 去哪查：<span class="mono">sql</span> 或 <span class="mono">api</span>，带参形态<br>
+          <span style="color:var(--primary)">补 v1 规格 §5.2 的悬空引用</span>（该处引用「§4 讨论」但 §4 从未定义读绑定）</div>
+      </div>
+      <div class="layer">
+        <div><div class="k">写绑定</div><span class="pill out">运行时</span></div>
+        <div class="v">动作 → 调哪个 API：<span class="mono">endpoint / method / param_mapping / idempotency_key</span><br>
+          <span style="color:var(--warn)"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 现有 WriteBinding 是 DB 直写形状（system/table/field/conflict_field），需作废重做</span></div>
+      </div>
+      <div class="layer">
+        <div><div class="k">身份绑定</div><span class="pill out">运行时</span></div>
+        <div class="v">SSO subject → 本体 object key<br>
+          <span style="color:var(--warn)"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 全新，且是整条链的接缝 —— v2 最缺的一块</span></div>
+      </div>
+      <div class="layer">
+        <div><div class="k">审计</div><span class="pill out">运行时</span></div>
+        <div class="v">operator + 端点 + 动作 + 结果 + 时刻<br>
+          <span style="color:var(--warn)"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 现有 proposals / proposal_items 表无 actor 字段 —— 只记「决定了什么」，从不记「谁决定的」</span></div>
+      </div>
+    </div>
+    <div class="fig-cap"><b>为什么必须分层</b>：类型慢变、绑定与身份快变。若把权限写进本体，改一次组织架构就要走「提案 → 双轨审核 → 冻结」—— v1 规格 §4.6「切片 1 必须为 ActionType 占位」正是这条教训：<b>结构进快照，运行时事实不进。</b></div>
+  </div>
+</section>
+
+<!-- ═══ 3 抽取管线 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>抽取管线：两个生产者并列</h2></div>
+  <p class="sec-sub">提案说的是「先非结构化后结构化」。<b>BA 读成权威性顺序，不是执行顺序</b> —— 见文末 M1，这一条待负责人确认。</p>
+  <div class="fig">
+    <div class="pipe">
+      <div class="pstep new"><b>非结构化</b><span>文档 / 聊天<br>名词聚类→实体<br>动词→action·function<br>+ 关系 + rule</span></div>
+      <div class="parrow">+</div>
+      <div class="pstep"><b>结构化</b><span>DB schema + API 目录<br>验证本体<br>生成读写绑定</span></div>
+      <div class="parrow">→</div>
+      <div class="pstep new"><b>合并验证</b><span>非结构化提的实体<br>schema 里有对应物吗<br>读绑定解析得出来吗</span></div>
+      <div class="parrow">→</div>
+      <div class="pstep key"><b>提案通道</b><span>沿用 ItemKind<br>与双轨审核<br>不变</span></div>
+      <div class="parrow">→</div>
+      <div class="pstep key"><b>冻结快照</b><span>类型 / 关系 / rule</span></div>
+    </div>
+    <div class="fig-cap"><b>关键设计</b>：两个抽取器<b>并列生产</b>进同一个提案通道，差别在<b>否决权</b>（非结构化提的实体，结构化可以否掉），不在执行先后。这样双轨审核、快照、冻结<b>一个字都不用改</b>。<br><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> <b>若负责人本意是物理上先跑完非结构化再跑结构化</b>，成本显著上升，本图作废。</div>
+  </div>
+</section>
+
+<!-- ═══ 4 推理层 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>推理层：从问题到调用</h2></div>
+  <p class="sec-sub">一次业务问答的真实成本往往不是「一次查询」，而是一串依赖查询。这条链的每一步都在做什么：</p>
+  <div class="fig">
+    <svg class="sv" viewBox="0 0 900 400">
+      <defs>
+        <marker id="sar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0l8 4-8 4z" fill="#7c7a72"/></marker>
+      </defs>
+      <!-- lifelines -->
+      <g stroke="#e9e3d6" stroke-width="1.5" stroke-dasharray="4 4">
+        <line x1="80" y1="52" x2="80" y2="388"/>
+        <line x1="270" y1="52" x2="270" y2="388"/>
+        <line x1="460" y1="52" x2="460" y2="388"/>
+        <line x1="650" y1="52" x2="650" y2="388"/>
+        <line x1="830" y1="52" x2="830" y2="388"/>
+      </g>
+      <!-- heads -->
+      <g>
+        <rect x="24" y="14" width="112" height="30" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="80" y="33" text-anchor="middle" class="node-lbl">用户</text>
+        <rect x="222" y="14" width="96" height="30" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="270" y="33" text-anchor="middle" class="node-lbl">MCP</text>
+        <rect x="392" y="14" width="136" height="30" rx="8" fill="rgba(47,111,94,.09)" stroke="#2f6f5e" stroke-opacity=".4"/>
+        <text x="460" y="33" text-anchor="middle" class="node-lbl" style="fill:#2f6f5e">推理层</text>
+        <rect x="592" y="14" width="116" height="30" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="650" y="33" text-anchor="middle" class="node-lbl">绑定</text>
+        <rect x="766" y="14" width="128" height="30" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="830" y="33" text-anchor="middle" class="node-lbl">业务系统</text>
+      </g>
+      <!-- messages -->
+      <g>
+        <path d="M80 78h190" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="175" y="70" text-anchor="middle" class="node-sub">① 问：张三名下有多少条订阅？</text>
+
+        <path d="M270 118h190" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="365" y="110" text-anchor="middle" class="node-sub">② 带 SSO 身份转发</text>
+
+        <path d="M460 158h190" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="555" y="150" text-anchor="middle" class="node-sub">③ 查规则：客户 → 订阅，需 1 跳</text>
+
+        <path d="M650 198H460" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="555" y="190" text-anchor="middle" class="node-sub">④ 读绑定：客户实例 = SELECT … WHERE id=$1</text>
+
+        <path d="M460 238h370" stroke="#2f6f5e" stroke-width="1.5" marker-end="url(#sar)"/>
+        <text x="645" y="230" text-anchor="middle" class="node-sub" style="fill:#2f6f5e">⑤ 执行（携带操作人凭证）</text>
+
+        <path d="M830 278H460" stroke="#2f6f5e" stroke-width="1.5" marker-end="url(#sar)"/>
+        <text x="645" y="270" text-anchor="middle" class="node-sub" style="fill:#2f6f5e">⑥ 结果（业务系统自行判权限）</text>
+
+        <path d="M460 318H270" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="365" y="310" text-anchor="middle" class="node-sub">⑦ 答案 + 审计落账</text>
+
+        <path d="M270 358H80" stroke="#7c7a72" stroke-width="1.4" marker-end="url(#sar)"/>
+        <text x="175" y="350" text-anchor="middle" class="node-sub">⑧ 返回</text>
+      </g>
+    </svg>
+    <div class="fig-cap"><b>①②③</b> 纯本地，零外部调用 —— 规则求值。<b>④⑤⑥</b> 才碰业务系统，且<b>每跳都可能是一次网络往返</b>。<br><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> <b>级联深度不可控</b>：一次问答可能触发一串查询。设计阶段必须算清，否则线上炸。</div>
+  </div>
+
+  <div class="fig" style="margin-top:14px">
+    <div class="pipe">
+      <div class="pstep key"><b>SQL · 只读</b><span>生成参数化查询<br>表列白名单<br>静态检查<span class="mono">（待决 D7）</span></span></div>
+      <div class="pstep key"><b>API · 读</b><span>GET 类调用<br>携带操作人凭证</span></div>
+      <div class="pstep new"><b>API · 写</b><span>POST/PUT 类<br>幂等键必填<br><b style="color:var(--warn)">永不走 DB</b></span></div>
+    </div>
+    <div class="fig-cap"><b>为什么写只走 API</b>：调用用的是<b>操作人员自己的权限</b>，平台没有一份「什么都能干」的服务权限。加一个字段不会让平台静默获得新系统的写能力 —— <b>得有人真的有那个权限，否则调用失败</b>。平台从「特权写者」变成「委托执行者」。</div>
+  </div>
+</section>
+
+<!-- ═══ 05 委托执行对比 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>委托执行 vs 特权写入</h2></div>
+  <p class="sec-sub">v1 规格反对自动写绑定的核心理由是「静默多写 = 误操作客户生产数据」。这一栏说明为什么新设计消掉了它。</p>
+  <div class="card">
+    <div class="bench bench-h"><span>维度</span><span>平台直连 DB 写（旧）</span><span>代操作人员调 API（新）</span></div>
+    <div class="bench"><span class="bench-l">平台持有的权限</span>
+      <div class="bench-a bad">一份平台自己的<b>万能写权限</b>，覆盖所有已绑定系统</div>
+      <div class="bench-a good"><b>没有。</b>每次调用都是某个具体人的权限，用完即弃</div></div>
+    <div class="bench"><span class="bench-l">加个字段的后果</span>
+      <div class="bench-a bad"><b>静默获得</b>新系统的写能力</div>
+      <div class="bench-a good">得<b>有人真的有</b>那个权限，否则调用失败并报错</div></div>
+    <div class="bench"><span class="bench-l">权限边界谁执行</span>
+      <div class="bench-a bad">平台要自己<b>再实现一遍</b>权限判定</div>
+      <div class="bench-a good"><b>业务系统自己执行</b>，平台不重复造轮子</div></div>
+    <div class="bench"><span class="bench-l">出事的追责</span>
+      <div class="bench-a bad">平台的权限，日志里没有自然人</div>
+      <div class="bench-a good">operator + 端点 + 动作<b>全在平台侧可审计</b></div></div>
+  </div>
+  <div class="fig" style="margin-top:14px">
+    <div class="notes">
+      <div class="note amber"><div class="nt"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 但幂等性从「次要问题」升级为「必须设计」</div>
+      <div class="nb">旧的 <span class="mono">conflict_field</span> 乐观锁靠 DB 条件更新原子判冲突，<b>API 没有对应物</b>。重试一次就是多执行一次。需要 <span class="mono">Idempotency-Key</span>，或查询-判断-执行的补偿逻辑。</div></div>
+      <div class="note warn"><div class="nt"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 生成 SQL 是全新的安全面</div>
+      <div class="nb">现状：3 处 <span class="mono">format!</span> 拼 SQL，表名列名<b>全硬编码</b>。改成按绑定生成 ⇒ 引入规则/模型产出的 SQL 进数据库执行 = <b>SQL 注入面</b>。必须配套参数化 + 表列白名单 + 生成结果静态检查。<b>v1 规格完全没有这一块</b>，因为它不生成 SQL。<span class="mono" style="color:var(--muted)">（待决 D7）</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 06 身份 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>身份与权限</h2></div>
+  <p class="sec-sub">「用户是本体中的一个对象」在设计立场上是成立的，但必须拆成三层才不撞冻结语义。</p>
+  <div class="fig">
+    <div class="layers">
+      <div class="layer snap">
+        <div><div class="k">①「客户」这个类型存在</div><span class="pill in">进快照</span></div>
+        <div class="v">这是<b>结构判断</b>，由抽取 + 双轨审核得出。慢变。</div>
+      </div>
+      <div class="snapline"><span>冻结边界</span></div>
+      <div class="layer">
+        <div><div class="k">②「此刻是张三」</div><span class="pill out">运行时绑定</span></div>
+        <div class="v">SSO subject 落到「客户」类型的一个实例上。<b>每请求变，不进快照。</b></div>
+      </div>
+      <div class="layer">
+        <div><div class="k">③「张三能调哪个 API」</div><span class="pill out">运行时绑定</span></div>
+        <div class="v">该实例上的读写能力。每请求变，不进快照。</div>
+      </div>
+    </div>
+    <div class="fig-cap"><b>② 是整条链的接缝</b>：SSO 登进来的那个 subject，怎么落到「客户」类型的某个实例上 —— <b>现有代码零身份概念</b>（<span class="mono">proposals</span> / <span class="mono">proposal_items</span> 表无 actor 字段）。这正是 v1 规格 §2.3 说的那类问题：「数据能告诉你"有什么"，不能告诉你"这算什么"」。<br><b>待决 D1</b>：直接用 subject 作 key，还是维护 subject ↔ object 映射表。</div>
+  </div>
+</section>
+
+<!-- ═══ 07 user view ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>user view · 只读图检查</h2></div>
+  <p class="sec-sub">只展示已构建好的本体图关系，<b>不做操作入口</b>。目的是让「双轨审核里客户过目」这一条真正成立。</p>
+  <div class="fig">
+    <svg class="sv" viewBox="0 0 900 320">
+      <rect x="0" y="0" width="900" height="320" rx="10" fill="#fcfbf8" stroke="#e9e3d6"/>
+      <text x="20" y="26" style="font-size:11.5px;fill:#7c7a72;font-family:'JetBrains Mono',monospace">本体图关系 · demo3 v2 · 91 节点 / 79 边</text>
+      <!-- edges -->
+      <g stroke="#c9c3b6" stroke-width="1.3">
+        <line x1="180" y1="130" x2="330" y2="86"/><line x1="180" y1="130" x2="330" y2="176"/>
+        <line x1="180" y1="130" x2="150" y2="228"/>
+        <line x1="480" y1="86" x2="630" y2="126"/><line x1="480" y1="176" x2="630" y2="196"/>
+        <line x1="330" y1="176" x2="480" y2="196"/>
+        <line x1="330" y1="86" x2="480" y2="86" stroke-dasharray="4 3"/>
+        <line x1="150" y1="228" x2="480" y2="196"/>
+        <line x1="480" y1="196" x2="770" y2="160"/>
+      </g>
+      <!-- nodes -->
+      <g>
+        <circle cx="180" cy="130" r="27" fill="rgba(47,111,94,.12)" stroke="#2f6f5e" stroke-opacity=".45"/>
+        <text x="180" y="128" text-anchor="middle" style="font-size:12.5px;font-weight:600">客户</text>
+        <text x="180" y="144" text-anchor="middle" style="font-size:10px;fill:#7c7a72">26 属性</text>
+
+        <circle cx="330" cy="86" r="23" fill="#fff" stroke="#e9e3d6"/>
+        <text x="330" y="84" text-anchor="middle" style="font-size:11.5px;font-weight:600">客户订阅</text>
+        <text x="330" y="98" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">10</text>
+
+        <circle cx="330" cy="176" r="23" fill="#fff" stroke="#e9e3d6"/>
+        <text x="330" y="174" text-anchor="middle" style="font-size:11.5px;font-weight:600">应用扣费</text>
+        <text x="330" y="188" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">17</text>
+
+        <circle cx="150" cy="228" r="21" fill="#fff" stroke="#e9e3d6"/>
+        <text x="150" y="226" text-anchor="middle" style="font-size:11px;font-weight:600">余额账户</text>
+        <text x="150" y="239" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">26</text>
+
+        <circle cx="480" cy="86" r="22" fill="rgba(201,123,63,.12)" stroke="#c97b3f" stroke-opacity=".5"/>
+        <text x="480" y="84" text-anchor="middle" style="font-size:11px;font-weight:600">额度用量</text>
+        <text x="480" y="97" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">3</text>
+
+        <circle cx="480" cy="196" r="24" fill="#fff" stroke="#e9e3d6"/>
+        <text x="480" y="194" text-anchor="middle" style="font-size:11.5px;font-weight:600">扣费交易</text>
+        <text x="480" y="208" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">16</text>
+
+        <circle cx="630" cy="126" r="21" fill="#fff" stroke="#e9e3d6"/>
+        <text x="630" y="124" text-anchor="middle" style="font-size:11px;font-weight:600">速率限制</text>
+        <text x="630" y="137" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">8</text>
+
+        <circle cx="630" cy="196" r="20" fill="#fff" stroke="#e9e3d6"/>
+        <text x="630" y="194" text-anchor="middle" style="font-size:11px;font-weight:600">折扣返利</text>
+        <text x="630" y="207" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">8</text>
+
+        <circle cx="770" cy="160" r="22" fill="rgba(176,99,103,.10)" stroke="#b06367" stroke-opacity=".4"/>
+        <text x="770" y="158" text-anchor="middle" style="font-size:11px;font-weight:600">操作日志</text>
+        <text x="770" y="171" text-anchor="middle" style="font-size:9.5px;fill:#7c7a72">15</text>
+      </g>
+      <!-- legend -->
+      <g transform="translate(20,270)">
+        <circle cx="5" cy="0" r="5" fill="rgba(47,111,94,.12)" stroke="#2f6f5e" stroke-opacity=".45"/>
+        <text x="16" y="4" style="font-size:11px;fill:#3a4256">当前选中 · 点开看属性与证据</text>
+        <circle cx="205" cy="0" r="5" fill="rgba(201,123,63,.12)" stroke="#c97b3f" stroke-opacity=".5"/>
+        <text x="216" y="4" style="font-size:11px;fill:#3a4256">完整性为 partial</text>
+        <circle cx="360" cy="0" r="5" fill="rgba(176,99,103,.10)" stroke="#b06367" stroke-opacity=".4"/>
+        <text x="371" y="4" style="font-size:11px;fill:#3a4256">完整性未标注</text>
+        <line x1="500" y1="0" x2="524" y2="0" stroke="#c9c3b6" stroke-width="1.3" stroke-dasharray="4 3"/>
+        <text x="532" y="4" style="font-size:11px;fill:#3a4256">跨系统绑定</text>
+      </g>
+    </svg>
+    <div class="fig-cap"><b>节点上要带完整性标记</b>（<span class="mono">complete</span> / <span class="mono">partial</span>）—— 因为按需物化的实例<b>不完整</b>，「没查到」不等于「没有」。v1 的封闭世界承诺（答「确定没有」）只在 complete 的类型上成立，<b>这个区分必须显式存在</b>。<span class="mono" style="color:var(--muted)">（待决 D4）</span></div>
+  </div>
+</section>
+
+<!-- ═══ 08 分期 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">08</span><h2>分期路线</h2></div>
+  <p class="sec-sub">原则：<b>叠加，不重写</b>。现有 develop 是本设计的一个垂直切片（只读那半），保留；每阶段可独立验收、独立回滚。</p>
+  <div class="card">
+    <ol class="timeline">
+      <li class="gate">
+        <div class="tl-h"><strong>0 · 规则所有权 + 身份解析</strong><span class="tl-badge gate">待决 D1 D2</span></div>
+        <div class="tl-body">规则由谁写、谁审；SSO subject 怎么落到 object key。这两件不定，后面全部悬空。</div>
+        <div class="tl-meta">产出：rules 审批流程定义 · 身份绑定表</div>
+      </li>
+      <li>
+        <div class="tl-h"><strong>1 · user view</strong><span class="tl-badge">复用最多</span></div>
+        <div class="tl-body">HTTP server + graph view。复用 <span class="mono">CustomerView</span>、守门器、<span class="mono">html_view.rs</span>、<span class="mono">object_types/link_types</span>。不动抽取内核。</div>
+        <div class="tl-meta">产出：一双看得见问题的眼睛 · 后面每步都能被它检验</div>
+      </li>
+      <li>
+        <div class="tl-h"><strong>2 · 读绑定</strong><span class="tl-badge">待决 D3</span></div>
+        <div class="tl-body">补 v1 规格 §5.2 的悬空引用；<span class="mono">object_types</span> 加 <span class="mono">source[]</span>；明确读走 SQL 还是 API。</div>
+        <div class="tl-meta">产出：ReadBinding 模型 · 读路径显式标注</div>
+      </li>
+      <li>
+        <div class="tl-h"><strong>3 · API 写绑定</strong><span class="tl-badge">作废旧设计</span></div>
+        <div class="tl-body">替换 <span class="mono">WriteBinding</span> 的 DB 直写形状；补幂等设计。</div>
+        <div class="tl-meta">产出：endpoint/method/param/idempotency · 乐观锁方案退役</div>
+      </li>
+      <li>
+        <div class="tl-h"><strong>4 · 动词维度</strong><span class="tl-badge">扩类型系统</span></div>
+        <div class="tl-body">扩 <span class="mono">ItemKind</span>（现在六个变体里<b>没有</b> action/function）<b>＋审核面</b>。<span class="mono">action_types</span> 的 DDL 与领域类型已占位，缺的是 kind、生产者、以及双轨审核里对它的处理。</div>
+        <div class="tl-meta">产出：ItemKind +2 · proposal 校验 · CustomerView 投影 · MCP tools · 快照写入</div>
+      </li>
+      <li>
+        <div class="tl-h"><strong>5 · 非结构化接入</strong><span class="tl-badge">并列生产者</span></div>
+        <div class="tl-body">文档/聊天抽取作为<b>第三个</b> ExtractionAgent 实现接入 <span class="mono">orchestrate.rs</span>，不是替换 DB 抽取。</div>
+        <div class="tl-meta">产出：unstructured agent · 合并验证规则</div>
+      </li>
+      <li class="gate">
+        <div class="tl-h"><strong>6 · 推理层</strong><span class="tl-badge gate">待决 D4 D5 D7</span></div>
+        <div class="tl-body">只读先行；写仍走阶段 3 的审核签字，<b>不直执行</b>。</div>
+        <div class="tl-meta">产出：规则求值器 · 绑定解析 · 参数化 SQL 生成 · 完整性标记</div>
+      </li>
+    </ol>
+  </div>
+  <div class="fig" style="margin-top:14px">
+    <div class="notes">
+      <div class="note warn"><div class="nt"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 阶段 1 必须带身份门</div>
+      <div class="nb">把本体库经 HTTP 暴露出去，而系统<b>零身份概念</b> —— 等于给客户开一扇没锁的窗。这不是「先上线再补」的东西。</div></div>
+      <div class="note amber"><div class="nt"><svg class="wic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> 拆安全网要分档</div>
+      <div class="nb"><span class="mono">tests/test_no_write_path.rs</span> 现在断言 domain 层不得出现 <span class="mono">execute / write_back / dispatch / run_action / apply_effect</span>，且 <span class="mono">action_types / functions</span> 恒空。<b>每放一档就钉住新的东西</b> —— 一次全拆 = 拆了防护网还没补上新的。</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 09 待决 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">09</span><h2>待拍板清单</h2></div>
+  <p class="sec-sub">BA <b>不夹推荐</b>，只列选项与各自代价。</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:8%">#</th><th style="width:24%">待决</th><th style="width:26%">选项 A</th><th style="width:26%">选项 B</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">D1</td><td>外部身份 → object key 的解析</td><td>SSO subject 直接作 key</td><td>维护 subject ↔ object 映射表</td><td>整条链的接缝</td></tr>
+        <tr><td class="mono">D2</td><td>规则的所有权与审核</td><td>与本体同走提案通道</td><td>规则独立一套评审流程</td><td><b style="color:var(--warn)">最关键</b>：不定则推理层无据</td></tr>
+        <tr><td class="mono">D3</td><td>读路径</td><td>平台直连业务库（现状）</td><td>走业务系统只读 API</td><td>决定权限模型的一半</td></tr>
+        <tr><td class="mono">D4</td><td>实例完整性的表达</td><td>每类型标 complete/partial</td><td>不区分，一律答「不确定」</td><td>影响封闭世界承诺</td></tr>
+        <tr><td class="mono">D5</td><td>缓存与可复现</td><td>全按需，不缓存</td><td>按需 + 带时间戳物化缓存</td><td>「当时这个数是多少」</td></tr>
+        <tr><td class="mono">D6</td><td>MCP 的认证方式</td><td>平台提供远程 MCP + OAuth</td><td>保持 stdio，凭证走配置</td><td><span class="mono">ServerArgs</span> 需扩</td></tr>
+        <tr><td class="mono">D7</td><td>生成 SQL 的安全边界</td><td>白名单 + 参数化 + 静态检查</td><td>放弃生成 SQL，全走 API</td><td>SQL 注入面</td></tr>
+        <tr><td class="mono">D8</td><td>术语改名</td><td>「绑定」</td><td>「落地信息」</td><td>与 v1「元数据=使用痕迹」冲突</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>需要推翻的 v1 规格条目</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:30%">条目</th><th style="width:22%">行号</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td>切片顺序（非结构化最后）</td><td class="ref">SPEC:1245 · SPEC:1255</td><td>提案要求非结构化先行</td></tr>
+        <tr><td>提案通道铁律</td><td class="ref">SPEC:484 · SPEC:68</td><td>推理直接执行；<b>但委托执行模型可保住「不误伤生产数据」</b></td></tr>
+        <tr><td>切片 1 无写回红线</td><td class="ref">SPEC:101</td><td>推理层需执行能力</td></tr>
+        <tr><td>使用者是 FDE</td><td class="ref">SPEC:195</td><td>多人 + 权限打通</td></tr>
+        <tr><td>项目内行级权限不做</td><td class="ref">SPEC §0.1 C 表</td><td>权限成为本体绑定</td></tr>
+        <tr><td>实例层实体对齐「无底洞」</td><td class="ref">SPEC:1393</td><td>按需物化把对齐降级成查询</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <span>本文是提案，非规格 —— 与 <span class="mono">ontology-platform-spec.md</span> 并存</span>
+  <span>代码基线 develop <span class="mono">9043164</span> · 提案 <span class="mono">2026-10-16</span></span>
+</footer>
+
+</div>
+</body>
+</html>

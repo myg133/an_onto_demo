@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本体平台 v2 · 模块设计</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --cream:#f7f5f0; --card:#fff; --line:#e9e3d6; --line-soft:#f0ece2;
+  --ink:#14171e; --ink-2:#3a4256; --muted:#7c7a72;
+  --primary:#2f6f5e; --primary-soft:rgba(47,111,94,.08); --primary-line:rgba(47,111,94,.28);
+  --amber:#c97b3f; --amber-soft:rgba(201,123,63,.10); --amber-line:rgba(201,123,63,.34);
+  --warn:#b06367; --warn-soft:rgba(176,99,103,.09); --warn-line:rgba(176,99,103,.34);
+  --code-bg:#1f2430; --code-ink:#dfe3ea;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--cream);color:var(--ink);font-family:'Outfit',-apple-system,sans-serif;
+  font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(680px 420px at 8% -4%,rgba(47,111,94,.05),transparent 62%),
+             radial-gradient(620px 400px at 96% 4%,rgba(201,123,63,.04),transparent 60%)}
+.wrap{position:relative;z-index:1;max-w-1080px;margin:0 auto;padding:0 24px 100px}
+@media(min-width:768px){.wrap{padding:0 40px 120px}}
+
+.hero{padding:60px 0 32px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--primary);margin-bottom:15px}
+h1{font-family:'DM Serif Display',serif;font-weight:400;font-size:37px;line-height:1.16;
+  letter-spacing:-.01em;margin-bottom:12px}
+@media(max-width:640px){h1{font-size:27px}}
+.lede{font-size:16.5px;color:var(--ink-2);max-width:66ch;margin-bottom:20px}
+.metaline{display:flex;flex-wrap:wrap;gap:8px}
+.tag{font-size:12.5px;color:var(--ink-2);background:var(--card);border:1px solid var(--line);
+  border-radius:999px;padding:5px 13px}
+.tag b{font-weight:600;color:var(--ink)}
+.tag.mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
+
+section{padding-top:48px}
+@media(max-width:640px){section{padding-top:36px}}
+.sec-head{display:flex;align-items:baseline;gap:11px;margin-bottom:7px}
+.sec-num{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--primary);
+  border:1px solid var(--primary-line);background:var(--primary-soft);
+  border-radius:6px;padding:2px 8px;flex:none;align-self:center}
+h2{font-family:'DM Serif Display',serif;font-weight:400;font-size:25px;letter-spacing:-.005em;line-height:1.25}
+@media(max-width:640px){h2{font-size:20px}}
+h3{font-size:15px;font-weight:600;margin:24px 0 9px}
+.sec-sub{color:var(--muted);font-size:14px;margin-bottom:20px;max-width:78ch}
+p{font-size:14px;color:var(--ink-2);margin-bottom:9px;max-width:82ch}
+hr.rule{border:none;border-top:1px solid var(--line);margin-top:50px}
+@media(max-width:640px){hr.rule{margin-top:36px}}
+
+.fig{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 18px;
+  box-shadow:0 4px 16px -2px rgba(0,0,0,.055)}
+.fig-cap{font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6;
+  padding-top:12px;border-top:1px dashed var(--line)}
+.fig-cap b{color:var(--ink-2);font-weight:600}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:11px;padding:15px 17px;
+  overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.68}
+pre .c{color:#8b93a7}
+pre .k{color:#7fc7b0}
+pre .s{color:#e0b078}
+pre .t{color:#c9a0dc}
+pre .n{color:#e8a0a0}
+code{font-family:'JetBrains Mono',monospace;font-size:12.5px;
+  background:rgba(0,0,0,.045);padding:1px 5px;border-radius:4px}
+.mono{font-family:'JetBrains Mono',monospace;font-size:12.5px}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);padding:0 12px 9px 0;border-bottom:1px solid var(--line)}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line-soft);vertical-align:top;
+  color:var(--ink-2);line-height:1.55}
+td:first-child{color:var(--ink);font-weight:500}
+tr:last-child td{border-bottom:none}
+.tbl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;
+  box-shadow:0 2px 8px rgba(0,0,0,.035);overflow-x:auto}
+
+.st{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
+  padding:2px 7px;border-radius:5px;white-space:nowrap}
+.st.new{background:var(--primary-soft);color:var(--primary);border:1px solid var(--primary-line)}
+.st.mod{background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber-line)}
+.st.keep{background:#f4f2ee;color:var(--muted);border:1px solid var(--line)}
+
+.notes{display:flex;flex-direction:column;gap:9px}
+.note{border:1px solid var(--line);border-radius:11px;padding:13px 16px;background:var(--card)}
+.note.warn{border-color:var(--warn-line);background:var(--warn-soft)}
+.note.amber{border-color:var(--amber-line);background:var(--amber-soft)}
+.note .nt{font-weight:600;font-size:14px;margin-bottom:3px}
+.note .nb{font-size:13px;color:var(--ink-2);line-height:1.6}
+
+.matrix{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+.matrix th{padding:8px 6px;text-align:center;font-size:10.5px}
+.matrix th.rh{text-align:left;min-width:150px}
+.matrix td{padding:7px 6px;text-align:center;border-bottom:1px solid var(--line-soft)}
+.matrix td.rh{text-align:left;font-weight:600;color:var(--ink);white-space:nowrap}
+.yes{color:var(--primary);font-weight:700}
+.no{color:#cfcabf}
+.hr{color:var(--warn);font-weight:700}
+
+.gate{background:var(--primary-soft);border:1px solid var(--primary-line);border-radius:12px;
+  padding:14px 18px;font-size:13.5px;color:var(--ink-2);line-height:1.65}
+.gate b{color:var(--ink)}
+.gate code{background:rgba(0,0,0,.05)}
+.sv{width:100%;height:auto;display:block;overflow:visible}
+.nl{font-family:'Outfit',sans-serif;font-size:13px;font-weight:600}
+.ns{font-family:'Outfit',sans-serif;font-size:10.5px;fill:var(--muted)}
+footer{margin-top:50px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;
+  color:var(--muted);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Ontology Platform v2 · Module Design</div>
+  <h1>模块设计</h1>
+  <p class="lede">在现有的<strong>三条硬约束</strong>内落笔：<span class="mono">domain/</span> 零 I/O、存储层刻意不抽 trait、抽取 agent 层是唯一已存在的 trait 边界。新增 <strong>19 个模块</strong>，其中 <strong>13 个是纯逻辑</strong>。</p>
+  <div class="metaline">
+    <span class="tag">代码基线 <b class="mono">develop 9043164</b></span>
+    <span class="tag">现状 <b class="mono">52 文件 / 28,307 行</b></span>
+    <span class="tag">新增 <b class="mono">19 模块</b></span>
+    <span class="tag">改造 <b class="mono">6 模块</b></span>
+  </div>
+</header>
+
+<!-- ═══ 01 分层 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>分层与依赖方向</h2></div>
+  <p class="sec-sub">新增了 <code>runtime/</code> 与 <code>server/</code> 两层。依赖只能<b>向下</b>，两条禁止依赖用红色标出。</p>
+  <div class="fig">
+    <svg class="sv" viewBox="0 0 900 470">
+      <defs>
+        <marker id="d1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#7c7a72"/></marker>
+      </defs>
+
+      <!-- server -->
+      <rect x="40" y="14" width="820" height="74" rx="12" fill="rgba(47,111,94,.06)" stroke="#2f6f5e" stroke-opacity=".3"/>
+      <text x="56" y="34" class="ns" style="font-size:11px;letter-spacing:.08em">SERVER · 对外服务面 · 全新增</text>
+      <g>
+        <rect x="60" y="44" width="176" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="148" y="64" text-anchor="middle" class="nl">http.rs</text>
+        <rect x="248" y="44" width="176" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="336" y="64" text-anchor="middle" class="nl">mcp_endpoint.rs</text>
+        <rect x="436" y="44" width="176" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="524" y="64" text-anchor="middle" class="nl">sso_middleware.rs</text>
+        <text x="636" y="60" class="ns">user view · 远程 MCP</text>
+        <text x="636" y="72" class="ns">SSO 会话</text>
+      </g>
+
+      <path d="M450 90v22" stroke="#7c7a72" stroke-width="1.6" marker-end="url(#d1)"/>
+
+      <!-- runtime -->
+      <rect x="40" y="114" width="820" height="86" rx="12" fill="rgba(47,111,94,.06)" stroke="#2f6f5e" stroke-opacity=".3"/>
+      <text x="56" y="134" class="ns" style="font-size:11px;letter-spacing:.08em">RUNTIME · 运行期编排 · 全新增（推理层落在这里，不进 domain）</text>
+      <g>
+        <rect x="60" y="144" width="176" height="32" rx="8" fill="rgba(201,123,63,.09)" stroke="#c97b3f" stroke-opacity=".4"/>
+        <text x="148" y="164" text-anchor="middle" class="nl">reasoner.rs</text>
+        <rect x="248" y="144" width="176" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="336" y="164" text-anchor="middle" class="nl">exec_sql.rs</text>
+        <rect x="436" y="144" width="176" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="524" y="164" text-anchor="middle" class="nl">exec_api.rs</text>
+        <rect x="624" y="144" width="120" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="684" y="164" text-anchor="middle" class="nl">authz.rs</text>
+        <rect x="756" y="144" width="96" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="804" y="164" text-anchor="middle" class="nl">idem.rs</text>
+        <text x="148" y="190" text-anchor="middle" class="ns">规则求值 · 编排</text>
+        <text x="336" y="190" text-anchor="middle" class="ns">读 · 生成即用</text>
+        <text x="524" y="190" text-anchor="middle" class="ns">读写 · 带身份</text>
+      </g>
+
+      <path d="M450 202v22" stroke="#7c7a72" stroke-width="1.6" marker-end="url(#d1)"/>
+
+      <!-- agent + extract -->
+      <rect x="40" y="226" width="405" height="78" rx="12" fill="#fff" stroke="#e9e3d6"/>
+      <text x="56" y="246" class="ns" style="font-size:11px;letter-spacing:.08em">AGENT · 构建期抽取</text>
+      <g>
+        <rect x="60" y="256" width="150" height="32" rx="8" fill="rgba(201,123,63,.09)" stroke="#c97b3f" stroke-opacity=".4"/>
+        <text x="135" y="276" text-anchor="middle" class="nl">unstructured.rs</text>
+        <text x="243" y="270" class="ns">rule_based · acp · llm</text>
+        <text x="243" y="284" class="ns">orchestrate（改造）</text>
+      </g>
+
+      <rect x="455" y="226" width="405" height="78" rx="12" fill="#fff" stroke="#e9e3d6"/>
+      <text x="471" y="246" class="ns" style="font-size:11px;letter-spacing:.08em">EXTRACT · 数据接入</text>
+      <g>
+        <rect x="475" y="256" width="120" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="535" y="276" text-anchor="middle" class="nl">introspect</text>
+        <rect x="607" y="256" width="120" height="32" rx="8" fill="#fff" stroke="#e9e3d6"/>
+        <text x="667" y="276" text-anchor="middle" class="nl">propose</text>
+        <text x="475" y="298" class="ns">仅结构化 · 保留不动</text>
+      </g>
+
+      <path d="M450 306v22" stroke="#7c7a72" stroke-width="1.6" marker-end="url(#d1)"/>
+
+      <!-- db -->
+      <rect x="40" y="330" width="820" height="52" rx="12" fill="#fff" stroke="#e9e3d6"/>
+      <text x="56" y="350" class="ns" style="font-size:11px;letter-spacing:.08em">DB · 存储 · 有 I/O · 刻意不抽 trait</text>
+      <g>
+        <rect x="60" y="358" width="128" height="18" rx="5" fill="rgba(47,111,94,.08)" stroke="#2f6f5e" stroke-opacity=".28"/>
+        <text x="124" y="371" text-anchor="middle" class="ns">rules_store</text>
+        <rect x="196" y="358" width="128" height="18" rx="5" fill="rgba(47,111,94,.08)" stroke="#2f6f5e" stroke-opacity=".28"/>
+        <text x="260" y="371" text-anchor="middle" class="ns">binding_store</text>
+        <rect x="332" y="358" width="128" height="18" rx="5" fill="rgba(47,111,94,.08)" stroke="#2f6f5e" stroke-opacity=".28"/>
+        <text x="396" y="371" text-anchor="middle" class="ns">identity_store</text>
+        <rect x="468" y="358" width="128" height="18" rx="5" fill="rgba(47,111,94,.08)" stroke="#2f6f6e" stroke-opacity=".28"/>
+        <text x="532" y="371" text-anchor="middle" class="ns">audit_store</text>
+        <text x="616" y="371" class="ns">+ 既有 7 个 store / PgStore / PgProjectStore …</text>
+      </g>
+
+      <path d="M450 384v22" stroke="#7c7a72" stroke-width="1.6" marker-end="url(#d1)"/>
+
+      <!-- domain -->
+      <rect x="40" y="408" width="820" height="52" rx="12" fill="rgba(47,111,94,.06)" stroke="#2f6f5e" stroke-opacity=".45" stroke-width="1.6"/>
+      <text x="56" y="428" class="ns" style="font-size:11px;letter-spacing:.08em;fill:#2f6f5e">DOMAIN · 纯逻辑 · 零 I/O（硬验收：grep 'sqlx|PgStore|db::' src/domain/ 必须无输出）</text>
+      <g>
+        <rect x="60" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="106" y="449" text-anchor="middle" class="ns">rules</text>
+        <rect x="160" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="206" y="449" text-anchor="middle" class="ns">binding</text>
+        <rect x="260" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="306" y="449" text-anchor="middle" class="ns">sqlgen</text>
+        <rect x="360" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="406" y="449" text-anchor="middle" class="ns">integrity</text>
+        <rect x="460" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="506" y="449" text-anchor="middle" class="ns">authorization</text>
+        <rect x="560" y="436" width="92" height="18" rx="5" fill="#fff" stroke="#2f6f5e" stroke-opacity=".3"/>
+        <text x="606" y="449" text-anchor="middle" class="ns">graph</text>
+        <text x="672" y="449" class="ns">+ 既有 12 个模块</text>
+      </g>
+    </svg>
+    <div class="fig-cap"><b>为什么推理层不能放 domain</b>：它要发 SQL 和 HTTP，而 <code>domain/</code> 的零 I/O 是<b>可执行的验收条件</b>，不是风格偏好。拆开之后，<b>规则求值、SQL 生成、权限判定全在 domain（纯函数、可单测）</b>，只有「发出去」这一步在 runtime（可 mock）。</div>
+  </div>
+
+  <div class="gate" style="margin-top:14px">
+    <b>两条禁止依赖（会直接破坏现有验收）</b><br>
+    ① <code>domain → runtime | db | server</code> 任何一条 ⇒ <code>grep -rn 'sqlx|PgStore|db::' src/domain/</code> 立刻有输出，AC-002 变红<br>
+    ② <code>runtime → server</code> ⇒ 编排层知道协议，会导致同一套推理既走 MCP 又走 HTTP 两条路径，两条都得测
+  </div>
+</section>
+
+<!-- ═══ 02 依赖矩阵 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>依赖矩阵</h2></div>
+  <p class="sec-sub">行依赖列。<code>hr</code> = 禁止，<code>—</code> = 不应有。</p>
+  <div class="tbl">
+    <table class="matrix">
+      <thead><tr>
+        <th class="rh">依赖 ↓ / 被依赖 →</th><th>domain</th><th>db</th><th>agent</th><th>extract</th><th>runtime</th><th>server</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="rh">server（新增）</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="no">—</td></tr>
+        <tr><td class="rh">runtime（新增）</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="hr">✗</td></tr>
+        <tr><td class="rh">agent</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="hr">✗</td><td class="hr">✗</td></tr>
+        <tr><td class="rh">extract</td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="hr">✗</td><td class="hr">✗</td></tr>
+        <tr><td class="rh">db</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="hr">✗</td><td class="hr">✗</td></tr>
+        <tr><td class="rh">domain</td><td class="yes">✓</td><td class="hr">✗</td><td class="hr">✗</td><td class="hr">✗</td><td class="hr">✗</td><td class="hr">✗</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ 03 新增模块 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>新增模块清单</h2></div>
+  <p class="sec-sub">19 个，其中 <b>13 个在 domain（纯逻辑）</b>。<span class="st new">新</span> 表示当前代码零存在。</p>
+
+  <h3>domain/ · 纯逻辑 · 零 I/O</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26%">模块</th><th style="width:40%">职责</th><th>关键接口</th></tr></thead>
+      <tbody>
+        <tr><td><code>domain/rules.rs</code> <span class="st new">新</span></td>
+          <td>规则形状与求值。<b>纯函数</b>：给定事实集与规则，返回新事实集</td>
+          <td><code>fn eval(r: &amp;Rule, ctx: &amp;Facts) -&gt; Vec&lt;Fact&gt;</code></td></tr>
+        <tr><td><code>domain/binding.rs</code> <span class="st new">新</span></td>
+          <td>读写绑定的形状 + 解析。<b>纯函数</b>：类型 + 实例 key → 查询规格</td>
+          <td><code>fn resolve(b: &amp;Bindings, k: &amp;Key) -&gt; QuerySpec</code></td></tr>
+        <tr><td><code>domain/sqlgen.rs</code> <span class="st new">新</span></td>
+          <td>查询规格 → <b>参数化</b> SQL。表列白名单在此强制</td>
+          <td><code>fn build(s: &amp;QuerySpec) -&gt; Result&lt;(String, Vec&lt;Value&gt;)&gt;</code></td></tr>
+        <tr><td><code>domain/integrity.rs</code> <span class="st new">新</span></td>
+          <td>完整性标记传播。判定一次物化结果能否支撑「确定没有」</td>
+          <td><code>fn merge(a: Integrity, b: Integrity) -&gt; Integrity</code></td></tr>
+        <tr><td><code>domain/authorization.rs</code> <span class="st new">新</span></td>
+          <td>权限判定。<b>纯函数</b>：操作人 + 动作 + 授权 → 允许/拒绝/越权</td>
+          <td><code>fn allow(op: &amp;Operator, a: &amp;Action, g: &amp;Grants) -&gt; Decision</code></td></tr>
+        <tr><td><code>domain/graph.rs</code> <span class="st new">新</span></td>
+          <td>图投影。把 <code>CustomerView</code> 摊成节点/边，供 user view 渲染</td>
+          <td><code>fn project(v: &amp;CustomerView) -&gt; GraphProjection</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>runtime/ · 编排 · 新的一层</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26%">模块</th><th style="width:40%">职责</th><th>关键接口</th></tr></thead>
+      <tbody>
+        <tr><td><code>runtime/reasoner.rs</code> <span class="st new">新</span></td>
+          <td>推理层主体。<b>唯一编排点</b>：问题 → 规则求值 → 查询计划 → 执行 → 组装答案</td>
+          <td><code>async fn answer(q: &amp;Q, ctx: &amp;RtCtx) -&gt; Answer</code></td></tr>
+        <tr><td><code>runtime/exec_sql.rs</code> <span class="st new">新</span></td>
+          <td>只读 SQL 执行。拿 <code>domain/sqlgen</code> 的产物发出去</td>
+          <td><code>async fn run(sql: &amp;str, args: &amp;[Value]) -&gt; Rows</code></td></tr>
+        <tr><td><code>runtime/exec_api.rs</code> <span class="st new">新</span></td>
+          <td>API 执行（读 + 写）。<b>写只走这里，永不走 DB</b></td>
+          <td><code>async fn call(b: &amp;ApiBinding, ctx: &amp;OpCtx) -&gt; Resp</code></td></tr>
+        <tr><td><code>runtime/authz.rs</code> <span class="st new">新</span></td>
+          <td>权限编排：解析操作人 → 查授权 → 调 domain 判定 → 不通过即拒</td>
+          <td><code>async fn guard(a: &amp;Action) -&gt; Result&lt;OpCtx&gt;</code></td></tr>
+        <tr><td><code>runtime/idem.rs</code> <span class="st new">新</span></td>
+          <td>幂等键生成与去重。<b>API 写的必备件</b>（DB 乐观锁退役后的替代）</td>
+          <td><code>fn key(a: &amp;Action) -&gt; String</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>server/ · 对外服务面</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26%">模块</th><th style="width:40%">职责</th><th>关键接口</th></tr></thead>
+      <tbody>
+        <tr><td><code>server/http.rs</code> <span class="st new">新</span></td>
+          <td>user view。HTTP + 静态资源 + <code>/api/graph</code>。<b>只读，不接受任何变更</b></td>
+          <td><code>GET /api/graph?version=N</code></td></tr>
+        <tr><td><code>server/mcp_endpoint.rs</code> <span class="st new">新</span></td>
+          <td>远程 MCP 端点。复用 <code>mcp/tools.rs</code> 的工具面，加身份上下文</td>
+          <td><code>POST /mcp</code>（JSON-RPC）</td></tr>
+        <tr><td><code>server/sso_middleware.rs</code> <span class="st new">新</span></td>
+          <td>SSO 会话。<b>把 subject 解析成 object key</b>（D1 接缝落在这里）</td>
+          <td><code>async fn resolve(subj) -&gt; Key</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>db/ 与 agent/</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26%">模块</th><th style="width:40%">职责</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td><code>db/rules_store.rs</code> <span class="st new">新</span></td><td>规则的读写，含审批状态流转</td><td><b>不抽 trait</b> —— 沿用 <code>db/mod.rs</code> 已定的「只有一个实现时抽 trait 是过早抽象」</td></tr>
+        <tr><td><code>db/binding_store.rs</code> <span class="st new">新</span></td><td>读写绑定的读写，按 source 路由</td><td>同上</td></tr>
+        <tr><td><code>db/identity_store.rs</code> <span class="st new">新</span></td><td>subject ↔ object 映射（D1）</td><td>同上</td></tr>
+        <tr><td><code>db/audit_store.rs</code> <span class="st new">新</span></td><td>审计落账：operator + 端点 + 动作 + 结果</td><td>补上现有表<b>完全不记谁</b>的缺口</td></tr>
+        <tr><td><code>agent/unstructured.rs</code> <span class="st new">新</span></td>
+          <td>第三个 <code>ExtractionAgent</code> 实现：文档 / 聊天抽取</td>
+          <td><b>已有 trait，接入即用</b>；须声明 <code>CAPABILITY_PRODUCES_PROPOSAL</code>，否则编排入口拒绝</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ 04 接口 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>关键接口定义</h2></div>
+  <p class="sec-sub">只给形状，不给实现。<b>所有 domain 函数都是纯的</b> —— 这条是它们能被单测钉住的唯一原因。</p>
+  <div class="fig">
+<pre><span class="c">// ── domain/rules.rs ─ 纯逻辑，无 I/O ──────────────────────</span>
+<span class="k">pub enum</span> <span class="t">Rule</span> {
+    <span class="c">/// 从某类型的事实推导出另一类型的事实</span>
+    Traverse { from: <span class="t">Key</span>, to: <span class="t">Key</span>, via: <span class="k">Vec</span>&lt;<span class="t">LinkKey</span>&gt; },
+    <span class="c">/// 过滤：只保留满足谓词的实例</span>
+    Filter   { on: <span class="t">Key</span>, pred: <span class="t">Predicate</span> },
+    <span class="c">/// 聚合</span>
+    Aggregate{ on: <span class="t">Key</span>, by: <span class="t">Agg</span> },
+}
+<span class="k">pub enum</span> <span class="t">Integrity</span> { Complete, Partial, <span class="c">/// 查不到 ≠ 不存在</span> Unknown }
+
+<span class="c">// 规则求值：纯函数。Err = 规则本身非法（不是「跑出错」）</span>
+<span class="k">pub fn</span> <span class="t">eval</span>(r: &amp;<span class="t">Rule</span>, ctx: &amp;<span class="t">Facts</span>) -&gt; <span class="k">Result</span>&lt;<span class="t">Vec</span>&lt;<span class="t">Fact</span>&gt;&gt;;
+
+<span class="c">// ── domain/binding.rs ─ 绑定形状与解析 ──────────────────</span>
+<span class="k">pub enum</span> <span class="t">ReadSpec</span> {
+    Sql { stmt: <span class="t">String</span>, cols: <span class="t">Vec</span>&lt;<span class="t">String</span>&gt; },   <span class="c">// 参数化</span>
+    Api { method: <span class="t">Method</span>, path: <span class="t">String</span>, map: <span class="t">ParamMap</span> },
+}
+<span class="k">pub fn</span> <span class="t">resolve</span>(bs: &amp;<span class="t">Bindings</span>, k: &amp;<span class="t">Key</span>) -&gt; <span class="t">QuerySpec</span>;
+<span class="k">pub fn</span> <span class="t">coverage</span>(bs: &amp;<span class="t">Bindings</span>) -&gt; <span class="t">Integrity</span>;  <span class="c">// 部分源缺失 → Partial</span>
+
+<span class="c">// ── domain/sqlgen.rs ─ 生成即用，但生成是纯函数 ──────────</span>
+<span class="c">// 表/列白名单在此强制：不在白名单的标识符直接拒绝，不做任何转义兜底</span>
+<span class="k">pub fn</span> <span class="t">build</span>(s: &amp;<span class="t">QuerySpec</span>, wl: &amp;<span class="t">Whitelist</span>)
+    -&gt; <span class="k">Result</span>&lt;(<span class="t">String</span>, <span class="t">Vec</span>&lt;<span class="t">Value</span>&gt;), <span class="t">GenError</span>>;
+<span class="k">pub enum</span> <span class="t">GenError</span> { UnknownTable(String), UnknownColumn(String), BadShape(String) }
+
+<span class="c">// ── domain/authorization.rs ─ 权限判定 ────────────────────</span>
+<span class="k">pub enum</span> <span class="t">Decision</span> { Allow, <span class="c">/// 超出该操作人的授权范围</span> Deny(Reason), <span class="c">/// 该动作类型未声明任何绑定</span> NoBinding }
+<span class="k">pub fn</span> <span class="t">allow</span>(op: &amp;<span class="t">Operator</span>, a: &amp;<span class="t">Action</span>, g: &amp;<span class="t">Grants</span>) -&gt; <span class="t">Decision</span>;
+
+<span class="c">// ── domain/graph.rs ─ 给 user view 的图投影 ────────────────</span>
+<span class="k">pub struct</span> <span class="t">GraphProjection</span> { pub nodes: <span class="t">Vec</span>&lt;<span class="t">Node</span>&gt;, pub edges: <span class="t">Vec</span>&lt;<span class="t">Edge</span>&gt; }
+<span class="k">pub fn</span> <span class="t">project</span>(v: &amp;<span class="t">CustomerView</span>) -&gt; <span class="t">GraphProjection</span>;</pre>
+    <div class="fig-cap"><b>返回值里带 <code>Integrity</code> 是刻意的</b>：调用方拿到的不是「一个列表」，而是「一个列表 + 这个列表能不能支撑『确定没有』」。D4 未定前，<code>Integrity::Unknown</code> 就是安全的默认。</div>
+  </div>
+</section>
+
+<!-- ═══ 05 改造 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>现有模块的改动</h2></div>
+  <p class="sec-sub">6 个改、其余 46 个不动。改动集中在「扩枚举」与「加字段」，不是重写。</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:26%">模块</th><th style="width:44%">改什么</th><th style="width:14%">波及面</th><th>风险</th></tr></thead>
+      <tbody>
+        <tr><td><code>domain/snapshot.rs</code> <span class="st mod">改</span></td>
+          <td>加 <code>completeness</code> 字段到 ObjectType；<code>Function</code> 侧接规则</td>
+          <td>快照写入 + 读出</td>
+          <td>低。但要过 <code>test_snapshot_*</code> 的往返断言</td></tr>
+        <tr><td><code>domain/review.rs</code> <span class="st mod">改</span></td>
+          <td><code>ItemKind</code> 加 <code>AddActionType</code> / <code>AddFunction</code> 两个变体</td>
+          <td><b>6 处</b>：提案校验 / 双轨审核 UI / CustomerView / MCP tools / 快照写入 / kind 枚举</td>
+          <td><b>高</b>。<code>db/proposal.rs:82</code> 对未知 kind 直接 <code>bail</code>；少改一处 = 能存不能看</td></tr>
+        <tr><td><code>agent/orchestrate.rs</code> <span class="st mod">改</span></td>
+          <td>插入「合并验证」阶段；接入第三个 agent</td>
+          <td>抽取主流程</td>
+          <td>中。现有四阶段的收敛判定不能被破坏</td></tr>
+        <tr><td><code>mcp/tools.rs</code> <span class="st mod">改</span></td>
+          <td>5 个只读工具 → 增加推理/执行类工具</td>
+          <td>MCP 协议面</td>
+          <td>中。<b>对外契约</b>，加工具要带完整入参 schema</td></tr>
+        <tr><td><code>db/pg.rs</code> <span class="st mod">改</span></td>
+          <td>新表 DDL：<code>rules</code> / <code>bindings</code> / <code>identity_map</code> / <code>audit_log</code></td>
+          <td>迁移</td>
+          <td>低。注意该文件已记录过并发建表事故，<code>IF NOT EXISTS</code> 在 PG 里不是并发安全的</td></tr>
+        <tr><td><code>cli.rs</code> <span class="st mod">改</span></td>
+          <td>新子命令：<code>rule</code> / <code>bind</code> / <code>serve</code></td>
+          <td>CLI 面</td>
+          <td>低</td></tr>
+        <tr><td><code>domain/view.rs</code>、<code>html_view.rs</code>、<code>overview.rs</code>、<code>mcp/serve.rs</code>、<code>extract/propose.rs</code> 等 46 个</td>
+          <td><span class="st keep">不动</span></td>
+          <td>—</td>
+          <td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="fig" style="margin-top:14px">
+    <div class="notes">
+      <div class="note warn"><div class="nt">最危险的一处：ItemKind 加变体是六个地方的联动</div>
+      <div class="nb">这个项目已经吃过一次同款亏 —— <code>action_types</code> 的 DDL 在、领域类型在、<b>就是没人往里写</b>。扩枚举时若只改提案校验，症状是「能存进去、审核界面看不见」；只改界面则是「看得见、apply 时报错」。<b>两处都要有对应测试。</b></div></div>
+      <div class="note amber"><div class="nt">拆安全网要分档，别一次全拆</div>
+      <div class="nb"><code>tests/test_no_write_path.rs</code> 现在断言：domain 层不得出现 <code>execute / write_back / dispatch / run_action / apply_effect</code>，且 <code>action_types / functions</code> 恒空、四个存储入口必须连同一个库。<b>每放一档就补一条新断言钉住它</b> —— 一次全拆等于拆了防护网还没补上新的。</div></div>
+      <div class="note"><div class="nt">顺手能拿到的</div>
+      <div class="nb"><code>domain/view.rs</code>（CustomerView）、<code>html_view.rs</code>（单文件 HTML 雏形）、守门器、<code>object_types/link_types</code> 全部<b>原样复用</b>。<code>domain/graph.rs</code> 只是它们的第二个投影，不碰原实现。</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 06 推理层内部 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>推理层内部结构</h2></div>
+  <p class="sec-sub">以「客户 A 有多少条订阅」为例，看一次 <code>reasoner</code> 内部循环怎么走。</p>
+  <div class="fig">
+    <svg class="sv" viewBox="0 0 900 300">
+      <defs><marker id="r1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0l7 3.5L0 7z" fill="#2f6f5e"/></marker></defs>
+
+      <rect x="30" y="30" width="840" height="52" rx="11" fill="rgba(201,123,63,.08)" stroke="#c97b3f" stroke-opacity=".35"/>
+      <text x="50" y="53" class="nl">① 规则求值</text>
+      <text x="50" y="71" class="ns">domain/rules.rs · 纯函数 · 零外部调用</text>
+      <text x="360" y="62" class="ns">产出：客户 → 订阅 需 1 跳；聚合 count；完整性 Partial</text>
+
+      <path d="M450 84v20" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#r1)"/>
+
+      <rect x="30" y="106" width="840" height="52" rx="11" fill="#fff" stroke="#e9e3d6"/>
+      <text x="50" y="129" class="nl">② 绑定解析</text>
+      <text x="50" y="147" class="ns">domain/binding.rs · 纯函数</text>
+      <text x="360" y="138" class="ns">产出：订阅实例 = SELECT … WHERE customer_id = $1</text>
+
+      <path d="M450 160v20" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#r1)"/>
+
+      <rect x="30" y="182" width="840" height="52" rx="11" fill="#fff" stroke="#e9e3d6"/>
+      <text x="50" y="205" class="nl">③ SQL 生成 + 静态检查</text>
+      <text x="50" y="223" class="ns">domain/sqlgen.rs · 纯函数 · 表列白名单强制</text>
+      <text x="360" y="214" class="ns">产出：参数化 SQL + 参数数组（不含任何拼接值）</text>
+
+      <path d="M450 236v20" stroke="#2f6f5e" stroke-width="1.6" marker-end="url(#r1)"/>
+
+      <rect x="30" y="258" width="405" height="34" rx="10" fill="rgba(47,111,94,.09)" stroke="#2f6f5e" stroke-opacity=".35"/>
+      <text x="232" y="279" text-anchor="middle" class="nl" style="fill:#2f6f5e">④ 执行（runtime 层 · 可 mock）</text>
+      <rect x="465" y="258" width="405" height="34" rx="10" fill="#fff" stroke="#e9e3d6"/>
+      <text x="667" y="279" text-anchor="middle" class="nl">⑤ 组装 + 完整性标注 + 审计落账</text>
+    </svg>
+    <div class="fig-cap"><b>① ② ③ 全在 domain，全是纯函数</b> —— 意味着「规则写得对不对」「SQL 生成得安不安全」都能用构造样本单测，不需要连库、不需要 mock。<b>只有 ④ 需要真实 I/O</b>，也是唯一需要集成测试的一段。<br>这个切分就是纪律 G 的直接收益：<b>变异证据可以在纯函数层做，条数多、复现快。</b></div>
+  </div>
+</section>
+
+<!-- ═══ 07 待决映射 ═══ -->
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>待决项落到哪个模块</h2></div>
+  <p class="sec-sub">8 项决策各自有明确的落点，不是悬在架构上的空话。</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th style="width:8%">#</th><th style="width:32%">待决</th><th style="width:30%">落点模块</th><th>不定会怎样</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">D1</td><td>身份 → object key</td><td><code>server/sso_middleware.rs</code> + <code>db/identity_store.rs</code></td><td>整条链的接缝断裂，推理层不知道代表谁</td></tr>
+        <tr><td class="mono">D2</td><td>规则所有权与审核</td><td><code>domain/rules.rs</code> + <code>db/rules_store.rs</code></td><td><b style="color:var(--warn)">最严重</b>：规则成为「未签字的自动化结论」，违反 v1 铁律</td></tr>
+        <tr><td class="mono">D3</td><td>读路径 SQL / API</td><td><code>domain/binding.rs</code> 的 <code>ReadSpec</code> 枚举</td><td>枚举设计要改，两种都要，实现翻倍</td></tr>
+        <tr><td class="mono">D4</td><td>完整性表达</td><td><code>domain/integrity.rs</code> + <code>domain/graph.rs</code></td><td>user view 无法告诉用户「这个节点的数据可能不全」</td></tr>
+        <tr><td class="mono">D5</td><td>缓存与可复现</td><td><code>runtime/reasoner.rs</code> 的结果层</td><td>「当时这个数是多少」无法回答</td></tr>
+        <tr><td class="mono">D6</td><td>MCP 认证</td><td><code>server/mcp_endpoint.rs</code></td><td>远程 MCP 无法携带身份，退回 stdio</td></tr>
+        <tr><td class="mono">D7</td><td>SQL 安全边界</td><td><code>domain/sqlgen.rs</code> 的 <code>Whitelist</code></td><td><b style="color:var(--warn)">安全</b>：可能放弃生成 SQL，全走 API</td></tr>
+        <tr><td class="mono">D8</td><td>术语改名</td><td>全部新模块的字段命名</td><td>与 v1「元数据 = 使用痕迹」撞车</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <span>模块设计 · 承接 <span class="mono">2026-10-16-本体平台v2架构提案.md</span></span>
+  <span>代码基线 develop <span class="mono">9043164</span> · 52 文件 / 28,307 行</span>
+</footer>
+
+</div>
+</body>
+</html>
