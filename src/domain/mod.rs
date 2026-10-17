@@ -34,6 +34,8 @@ pub mod overview;
 // 刻意不写进 `view.rs`：那里是建模术语黑名单的所在地，
 // 把「保留建模术语的那一份」放进去会让两者的分离变得不可核对。
 pub mod model_view;
+// REQ-104 · 客户视图的**属性级剔除**（出口层动作；判据在 identifier_shape，不在本文件）
+pub mod property_filter;
 pub mod review;
 // REQ-056 · **提案条目的建模投影（FDE 通道）**。同样**刻意不写进 `view.rs`** ——
 // 理由与 `model_view` 一致：那里是建模术语黑名单的所在地。

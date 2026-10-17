@@ -390,6 +390,23 @@ pub fn state_from_view(
     version: i32,
     token: &str,
 ) -> AppState {
+    // ── REQ-104 · 出口层属性级剔除 ──
+    //
+    // 放在 `state_from_view` 里而不是 `serve()` 里，是因为这个文件里
+    // **`serve` 与 `server::http::tests` 都调它，没有第二份接线** ——
+    // 放这里，生产接线与测试接线**不可能分叉**。
+    //
+    // ⚠️ 剔除发生在**守门器（`guarded`）之前**，守门器**一行没改**：
+    // `demo3` 第 2 版有 3 个节点因为属性文案带 `pk` / `key` 被逐节点判拒发（HTTP 500），
+    // 剔除后这 4 条属性不再进节点视图 ⇒ 91 个节点全部打得开；
+    // 而真·建模术语剔不掉，照旧到达守门器、照旧拒发。
+    let filtered = crate::domain::property_filter::filter_view(view);
+    let report = filtered.report();
+    if !report.is_empty() {
+        eprintln!("{report}");
+    }
+    let view = &filtered.view;
+
     let graph = crate::domain::graph::project(view);
 
     // 节点索引的键**直接取自 `graph.nodes[i].key`** ——

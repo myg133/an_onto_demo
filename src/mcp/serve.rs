@@ -87,6 +87,24 @@ pub async fn prepare(pool: &PgPool, args: &ServerArgs) -> anyhow::Result<Ontolog
         .collect();
 
     let view = crate::domain::view::project(&sv);
+
+    // ── REQ-104 · 出口层属性级剔除 ──
+    //
+    // 判据在 `identifier_shape::has_raw_identifier`（全仓一份），本处**只调用**。
+    // 放在 `project()` 之后、`build_overview()` 之前：这样**五个工具共用这一份视图**，
+    // 而不是每个工具各写一遍过滤（纪律 H）。
+    //
+    // ⚠️ 本模块此前那道 `scrub_identifiers`（**替换**成 `…`）**保留不动** ——
+    // 它是 B1 的职责、动作不同（保留周围业务文字）。本轮加的是**剔除**：
+    // 名字是标识符的整条属性不上，名字干净而说明脏的只隐去说明。
+    // 两者先后无冲突（替换过之后 `has_raw_identifier` 更不容易命中）。
+    let filtered = crate::domain::property_filter::filter_view(&view);
+    let report = filtered.report();
+    if !report.is_empty() {
+        eprintln!("{report}");
+    }
+    let view = filtered.view;
+
     let overview =
         crate::domain::overview::build_overview(&view, &snapshot.concept_groups, &names);
 

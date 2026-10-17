@@ -1283,7 +1283,22 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            let json = serde_json::to_string_pretty(&cv)?;
+            // ── REQ-104 · 出口层属性级剔除 ──
+            //
+            // 判据在 `identifier_shape::has_raw_identifier`（全仓一份），本处**只调用**。
+            // 页面出口（上面的 `--html` 分支）在 `html_view` 里已有自己那套展示级清洗，
+            // **本轮不动它** —— 这里只管 JSON 出口。
+            //
+            // ⚠️ 剔除发生在**守门器之前**，守门器本身**一行没改**：
+            // 真·建模术语（`主键` / `基数` / `1:N`）不是标识符形态，剔不掉，
+            // 照旧到这里并照旧让整份视图 fail-closed（`exit 2`）。
+            let filtered = crate::domain::property_filter::filter_view(&cv);
+            let report = filtered.report();
+            if !report.is_empty() {
+                eprintln!("{report}");
+            }
+
+            let json = serde_json::to_string_pretty(&filtered.view)?;
             let leaked = scan_modeling_terms(&json);
             crate::cli::emit_domain_line(&json);
             if !leaked.is_empty() {
