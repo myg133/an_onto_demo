@@ -1299,12 +1299,31 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             }
 
             let json = serde_json::to_string_pretty(&filtered.view)?;
+
+            // ── REQ-106 · AC-001：判定必须在写出**之前** ──
+            //
+            // REQ-106 之前这三行是「先 `emit_domain_line(&json)`、再判 `leaked`」：
+            // 命中建模术语时**完整视图已经逐字节落在 stdout 上**了，
+            // `exit 2` 只是个**事后信号**。于是
+            // `ontology show … > out.json` 照样写出一份带建模术语的完整视图 ——
+            // 「客户视图不得含建模术语」这条承诺在 JSON 出口上**可以绕过**。
+            //
+            // 现在顺序是 **判定 → 不通过则拒发 → 通过才写出**，
+            // 与同文件 `--html` 分支那条 fail-closed 同一纪律、同一时序。
             let leaked = scan_modeling_terms(&json);
-            crate::cli::emit_domain_line(&json);
             if !leaked.is_empty() {
-                println!("\n⚠ 客户视图泄露了建模术语：{leaked:?}");
+                // AC-002：诊断一律走 stderr。
+                //
+                // 命中清单**就是建模黑话本身**，写进 stdout 等于把它顺着重定向
+                // 一起发出去 —— 闸门挡住了正文，却从诊断里漏了后门
+                // （与 `mcp::tools::guard` 把词条只写 stderr 是同一条理由）。
+                // 这个出口在 stdout 上承诺的格式**只有一种**：客户视图 JSON。
+                eprintln!("⚠ 客户视图泄露了建模术语：{leaked:?}");
                 std::process::exit(crate::cli::EXIT_LEAKED_MODELING_TERMS);
             }
+
+            // 走到这里 = 判定通过 ⇒ 才允许写出。stdout 上只会出现这一种格式。
+            crate::cli::emit_domain_line(&json);
         }
         OntologyCmd::Overview { project, version, json } => {
             let p = s.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;

@@ -260,8 +260,31 @@ async fn get_node(
     guarded(node)
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
-    Html(crate::server::page::index_html(&state.project, state.version))
+/// 首页。
+///
+/// # ⚠️ REQ-106 · 项目名过闸在**渲染之前**（AC-003）
+///
+/// REQ-106 之前这里是 `Html(index_html(&state.project, state.version))`，
+/// 一条**零闸**的路：项目名原样进 JS 字面量，既不过 `mcp::tools::guard`，
+/// 也不转义。同一个出口家族里，`/api/graph` `/api/node` 走 [`guarded`]，
+/// MCP 侧走 `mcp::tools::guard` —— **只有首页没有**。
+///
+/// 现在判据在 [`crate::server::page::index_html`] 里，与其它出口**同一道**
+/// （`mcp::tools::guard` 本身，不是抄一份），且**转义**也在那里。
+/// 本函数只负责把 `Err` 变成**非 200**，⛔ 不自己再判一次。
+///
+/// 状态码取 [`StatusCode::INTERNAL_SERVER_ERROR`]：与 [`guarded`] 命中时同款 ——
+///
+/// 项目名是**服务端绑定时的启动参数**（`--project`），不是请求方能传的参数，
+/// 所以它不合格**不是客户端的错**。返回 4xx 会把运维的错说成访客的错。
+///
+/// ⛔ 错误正文用 `guard` 的 `Err` 文案，**不要再拼词条**：`guard` 的 `Err`
+/// 按设计就不含任何建模术语（命中词只进 stderr）。
+async fn index(State(state): State<AppState>) -> Result<Html<String>, Response> {
+    match crate::server::page::index_html(&state.project, state.version) {
+        Ok(html) => Ok(Html(html)),
+        Err(msg) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, &msg)),
+    }
 }
 
 /// 只读服务对「你想改点什么」的**唯一**回答。
@@ -711,6 +734,152 @@ mod tests {
                 "{m} {uri} 无口令时应当 401（不该泄露该路径是否存在）"
             );
         }
+    }
+
+    // ── REQ-106 · AC-003 / AC-004：首页的项目名注入面 ─────────────
+    //
+    // ⚠️ 这一组**刻意不碰数据库**：项目名是 `serve()` 绑定的启动参数，
+    // 闸门与转义都发生在**渲染之前**，所以用 `state_from_view`（生产接线）
+    // 造一个空视图就够判据用 —— 与共享集群的连接占用完全解耦。
+
+    /// 项目名**故意带注入串**时的服务端状态。走**生产接线**
+    /// [`state_from_view`]，⛔ 不手搓 `AppState`（REQ-093 P1 防护的同一条：
+    /// 生产接线与测试接线不可能分叉）。
+    fn st_named(project: &str) -> AppState {
+        crate::server::http::state_from_view(
+            &CustomerView {
+                objects: vec![],
+                relations: vec![],
+            },
+            project,
+            2,
+            TOKEN,
+        )
+    }
+
+    /// 页面里 `project: <字面量>, version:` 那一段的字面量原文。
+    ///
+    /// 断言它**能被 `serde_json` 原样解析回项目名** —— 这是「JS 结构没被破坏」
+    /// 最强的一条：解析失败就是字面量坏了；解析回来不等于原名就是转义错了。
+    fn project_literal(html: &str) -> &str {
+        const HEAD: &str = "var who = { project: ";
+        const TAIL: &str = ", version: ";
+        let start = html
+            .find(HEAD)
+            .unwrap_or_else(|| panic!("页面里没有 who 的定义"))
+            + HEAD.len();
+        let end = start
+            + html[start..]
+                .find(TAIL)
+                .unwrap_or_else(|| panic!("who 的定义被截断了 —— 字面量没闭合"));
+        &html[start..end]
+    }
+
+    /// ⛔ **注入面**：项目名含 `"` / `\` / `</script>` 时，
+    /// 页面必须仍是**合法 HTML**，JS 结构不被破坏。
+    ///
+    /// 覆盖两种坏法：
+    /// - **JS 层**（`"` `\` `;`）⇒ 改写 `var who = {...}` 的结构；
+    /// - **HTML 层**（`</script>` `<!--`）⇒ HTML 解析器先于 JS 解析器
+    ///   结束脚本块，`serde_json` 转义救不了它（正斜杠 JSON 不转义）。
+    #[tokio::test]
+    async fn a_hostile_project_name_cannot_break_the_page() {
+        let hostiles = [
+            r#"has"quote"#,
+            r"has\backslash",
+            r#"x"; fetch("//evil.example"); var y="#,
+            "</script><script>alert(1)</script>",
+            "<!--<script>",
+            "换行\n与\r回车",
+            " 控制符",
+        ];
+        // 对照组：干净页面，用来比「结构标记的数量」。
+        // ⛔ 没有它，上面的断言可能只是「页面变短了」也照样绿（纪律 E）。
+        let clean_status = call_status(st_named("demo3"), "GET", "/", Some(TOKEN)).await;
+        assert_eq!(
+            clean_status,
+            StatusCode::OK,
+            "对照组本身必须是 200，否则下面全是空转"
+        );
+        let clean = body_of(call(st_named("demo3"), "GET", "/", Some(TOKEN)).await).await;
+
+        for hostile in hostiles {
+            let r = call(st_named(hostile), "GET", "/", Some(TOKEN)).await;
+            assert_eq!(
+                r.status(),
+                StatusCode::OK,
+                "项目名 {hostile:?} 不含建模术语，页面应当照常出"
+            );
+            let html = body_of(r).await;
+
+            // ① 字面量能原样解析回项目名 ⇒ JS 结构完好。
+            assert_eq!(
+                serde_json::from_str::<String>(project_literal(&html)).unwrap_or_else(|e| {
+                    panic!("项目名 {hostile:?} 的字面量解析失败：{e}\n字面量：{}", project_literal(&html))
+                }),
+                hostile,
+                "项目名 {hostile:?} 应当被正确转义后原样还原"
+            );
+
+            // ② HTML 层结构标记的数量**逐个不变** ⇒ 没有多出/少掉脚本块。
+            //    注意 `<script>` 在页面上本来就出现多次，所以比的是**数量**。
+            for mark in ["<script>", "</script>", "<style>", "</html>", "<body"] {
+                assert_eq!(
+                    html.matches(mark).count(),
+                    clean.matches(mark).count(),
+                    "项目名 {hostile:?} 改变了结构标记 `{mark}` 的数量 —— 脚本块被改坏了"
+                );
+            }
+
+            // ③ 注入的原串**没有**原样出现在页面里。
+            assert!(
+                !html.contains("</script><script>") && !html.contains("fetch(\"//evil"),
+                "项目名 {hostile:?} 有一部分原样落进了页面"
+            );
+        }
+    }
+
+    /// ⛔ **闸门面**：项目名含建模术语 ⇒ 首页**拒绝出页面**（非 200）。
+    ///
+    /// 与 `instructions()` / `guarded()` 同一口径：同一份项目名在 MCP 侧
+    /// 本来就过闸，只有首页没有 —— 这条测试钉住的是「现在有了」。
+    #[tokio::test]
+    async fn a_project_name_with_modeling_terms_is_refused_on_the_homepage() {
+        for bad in ["外键", "基数", "主键", "证据"] {
+            let name = format!("demo{bad}demo");
+            let r = call(st_named(&name), "GET", "/", Some(TOKEN)).await;
+            assert!(
+                !r.status().is_success(),
+                "项目名含 {bad:?} 应当被首页拒绝，实际 {:?}",
+                r.status()
+            );
+            let b = body_of(r).await;
+            assert!(
+                !b.contains(bad),
+                "守门词 {bad:?} 本身不许从错误响应里漏出去：{b}"
+            );
+        }
+    }
+
+    /// 对照组（纪律 E）：**干净的项目名必须过得去**。
+    /// 没有这条，上一条全绿也可能只是「所有首页都被拒了」。
+    #[tokio::test]
+    async fn a_clean_project_name_still_serves_the_homepage() {
+        let r = call(st_named("demo3"), "GET", "/", Some(TOKEN)).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let b = body_of(r).await;
+        assert!(b.contains("demo3"), "页面应带上项目名");
+    }
+
+    /// 对照组（纪律 E）：没有访问口令时，首页**同样**是 401 ——
+    /// 闸门不能变成一条绕过身份门的路。
+    #[tokio::test]
+    async fn the_homepage_gate_does_not_bypass_the_token_gate() {
+        assert_eq!(
+            call_status(st_named("demo外键demo"), "GET", "/", None).await,
+            StatusCode::UNAUTHORIZED,
+            "无口令应当先被身份门拦下"
+        );
     }
 
     // ── AC-002 · 守门器在 HTTP 路径上同样生效 ─────────────

@@ -234,7 +234,8 @@ fn graph_projection_does_not_filter() {
 /// ⛔ 页面不许引任何外部资源（离线可看是硬要求）。
 #[test]
 fn the_page_pulls_in_nothing_from_outside() {
-    let html = ontok::server::page::index_html("demo3", 2);
+    let html = ontok::server::page::index_html("demo3", 2)
+        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
     for bad in ["http://", "https://", "//cdn", "cdn.", "integrity="] {
         assert!(
             !html.contains(bad),
@@ -249,7 +250,8 @@ fn the_page_pulls_in_nothing_from_outside() {
 /// 这条测试会抓住任何人不小心把建模黑话写进 UI 文案。
 #[test]
 fn the_page_itself_has_no_modeling_terms() {
-    let html = ontok::server::page::index_html("demo3", 2);
+    let html = ontok::server::page::index_html("demo3", 2)
+        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
     let hits = ontok::domain::view::scan_modeling_terms(&html);
     assert!(hits.is_empty(), "页面泄露了建模术语：{hits:?}");
 }
@@ -257,7 +259,8 @@ fn the_page_itself_has_no_modeling_terms() {
 /// 项目名要出现在页面上（否则前端拿不到作用域），且替换**只发生一次**。
 #[test]
 fn the_page_carries_its_scope() {
-    let html = ontok::server::page::index_html("demo3", 2);
+    let html = ontok::server::page::index_html("demo3", 2)
+        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
     assert!(html.contains("demo3"), "页面应带上项目名");
     assert!(!html.contains("%%PROJECT%%"), "占位符没被替换干净");
     assert!(!html.contains("%%VERSION%%"), "占位符没被替换干净");
