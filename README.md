@@ -103,24 +103,38 @@ git ls-files
 
 ## 当前状态
 
-> 更新：2026-10-04
+> 更新：2026-10-20（BA 初始化时按 `demand` / `develop` 实况校准；此前的「2026-10-04」版本停在 REQ-004）
 
 | 项 | 状态 |
 | --- | --- |
-| 设计规格 | 已整合为唯一事实源（1427 行） |
-| **代码** | **本体内核 MVP 已合入 `develop`（`3815870`）** · 167 测试全绿 |
-| 汇报材料 | 三份 HTML + 索引，均自包含零外部依赖 |
-| 实现计划 | 内核 1 份 + 抽取 1 份 |
-| 需求 | REQ-001 ~ REQ-003 已完成，REQ-004 草稿 |
+| 设计规格 | v1 事实源（1427 行）+ v2 架构提案与实施规划（2026-10-16） |
+| **代码** | `develop` `b714f48`（REQ-106 已合并）· 全量基线 **62 suite / 846 passed / 0 failed / 1 ignored** @ `7f26fa2` |
+| 需求账本 | [`BA/dispatch/req-registry.md`](BA/dispatch/req-registry.md) **107 条**：已验证 50 · 已完成 25 · 已就绪 11 · 草稿 12 · 其他 9 |
+| 当前迭代 | [`BA/sprint/current.md`](BA/sprint/current.md)（Sprint 2 · v2 出口收口）· Sprint 1 留档见 [`BA/sprint/retrospective.md`](BA/sprint/retrospective.md) |
+| 汇报材料 | 三份 HTML + 索引 + v2 模块设计，均自包含零外部依赖 |
 
-### 需求进展
+> ⚠️ **账本口径**：`BA/demands/` **不是**事实源 —— REQ-103/104/105/107 连目录都没有，
+> REQ-106 只有 `acceptance.md`。状态一律以 `req-registry.md` 与 `develop` 提交为准。
+
+### v2 进展（阶段 1 已完成）
+
+| 阶段 | REQ | 状态 |
+| --- | --- | --- |
+| 1a · user view HTTP server（只读图检查） | REQ-093 | **已验证** |
+| 1b · 图投影 + graph view | REQ-094 | **已验证** |
+| 0b · 规则所有权与审核（**决策 D2**）★ 硬门槛 | REQ-100 | 草稿 · 等人拍板 |
+| 4 · `ItemKind` 扩 action / function | REQ-098 | 草稿 · P0 无依赖，是阶段 5/6 的共同前置 |
+| 6 · 推理层 | REQ-102 | 草稿 · 被 REQ-100 阻塞 |
+| 出口收口（25 个出口各自决定呈现） | REQ-107 | 待开单（从 REQ-106 拆出） |
+
+### v1 需求进展（留档）
 
 | REQ | 名称 | 状态 | 结果 |
 | --- | --- | --- | --- |
 | REQ-001 | 抽取可信度 spike | 待验证 | 技术侧 6/7 通过，**AC-005 客户判读待组织** |
 | REQ-002 | 本体内核 MVP（Rust） | **已完成** | 两轮审核闭环 → `develop` `723cc87` |
 | REQ-003 | 从真实源库抽取本体 | **已完成** | 三轮审核闭环 → `develop` `3815870` |
-| REQ-004 | 概念归并 + AC-013 判读设计 | 草稿 | [草案](BA/demands/REQ-004-concept-consolidation/demand.md) |
+
 
 ### 已经能跑的链路
 
@@ -165,5 +179,5 @@ bash BA/e2e-req003.sh
 
 <footer>
 FDE 本体论平台 · workspace 根容器
-事实源：<code>BA/docs/design/ontology-platform-spec.md</code> · 进度更新 2026-10-04
+事实源：<code>BA/docs/design/ontology-platform-spec.md</code> · 进度更新 2026-10-20
 </footer>
