@@ -69,3 +69,34 @@
 复制到 `.review-workspace/baseline-backup/schema.baseline.json`。
 起因见 `demands/REQ-062/acceptance.md` 的 AC-000 ——
 **门禁现拉模式会把该文件覆盖成待审对象**，且该文件未被 git 跟踪，无 git 兜底。
+
+## 2026-10-20 — 本仓库首次本地初始化（新克隆）+ 巡检
+
+**背景**：远程已有完整五分支历史（`demand` tip `d39be85`），本地只有仓库根（`workspace`）。
+本次补齐本地 workspace 内容。
+
+**建齐 worktree**（在仓库根执行，均跟踪对应远程分支）：
+
+| 目录 | 分支 | tip |
+| --- | --- | --- |
+| `BA/` | `demand` | `d39be85` |
+| `code/` | `develop` | `b714f48` |
+| `Deploy/` | `deploy` | `233fa8f` |
+
+根 worktree 仍在 `workspace`（`aa35cc9`），符合「根恒定停留 workspace」规约。
+
+**补齐缺失结构**：
+- `BA/backlog/inbox/`、`BA/backlog/refined/` —— **此前不存在**，但 `README.md` / `AGENTS.md` 都把 `BA/backlog/inbox/` 当需求入口
+- 各 worktree 的 `.local/{discussions,analysis,drafts,references}/`（不跟踪）
+- `BA/.ba/session.md`（不跟踪）
+
+**巡检结果**：
+- `feature-*` / `hotfix-*` worktree：**0 个**；远程也无 `feature/*` `hotfix/*` 分支 ⇒ 无需回收
+- 根 `git status` 干净；`git ls-files` = 19 个文件，全部属已登记偏离（README / AGENTS / .gitignore / .agents/）
+- `agent-registry.md`：`ba-bogon-112089` 由 `online` 降为 `stale`（最后活动 2026-10-02，已 18 天）；新增本会话 `online`
+- ⚠️ **发现**：`demand` 历史是脱敏快照同步，**全部提交不含 `[session: …]` 尾注** ⇒ 规范的
+  `git log --grep` 追溯在本仓库无效，registry 时间戳是唯一依据（已写入 `agent-registry.md`）
+
+**未做（留待负责人拍板）**：
+- `BA/sprint/current.md` 仍停在 Sprint 1 / REQ-002（`demand` 已到 REQ-106）
+- 仓库根 `README.md` 的「当前状态」停在 2026-10-04
