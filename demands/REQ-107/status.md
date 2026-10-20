@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**待验证**（2026-10-20 · Dev 已交付，等待 QA 代码审核）
+**已退回**（2026-10-20 · QA 判 FAIL，3 条阻断，第 2 轮修复中）
 
 ## 状态流转
 
@@ -58,6 +58,45 @@
 
 ## Dev 交付后新增的待办
 
-- [ ] QA 代码审核（**重点**：A9 的三条既有测试改写、A8 的测试绕行、AC-003 判据是否可被自造命名绕过）
+- [x] QA 代码审核 —— **FAIL，3 阻断**（见下）
 - [ ] 清理 `.review-workspace/req107/base`（Dev 为 golden 取证建的 detach worktree）
 - [ ] 合并后回收 `feature-REQ-107`
+
+## QA 审核结论（2026-10-20 · `qa-review.md`）
+
+**FAIL · 3 条阻断**。QA 在独立 worktree 做了 **12 次变异**（Dev 是 6 次），核心结论：
+**AC-003 的承诺只对 CLI 的 4 个登记站点成立，对 HTTP 新增出口完全不成成立。**
+
+### 阻断项
+
+| # | 违反的 AC | 事实 | 证据 |
+| --- | --- | --- | --- |
+| B1 | **AC-003** | 「新增客户类出口但不接管线」—— 这条 AC **逐字点名**的场景，实测 **0 红** | 新增 `/api/raw` 路由、零闸、不进 `OUTLETS` ⇒ **12/12 全绿** |
+| B2 | **AC-001** | `OutletSpec.track` 是 **pub 字段** ⇒ 出口一行 `spec.track = Track::Internal` 就能关闸 | 全绿 |
+| B3 | **A9 #2** | 锚点迁到管线后，**管线内部**顺序仍被钉住（M6 红），但**出口侧「先写后判」完全失守**（M7 全绿） | 把「未过闸字节先写 stdout」放回出口 ⇒ 全绿 |
+
+### 五种绕过硬（挡不住）
+
+1. 自造 `fn local_ok` 且**真的改变写出**（保留管线调用）
+2. 公开构造器**换个名字** `pub fn craft(String)`（doctest 全绿、12 判据全绿）
+3. **新增 `/api/raw` 客户路由**，零闸、不进 `OUTLETS`
+4. 出口把 `spec.track` 改成 `Internal` 即关闸
+5. 把「未过闸字节先写 stdout」放回出口
+
+### 挡得住的三种（不是全盘失败）
+
+摘掉 H3 的管线调用（红 2 条）· 三字段全改 `pub`（doctest 报 "compiled successfully, but marked compile_fail" + 源码判据红）· 公开构造器**叫 `new`**（但只靠 `pub fn new(` 这个字符串）
+
+### QA 确认「真做对了」的部分
+
+13 条出口**确实全部接线**（QA 逐条读 `path:line`）· 出口层零判据直调 · 五红线 / `guard()` / G1–G4 前 145 行逐字节未动 · 无 `#[ignore]` / 无删测试 · golden 来源可独立复现（QA 自写脚本重算 6/13 份全 MATCH）· **Z1/Z2/Z3 修复有效**（塞「外键」进 `description` 与 `instructions` 模板正文都红）· Dev 报告的本机数字与 QA 实测**逐条一致（没编数）**
+
+### 根因（QA 的判定，我认同）
+
+`OUTLETS` 是**手工登记表**，只做「表 → 源码」**单向** needle 对账；**没有任何判据枚举源码里的客户写出点**。
+⇒ Dev 的 M-2 变异用的是**已登记的名字**，所以「能红」，但这掩盖了「换个名字就绿」。
+
+### 预算说明
+
+`src/bin/ontok-gate-preflight.rs` 的 A8 绕行经 QA 两次独立复验，sha256 `C7CF95E2…322D` 前后一致。
+⚠️ **QA 新发现**：`tests/test_retained_names_req084.rs` 用 `include_str!` 引用该 bin ⇒ **bin 挪出期间它编不过**（Dev 报告未写）。A8 绕行只对**不含该 `include_str!` 的目标**成立 —— 记入 A10。
