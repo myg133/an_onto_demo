@@ -16,6 +16,9 @@
 //! | T4 | 全仓所有返回客户产物的 `pub fn` | 恰好 `render` / `publish_value` 两个 |
 //! | T5 | 三个出口文件里的每一个 `fn` 定义 | `OUTLET_FNS`（逐个登记 + 用途） |
 //! | T6 | 全仓所有 `mod x;` 声明 | `MODULES`（新增模块即红） |
+//! | T7 | 管线模块自己的 stdout 宏 | 零命中（写出是出口的事） |
+//! | T8 | 每条 `Enforcement::Pipeline` 的**证据**（第 3 轮 F1） | 文件里必须存在携带 `OutletId::<X>` 的**管线调用**，且该调用与登记的写点**在同一个函数**里（或写点所在函数正是该调用的适配器） |
+//! | T9 | `Json(` / `Html(` 响应体的实参（第 3 轮 F4） | 必须是 `<绑定>.into_value()` / `<绑定>.into_text()`，且该绑定来自管线调用的 `Ok(..)` 分支 |
 //!
 //! ⛔ **不许写死文件清单**：T1/T4/T6 都从 `src/` 目录**现场遍历**，
 //! 新加的 `.rs` 自动进扫描范围（大多数情况下它没有登记 ⇒ 红）。
@@ -27,12 +30,13 @@
 //! # 已知边界（⛔ 不许改写成「已封堵」）
 //!
 //! - 枚举认的是**构造拼写**（`println!` / `emit_domain_*` / `Json(` / `Html(` /
-//!   `encode_result(` / `fs::write(`）。用别的机制绕过（自建 `io::stdout()`、
-//!   第三方日志宏）**抓不到**；补强在类型层（写出函数只收 `OutletRender`，
-//!   裸 `&str` 编译不过）。
+//!   `encode_result(` / `fs::write(`）。**第 3 轮**已把「绕开全部构造」的三条路
+//!   （`std::io::stdout` / `write_all(` / `Response::builder` / `.body(` / `Body::from(`）
+//!   做成**否定式禁调**（[`FORBIDDEN_MECHANISMS`]，T1 内断言）——
+//!   它们不再「全绿」，而是**一出现就红**。
 //! - T2 只看「管线赋值 ↔ 写出」之间的窗口；「在管线调用**之前**用一个本地判据
 //!   决定要不要调管线」这种形态由 T5（fn 登记）与 T1（新写点）侧证，
-//!   **闭包形式的本地判据**不在 T5 覆盖内（诚实登记，见交付物 §7）。
+//!   **闭包形式的本地判据**不在 T5 覆盖内（诚实登记，见交付物 §11）。
 
 mod common;
 
@@ -354,6 +358,180 @@ fn paren_delta(s: &str) -> i32 {
     })
 }
 
+// ══════════════════════════════════════════════════════════════
+// 第 3 轮公共设施（F1–F4）
+// ══════════════════════════════════════════════════════════════
+
+/// **domain 生产者**：一段写点窗口里出现这些调用，说明它在**构造**客户视图。
+///
+/// F2（`qa-review-2.md` §7.1-B2 / §9-2）：`NON_CUSTOMER_WRITES` 是**自证清单** ——
+/// 谁都能加一行 needle + 计数，把一处「打客户 JSON 的 `println!`」登记成「非客户」。
+/// 判据改成：白名单命中的写点窗口**不得**含 domain 生产者（见
+/// [`whitelist_smuggles_domain_product`]）。
+const DOMAIN_PRODUCERS: &[&str] = &[
+    "to_string_pretty(",
+    "to_value(",
+    "render_html(",
+    "render_overview_text(",
+    "filter_view(",
+    "encode_result(",
+];
+
+/// F2 的**纯判据**：白名单命中的写点窗口里是否夹带了 domain 生产者。
+///
+/// `construct` 是这条写点自己的构造拼写 —— 若它本身就是 `encode_result(`，
+/// 那「窗口里含 `encode_result(`」是**这条写点自己**，不算夹带。
+fn whitelist_smuggles_domain_product<'a>(construct: &str, window: &'a str) -> Option<&'static str> {
+    DOMAIN_PRODUCERS
+        .iter()
+        .copied()
+        .find(|p| *p != construct && window.contains(p))
+}
+
+/// F3 / F4：出口文件里**禁止**出现的、绕开全部已登记构造的写出机制。
+///
+/// - **F3**（`qa-review-2.md` §3.6-5d）：`std::io::stdout().lock().write_all(raw)`
+///   曾经 71 passed 全绿 —— REQ-106 的语义病（未过闸字节先落 stdout）仍可表达。
+/// - **F4**（§4.6-M10b）：`Response::builder().status(..).body(Body::from(raw))`
+///   曾经全绿，而且**顺手绕过 `check_scope`**。
+///
+/// ⇒ 第 3 轮把它们做成**否定式禁调**：不是「枚举到了才登记」，而是「出现即红」。
+const FORBIDDEN_MECHANISMS: &[(&str, &str)] = &[
+    ("std::io::stdout", "F3：自开一条 stdout，绕开 `emit_domain_*`（REQ-106 的原始病）"),
+    ("write_all(", "F3：裸 fd 写 —— 与 `std::io::stdout` 同一条绕过路径"),
+    ("Response::builder", "F4：响应体由 `Response::builder` 手搓 ⇒ 不在 `Json(`/`Html(` 写点枚举内"),
+    (".body(", "F4：`.body(…)` 直收裸串 —— 同上"),
+    ("Body::from(", "F4：`Body::from(raw)` 由裸串构造响应体 —— 同上"),
+];
+
+/// 机制级豁免：**传输**函数里的 fd 写出（与 [`WRITER_FNS`] 同理）。
+///
+/// `mcp/serve.rs` 的 `write_mcp_line()` 把**已经编码好的响应行**写到 stdout —— 它是
+/// MCP 的传输层，不是一条客户出口（它自己与 `serve` 都在 `OUTLET_FNS` 里登记）。
+/// ⚠️ 这是**唯一**的 F3 豁免，且精确到「文件 + 函数」。
+/// 第 3 轮之前豁免的是整条 `serve()`（函数体很大，往里加一行裸写不会被抓）；
+/// 现在传输写被收进这一个小函数，`serve()` 的函数体受 F3 约束。
+const TRANSPORT_FNS: &[(&str, &str)] = &[("src/mcp/serve.rs", "fn write_mcp_line")];
+
+/// 取出 `construct` 之后**配对括号内**的实参（跨行时由调用方把窗口拼好）。
+fn paren_arg(text: &str, construct: &str) -> Option<String> {
+    let at = text.find(construct)?;
+    let start = at + construct.len(); // `construct` 以 `(` 结尾
+    let mut depth = 1usize;
+    for (off, ch) in text[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..start + off].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 这一行是不是**函数定义**行（`fn` / `pub fn` / `async fn` / `pub(crate) fn` …）。
+fn is_fn_def(line: &str) -> bool {
+    let t = line.trim_start();
+    [
+        "pub(crate) fn ",
+        "pub async fn ",
+        "pub const fn ",
+        "pub fn ",
+        "async fn ",
+        "const fn ",
+        "fn ",
+    ]
+    .iter()
+    .any(|p| t.starts_with(p))
+}
+
+/// 函数定义行上的函数名。
+fn fn_name_of(line: &str) -> Option<String> {
+    let at = line.find("fn ")? + 3;
+    let name: String = line[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// 从第 `at` 行开始的函数体行区间（0 基，含首尾；按花括号配平）。
+fn fn_range_at(lines: &[String], at: usize) -> Option<(usize, usize)> {
+    let mut depth = 0i32;
+    let mut opened = false;
+    for (i, l) in lines.iter().enumerate().skip(at) {
+        depth += l.matches('{').count() as i32;
+        depth -= l.matches('}').count() as i32;
+        if l.contains('{') {
+            opened = true;
+        }
+        if opened && depth <= 0 {
+            return Some((at, i));
+        }
+    }
+    None
+}
+
+/// 第 `idx` 行（0 基）**所属**的函数名：向上找最近的 `fn` 定义，再按花括号配平确认它包含 `idx`。
+///
+/// 这是 F1 的「同一个函数」判据与 [`pipeline_calls`] 的定位基础。
+fn enclosing_fn(lines: &[String], idx: usize) -> Option<String> {
+    let mut k = idx;
+    loop {
+        if is_fn_def(&lines[k]) {
+            if let Some((lo, hi)) = fn_range_at(lines, k) {
+                if idx >= lo && idx <= hi {
+                    return fn_name_of(&lines[k]);
+                }
+            }
+        }
+        if k == 0 {
+            return None;
+        }
+        k -= 1;
+    }
+}
+
+/// 扫描一处源码里的**禁调机制**（F3/F4），跳过写出机制与传输层函数的函数体。
+fn forbidden_mechanisms(rel: &str, code: &str) -> Vec<String> {
+    let lines: Vec<String> = code.lines().map(|s| s.to_string()).collect();
+    let mut skip: Vec<(usize, usize)> = Vec::new();
+    for m in WRITER_FNS {
+        if let Some((lo, hi)) = fn_range(&lines, m) {
+            skip.push((lo, hi));
+        }
+    }
+    for (file, m) in TRANSPORT_FNS {
+        if *file == rel {
+            if let Some((lo, hi)) = fn_range(&lines, m) {
+                skip.push((lo, hi));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if skip.iter().any(|(lo, hi)| i >= *lo && i <= *hi) {
+            continue;
+        }
+        for (needle, why) in FORBIDDEN_MECHANISMS {
+            let mut from = 0usize;
+            while let Some(off) = line[from..].find(needle) {
+                let at = from + off;
+                from = at + 1;
+                if !boundary_ok(line, at) {
+                    continue;
+                }
+                out.push(format!("  - {rel}:{} `{needle}` —— {why}", i + 1));
+            }
+        }
+    }
+    out
+}
+
 /// 非客户写点白名单：**(文件, needle, 期望命中数, 理由)**。
 ///
 /// `needle` 必须出现在写点的**窗口文本**里，且命中数必须**恰好等于** `expected`：
@@ -407,10 +585,14 @@ fn registered_needles(path: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// ⭐ **纯函数**：给定「文件 → 生产代码」与两张白名单，返回**未登记的写点**。
-fn unregistered_write_points(files: &BTreeMap<String, Src>) -> (Vec<String>, Vec<String>) {
+/// ⭐ **纯函数**：给定「文件 → 生产代码」与两张白名单，返回**未登记的写点**、
+/// **过期的白名单**，以及**夹带了 domain 生产者**的白名单命中（F2）。
+fn unregistered_write_points(
+    files: &BTreeMap<String, Src>,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut unregistered = Vec::new();
     let mut stale_allow = Vec::new();
+    let mut smuggled = Vec::new();
     // 白名单命中计数（按 (path, needle)）。
     let mut allow_hits: BTreeMap<(&str, &str), usize> = BTreeMap::new();
 
@@ -431,6 +613,16 @@ fn unregistered_write_points(files: &BTreeMap<String, Src>) -> (Vec<String>, Vec
             for (path, needle, _, _) in NON_CUSTOMER_WRITES {
                 if path == rel && p.text.contains(needle) {
                     *allow_hits.entry((path, needle)).or_insert(0) += 1;
+                    // ⭐ F2：白名单不是「填一行就合法」——窗口里夹带 domain 生产者
+                    // 就说明这是**客户视图的构造**，登记成「非客户」不算数。
+                    if let Some(prod) = whitelist_smuggles_domain_product(p.construct, &p.text) {
+                        smuggled.push(format!(
+                            "  - {rel}:{} `{}`（白名单 needle `{needle}`）的窗口里含 domain 生产者 `{prod}`\n      {}",
+                            p.line,
+                            p.construct,
+                            p.text.replace('\n', " ⏎ ")
+                        ));
+                    }
                     covered = true;
                 }
             }
@@ -468,7 +660,7 @@ fn unregistered_write_points(files: &BTreeMap<String, Src>) -> (Vec<String>, Vec
             None => unregistered.push(format!("  - {}: 找不到 {}", o.id, o.path)),
         }
     }
-    (unregistered, stale_allow)
+    (unregistered, stale_allow, smuggled)
 }
 
 fn all_src_code() -> BTreeMap<String, Src> {
@@ -516,8 +708,90 @@ fn t1_every_customer_write_point_is_registered() {
         "写出函数的**定义体**被当成了出口写点 ⇒ 每个出口文件都会恒红"
     );
 
-    let (unregistered, stale) = unregistered_write_points(&files);
+    let (unregistered, stale, smuggled) = unregistered_write_points(&files);
     assert!(stale.is_empty(), "⛔ 白名单过期：\n{}", stale.join("\n"));
+    // ⭐ F2（第 3 轮）：白名单 needle 的写点窗口**不得**含 domain 生产者。
+    // 反空转：QA 的 M7 形态（`println!` 打客户 JSON + 白名单一行）必须被判出来。
+    assert_eq!(
+        whitelist_smuggles_domain_product(
+            "println!(",
+            r#"println!("{}", serde_json::to_string_pretty(&*state.graph))"#
+        ),
+        Some("to_string_pretty("),
+        "白名单夹带 domain 生产者的判据认不出来 ⇒ M7 仍然全绿"
+    );
+    assert_eq!(
+        whitelist_smuggles_domain_product("encode_result(", "p::encode_result(id, p::empty_result())"),
+        None,
+        "`encode_result(` 是这条写点**自己的构造拼写**，不该被算成夹带 ⇒ 判据会恒红"
+    );
+    assert_eq!(
+        whitelist_smuggles_domain_product("Json(", r#"(status, Json(json!({ "error": msg })))"#),
+        None,
+        "错误通道的 `json!` 被算成 domain 生产者 ⇒ 判据会恒红"
+    );
+    assert!(
+        smuggled.is_empty(),
+        "⛔ 有 {} 处白名单把「domain 生产者」登记成了非客户写点（F2：白名单 = 合法绕过）：\n{}",
+        smuggled.len(),
+        smuggled.join("\n")
+    );
+
+    // ⭐ F3 / F4（第 3 轮）：出口文件里**禁止**绕开全部已登记构造的写出机制。
+    // 反空转：三条形态必须被认出来（它们曾经各自 71 passed 全绿）。
+    let probes = [
+        (
+            "fn x() { let mut o = std::io::stdout().lock(); o.write_all(raw.as_bytes()); }",
+            "std::io::stdout",
+        ),
+        ("fn x() { std::io::stdout().write_all(raw.as_bytes()); }", "write_all("),
+        ("fn x() { Response::builder().body(Body::from(raw)); }", "Response::builder"),
+        ("fn x() { Response::builder().body(Body::from(raw)); }", ".body("),
+        ("fn x() { Response::builder().body(Body::from(raw)); }", "Body::from("),
+    ];
+    for (src, want) in probes {
+        let got = forbidden_mechanisms("src/cli.rs", src);
+        assert!(
+            got.iter().any(|m| m.contains(want)),
+            "禁调扫描器认不出 `{want}` ⇒ F3/F4 那两条又回到「全绿」：{got:?}"
+        );
+    }
+    // 反向：写出机制本体 / MCP 传输层的 fd 写出必须放行（否则判据恒红）。
+    assert!(
+        forbidden_mechanisms(
+            "src/cli.rs",
+            "fn write_stdout(text: &str) { let mut out = std::io::stdout(); out.write_all(text.as_bytes()); }"
+        )
+        .is_empty(),
+        "`write_stdout` 的函数体被当成绕过 ⇒ 判据会恒红"
+    );
+    assert!(
+        forbidden_mechanisms(
+            "src/mcp/serve.rs",
+            "fn write_mcp_line(resp: &str) -> R { let mut o = std::io::stdout(); o.write_all(resp.as_bytes()) }"
+        )
+        .is_empty(),
+        "MCP 传输层的 stdout 写出被当成绕过 ⇒ 判据会恒红"
+    );
+    // 反向：传输写被收进 `write_mcp_line` 之后，**`serve()` 的函数体**必须重新受约束
+    // （第 3 轮之前整条 `serve()` 都在豁免里，往里加一行裸写不会被抓）。
+    assert!(
+        !forbidden_mechanisms(
+            "src/mcp/serve.rs",
+            "async fn serve(x: X) { let o = raw; std::io::stdout().write_all(o.as_bytes()); }"
+        )
+        .is_empty(),
+        "`serve()` 又变成豁免区 ⇒ F3 在 MCP 传输层有一个大洞"
+    );
+    let mut forbidden = Vec::new();
+    for rel in OUTLET_FILES {
+        forbidden.extend(forbidden_mechanisms(rel, &prod(rel)));
+    }
+    assert!(
+        forbidden.is_empty(),
+        "⛔ 出口文件里出现了**禁用的写出机制**（F3/F4：绕开全部已登记构造）：\n{}",
+        forbidden.join("\n")
+    );
     assert!(
         unregistered.is_empty(),
         "⛔ 有 {} 处客户可见写点**没有登记**（AC-003：新增出口必须当场红）：\n{}",
@@ -1022,6 +1296,7 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/mcp/serve.rs", "serve", "MCP 分发/装配"),
     ("src/mcp/serve.rs", "handle_line", "MCP 分发/装配"),
     ("src/mcp/serve.rs", "dispatch", "MCP 分发/装配"),
+    ("src/mcp/serve.rs", "write_mcp_line", "MCP **传输层**的 fd 写出（F3 的唯一豁免，精确到函数）"),
 
 ];
 
@@ -1210,6 +1485,275 @@ fn t7_pipeline_module_never_writes_stdout() {
         code.matches("eprintln!(").count(),
         1,
         "管线里的 stderr 写出应当只有 `DropReport::emit` 一处"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// T8 · 每条 `Enforcement::Pipeline` 必须有**证据**（第 3 轮 F1）
+// ══════════════════════════════════════════════════════════════
+
+/// 管线入口的**调用拼写**（`publish_customer` 是 CLI 的适配器，内部再调 `pipeline::render`）。
+const PIPELINE_ENTRIES: &[&str] = &[
+    "publish_customer(",
+    "publish_json(",
+    "publish_value(",
+    "pipeline::render(",
+];
+
+/// 一处管线调用点：行号（1 基）、callee、实参里的 `OutletId::<X>` 记号、所在函数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PipelineCall {
+    line: usize,
+    callee: &'static str,
+    token: Option<String>,
+    enclosing: Option<String>,
+}
+
+/// ⭐ **纯函数**：枚举一段源码里的管线调用点（函数**定义**行不算调用）。
+fn pipeline_calls(code: &str) -> Vec<PipelineCall> {
+    let lines: Vec<String> = code.lines().map(|s| s.to_string()).collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if is_fn_def(line) {
+            continue;
+        }
+        for callee in PIPELINE_ENTRIES {
+            let Some(at) = line.find(callee) else { continue };
+            if !boundary_ok(line, at) {
+                continue;
+            }
+            // 实参窗口：按括号配平，最多向下 8 行（登记表里的调用都不超过 4 行）。
+            let mut buf = line[at..].to_string();
+            let mut k = i;
+            while paren_delta(&buf) > 0 && k + 1 < lines.len() && k + 1 <= i + 8 {
+                k += 1;
+                buf.push('\n');
+                buf.push_str(&lines[k]);
+            }
+            // `id_tokens` 的键带 `OutletId::` 前缀，这里只留记号名。
+            let token = id_tokens(&buf)
+                .keys()
+                .next()
+                .map(|t| t.trim_start_matches("OutletId::").to_string());
+            out.push(PipelineCall {
+                line: i + 1,
+                callee,
+                token,
+                enclosing: enclosing_fn(&lines, i),
+            });
+            break;
+        }
+    }
+    out
+}
+
+/// 出口 id → **证据记号**（`OutletId::<T>` 里的 `T`）。
+///
+/// ⛔ 这里**不是**一张可扩展的映射表：除两个显式共享组外，证据记号**就是出口自己的
+/// id**。于是「新登记一条 `H4`」**不会**自动借到 `H2` 的记号 —— 它必须自带
+/// `OutletId::H4`（枚举里真有这个变体、且真被管线调用）。
+///
+/// 两个共享组是**写死**的，理由在代码里：
+/// - `C2`（`--out` 写文件）与 `C1` 写**同一份产物**（`call_site` 注释与 `cli.rs`
+///   的 `let html = publish_customer(OutletId::C1, ..)` 都是证据）；
+/// - `M1`–`M5` 五个工具**共用一次** `publish_value(OutletId::McpTools, ..)`。
+fn evidence_token(id: &str) -> String {
+    match id {
+        "C2" => "C1".to_string(),
+        "M1" | "M2" | "M3" | "M4" | "M5" => "McpTools".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[test]
+fn t8_pipeline_declarations_have_evidence() {
+    use ontok::domain::pipeline::{Enforcement, OUTLETS};
+
+    // 反空转 ①：新出口 id **不会**自动借到别人的记号（这是 M6b 的命门）。
+    assert_eq!(evidence_token("H4"), "H4", "新出口 id 必须自带同名证据");
+    assert_eq!(evidence_token("M6"), "M6", "只有登记在册的 M1–M5 才共享 `McpTools`");
+    // 反空转 ②：两个显式共享组。
+    assert_eq!(evidence_token("C2"), "C1");
+    assert_eq!(evidence_token("M3"), "McpTools");
+    // 反空转 ③：跨行调用也要取得到实参里的记号；定义行不是调用。
+    let calls = pipeline_calls(
+        "fn x() {\n    publish_json(\n        OutletId::H2,\n        value,\n    )\n}",
+    );
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].token.as_deref(), Some("H2"), "{calls:?}");
+    assert_eq!(calls[0].enclosing.as_deref(), Some("x"), "{calls:?}");
+    assert!(
+        pipeline_calls("fn publish_json(id: OutletId, v: Value) -> X { todo!() }").is_empty(),
+        "函数定义被当成了调用点 ⇒ 这条判据会空转"
+    );
+
+    let mut bad = Vec::new();
+    // ① 客户出口只许在三个出口文件里（否则下面的逐文件对账会漏掉它）。
+    for o in OUTLETS.iter().filter(|o| o.enforcement == Enforcement::Pipeline) {
+        if !OUTLET_FILES.contains(&o.path) {
+            bad.push(format!(
+                "  - {}: `Enforcement::Pipeline` 的出口落在 {} —— 客户可见字节只从三个出口文件出去",
+                o.id, o.path
+            ));
+        }
+    }
+    // ② 逐文件：登记的每条 Pipeline 都要有「调用 + 同函数写点」两件证据。
+    for rel in OUTLET_FILES {
+        let src = Src::load(rel);
+        let lines: Vec<String> = src.code.lines().map(|s| s.to_string()).collect();
+        let calls = pipeline_calls(&src.code);
+        let mut expected: BTreeSet<String> = BTreeSet::new();
+        for o in OUTLETS
+            .iter()
+            .filter(|o| o.enforcement == Enforcement::Pipeline && o.path == *rel)
+        {
+            let token = evidence_token(o.id);
+            expected.insert(token.clone());
+            let Some(call) = calls.iter().find(|c| c.token.as_deref() == Some(token.as_str()))
+            else {
+                bad.push(format!(
+                    "  - {}（{rel}）声明了 `Enforcement::Pipeline`，但 {rel} 里找不到携带 \
+                     `OutletId::{token}` 的**管线调用** —— 「填表」不是接线（F1）",
+                    o.id
+                ));
+                continue;
+            };
+            // 写点所在函数：登记 needle 在**展示视图**里的第一处。
+            let Some(wp_idx) = src.display.lines().position(|l| l.contains(o.call_site)) else {
+                continue; // T1 已经报「登记的 needle 在代码里找不到」
+            };
+            let wp_fn = enclosing_fn(&lines, wp_idx);
+            let same_fn = wp_fn.is_some() && wp_fn == call.enclosing;
+            // 适配器形态：写点所在函数**正是**这条管线调用的被调者
+            // （HTTP 的 `publish_json` / `publish_value` 把产物交给 `Json(..)`）。
+            let via_adapter = wp_fn
+                .as_deref()
+                .is_some_and(|f| f == call.callee.trim_end_matches('('));
+            if !same_fn && !via_adapter {
+                bad.push(format!(
+                    "  - {}（{rel}）的写点在第 {} 行的 `{}` 里，但携带 `OutletId::{token}` 的管线调用在 \
+                     第 {} 行的 `{}` 里 —— 声明与证据不在同一条路径上（F1）",
+                    o.id,
+                    wp_idx + 1,
+                    wp_fn.as_deref().unwrap_or("?"),
+                    call.line,
+                    call.enclosing.as_deref().unwrap_or("?")
+                ));
+            }
+        }
+        // ③ 反向：文件里每一处**携带记号**的管线调用都必须有 Pipeline 条目认领
+        //    （多调一次也是绕过：那是一次没人登记的闸调用）。
+        for c in &calls {
+            if let Some(tok) = &c.token {
+                if !expected.contains(tok) {
+                    bad.push(format!(
+                        "  - {rel}:{} `{}` 携带 `OutletId::{tok}`，但登记表里没有一条 Pipeline 出口需要它",
+                        c.line, c.callee
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "⛔ `Enforcement::Pipeline` 是声明，不是证据（F1：老实填表即合法）：\n{}",
+        bad.join("\n")
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// T9 · 客户响应体必须是管线产物（第 3 轮 F4）
+// ══════════════════════════════════════════════════════════════
+
+/// 响应体实参的**唯一合法形状**：`<绑定>.into_value()` / `<绑定>.into_text()`。
+fn response_arg_product(arg: &str) -> Option<&str> {
+    let arg = arg.trim();
+    arg.strip_suffix(".into_value()")
+        .or_else(|| arg.strip_suffix(".into_text()"))
+}
+
+#[test]
+fn t9_customer_response_bodies_come_from_the_pipeline() {
+    // 反空转：三条形状（M6b / M10b 的手搓响应体）必须认不出来是产物。
+    assert_eq!(response_arg_product("rendered.into_value()"), Some("rendered"));
+    assert_eq!(response_arg_product("rendered.into_text()"), Some("rendered"));
+    assert_eq!(
+        response_arg_product("serde_json::to_value(&*state.graph)"),
+        None,
+        "手搓的客户 JSON 被当成了管线产物 ⇒ M6b 仍然全绿"
+    );
+    assert_eq!(response_arg_product(r#"json!({ "error": msg })"#), None);
+    assert_eq!(response_arg_product(r#"serde_json::to_string_pretty(node).unwrap_or_default()"#), None);
+
+    let mut bad = Vec::new();
+    let mut checked = 0usize;
+    for rel in OUTLET_FILES {
+        let src = Src::load(rel);
+        let lines: Vec<String> = src.display.lines().map(|s| s.to_string()).collect();
+        // ⛔ 不看登记表：**每一处** `Json(` / `Html(` 写点都要过这一关（除错误通道白名单）。
+        // 只看「登记 needle 里含 Json( 的条目」会漏掉「手搓路由 + 登记 needle 不含 Json(」
+        // 这一格（QA-M11 实测）。
+        for p in write_points(&src.code, &src.display) {
+            if !(p.construct == "Json(" || p.construct == "Html(") {
+                continue;
+            }
+            let whitelisted = NON_CUSTOMER_WRITES
+                .iter()
+                .any(|(path, needle, _, _)| *path == *rel && p.text.contains(needle));
+            if whitelisted {
+                continue;
+            }
+            checked += 1;
+            let Some(arg) = paren_arg(&p.text, p.construct) else {
+                bad.push(format!(
+                    "  - {rel}:{} `{}` 的实参取不出来",
+                    p.line, p.construct
+                ));
+                continue;
+            };
+            let Some(ident) = response_arg_product(&arg) else {
+                bad.push(format!(
+                    "  - {rel}:{} 的响应体是 `{}` —— **不是管线产物**（F4：只能是 \
+                     `<绑定>.into_value()` / `<绑定>.into_text()`）",
+                    p.line,
+                    arg.trim().replace('\n', " ")
+                ));
+                continue;
+            };
+            let this_line = lines.get(p.line - 1).map(|s| s.as_str()).unwrap_or("");
+            if !this_line.contains(&format!("Ok({ident})")) {
+                bad.push(format!(
+                    "  - {rel}:{} 的 `{ident}` 不在 `Ok({ident})` 分支里 —— 拿不到管线产物",
+                    p.line
+                ));
+                continue;
+            }
+            // 这个 `Ok(..)` 分支必须是**某次管线调用**的结果（往上 20 行内）。
+            let lo = p.line.saturating_sub(21);
+            let from_pipeline = lines
+                .iter()
+                .take(p.line - 1)
+                .skip(lo)
+                .any(|l| PIPELINE_ENTRIES.iter().any(|c| l.contains(c)));
+            if !from_pipeline {
+                bad.push(format!(
+                    "  - {rel}:{} 的 `{ident}` 不是来自管线调用的 `Ok(..)` 分支",
+                    p.line
+                ));
+            }
+        }
+    }
+    // 反空转：干净树上必须真的检查到「客户响应体」那几处（今天 http.rs 是 2 处：
+    // H1 整页的 `Html(` + H2/H3 共用的 `publish_json` 里的 `Json(`；
+    // 其余 3 处 `Json(` 是错误通道白名单）。
+    assert!(
+        checked >= 2,
+        "只检查到 {checked} 处响应体 ⇒ 白名单把客户响应体也放行了，这条判据在空转"
+    );
+    assert!(
+        bad.is_empty(),
+        "⛔ 客户响应体不是管线产物（F4：`Response::builder().body(raw)` 的同类形态）：\n{}",
+        bad.join("\n")
     );
 }
 

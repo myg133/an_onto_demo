@@ -196,14 +196,27 @@ pub async fn serve(ctx: OntologyContext) -> anyhow::Result<()> {
         let out = handle_line(&ctx, &line);
         // 只有请求才有响应；通知**必须**静默
         if let Some(resp) = out {
-            let mut stdout = std::io::stdout();
-            stdout
-                .write_all(resp.as_bytes())
-                .and_then(|_| stdout.write_all(b"\n"))
-                .and_then(|_| stdout.flush())
-                .context("写 stdout 失败 —— 客户端可能已经断开")?;
+            write_mcp_line(&resp)?;
         }
     }
+}
+
+/// MCP **传输层**：把**已编码好的一行**写给客户端（REQ-107 第 3 轮 F3）。
+///
+/// ⛔ 这是 `serve.rs` 里**唯一**被允许碰 fd 的地方 —— 判据
+/// （`tests/test_req107_source_enumeration.rs` 的 `TRANSPORT_FNS`）把「禁用
+/// `std::io::stdout` / `write_all(`」的豁免**精确到这一个函数**，
+/// 而不是整条 `serve()`（后者的函数体很大，在里面加一行裸写不会被抓）。
+///
+/// 写的字节来自 `handle_line` → `dispatch` → `p::encode_result(..)` 的返回值，
+/// 不是客户视图本身；它到这一步已经过 `publish_value` 的闸。
+fn write_mcp_line(resp: &str) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(resp.as_bytes())
+        .and_then(|_| stdout.write_all(b"\n"))
+        .and_then(|_| stdout.flush())
+        .context("写 stdout 失败 —— 客户端可能已经断开")
 }
 
 /// 处理一行入站消息，返回**该回的那一行**（通知返回 `None`）。

@@ -695,6 +695,9 @@ A8 绕行：`src/bin/ontok-gate-preflight.rs` 挪到 `%TEMP%\req107-dev-r2\`，
    补强在类型层（`emit_domain_*` 只收 `OutletRender`），但 `emit_domain_text_with(&str, …)` 这个
    建模轨闭包入口仍在 —— 它的**新调用点**会被 `t1` 抓住（5c 实测），可它的**实参来源**只由
    REQ-078 的 G-1 守卫覆盖（D2 一处）。
+   > **第 3 轮订正（QA N6）**：上面「补强在类型层」的说法**只对 `emit_domain_*` 成立**；
+   > 自开 `std::io::stdout()` 这条路径**类型层零作用**。第 3 轮已改为**否定式禁调**（§11.4），
+   > 不再依赖类型层叙事。
 2. **T2 的窗口**只看「管线赋值 → 写出」之间。「在调用管线**之前**用一个闭包式本地判据决定
    要不要调管线」不在 T2 覆盖内（`fn` 形式会被 T5 抓好，**闭包形式抓不到**）。
 3. **HTTP handler 返回裸 `String` / `(StatusCode, String)`** 这类不走 `Json(`/`Html(` 的响应体
@@ -715,6 +718,167 @@ T3–T7 都不会红。要彻底封它，只能把出口函数的**允许语句�
 
 ---
 
+## 11 · 第 3 轮修复（QA `qa-review-2.md` 的 2 条阻断 + 2 条收紧）
+
+> **对象**：`BA/demands/REQ-107/qa-review-2.md`（FAIL，B1/B2）+ `acceptance.md §七 A13`。
+> **基线**：`4bbd8ac`。**本轮只动两处**：`tests/test_req107_source_enumeration.rs`（判据）
+> + `src/mcp/serve.rs`（9 行传输层收窄，见 §11.4）。**13 条出口的接线代码一行未改**。
+
+### 11.1 结论先行
+
+| # | 项 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| **F1** | 「老实填表」即合法 | **封住（运行期判红）** | QA 现成变异 `M6b` 复跑：**71 passed / 2 failed**（`t8` + `t9`） |
+| **F2** | 白名单可加 | **封住（运行期判红）** | QA 现成变异 `M7` 复跑：**72 / 1**（`t1`） |
+| **F3** | 直写 stdout | **封住（运行期判红）** | QA `M5d` 复跑：**72 / 1**（`t1`，两行命中） |
+| **F4** | 条件分支 + `Response::builder().body(raw)` | **封住（运行期判红）** | QA `M10b` 复跑：**72 / 1**（`t1`，三行命中）+ 新 `t9` |
+| — | 13 判据目标（未变异） | **73 passed / 0 failed**（原 71 + 新增 `t8`/`t9`） | §11.8 |
+| — | `cargo test --lib` | **168 passed / 2 failed**（`MissingEnv`，环境不具备） | 与 QA 基线逐条一致 |
+| — | `cargo test --doc` | **4 passed** | 两条 `compile_fail` 仍在 |
+
+**没有一次是靠「编译失败」挡住的**：8 次变异全部**编译通过**、由运行期判据判红（`log` 里无 `error[E…]`）。
+（`run.ps1` 摘要里的 `COMPILE| error: test failed …` 是 cargo 在**测试失败之后**的收尾报错，不是编译错误。）
+
+### 11.2 F1 · 声明必须伴随证据（`Enforcement::Pipeline` 不再是无人校验的枚举值）
+
+QA 的命门：`OUTLETS` 里写 `enforcement: Enforcement::Pipeline` **没有任何判据**去问「这条出口到底调没调管线」。
+
+修法是给每条 `Pipeline` 条目配**三件证据**，全部落在
+`tests/test_req107_source_enumeration.rs`：
+
+| 证据 | 实现 | 位置 |
+| --- | --- | --- |
+| ① 证据记号 = 出口自己的 id | `evidence_token(id)`：只有两个**写死、不可扩展**的共享组（`C2→C1` 同一份产物、`M1–M5→McpTools` 同一次调用），其余 `other => other`。**新登记 `H4` 拿不到 `H2` 的记号** | `:1560` |
+| ② 真有一处管线调用 | `pipeline_calls()`：枚举 `publish_customer(` / `publish_json(` / `publish_value(` / `pipeline::render(` 的**调用**（定义行不算），按括号配平取实参里的 `OutletId::<X>` + 所在函数 | `:1513` |
+| ③ 调用与写点在**同一条路径** | `t8`：写点所在函数 == 调用所在函数，**或**写点所在函数正是该调用的被调者（HTTP 的 `publish_json`/`publish_value` 适配器形态）；反向：每处携带记号的调用都必须有 `Pipeline` 条目认领；另加「`Pipeline` 条目只许落在三个出口文件」 | `:1569` |
+
+合法形态逐条核过：`C1/C3/C4/C5/D1`（`ontology_cmd` 同函数）、`C2`（同函数 + 共享 C1）、
+`H1`（`index` 同函数）、`H2/H3`（写点在 `publish_json` 适配器、调用在 handler ⇒ 适配器规则）、
+`Z1`（`check_scope` 同函数）、`M1–M5`（`dispatch` 同函数 + 共享一次调用）、`Z2/Z3`（`dispatch` 同函数）。
+
+**M6b 实测**：`H4（src/server/http.rs）声明了 Enforcement::Pipeline，但 src/server/http.rs 里找不到携带 OutletId::H4 的管线调用` ⇒ 红。
+**M11 实测**（我加造的升级版：**伪造一次真调用** `publish_value(OutletId::H4, json!({}))` 再把结果丢掉）：
+`H4 的写点在第 282 行的 get_graph 里，但携带 OutletId::H4 的管线调用在第 314 行的 get_raw 里 —— 声明与证据不在同一条路径上` ⇒ 红（另加 `t9` 红，见 §11.5）。
+
+### 11.3 F2 · 白名单 needle 的窗口不得含 domain 生产者
+
+| 项 | 实现 | 位置 |
+| --- | --- | --- |
+| 生产者清单 | `DOMAIN_PRODUCERS`：`to_string_pretty(` / `to_value(` / `render_html(` / `render_overview_text(` / `filter_view(` / `encode_result(` | `:371` |
+| 纯判据 | `whitelist_smuggles_domain_product(construct, window)`：窗口含生产者 ⇒ 该白名单条目**不成立**；`construct` 本身等于生产者时不算夹带（MCP 的 `p::encode_result(id, p::empty_result())`） | `:384`、`:618` |
+| 断言 | `t1`：`smuggled.is_empty()`（文案直说「白名单 = 合法绕过」） | `:734` |
+
+反空转：`println!("{}", serde_json::to_string_pretty(&*state.graph))` 必须被判出（M7 形态）；
+`encode_result(id, p::empty_result())` 与错误通道的 `Json(json!({"error": msg}))` 必须**不**被判出（防恒红）。
+
+**M7 实测**：`src/server/http.rs:280 println!(`（白名单 needle `serde_json::to_string_pretty(&*state.graph)`）的窗口里含 domain 生产者 `to_string_pretty(` ⇒ 红。
+
+### 11.4 F3 · 出口文件里禁止「绕开全部已登记构造」的写出机制
+
+| 项 | 内容 |
+| --- | --- |
+| 禁调集合 | `FORBIDDEN_MECHANISMS`：`std::io::stdout`、`write_all(`、`Response::builder`、`.body(`、`Body::from(`（`:399`） |
+| 扫描器 | `forbidden_mechanisms(rel, code)`：跳过 `WRITER_FNS` 函数体 + `TRANSPORT_FNS`（`:500`） |
+| 断言 | `t1`（`:786`/`:791`），含 5 条正探针 + 2 条反探针 |
+
+**豁免只留一个，且精确到函数**：`src/mcp/serve.rs::write_mcp_line`（`:414`）。
+第 2 轮的写法把**整条 `serve()`** 当豁免区（函数体 57 行，往里加一行裸写谁也看不见）；
+本轮把传输写收进 9 行小函数（`src/mcp/serve.rs:213`，`serve()` 里只剩 `write_mcp_line(&resp)?`，`:199`），
+于是 `serve()` 的函数体重新受 F3 约束。
+
+**M5d 实测**：`src/cli.rs:1350 std::io::stdout` + `:1351 write_all(` ⇒ 红 ×2。
+**M12 实测**（我加造：在 `serve()` 里加 `std::io::stdout().write_all(line)`）：⇒ 红 ×2（第 2 轮这一格是绿的）。
+
+### 11.5 F4 · 客户响应体必须是管线产物
+
+两层，**都不是登记**：
+
+1. **禁调**（同上）：`Response::builder` / `.body(` / `Body::from(` 在三个出口文件里出现即红。
+2. **`t9`（`:1676`）**：三个出口文件里**每一处** `Json(` / `Html(` 写点（除错误通道白名单），
+   实参必须是 `<绑定>.into_value()` / `<绑定>.into_text()`，且该绑定出现在 `Ok(<绑定>)` 分支、
+   其上游 20 行内有管线调用。⇒ 「手搓响应体」不登记也红。
+
+⚠️ 第 2 层刻意**不看登记表**：M11 的写点 needle 是 `serde_json::to_value(&*state.graph)`
+（不含 `Json(`），若只遍历「call_site 里含 `Json(` 的条目」会漏掉它 —— 这是我一轮内自己打穿过一次的格子。
+
+**M10b 实测**：`Response::builder`@282 / `.body(`@285 / `Body::from(`@285 ⇒ 红 ×3。
+**M6b / M11 实测**：`t9` 报 `响应体是 serde_json::to_value(&*state.graph).unwrap_or(...) —— 不是管线产物` ⇒ 红。
+
+### 11.6 六种攻击的变异结果（纪律 G 三元组）
+
+> 装置：`.review-workspace/req107/dev3/{mutate.ps1,run.ps1,restore.ps1}`。
+> 每次：**唯一一次精确替换**（`IndexOf` + 子串拼接，UTF-8 无 BOM）→ 记**被改文件 sha256 前/后** →
+> `git diff --no-index` 存 patch（`logs/<ID>.patch`）→ 跑 13 个目标（`--no-fail-fast`）→ **从 stash 逐字节复原**并核 sha。
+> ⛔ 变异**不碰**生产代码里的登记表以外的东西；复原后 `git status` 只剩本轮应改的两个文件。
+
+| # | 攻击 | 被改文件 sha256 前 → 后 | 结果（13 目标） |
+| --- | --- | --- | --- |
+| 0 | **基线**（未变异） | — | **73 passed / 0 failed**（9/12/4/1/2/4/3/2/3/10/7/7/9） |
+| 1 | **老实填表**：`/api/raw` 零闸 + `OUTLETS` 加 `H4`(Pipeline) + `OUTLET_FNS` + 计数 33/13→34/14 + ID 集合（QA `M6b`） | `http.rs 6BEF88DF…→34F76516…`；`pipeline.rs 88C28710…→E312EA2A…`；`test_…_source_enumeration.rs 75AB1461…→79C1B9D7…`；`test_req107_outlet_pipeline.rs B395D8D0…→22BBD19E…` | 🟢 **红 ×2**：`t8`（无 `OutletId::H4` 调用）+ `t9`（响应体是手搓 `to_value`）。其余 12 目标全绿 |
+| 2 | **白名单**：`println!` 打客户 JSON + `NON_CUSTOMER_WRITES` 加一行 needle/计数（QA `M7`） | `http.rs 6BEF88DF…→7385EC1D…`；`test_…_source_enumeration.rs 75AB1461…→A4727419…` | 🟢 **红 ×1**：`t1`（窗口含 `to_string_pretty(`） |
+| 3 | **直写 stdout**：`std::io::stdout().lock().write_all(raw)`（QA `M5d`） | `cli.rs C5CACC1A…→4A7E07B6…` | 🟢 **红 ×1**：`t1`（`:1350 std::io::stdout`、`:1351 write_all(`） |
+| 4 | **改已有 handler + 条件分支 + `Response::builder().body(raw)`**（QA `M10b`） | `http.rs 6BEF88DF…→54964D46…` | 🟢 **红 ×1**：`t1`（`Response::builder`@282 / `.body(`@285 / `Body::from(`@285） |
+| 5 | **运维 bin 整文件豁免里加客户写出点**（QA `M8`） | `ontok-propose.rs A8C0A209…→420E7BA7…` | 🔴 **全绿 73/0** ⇒ 登记 **P-3** |
+| 6 | **闭包式判据** `let local_ok = \|s\| …` 只作用在重拼串上（QA `M9`） | `cli.rs C5CACC1A…→3742A588…` | 🔴 **全绿 73/0** ⇒ 登记 **P-1** |
+| + | **（我加造）伪造一次真管线调用**丢弃结果再写手搓 JSON（`M11`） | `http.rs 6BEF88DF…→DBB2A4AC…`；`pipeline.rs 88C28710…→74BC5C37…`；`test_…_source_enumeration.rs 75AB1461…→721AD24C…`；`outlet_pipeline B395D8D0…→E28BC139…` | 🟢 **红 ×2**：`t8`（证据不在同一路径）+ `t9`（响应体不是产物） |
+| + | **（我加造）`serve()` 里再开一条裸写**（`M12`，验证 F3 豁免收窄） | `serve.rs B4ECD075…→517699C4…` | 🟢 **红 ×1**：`t1`（`serve.rs:199 std::io::stdout` / `write_all(`） |
+
+**逐条说明「没有靠编译期」**：8 次变异全部编译成功（`cargo` 只报 `test failed`），
+红的都是**运行期判据 + 失败用例名**。本轮**没有**「编译期挡住」的项。
+
+### 11.7 已知限制（登记 ≠ 已覆盖）
+
+| # | 形态 | 危害 | 什么条件下会真漏 | 下一轮谁接手 / 怎么收 |
+| --- | --- | --- | --- | --- |
+| **P-1** | 闭包式本地判据 `let local_ok = \|s\| …`（M9，**73/0 全绿**） | 它能在**调管线之前**决定「这条出口写不写 / 写什么」，而且只作用在**重拼出来的串**上 ⇒ T2（只看管线产物被怎么用）永远看不到它 | 单用闭包 = **静默丢/改**（功能性），不直接泄漏——前提是最终写出的仍是管线产物（T2 钉着）。**与 P-2 组合**（手拼响应体）才是泄漏 | Dev（第 4 轮）。方案：给出口函数加「允许语句集」白名单（`let <id> = \|` / 管线调用之前的 `if … { return }` 一律要求登记用途）。成本中等 |
+| **P-2** | handler 返回裸 `String` / 元组（不走 `Json(`/`Html(`） | axum 对 `String` 有 `IntoResponse` ⇒ 响应体不进 T1 写点枚举，`Content-Type` 还变成 `text/plain` | 改**已有** handler 的**返回类型**（条件分支 `return Ok(raw_string)` 与 `Ok(Json<T>)` 不同型 ⇒ **编译不过**，所以静默后门要先改签名，diff 显眼）；或**新增**一个返回 `String` 的路由（T5 要求登记 fn、T1 无写点） | Dev（第 4 轮）。方案：对 3 个数据路由加「返回类型必须是 `Result<Json<..>, Response>` / `Result<Html<..>, Response>`」的**签名否定式**判据 |
+| **P-3** | `NON_OUTLET_FILES` 对 4 个运维 bin + `mcp/protocol.rs` **整文件**豁免（M8，**73/0 全绿**） | 这 5 个文件里任何客户可见写出点都不会红；`src/bin/` 正是「顺手 println 调试」的高频位置 | 往 `ontok-propose` / `ontok-introspect` / `ontok-translate-names` 里打印客户视图字段或整份 JSON，且被当成运维回执发出去 | Dev（第 4 轮）。方案：`NON_OUTLET_FILES` 从「路径」改成「(路径, 函数名)」——4 个 bin 的写点集中在 `main` + 少数 fn，一次性登记即可（QA 估成本低） |
+
+**新增的一条窄边界（不是 P，但必须写）**：F3 的唯一豁免是 `src/mcp/serve.rs::write_mcp_line`（9 行）。
+危害：**只有这个函数体内部**可以裸写 fd。什么条件下会真漏：若有人把它的实参从 `resp`（`handle_line` 的返回值，
+已过 `publish_value` 的闸）改成手拼串 —— T1/T9 看不见。残留风险靠「函数只有 3 行、改动显眼」+ 代码评审兜；
+**不假装封死**。
+
+### 11.8 本轮实测命令与结果（本机 Windows + 无 PostgreSQL）
+
+```powershell
+# A8：临时挪出 unix-only bin（⛔ 不删/不改内容），跑完挪回
+#   BEFORE_SHA256 = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+#   AFTER_SHA256  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D   SAME=True
+cargo test --test test_req107_source_enumeration --test test_req107_outlet_pipeline `
+  --test test_req107_guard_granularity --test test_req107_pipeline_bytes `
+  --test test_req107_red_lines --test test_req107_scope_error_gate `
+  --test test_req107_static_texts --test test_req107_track_manifest `
+  --test test_req107_zero_visible_change --test test_property_filter `
+  --test test_exit_ordering_req106 --test test_binary_output_guard `
+  --test test_graph_server --no-fail-fast
+```
+
+| 命令 | 实测 |
+| --- | --- |
+| 13 个目标 | **73 passed / 0 failed**（9/12/4/1/2/4/3/2/3/10/7/7/9；原 71 + 新增 `t8`/`t9`） |
+| `cargo test --lib` | **168 passed / 2 failed**（`db::apply` / `extract::introspect` = `MissingEnv`，**环境不具备**） |
+| `cargo test --lib registry_is_the_33_baseline` | **1 passed**（33/13 数字未动） |
+| `cargo test --doc` | **4 passed** |
+| `git diff --numstat develop -- tests/drop_rate.rs tests/test_fk_naming.rs src/domain/view.rs src/domain/review_view.rs src/mcp/tools.rs` | **空**（五红线零触碰） |
+| `property_filter.rs` 前 145 行 sha256（develop vs 现状） | `769763BB…5E94` = `769763BB…5E94`（逐字节相同，G1–G4 措辞未动） |
+| 新增 `#[ignore]` / 删测试文件 / 删 `#[test]` | **0 / 0 / 0** |
+| 断言计数（三个既有判据文件本轮**未改**） | `property_filter` 30、`exit_ordering_req106` 11、`binary_output_guard` 79 —— 与 QA 上一轮核过的一致 |
+| golden（`tests/fixtures/req107/golden`） | 本轮**零改动**（`git diff 4bbd8ac --name-only -- tests/fixtures` 空） |
+| `tests/test_retained_names_req084.rs` | **跑不了**（A10：`include_str!` 引用那个 unix-only bin；挪出时编不过、挪回时 bin 本身在本机编不过）——如实报 |
+
+### 11.9 我认为第 4 轮最可能被打回的一点
+
+**P-1（闭包式本地判据）**。A13 允许「登记」，但同一段又写「登记 ≠ 已覆盖」，而 P-1 是三条登记里
+唯一**能决定客户字节写不写/写什么**的一条（P-2/P-3 的漏点都要先改签名或新路由，痕迹都更大）。
+我给的危害评估是「静默丢/改、不直接泄漏（因为最终字节仍必须是管线产物）」，**这个论证依赖 T2 继续有效**；
+如果 QA 认为 T2 的窗口太窄（它只看「管线赋值 ↔ 写出」之间），P-1 就会被判「危害评估不足」。
+
+**第二可能**：`M11` 的残留 —— 「同一个函数里调一次真管线 + 写另一份手搓字节，且手搓字节不走 `Json(`/`Html(`」。
+今天这条只剩 P-2 那一个出口（返回裸 `String`），所以它会被算到 P-2 头上。
+
+---
+
 ## 附 · 交付物清单
 
 | # | 交付物 | 位置 |
@@ -728,3 +892,4 @@ T3–T7 都不会红。要彻底封它，只能把出口函数的**允许语句�
 | 7 | `git diff --numstat` + 红线零触碰 | 本文件 §7 |
 | 8 | 已知限制 | 本文件 §8 |
 | 9 | 异议 | 本文件 §9 |
+| 10 | 第 3 轮修复证据（F1–F4 + 8 次变异三元组 + P-1/P-2/P-3 危害评估） | 本文件 §11 + `.review-workspace/req107/dev3/{patches,logs,stash}/` |
