@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已退回**（2026-10-20 · QA 判 FAIL，3 条阻断，第 2 轮修复中）
+**待验证（第 2 轮）**（2026-10-20 · Dev 已修 5 条阻断，QA 复验中）
 
 ## 状态流转
 
@@ -100,3 +100,17 @@
 
 `src/bin/ontok-gate-preflight.rs` 的 A8 绕行经 QA 两次独立复验，sha256 `C7CF95E2…322D` 前后一致。
 ⚠️ **QA 新发现**：`tests/test_retained_names_req084.rs` 用 `include_str!` 引用该 bin ⇒ **bin 挪出期间它编不过**（Dev 报告未写）。A8 绕行只对**不含该 `include_str!` 的目标**成立 —— 记入 A10。
+
+## 第 2 轮修复（2026-10-20 · commit `4bbd8ac`）
+
+| 阻断 | 修法 | 位置 |
+| --- | --- | --- |
+| B1 反向枚举 | 递归扫 `src/` 全目录写点（剥注释 + 抹字符串），每个必须落在 `OUTLETS.call_site` 或 22 条非客户白名单（带期望命中数） | `tests/test_req107_source_enumeration.rs:296/364/486` |
+| B2 track 不可赋值 | 出口只传 `OutletId`（enum），轨道由 `const fn spec_of(id)` 查表；全字段私有 + 运行时 `pairing_ok` | `pipeline.rs:243/291/636/727/713` |
+| B3 出口侧时序 | 写出函数只收 `OutletRender`（裸 `&str` **编不过**） | `cli.rs:645/650`；判据 `source_enumeration.rs:546` |
+| B4 构造器全枚举 | 枚举全仓 `pub fn` 返回类型（含 `-> Self`），要求恰好 `render`/`publish_value` 两个；删掉公开工厂 `publish_error_text` | `source_enumeration.rs:840/893`；`http.rs:251-266` |
+| B5 自造判据 | 出口文件逐函数登记（43 条）+ 全仓 mod 登记（52 条）+ 禁止产物转手 | `:981/:1093/:546` |
+
+**5 种攻击实测**：全红（其中 4a/5a 是**编译期挡住**，Dev 如实标注「不算执行结果」，并用 4b/5b/5c 等价可编译形态补测）。
+
+**Dev 自陈未封口三项**（已入 AC §A12 作第 3 轮靶子）：闭包式本地判据 · handler 返回裸 `String` · `NON_OUTLET_FILES` 整文件豁免。
