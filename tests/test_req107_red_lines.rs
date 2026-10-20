@@ -118,15 +118,33 @@ fn test_req107_red_lines_and_guard_are_untouched() {
     assert!(s.len() > 200, "区段① 只有 {} 字节 —— 锚点大概取错了", s.len());
 
     // ④ 不许新增 `#[ignore]`。
+    //
+    // ⚠️ 只认**真正的属性**：新增行去掉行首 `+` 与空白后必须以 `#[ignore]` 开头。
+    //    否则本文件/别的测试里「讨论这件事」的那几行（注释、字符串、`.contains("…")`）
+    //    会把自己判红 —— 判据恒红 = 恒假。
+    let attr = concat!("#", "[ignore]");
     let tdiff = git(&["diff", "develop", "--", "tests"]);
     let ignores: Vec<&str> = tdiff
         .lines()
         .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
-        .filter(|l| l.contains("#[ignore]"))
+        .filter(|l| {
+            l.trim_start_matches('+').trim_start().starts_with(attr)
+        })
         .collect();
     assert!(
         ignores.is_empty(),
         "⛔ 新增了 `#[ignore]`（AC-009：不许 ignore）：{ignores:?}"
+    );
+    // 反空转：这条判据得认得出**真的**属性行（否则它永远绿）。
+    let probe = format!("+    {attr}");
+    assert!(
+        probe.trim_start_matches('+').trim_start().starts_with(attr),
+        "判据认不出真正的 `#[ignore]` 属性行"
+    );
+    let comment_probe = "+/// 讨论一下 #[ignore] 这件事";
+    assert!(
+        !comment_probe.trim_start_matches('+').trim_start().starts_with(attr),
+        "注释里提到 `#[ignore]` 被误判成属性"
     );
 
     // ⑤ 不许删除测试文件。
