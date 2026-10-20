@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已退回**（2026-10-20 · 第 3 轮 QA 判 FAIL，2 阻断：F1「老实填表」/ F2「白名单可加」）
+**待验证（第 3 轮）**（2026-10-20 · F1–F4 已修，QA 第 4 轮复验中）
 
 ## 状态流转
 
@@ -127,3 +127,17 @@
 
 **未退化项全部通过**：13 条出口仍接线 · 五红线 numstat 空 · `guard()` 零改动 · `property_filter` 前 145 行 sha256 逐字节相同 · 无 `#[ignore]` / 无删测试（断言 79→79 / 30→30 / 55→56 / 11→12 / 20→21，**只增不减**）· Z1/Z2/Z3 仍在 · golden 独立复算 6/6 MATCH。
 **Dev 报告数字与 QA 实测逐条一致（含 lib 168/2），没有编数。**
+
+## 第 3 轮修复（2026-10-20 · commit `867969b`）
+
+| 要求 | 修法 | 位置 |
+| --- | --- | --- |
+| **F1** 填表即合法 | `Enforcement::Pipeline` 从「无人校验的枚举值」变成**三件证据**：① `evidence_token(id)`（记号就是出口 id）② `pipeline_calls()` 枚举管线**调用**并取实参里的 `OutletId::<X>` ③ `t8` 要求每条 Pipeline 条目在**同一函数**里有携带该记号的调用，**且双向**（每处调用必须有条目认领） | `test_req107_source_enumeration.rs:1513/1560/1569` |
+| **F2** 白名单可加 | `DOMAIN_PRODUCERS` 六项 + `whitelist_smuggles_domain_product`：白名单命中窗口**不得含** domain 生产者；`construct` 自身等于生产者时不算夹带 | `:371/384/618/734` |
+| **F3** 直写 stdout | `FORBIDDEN_MECHANISMS` = `std::io::stdout` / `write_all(` / `Response::builder` / `.body(` / `Body::from(`；唯一豁免收窄到 `serve.rs:213 fn write_mcp_line`（9 行） | `:399/500/786/791` |
+| **F4** 裸响应 | 新增 `t9`：三个出口文件里**每一处** `Json(`/`Html(` 写点的实参必须是 `<绑定>.into_value()/into_text()`，绑定在 `Ok()` 分支且上游 20 行内有管线调用；**刻意不看登记表** | `:1676` |
+
+**8 次变异实测**：攻击 1/2/3/4/11/12 全红（**全部运行期判红，没有一次靠编译期**）；
+攻击 5（运维 bin 整文件豁免）、6（闭包式判据）仍绿 ⇒ 按 A13 格式登记 P-1 / P-3。
+
+**登记（未封）**：P-1 闭包式判据 · P-2 handler 返回裸 `String` · P-3 `NON_OUTLET_FILES` 整文件豁免 —— 每条已写危害 / 触发条件 / 接手人（下一轮 Dev）。
