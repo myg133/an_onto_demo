@@ -20,6 +20,12 @@
 //!   （运行时读工作区文件），它的变异证据要取**被扫文件的工作区 sha256**，
 //!   不是二进制 sha256 —— 理由见 `tests/test_graph_server.rs` 模块头。
 //!
+//! ⚠️ **REQ-107 改写了它**（AC §七 A3：改写、不许删）：收口后三个出口**不许**
+//! 自己调判据，判据只在 `crate::domain::pipeline` 里执行一次。⇒ 判据从
+//! 「三个文件都 contains 判据名」改成**否定式**「三个文件的判据直调点数各为 0，
+//! 且都必须有管线调用点」。**放宽了吗？没有** —— 旧判据在 M3 形态下全绿
+//! （本模块 `property_filter.rs` 的 ③ 段登记过），新判据在 M3 形态下必红。
+//!
 //! ## ⛔ 本文件的合成夹具**不得**出现真实客户标识符
 //!
 //! 本文件第一版把 `demo3` 第 2 版的**真实列注释原文**当夹具写了进去
@@ -333,25 +339,100 @@ fn ordinary_business_attributes_survive_untouched() {
 
 // ── 三处出口共用一个函数（源码扫描型守卫，变异证据取被扫文件 sha256）────
 
-/// ⛔ 三个出口**必须**都调 `property_filter::filter_view`，不许各写一遍。
+/// ⭐ REQ-107 · **否定式**：三个出口都**不许自己调判据**，一律经由管线。
 ///
-/// 纪律 H：抄一份判据/动作就是制造下一次漂移。REQ-029 已经因为两份副本
-/// 漂移过一次（`对应abc.def` 在页面侧漏抓），本条防止第三次。
+/// # 为什么从正向改成否定式（AC §七 A3：改写，⛔ 不许删）
+///
+/// 收口前这条断言的是「三个文件里 `contains("property_filter::filter_view")`」。
+/// 本文件（`src/domain/property_filter.rs:129-142`）自己登记了它的盲区：
+/// **保留共享调用、同时另加一份真在生效的本地判据 ⇒ QA 变异 M3 实测 9 条全绿**。
+/// 正向判据钉不住这个形态 —— 它只问「调了没有」，不问「还有没有第二份」。
+///
+/// 收口后判据换成**否定式**：
+/// 1. 出口文件里对判据的**直调点数必须为 0**（剔除/清洗/闸全部在
+///    `domain::pipeline` 里执行）；
+/// 2. 每个出口都必须有**管线调用点**（否则「0 命中」可以靠「什么都不做」达成）。
+///
+/// 两条缺一不可：只做 1，出口可以把整段删掉；只做 2，出口可以「调管线 + 另写一份」。
+///
+/// 名字**沿用**（A3：改写、不许删）：它守的意图没变 —— 剔除只许有**一份**实现，
+/// 三个出口都走它；变的是判据方向。
 #[test]
 fn all_three_outlets_call_the_one_shared_function() {
-    let outlets = [
-        ("src/cli.rs", "ontology show（JSON 出口）"),
-        ("src/server/http.rs", "只读图 /api/node"),
-        ("src/mcp/serve.rs", "MCP 通道"),
+    // (文件, 人读的名字, 必须出现的管线调用点)
+    let outlets: [(&str, &str, &[&str]); 3] = [
+        ("src/cli.rs", "ontology show（JSON 出口）", &["OutletSpec::C3"]),
+        ("src/server/http.rs", "只读图 /api/node", &["prepare_view", "OutletSpec::H3"]),
+        ("src/mcp/serve.rs", "MCP 通道", &["prepare_view", "OutletSpec::MCP_TOOLS"]),
     ];
-    for (rel, which) in outlets {
-        let src = common::read_source(rel);
-        assert!(
-            src.contains("property_filter::filter_view"),
-            "{which}（{rel}）没有调共享的 property_filter::filter_view —— \
-             三处出口必须共用一份，不许各写一遍（纪律 H）"
-        );
+
+    // 判据直调点的**唯一**允许位置就是管线模块本身；出口文件里必须是 0。
+    //
+    // ⚠️ 针脚是 `tools::guard(` / `mcp::tools::guard(` 而**不是**裸 `guard(`：
+    // 后者会把 `install_broken_pipe_guard()` 这类无关调用算成判据调用
+    // （实测 `src/cli.rs:288` / `:738` 就是它）⇒ 判据恒红 = 恒假。
+    // 这是 TC-001 用例原文的一个**已知缺陷**（它写的是裸 `guard(`），
+    // 交付物「异议」里已登记。
+    const CRITERION_CALLS: &[&str] = &[
+        "filter_view(",
+        "has_raw_identifier(",
+        "sanitize_display(",
+        "scan_modeling_terms(",
+        "tools::guard(",
+    ];
+
+    for (rel, which, needles) in outlets {
+        // ⚠️ 必须剥注释：本文件/出口文件的注释里就写着这些名字（裸 grep 会假红）。
+        // ⚠️ 只扫**测试模块之前**的生产代码：`http.rs` 的 `#[cfg(test)]` 里有
+        //    「错误文案自己过闸」那条测试，它**调用的就是判据** —— 那是测试代码。
+        let raw = common::strip_comments(&common::read_source(rel));
+        let src = raw.split("#[cfg(test)]").next().unwrap_or("").to_string();
+
+        for bad in CRITERION_CALLS {
+            let hits: Vec<usize> = src
+                .match_indices(bad)
+                .map(|(off, _)| src[..off].matches('\n').count() + 1)
+                .collect();
+            assert!(
+                hits.is_empty(),
+                "{which}（{rel}）里还有 {} 处判据直调 `{bad}`（行 {:?}）—— \
+                 剔除/清洗/闸只许经由 `crate::domain::pipeline`，出口层一份都不许留",
+                hits.len(),
+                hits
+            );
+        }
+
+        for needle in needles {
+            assert!(
+                src.contains(needle),
+                "{which}（{rel}）里找不到管线调用点 `{needle}` —— \
+                 「判据直调点为 0」也可以靠「出口什么都不做」达成，所以这一条必须有"
+            );
+        }
     }
+
+    // 反空转：管线模块里**必须**有判据调用，否则上面那圈「0 命中」是因为全仓都没有它。
+    let pipeline = common::strip_comments(&common::read_source("src/domain/pipeline.rs"));
+    assert!(
+        pipeline.contains("filter_view(") && pipeline.contains("scan_modeling_terms("),
+        "管线模块里居然没有判据调用 —— 上面的「出口 0 命中」是空转"
+    );
+}
+
+/// 剥注释这一步本身不能是空转（纪律 E：扫出「零」先怀疑扫描器）。
+#[test]
+fn strip_comments_is_not_vacuous() {
+    let raw = "// filter_view(&cv)\nlet x = 1;\n/* scan_modeling_terms(x) */\nlet y = 2;\n";
+    let out = common::strip_comments(raw);
+    assert!(!out.contains("filter_view"), "行注释没被剥掉：{out}");
+    assert!(!out.contains("scan_modeling_terms"), "块注释没被剥掉：{out}");
+    assert!(out.contains("let x = 1;") && out.contains("let y = 2;"), "真代码被误剥：{out}");
+    // 字符串字面量**不该**被剥（它是代码，判据要能看见它 ⇒ 宁可假红）。
+    let kept = common::strip_comments("let s = \"filter_view(\";");
+    assert!(kept.contains("filter_view("), "字符串字面量被误剥：{kept}");
+    // 字符常量里的 `'` 不许把后续代码吞掉。
+    let ch = common::strip_comments("let q = '\\'';\nlet z = 3;\n");
+    assert!(ch.contains("let z = 3;"), "字符常量吞掉了后续代码：{ch}");
 }
 
 /// ⛔ 守门器**一行没改**：仍是 fail-closed，仍是整份序列化后全文扫。

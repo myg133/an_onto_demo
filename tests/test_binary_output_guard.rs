@@ -52,7 +52,8 @@ use std::collections::BTreeMap;
 use ontok::cli::{
     self_check_exit_code, DomainPrintSite, EXIT_LEAKED_MODELING_TERMS, EXIT_OK,
     EXIT_OPERATION_FAILED, EXIT_POLICY, EXIT_SELF_CHECK_VIOLATION, DOMAIN_PRINT_SITES,
-    REVIEW_SHOW_PREFIX_TEMPLATE, WIRING_CLOSURE, WIRING_NONE, WIRING_SAME_BINDING,
+    REVIEW_SHOW_PREFIX_TEMPLATE, WIRING_CLOSURE, WIRING_NONE, WIRING_PIPELINE,
+    WIRING_SAME_BINDING,
 };
 use ontok::domain::diff::diff_snapshots;
 use ontok::domain::review::{summarize, Decision, ItemKind, ItemView};
@@ -870,6 +871,16 @@ fn check_site(lines: &[String], site: &DomainPrintSite) -> Option<String> {
         }
     }
 
+    // ⭐ REQ-107 · `pipeline` 接线：判据在**管线内**执行一次，出口只写管线产物。
+    //
+    // 这一族**故意没有**出口级判据调用（那正是 AC-001 要的）。所以下面那段
+    // 「判据收到的串 == 打印出去的串」对它**不适用** —— 换成三条结构式判据
+    // （见 [`pipeline_site_verdict`]）。⛔ 不许因为「它没有判据」就 return None：
+    // 那样这一族就成了**零判据**，而「漏接管线」正是本需求要抓的东西。
+    if site.wiring == WIRING_PIPELINE {
+        return pipeline_site_verdict(lines, site, lo, hi);
+    }
+
     // 判据调用：**按它收到的那个绑定**归属到站点。
     // ⚠️ 不能按「函数里出现的全部判据调用」归属 —— `ontology_cmd` 里
     // 三条站点共用一个函数，否则 `scan_modeling_terms(&page.html)`
@@ -990,6 +1001,94 @@ fn check_site(lines: &[String], site: &DomainPrintSite) -> Option<String> {
     None
 }
 
+/// ⭐ REQ-107 · `pipeline` 接线的判据（三条，都是**结构式或否定式**）。
+///
+/// # 为什么不能沿用「判据收到的 == 打印出去的」
+///
+/// 那一格假设「判据」与「写出」是**两条语句**。收口后判据在
+/// `domain::pipeline` 里执行一次，出口拿到的只能是过了闸的产物
+/// （`OutletRender` 字段私有、无公开构造器）—— 出口层**没有**判据调用。
+/// 继续按老口径判，只会得到「没有判据 ⇒ 这一格是空的」，而真正的风险变成了
+/// 「出口**绕过**管线自己拼一份字节」。
+///
+/// # 它问的三个问题
+///
+/// 1. **管线入口在不在**这个函数体里（登记表说有、源码里被摘掉 ⇒ 红）；
+/// 2. 这个函数体里**有没有判据直调**（出口若「保留管线 + 另加一份本地判据」⇒ 红。
+///    这正是 QA 变异 **M3** 在收口前实测「9 条全绿」的那一格）；
+/// 3. 写出去的绑定**是不是从管线产物派生的**（`let <binding> = <x>.as_str();`）。
+///
+/// ⚠️ 已知边界（⛔ 不许写成「已封堵」）：第 3 条认的是 `.as_str()` 这个形状，
+/// 不是「类型真的是 `OutletRender`」—— 那由 `compile_fail` doctest 那一层管。
+fn pipeline_site_verdict(
+    lines: &[String],
+    site: &DomainPrintSite,
+    lo: usize,
+    hi: usize,
+) -> Option<String> {
+    /// 出口层**不许**出现的判据直调（与 REQ-107 AC-003 的否定式判据同一张名单）。
+    ///
+    /// ⚠️ 用 `tools::guard(` 而不是裸 `guard(`：后者把 `install_broken_pipe_guard()`
+    /// 也算成判据调用（实测 `src/cli.rs` 里有它）⇒ 判据恒红 = 恒假。
+    const CRITERION_CALLS: &[&str] = &[
+        "scan_modeling_terms(",
+        "filter_view(",
+        "has_raw_identifier(",
+        "sanitize_display(",
+        "tools::guard(",
+    ];
+
+    // ① 管线入口必须在（否则「登记表说有管线」就只是一句话）。
+    //
+    // ⚠️ `publish_customer(` 是 CLI 侧的**政策适配器**（把管线的 `Err` 映射成退出码），
+    // 它自己必须真的调 `pipeline::render` —— 这一条由 G-1 的**前提断言**钉住
+    // （`publish_customer` 的函数体里必须有 `pipeline::render(`）。
+    let has_entry = lines.iter().take(hi + 1).skip(lo).any(|l| {
+        l.contains("pipeline::render(")
+            || l.contains("pipeline::publish_value(")
+            || l.contains("pipeline::publish_error_text(")
+            || l.contains("publish_customer(")
+    });
+    if !has_entry {
+        return Some(format!(
+            "`{}` 里找不到管线入口（`pipeline::render` / `publish_value` / `publish_error_text`）\
+             —— 登记表说有管线、源码里已经摘掉了",
+            site.enclosing_fn
+        ));
+    }
+
+    // ② 出口级判据直调必须为 0（否定式 —— 本需求的核心判据）。
+    for (i, line) in lines.iter().enumerate().take(hi + 1).skip(lo) {
+        for c in CRITERION_CALLS {
+            if line.contains(c) {
+                return Some(format!(
+                    "{CLI_SRC}:{} —— `pipeline` 接线的出口里出现了判据直调 `{c}`。\
+                     判据只许在管线内执行一次；「保留管线 + 另加一份本地判据」\
+                     正是 QA 变异 M3 全绿的那一格",
+                    i + 1
+                ));
+            }
+        }
+    }
+
+    // ③ 写出去的绑定必须是从管线产物派生的。
+    let pattern = format!("let {} = ", site.binding);
+    let derived = lines
+        .iter()
+        .take(hi + 1)
+        .skip(lo)
+        .any(|l| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"));
+    if !derived {
+        return Some(format!(
+            "`{}` 里找不到 `let {} = <管线产物>.as_str();` —— \
+             写出去的绑定不是从管线产物派生的，`pipeline` 这一格是空的",
+            site.enclosing_fn, site.binding
+        ));
+    }
+
+    None
+}
+
 /// ⛔ **孤儿判据**：收到的东西既不是任何登记项的绑定 ⇒ 没有站点认领它。
 ///
 /// 这一条是 `same_binding` 那一族里**唯一非自指的**检查 ——
@@ -1054,6 +1153,30 @@ fn orphan_judgements(lines: &[String]) -> Vec<String> {
 #[test]
 fn g1_criteria_receive_exactly_what_is_printed() {
     let lines = read_cli();
+
+    // ── ⭐ REQ-107 · 前提断言：`pipeline` 族依赖的那个适配器必须真的接在管线上 ──
+    //
+    // `pipeline_site_verdict` 把「出口调了 `publish_customer`」当作「接了管线」。
+    // 若 `publish_customer` 自己不调管线，那一格就成了**空转** —— 先把这条前提钉死。
+    let (plo, phi) = fn_span(&lines, "publish_customer")
+        .expect("`src/cli.rs` 里必须有 `publish_customer` —— pipeline 族的接线依赖它");
+    // ⚠️ `fn_span` 认的是「第一个不缩进的行」，而 `publish_customer` 的签名跨多行
+    // （`) -> … {` 顶格）⇒ 这里不能直接用 `fn_span` 的行区间，按花括号深度取整个函数体。
+    let _ = (plo, phi);
+    let body = fn_body_lines(&lines, "publish_customer");
+    assert!(
+        !body.is_empty(),
+        "取不到 `publish_customer` 的函数体 —— 判据本身失效了"
+    );
+    assert!(
+        body.iter().any(|l| l.contains("crate::domain::pipeline::render(")),
+        "`publish_customer` 没有真的调 `crate::domain::pipeline::render` \
+         ⇒ 所有 `pipeline` 接线形态都只是装饰"
+    );
+    assert!(
+        body.iter().any(|l| l.contains("EXIT_LEAKED_MODELING_TERMS")),
+        "`publish_customer` 必须把管线命中的 `Err` 映射成退出码政策里的那个码"
+    );
 
     // ── 自检：先证明判据不是空转（G-4 再单独把这条钉一遍）──
     assert!(
@@ -1412,62 +1535,114 @@ fn g4_guard_is_not_vacuous() {
         "🔴 提取器认不出带缩进的 0 行"
     );
 
-    // ── ⭐ REQ-080 F-2 · `same_binding` 族的 M2b：**逐个站点**构造 ──
+    // ── ⭐ REQ-107 · `pipeline` 族的逐站变异（收口后的新形态）──
     //
-    // REQ-080 QA 实测：这一族在 shadowing 下 REQ-078 的五条**全绿**，
-    // 真正判红的是端到端字节比对 ⇒ 防线全落在 e2e 上，e2e 一旦被放松就是零防线。
-    // 现在对**每一个** `same_binding` 站点都插一次 shadowing，
-    // 证明 `check_site` 在它身上**真的会红**（⛔ 不是「e2e 抓到了」）。
+    // ⚠️ 收口前这一段是 4 个 `same_binding` 站点的 shadowing 变异（REQ-080 F-2）。
+    // 收口后那 4 个站点改成「管一次执行 → 出口只写产物」，`same_binding` 族变成 **0**。
+    // ⇒ 这个 0 必须被**登记**（否则下一次有人加回一个 same_binding 站点，
+    //    这一段会静默不覆盖它），并且**为新族补上自己的判别力证明**：
+    //    0 段 = 这一格恒真 = 不是防线。
     let same_binding: Vec<&DomainPrintSite> = DOMAIN_PRINT_SITES
         .iter()
         .filter(|s| s.wiring == WIRING_SAME_BINDING)
         .collect();
-    assert_eq!(
-        same_binding.len(),
-        4,
-        "`same_binding` 族已经不是 4 个站点了 —— 下面那 4 段逐站变异必须跟着改，\
-         别让它们悄悄缩成 0 段（0 段 = 这一格恒真 = 不是防线）"
+    assert!(
+        same_binding.is_empty(),
+        "`same_binding` 族现在是 {} 个站点 —— REQ-107 收口后这 4 个客户类站点应当全部\
+         迁到 `pipeline` 族；不为 0 说明有回退，而下面那段变异已经不再覆盖它们",
+        same_binding.len()
     );
-    for site in same_binding {
+
+    let pipeline_sites: Vec<&DomainPrintSite> = DOMAIN_PRINT_SITES
+        .iter()
+        .filter(|s| s.wiring == WIRING_PIPELINE)
+        .collect();
+    assert_eq!(
+        pipeline_sites.len(),
+        4,
+        "`pipeline` 族现在是 {} 个站点（收口时是 4：show --html / show JSON / overview / overview --json）。\
+         下面两段变异必须跟着改 —— 别让它悄悄缩成 0 段",
+        pipeline_sites.len()
+    );
+
+    for site in &pipeline_sites {
         let base = read_cli();
-        let jl = judge_line_for(&base, site).unwrap_or_else(|| {
-            panic!(
-                "[{}] 在 `{CLI_SRC}` 里找不到判据读到 `{}` 的那一行 —— 变异无从下手",
-                site.command, site.binding
-            )
-        });
-        // 反空转的另一侧：**未变异**的源码上必须仍然绿。
+        // 反空转：**未变异**的真实源码上必须绿，否则下面那次变异红得没有意义。
         assert!(
             check_site(&base, site).is_none(),
-            "🔴 [{}] 在**未变异**的真实源码上就红 ⇒ 下面那次变异红得没有意义",
-            site.command
+            "🔴 [{}] 在**未变异**的真实源码上就红 ⇒ 下面那次变异红得没有意义：{:?}",
+            site.command,
+            check_site(&base, site)
         );
-        let mut mutated = base.clone();
-        // 插在判据之后、写出之前：shadowing 之后**两边仍都叫同一个名字**
-        // ⇒ `is_plain_path` / 逐词元比较全部照样通过，只有新加的那一格能看见。
+
+        // 变异 M-P1（**漏接管线**）：把该站点所在函数里的管线入口摘掉 ⇒ 必须红。
         //
-        // ⚠️ 左边是**根**标识符（`page.html` ⇒ `page`）——
-        //    Rust 里改不了字段本身，绑了新的 `page` 就等于换了那份东西；
-        //    写成 `let page.html = ..` 那不是合法 Rust（也不构成任何重绑定）。
-        let root = binding_root(site.binding);
-        mutated.insert(
-            jl,
-            format!(
-                "{}let {root} = {}.replace('\\n', \"\");",
-                " ".repeat(16),
-                site.binding
-            ),
-        );
-        let verdict = check_site(&mutated, site).unwrap_or_else(|| {
+        // 两处一起摘：CLI 侧的适配器调用（`publish_customer(`）与它背后的管线路径。
+        // 只摘一处是不够的 —— 那正是「保留调用、换个名字」的假接线。
+        let mut m1 = base.clone();
+        for l in m1.iter_mut() {
+            if l.contains("crate::domain::pipeline::") {
+                *l = l.replace("crate::domain::pipeline::", "crate::local_render::");
+            }
+            if l.contains("publish_customer(") {
+                *l = l.replace("publish_customer(", "local_render(");
+            }
+        }
+        let v1 = check_site(&m1, site).unwrap_or_else(|| {
             panic!(
-                "🔴🔴 **M2b 变异在 [{}]（`{}`）上全绿** ⇒ 这一族的 G-1 没有判别力，\
-                 防线仍然全落在真进程字节比对上（REQ-080 F-2）",
-                site.command, site.binding
+                "🔴🔴 **M-P1 在 [{}] 上全绿** ⇒ 「把管线入口摘掉」这件事守卫看不见，\
+                 AC-003 的「漏接即红」在源码层没有落地",
+                site.command
             )
         });
         assert!(
-            verdict.contains("重新绑定"),
-            "🔴 [{}] 的 M2b 虽然红了，但红的**不是** F-2 那一格 ⇒ 变异没有命中目标：{verdict}",
+            v1.contains("找不到管线入口"),
+            "🔴 [{}] 的 M-P1 虽然红了，但红的不是「管线入口不见了」那一格：{v1}",
+            site.command
+        );
+
+        // 变异 M-P2（**保留管线 + 另加一份本地判据** —— QA 变异 M3 的形状）⇒ 必须红。
+        let mut m2 = base.clone();
+        let jl = judge_like_line(&m2, site).unwrap_or_else(|| {
+            panic!("[{}] 找不到可以插判据的行", site.command)
+        });
+        m2.insert(
+            jl,
+            "                let leaked = scan_modeling_terms(&json);".to_string(),
+        );
+        let v2 = check_site(&m2, site).unwrap_or_else(|| {
+            panic!(
+                "🔴🔴 **M3 形状在 [{}] 上全绿** ⇒ 「保留管线调用、另加一份本地判据」\
+                 这一格仍然看不见（这正是本需求 AC-003 点名要治的形态）",
+                site.command
+            )
+        });
+        assert!(
+            v2.contains("判据直调"),
+            "🔴 [{}] 的 M3 变异虽然红了，但红的不是「出口里出现判据直调」那一格：{v2}",
+            site.command
+        );
+
+        // 变异 M-P3（**产物不是管线给的**）：把派生行改成自己拼一份字符串 ⇒ 必须红。
+        let mut m3 = base.clone();
+        let pattern = format!("let {} = ", site.binding);
+        let dl = m3
+            .iter()
+            .position(|l| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"))
+            .unwrap_or_else(|| panic!("[{}] 找不到派生行 `{pattern}…as_str()`", site.command));
+        m3[dl] = format!(
+            "                let {} = String::from(\"客户视图\");",
+            site.binding
+        );
+        let v3 = check_site(&m3, site).unwrap_or_else(|| {
+            panic!(
+                "🔴🔴 **M-P3 在 [{}] 上全绿** ⇒ 「出口自己拼一份字节」守卫看不见",
+                site.command
+            )
+        });
+        assert!(
+            v3.contains("不是从管线产物派生的"),
+            "🔴 [{}] 的 M-P3 虽然红了，但红的不是「绑定不是管线产物」那一格：{v3}",
             site.command
         );
     }
@@ -1511,8 +1686,15 @@ fn g4_guard_is_not_vacuous() {
 /// 这个站点「判据读到绑定」的那一行（**1 基**行号）。
 ///
 /// 与 [`check_site`] 里归属判据调用用的是**同一套口径**
-/// （按 `judged_by` 找调用 → 取**最后一个**顶层实参 → 逐词元等于 `binding`），
-/// 两边一旦漂移，G-4 那个变异就会插到别的行上去。
+/// （按 `judged_by` 找调用 → 取**最后一个**顶层实参 → 逐词元等于 `binding`）。
+///
+/// ⚠️ REQ-107 起**没有调用者**：它服务的是 `same_binding` 族的逐站 shadowing 变异，
+/// 而那一族在收口后变成 0 个站点（判据与写出不再是两条语句）。
+/// 保留它而不是删掉，是因为「同一套口径」这句话仍然由 `check_site` 实现，
+/// 而重新引入 `same_binding` 时（例如将来某个出口确实需要「先判后写」两条语句）
+/// 这里必须与 `check_site` **同步**，否则变异会插到别的行上去。
+/// ⛔ 别把它改成 `todo!()` 或删掉——那会让「口径只有一份」这句话失去落点。
+#[allow(dead_code)]
 fn judge_line_for(lines: &[String], site: &DomainPrintSite) -> Option<usize> {
     let (lo, hi) = fn_span(lines, site.enclosing_fn)?;
     for (i, l) in lines.iter().enumerate().take(hi + 1).skip(lo) {
@@ -1533,6 +1715,52 @@ fn judge_line_for(lines: &[String], site: &DomainPrintSite) -> Option<usize> {
 // ══════════════════════════════════════════════════════════════
 // G-5 · AC-005 —— 覆盖**所有**打印 domain 产物的站点
 // ══════════════════════════════════════════════════════════════
+
+/// 按**花括号深度**取一个函数的整个函数体（含签名行）。
+///
+/// ⚠️ 为什么不能直接用 [`fn_span`]：它把「第一个不缩进的行」当函数结尾，
+/// 而多行签名的收尾行（`) -> … {`）是顶格的 ⇒ 会把整个函数体切掉。
+/// 这里改成数花括号（字符串字面量里的花括号会被算进去，对"找函数体"这个用途无害）。
+fn fn_body_lines<'a>(lines: &'a [String], name: &str) -> Vec<&'a String> {
+    let hit = format!("fn {name}(");
+    let Some(start) = lines.iter().position(|l| {
+        let t = l.trim_start();
+        t.starts_with(&hit) || t.starts_with(&format!("async {hit}"))
+    }) else {
+        return Vec::new();
+    };
+    let mut depth = 0i32;
+    let mut opened = false;
+    let mut out: Vec<&String> = Vec::new();
+    for l in &lines[start..] {
+        depth += l.matches('{').count() as i32;
+        depth -= l.matches('}').count() as i32;
+        if l.contains('{') {
+            opened = true;
+        }
+        out.push(l);
+        if opened && depth <= 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// `pipeline` 族变异用的**插入点**（0 基下标，插在该行之前）。
+///
+/// 插在「从管线产物派生绑定」那一行**之前** ⇒ 「出口里多了一条判据」发生在
+/// 产物被取用之前，正是 QA 变异 M3 的形状（出口自己又判了一次）。
+fn judge_like_line(lines: &[String], site: &DomainPrintSite) -> Option<usize> {
+    let (lo, hi) = fn_span(lines, site.enclosing_fn)?;
+    let pattern = format!("let {} = ", site.binding);
+    lines
+        .iter()
+        .enumerate()
+        .take(hi + 1)
+        .skip(lo)
+        .find(|(_, l)| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"))
+        .map(|(i, _)| i)
+}
 
 /// 这个打印调用是不是「在打一个 domain 产物」。
 ///
