@@ -1,11 +1,16 @@
 {
-  "req_id": "REQ-002",
-  "title": "本体内核 MVP（Rust）实施",
-  "branch": "feature/REQ-002",
+  "req_id": "REQ-107",
+  "title": "出口收口：把「渲染前处理」与「发布闸」收进一条统一管线",
+  "branch": "feature/REQ-107",
   "base": "develop",
-  "assigned_by": "ba-local-145007-20260930-175512",
-  "assigned_at": "2026-09-30 17:57:35",
-  "plan": "BA/docs/plans/2026-09-30-REQ-002-kernel-mvp-implementation.md",
-  "acceptance": "BA/demands/REQ-002-kernel-mvp/acceptance.md",
-  "status": "进行中"
+  "base_commit": "b714f48",
+  "assigned_by": "ba-michael-worksta-14864-20261020-151752",
+  "assigned_at": "2026-10-20 15:40:00",
+  "plan": "BA/demands/REQ-107/demand.md",
+  "acceptance": "BA/demands/REQ-107/acceptance.md",
+  "status": "进行中",
+  "notes": [
+    "从 REQ-106 拆出：REQ-106 只修两个具体洞（JSON 先写后判 / 首页零闸），不含重构。",
+    "AC 在 explore 枚举全部出口之后才写（纪律 S：AC 自己也会是错的）。"
+  ]
 }
