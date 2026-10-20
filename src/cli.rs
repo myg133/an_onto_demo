@@ -633,18 +633,22 @@ pub const DOMAIN_PRINT_SITES: &[DomainPrintSite] = &[
 
 // ───────────────────── 唯一的出口（AC-001）─────────────────────
 
-/// 把 domain 渲染产物**逐字节**写进 stdout（`print!` 语义，**不加**尾换行）。
+/// 把**已过前处理与发布闸**的客户产物逐字节写进 stdout（`print!` 语义，**不加**尾换行）。
 ///
-/// ⛔ 刻意**不返回**任何派生值：调用方能拿回的唯一东西就是它自己传进来的
-/// 那个 `&str`，不存在「写出去的」与「能拿到的」两份东西。
-/// 要判据参与就走 [`emit_domain_text_with`]。
-pub fn emit_domain_text(text: &str) {
-    write_stdout(text, false);
+/// ⭐ REQ-107 第 2 轮（QA 阻断 B3 / A11 R-D）：
+/// 实参类型是 [`OutletRender`] —— **拿裸 `&str` 调它编译不过**。
+/// 于是「出口先把手拼的未过闸字节写出去、再去调管线判定」（REQ-106 的原始病）
+/// 在出口层没有表达形式：写出去的字节只能来自管线的返回值。
+///
+/// ⛔ 刻意**不返回**任何派生值。
+/// 建模轨（D2）的闭包式接线路过 `emit_domain_text_with(&str, …)`，见那里。
+pub fn emit_domain_text(rendered: crate::domain::pipeline::OutletRender) {
+    write_stdout(rendered.as_str(), false);
 }
 
 /// 同 [`emit_domain_text`]，但补一个尾换行（`println!` 语义）。
-pub fn emit_domain_line(text: &str) {
-    write_stdout(text, true);
+pub fn emit_domain_line(rendered: crate::domain::pipeline::OutletRender) {
+    write_stdout(rendered.as_str(), true);
 }
 
 /// ⭐ REQ-078 · **判据收到的串 == 打印出去的串**，由**类型**保证。
@@ -715,11 +719,17 @@ fn write_stdout(text: &str, newline: bool) {
 ///
 /// 本函数不含任何判据：它只把 `pipeline::render` 的 `Err` 映射成退出码。
 /// 命中清单（词条本身）只进 stderr，⛔ 不进 stdout（REQ-106 AC-002）。
+///
+/// # ⭐ 第 2 轮：第一个参数是 [`OutletId`]，不是 spec
+///
+/// 出口只能交代「我是哪条出口」；轨道 / 格式 / 粒度由管线**查表**决定
+/// （`pipeline::spec_of`）。于是「出口把轨道改成 `Internal` 从而关掉闸门」
+/// （QA 变异 #4）在源码里**写不出来**：既没有 spec 值，也没有可写字段。
 fn publish_customer(
-    spec: crate::domain::pipeline::OutletSpec,
+    id: crate::domain::pipeline::OutletId,
     product: crate::domain::pipeline::Product<'_>,
 ) -> crate::domain::pipeline::OutletRender {
-    match crate::domain::pipeline::render(spec, product) {
+    match crate::domain::pipeline::render(id, product) {
         Ok(rendered) => rendered,
         Err(e) if e.is_leak() => {
             let hits = e.hits();
@@ -1250,12 +1260,13 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 // `tests/test_req107_track_manifest.rs` 都钉住这一点）。
                 let mv = crate::domain::model_view::project_model_track(&snap);
                 let mv_json = serde_json::to_string_pretty(&mv)?;
-                let rendered = publish_customer(
-                    crate::domain::pipeline::OutletSpec::D1,
+                // ⚠️ 第 2 轮：`mv_json` 直接就是管线产物（`OutletRender`），
+                // 不是「先取 &str 再交给写出」—— 写出函数只收这个类型。
+                let mv_json = publish_customer(
+                    crate::domain::pipeline::OutletId::D1,
                     crate::domain::pipeline::Product::Text(mv_json),
                 );
                 // REQ-078：登记表里的站点，走唯一的出口。
-                let mv_json = rendered.as_str();
                 crate::cli::emit_domain_line(mv_json);
                 return Ok(());
             }
@@ -1291,23 +1302,29 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 //
                 // C1（stdout）与 C2（--out 文件）**共用同一份产物** `html` ——
                 // 它们写的是同一批字节，不是两份各自渲染的东西。
-                let rendered = publish_customer(
-                    crate::domain::pipeline::OutletSpec::C1,
+                let html = publish_customer(
+                    crate::domain::pipeline::OutletId::C1,
                     crate::domain::pipeline::Product::CustomerHtml {
                         view: &cv,
                         sampling: sampling.as_slice(),
                     },
                 );
-                let html = rendered.as_str();
+                // ⚠️ 第 2 轮：`html` 就是管线产物本身（`OutletRender`）；写文件那一支
+                // 只借 `.as_str()`，stdout 那一支把产物**移进**写出函数 ——
+                // 类型层保证「写出去的 == 过了闸的」，出口拿不到第二份字节。
+                //
+                // 回执里的对象数先取出来：⛔ 不要让回执的 `println!` 也提到 `html`
+                // （REQ-078 的 G-1 会把「打印点对绑定接了方法调用」判红 —— 它是对的）。
+                let dropped_objects = html.dropped_object_count();
 
                 match &out {
                     Some(p) => {
-                        std::fs::write(p, html)
+                        std::fs::write(p, html.as_str())
                             .with_context(|| format!("写不出 {p:?}"))?;
                         println!(
                             "已写出客户视图页面：{}（{} 个对象 · 抽样高亮 {} 个 · 自包含单文件，可离线打开）",
                             p.display(),
-                            cv.objects.len() - rendered.dropped_object_count(),
+                            cv.objects.len() - dropped_objects,
                             sampling.len()
                         );
                     }
@@ -1326,11 +1343,10 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             //
             // ⚠️ 剔除发生在**守门器之前**（管线的固定顺序）：真·建模术语
             // （`主键` / `基数` / `1:N`）不是标识符形态、剔不掉，照旧到达闸门并被拒。
-            let rendered = publish_customer(
-                crate::domain::pipeline::OutletSpec::C3,
+            let json = publish_customer(
+                crate::domain::pipeline::OutletId::C3,
                 crate::domain::pipeline::Product::CustomerJson(&cv),
             );
-            let json = rendered.as_str();
 
             // 走到这里 = 判定通过 ⇒ 才允许写出。stdout 上只会出现这一种格式。
             crate::cli::emit_domain_line(json);
@@ -1357,18 +1373,16 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             // （保留收口前的「任一条命中就整份不发」—— 那是既有行为，AC-005 原样保留），
             // 出口只声明自己要哪一条形态。
             if json {
-                let rendered = publish_customer(
-                    crate::domain::pipeline::OutletSpec::C5,
+                let json_text = publish_customer(
+                    crate::domain::pipeline::OutletId::C5,
                     crate::domain::pipeline::Product::Overview(&ov),
                 );
-                let json_text = rendered.as_str();
                 crate::cli::emit_domain_line(json_text);
             } else {
-                let rendered = publish_customer(
-                    crate::domain::pipeline::OutletSpec::C4,
+                let text = publish_customer(
+                    crate::domain::pipeline::OutletId::C4,
                     crate::domain::pipeline::Product::Overview(&ov),
                 );
-                let text = rendered.as_str();
                 crate::cli::emit_domain_text(text);
             }
             if !ov.notes.is_empty() {

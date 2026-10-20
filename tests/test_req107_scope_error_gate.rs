@@ -142,7 +142,7 @@ fn test_req107_z1_goes_through_the_pipeline_error_path() {
     let body = &tail[..end];
 
     assert!(
-        body.contains("OutletSpec::Z1"),
+        body.contains("OutletId::Z1"),
         "`check_scope` 里找不到 Z1 的管线调用点：{body}"
     );
     assert!(
@@ -150,15 +150,20 @@ fn test_req107_z1_goes_through_the_pipeline_error_path() {
         "Z1 的文案原文应当保留（变化由 `safe_error` 在**命中时**决定，不是手改文案）"
     );
     assert!(
-        body.contains("publish_error_text("),
-        "Z1 没有走管线的错误路径（`publish_error_text`）—— 那就是收口前的零闸形状"
+        body.contains("Product::ErrorText("),
+        "Z1 没有走管线的错误路径（`Product::ErrorText`）—— 那就是收口前的零闸形状"
+    );
+    assert!(
+        !body.contains("publish_error_text("),
+        "第 2 轮起 `publish_error_text` 这个「任意 &str → 可写出产物」的公开工厂**已删除**\
+         （A11 R-C：客户产物只许有一个公开构造入口 `render`）"
     );
     assert!(
         body.contains("rendered.as_str()"),
         "`err(…, msg)` 的正文必须来自**管线产物**（`rendered.as_str()`），而不是裸 `format!`"
     );
-    // `publish_error_text` 必须在 `err(` 之前被调用（先过错误闸、再进响应）。
-    let pub_at = body.find("publish_error_text(").expect("找不到 publish_error_text");
+    // 管线入口必须在 `err(` 之前被调用（先过错误闸、再进响应）。
+    let pub_at = body.find("pipeline::render(").expect("找不到 pipeline::render");
     let err_at = body.rfind("err(StatusCode::BAD_REQUEST").expect("找不到 err 调用");
     assert!(pub_at < err_at, "错误文案必须先过 `safe_error` 才进响应");
 }

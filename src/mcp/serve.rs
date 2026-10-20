@@ -249,7 +249,7 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
             // 现在整段 result（模板正文 + serverInfo + 已过闸的项目名）一起判，
             // 与 `tools/call` 的返回值同一条外送路径、同一道闸。
             let result = p::initialize_result(agreed, &tools::instructions(ctx));
-            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletSpec::Z3, result) {
+            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletId::Z3, result) {
                 Ok(rendered) => p::encode_result(id, rendered.into_value()),
                 Err(e) => p::encode_error_line(id, p::INTERNAL_ERROR, e.message(), None),
             }
@@ -281,7 +281,7 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
             // 工具面板与下游 LLM 的提示词素材 —— 与 `tools/call` 的返回值同一条外送路径。
             // 收口前这条路径**零闸**（而且 `description`/`title` 连断言都没有）。
             let result = p::tools_list_result(Value::Array(tools));
-            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletSpec::Z2, result) {
+            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletId::Z2, result) {
                 Ok(rendered) => p::encode_result(id, rendered.into_value()),
                 Err(e) => p::encode_error_line(id, p::INTERNAL_ERROR, e.message(), None),
             }
@@ -312,7 +312,7 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
                 // 判定在管线里（`publish_value` 复用 `tools::guard` 本体，不抄判据）；
                 // 出口这一步只把结果映射成协议形状。
                 Ok(value) => match crate::domain::pipeline::publish_value(
-                    crate::domain::pipeline::OutletSpec::MCP_TOOLS,
+                    crate::domain::pipeline::OutletId::McpTools,
                     value,
                 ) {
                     Ok(rendered) => {

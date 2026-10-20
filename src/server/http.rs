@@ -175,7 +175,8 @@ fn err(status: StatusCode, msg: &str) -> Response {
 /// # ⚠️ REQ-107：本函数已并入管线，**不再**在出口层判
 ///
 /// 收口前这里是 `guarded()`：出口自己调 `mcp::tools::guard` 决定「发不发」。
-/// 现在出口只声明「客户 / JSON / 整份」([`OutletSpec::H2`] / [`OutletSpec::H3`])，
+/// 现在出口只声明「我是哪条出口」（[`crate::domain::pipeline::OutletId::H2`] /
+/// [`crate::domain::pipeline::OutletId::H3`]），
 /// 判定在 [`crate::domain::pipeline::publish_value`] 里。
 /// ⛔ 守门器本体仍然只复用 `mcp::tools::guard`，**不是**抄一份。
 ///
@@ -186,7 +187,7 @@ fn err(status: StatusCode, msg: &str) -> Response {
 /// - **序列化失败**：那是 bug，不是数据问题 —— 文案必须说清是「生成响应时出错」，
 ///   不要冒充成「发布闸命中」（冒充会让运维去查数据，而问题在代码里）。
 fn publish_json(
-    spec: crate::domain::pipeline::OutletSpec,
+    id: crate::domain::pipeline::OutletId,
     value: Result<serde_json::Value, serde_json::Error>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let value = value.map_err(|e| {
@@ -195,7 +196,7 @@ fn publish_json(
             &format!("生成响应时出错：{e}"),
         )
     })?;
-    match crate::domain::pipeline::publish_value(spec, value) {
+    match crate::domain::pipeline::publish_value(id, value) {
         Ok(rendered) => Ok(Json(rendered.into_value())),
         Err(e) if e.is_leak() => {
             // `guard` 已经把命中的词条打到 stderr 了；这里只说「哪个出口」。
@@ -246,15 +247,25 @@ fn check_scope(
         // 无闸、无 `safe_error`、无转义 —— 同一个项目名在首页被拒发，
         // 在这里却能一个字不差地读回来。
         //
-        // 现在走管线的**错误路径**（[`crate::domain::pipeline::publish_error_text`]）：
+        // 现在走管线的**错误路径**（`pipeline::render` + `Product::ErrorText`）：
         // 命中守门词 ⇒ 整句换成通用说明；干净项目名 ⇒ 原样回显（运维要能看出绑的是哪一份）。
-        let rendered = crate::domain::pipeline::publish_error_text(
-            crate::domain::pipeline::OutletSpec::Z1,
-            &format!(
+        //
+        // ⚠️ 第 2 轮：`publish_error_text` 这个「任意 `&str` → 可写出产物」的公开工厂
+        // **已删掉**（QA N6 / A11 R-C）—— 错误路径也只剩 `render` 一个入口，
+        // 于是「全仓公开构造客户产物的函数」恰好只有 `render` / `publish_value` 两个。
+        let rendered = crate::domain::pipeline::render(
+            crate::domain::pipeline::OutletId::Z1,
+            crate::domain::pipeline::Product::ErrorText(format!(
                 "本服务只对外提供 {} 第 {} 版这一份内容，别的一概不给。",
                 state.project, state.version
-            ),
+            )),
         );
+        // `Product::ErrorText` 恒 `Ok`（`safe_error` 只改写、不拒绝）——
+        // 这里的 `Err` 分支只是把「不可能」写成一句人话兜底，不冒充任何判定。
+        let rendered = match rendered {
+            Ok(r) => r,
+            Err(_) => return Err(err(StatusCode::BAD_REQUEST, "请求的项目或版本不在本服务范围内。")),
+        };
         return Err(err(StatusCode::BAD_REQUEST, rendered.as_str()));
     }
     Ok(())
@@ -267,7 +278,7 @@ async fn get_graph(
     check_scope(&q, &state)?;
     // ⭐ REQ-107 · 出口 H2：声明「客户 / JSON / **整份**」—— 发不发由管线判。
     publish_json(
-        crate::domain::pipeline::OutletSpec::H2,
+        crate::domain::pipeline::OutletId::H2,
         serde_json::to_value(&*state.graph),
     )
 }
@@ -292,7 +303,7 @@ async fn get_node(
     })?;
     // ⭐ REQ-107 · 出口 H3：声明「客户 / JSON / **逐节点**」—— 一个坏节点只拒那一个。
     publish_json(
-        crate::domain::pipeline::OutletSpec::H3,
+        crate::domain::pipeline::OutletId::H3,
         serde_json::to_value(node),
     )
 }
@@ -327,7 +338,7 @@ async fn index(State(state): State<AppState>) -> Result<Html<String>, Response> 
             // 不单独给模板来一遍（那会变成第二份判据遍历），而是让首页这条出口
             // 把**最终字节**交给同一道闸。
             match crate::domain::pipeline::render(
-                crate::domain::pipeline::OutletSpec::H1,
+                crate::domain::pipeline::OutletId::H1,
                 crate::domain::pipeline::Product::Text(html),
             ) {
                 Ok(rendered) => Ok(Html(rendered.into_text())),

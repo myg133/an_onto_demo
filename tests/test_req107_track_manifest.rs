@@ -5,7 +5,7 @@
 //! 收口前的「豁免」是**推导出来的**：「因为它没调闸，所以它是建模轨」。
 //! 那是 fail-open：漏接一个客户出口和「一条建模出口」在代码里长得一模一样。
 //!
-//! 现在轨道是 `OutletSpec` 里的**数据**（`Track::Modeling`），
+//! 现在轨道是 `OutletId` 里的**数据**（`Track::Modeling`），
 //! 「拦不拦」由 `Track::gated()` 决定 —— 误标时**行为会变**（被闸拦住）。
 //!
 //! # ⚠️ 如实登记的边界
@@ -18,7 +18,7 @@
 
 mod common;
 
-use ontok::domain::pipeline::{render, Format, OutletSpec, Product, Track};
+use ontok::domain::pipeline::{render, OutletId, Product, Track};
 use ontok::domain::pipeline::{outlet, OUTLETS};
 
 /// 出口层不该出现的判据直调（与 AC-003 的否定式判据同一张名单）。
@@ -160,14 +160,15 @@ fn test_req107_mislabeling_a_modeling_outlet_turns_it_red() {
     );
 
     // ② 声明为 Modeling ⇒ 原样输出（建模术语在这一轨是**内容**，不是泄露）。
-    let ok = render(OutletSpec::D1, Product::Text(text.clone())).expect("建模轨必须放行");
+    let ok = render(OutletId::D1, Product::Text(text.clone())).expect("建模轨必须放行");
     assert!(ok.as_str().contains("key"), "建模轨的输出必须含建模字段");
     assert_eq!(ok.as_str(), text, "建模轨必须**逐字节**原样输出（不剔不改名）");
 
     // ③ 同一份产物、把 spec 误标成 Customer ⇒ 必须被拦，且错误正文不含具体词条。
-    let mut mislabelled = OutletSpec::D1;
-    mislabelled.track = Track::Customer;
-    let err = render(mislabelled, Product::Text(text)).expect_err("误标为客户类必须被拦");
+    //    （QA 变异 #4 的原形态 `spec.track = Track::Internal` 在这一版**写不出来**；
+    //     源码侧另有 `tests/test_req107_source_enumeration.rs` 做否定式判据。）
+    let err = render(OutletId::C3, Product::Text(text.clone()))
+        .expect_err("同一份产物走客户轨必须被拦");
     assert!(err.is_leak(), "误标的失败必须是「发布闸命中」");
     assert!(
         !err.message().contains("主键") && !err.message().contains("基数"),
@@ -175,12 +176,16 @@ fn test_req107_mislabeling_a_modeling_outlet_turns_it_red() {
         err.message()
     );
 
-    // ④ 反向：干净产物在客户轨必须放行（证明上面那条不是「客户轨一律拒」）。
+    // ③′ 换 ID **不能关闸**：客户类产物不许从建模轨入口发布（第 2 轮的运行时不变式）。
+    let cv = ontok::domain::view::CustomerView { objects: vec![], relations: vec![] };
+    let mismatch = render(OutletId::D1, Product::CustomerJson(&cv))
+        .expect_err("客户类产物不许从建模轨出口发布");
+    assert!(!mismatch.is_leak(), "这一条是「形态不相容」，不是闸命中");
+
+    // ④ 反向：干净产物在客户轨必须放行（证明上面那条不是「客户轨恒红」）。
     let clean = serde_json::to_string_pretty(&serde_json::json!({ "name": "样例客户" })).unwrap();
-    let mut customer_text = OutletSpec::C3;
-    customer_text.format = Format::Text;
     assert!(
-        render(customer_text, Product::Text(clean)).is_ok(),
+        render(OutletId::C3, Product::Text(clean)).is_ok(),
         "干净的客户轨产物必须放行 —— 否则「误标必红」证明的是「客户轨恒红」"
     );
 }

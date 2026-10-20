@@ -16,7 +16,7 @@
 
 mod common;
 
-use ontok::domain::pipeline::{render, DropReport, OutletSpec, Product};
+use ontok::domain::pipeline::{render, DropReport, OutletId, Product};
 use ontok::domain::view::{CustomerView, EntityView, PropertyView, RelationView};
 
 // ══════════════════════════════════════════════════════════════
@@ -73,7 +73,7 @@ fn two_objects(relations: bool) -> CustomerView {
 
 fn html_of(cv: &CustomerView) -> String {
     render(
-        OutletSpec::C1,
+        OutletId::C1,
         Product::CustomerHtml { view: cv, sampling: &[] },
     )
     .expect("干净夹具必须过闸")
@@ -81,7 +81,7 @@ fn html_of(cv: &CustomerView) -> String {
 }
 
 fn json_of(cv: &CustomerView) -> String {
-    render(OutletSpec::C3, Product::CustomerJson(cv))
+    render(OutletId::C3, Product::CustomerJson(cv))
         .expect("干净夹具必须过闸")
         .into_text()
 }
@@ -267,7 +267,7 @@ fn test_req107_cardpoint3_report_shape_count_vs_raw_names() {
 
     // ⑤ ⭐ 形状统一的可机判形式：所有出口的 stderr 报告**只经** `DropReport::stderr_line()`。
     let rendered = render(
-        OutletSpec::C3,
+        OutletId::C3,
         Product::CustomerJson(&cv),
     )
     .expect("这份视图剔完必须干净");
@@ -316,8 +316,8 @@ fn test_req107_overview_gates_both_formats() {
     let ov = ontok::domain::overview::build_overview(&cv, &groups, &names);
 
     // 干净总览：两条形态都过。
-    assert!(render(OutletSpec::C4, Product::Overview(&ov)).is_ok());
-    assert!(render(OutletSpec::C5, Product::Overview(&ov)).is_ok());
+    assert!(render(OutletId::C4, Product::Overview(&ov)).is_ok());
+    assert!(render(OutletId::C5, Product::Overview(&ov)).is_ok());
 
     // 脏总览：两条形态**都**拒（收口前的过度拦截原样保留 —— AC-005 要求零可见变化）。
     let dirty = CustomerView {
@@ -334,11 +334,11 @@ fn test_req107_overview_gates_both_formats() {
         vec![("e0".to_string(), "主键台账".to_string())].into_iter().collect();
     let ov2 = ontok::domain::overview::build_overview(&dirty, &[], &names2);
     assert!(
-        render(OutletSpec::C4, Product::Overview(&ov2)).is_err(),
+        render(OutletId::C4, Product::Overview(&ov2)).is_err(),
         "文本形态命中 ⇒ 必须拒发"
     );
     assert!(
-        render(OutletSpec::C5, Product::Overview(&ov2)).is_err(),
+        render(OutletId::C5, Product::Overview(&ov2)).is_err(),
         "JSON 形态命中 ⇒ 必须拒发（两条形态都判，是既有行为）"
     );
 }

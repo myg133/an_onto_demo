@@ -12,7 +12,7 @@
 mod common;
 
 use common::req107::{concept_groups, fixture, names, overview, sampling, GOLDEN_FILES, MCP_CALLS};
-use ontok::domain::pipeline::{render, OutletSpec, Product};
+use ontok::domain::pipeline::{render, OutletId, Product};
 
 const TOKEN: &str = "correct-horse-battery";
 const PROJECT: &str = "样例项目";
@@ -60,7 +60,7 @@ async fn test_req107_pipeline_bytes_equal_golden() {
 
     // ── C1 / C2 ──
     let c1 = render(
-        OutletSpec::C1,
+        OutletId::C1,
         Product::CustomerHtml { view: &cv, sampling: &sampling() },
     )
     .expect("干净夹具必须过闸")
@@ -71,7 +71,7 @@ async fn test_req107_pipeline_bytes_equal_golden() {
     //
     // ⚠️ 出口的 stdout 字节 = 产物 ++ 尾换行（`emit_domain_line` 的 `println!` 语义）。
     //    管线产物本身不带那个换行 —— golden 记的是**出口字节**，所以这里补上。
-    let c3 = render(OutletSpec::C3, Product::CustomerJson(&cv))
+    let c3 = render(OutletId::C3, Product::CustomerJson(&cv))
         .expect("干净夹具必须过闸")
         .into_text();
     assert_same(
@@ -83,11 +83,11 @@ async fn test_req107_pipeline_bytes_equal_golden() {
 
     // ── C4 / C5 ──
     let ov = overview();
-    let c4 = render(OutletSpec::C4, Product::Overview(&ov))
+    let c4 = render(OutletId::C4, Product::Overview(&ov))
         .expect("干净总览必须过闸")
         .into_text();
     assert_same("C4", "C4_overview.txt", &golden("C4_overview.txt"), c4.as_bytes());
-    let c5 = render(OutletSpec::C5, Product::Overview(&ov))
+    let c5 = render(OutletId::C5, Product::Overview(&ov))
         .expect("干净总览必须过闸")
         .into_text();
     assert_same(

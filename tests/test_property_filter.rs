@@ -361,9 +361,9 @@ fn ordinary_business_attributes_survive_untouched() {
 fn all_three_outlets_call_the_one_shared_function() {
     // (文件, 人读的名字, 必须出现的管线调用点)
     let outlets: [(&str, &str, &[&str]); 3] = [
-        ("src/cli.rs", "ontology show（JSON 出口）", &["OutletSpec::C3"]),
-        ("src/server/http.rs", "只读图 /api/node", &["prepare_view", "OutletSpec::H3"]),
-        ("src/mcp/serve.rs", "MCP 通道", &["prepare_view", "OutletSpec::MCP_TOOLS"]),
+        ("src/cli.rs", "ontology show（JSON 出口）", &["OutletId::C3"]),
+        ("src/server/http.rs", "只读图 /api/node", &["prepare_view", "OutletId::H3"]),
+        ("src/mcp/serve.rs", "MCP 通道", &["prepare_view", "OutletId::McpTools"]),
     ];
 
     // 判据直调点的**唯一**允许位置就是管线模块本身；出口文件里必须是 0。

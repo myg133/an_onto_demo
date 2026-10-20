@@ -3,7 +3,7 @@
 > **代码基线** `develop` `b714f48`（REQ-106 已合并）
 > **全量测试基线** `62 suite / 846 passed / 0 failed / 1 ignored @ develop 7f26fa2`（纪律 O）
 > **⚠️ 本机不可复核**（`src/bin/ontok-gate-preflight.rs` 的 unix-only 代码；见 §6）
-> **分支** `feature/REQ-107`（未 push；5 个提交，见 §7）
+> **分支** `feature/REQ-107`（未 push；第 1 轮 7 个 `[Dev]` 提交 + 第 2 轮 1 个 `[Dev]` 提交（见 `git log`），§7 与 §10）
 > **设计文档** `.feature/design-req107.md`（实现前定稿，裁定与理由在那里；本文件只引用不重写）
 
 ---
@@ -31,21 +31,25 @@
 
 ### 1.1 13 条客户类出口 → 管线调用点（逐条 `path:line`）
 
+> ⭐ **第 2 轮**：管线入口的第一个参数从 `OutletSpec::X` 改成 **`OutletId::X`**（出口只交代身份；
+> 轨道 / 格式 / 粒度由 `pipeline::spec_of(id)` **查表**决定，见 §10.3）。下表已按新写法更新，
+> 行号是**本轮**改后的行号。
+
 | # | 出口 | 写出点 | 管线调用点 | 声明（格式 / 轨道 / 粒度） |
 | --- | --- | --- | --- | --- |
-| C1 | `ontology show --html` → stdout | `src/cli.rs:1316` `emit_domain_text(html)` | `src/cli.rs:1294` `publish_customer(OutletSpec::C1, Product::CustomerHtml{…})` | Html / Customer / Whole |
-| C2 | `ontology show --html --out` → 文件 | `src/cli.rs:1305` `std::fs::write(p, html)` | **同上**（与 C1 共用同一份 `html`） | Html / Customer / Whole |
-| C3 | `ontology show` → JSON stdout | `src/cli.rs:1336` `emit_domain_line(json)` | `src/cli.rs:1329` `publish_customer(OutletSpec::C3, Product::CustomerJson(&cv))` | Json / Customer / Whole |
-| C4 | `ontology overview` → 文本 | `src/cli.rs:1372` `emit_domain_text(text)` | `src/cli.rs:1367` `publish_customer(OutletSpec::C4, Product::Overview(&ov))` | Text / Customer / Whole |
-| C5 | `ontology overview --json` | `src/cli.rs:1365` `emit_domain_line(json_text)` | `src/cli.rs:1360` `publish_customer(OutletSpec::C5, Product::Overview(&ov))` | Json / Customer / Whole |
-| H1 | `GET /` 首页 | `src/server/http.rs:333` `Html(rendered.into_text())` | `src/server/http.rs:329` `pipeline::render(OutletSpec::H1, Product::Text(html))` | Html / Customer / Whole |
-| H2 | `GET /api/graph` | `src/server/http.rs:199` `Json(rendered.into_value())`（`publish_json` 里那一行） | `src/server/http.rs:269` `publish_json(OutletSpec::H2, …)` → `pipeline::publish_value` | Json / Customer / Whole |
-| H3 | `GET /api/node` | 同上（同一处 `publish_json`，出口不同） | `src/server/http.rs:294` `publish_json(OutletSpec::H3, …)` → `pipeline::publish_value` | Json / Customer / **PerNode** |
-| M1–M5 | 5 个 MCP 工具 | `src/mcp/serve.rs:321` `p::encode_result(id, p::tool_call_result(…))` | `src/mcp/serve.rs:315` `pipeline::publish_value(OutletSpec::MCP_TOOLS, value)`（**同一调用点**） | Json / Customer / Whole |
+| C1 | `ontology show --html` → stdout | `src/cli.rs:1333` `emit_domain_text(html)` | `src/cli.rs:1305` `let html = publish_customer(OutletId::C1, Product::CustomerHtml{…})` | Html / Customer / Whole |
+| C2 | `ontology show --html --out` → 文件 | `src/cli.rs:1322` `std::fs::write(p, html.as_str())` | **同一份 `html`**（与 C1 共用一个管线产物；⚠ 已知 N4：`OutletId::C2` 没有独立调用点） | Html / Customer / Whole |
+| C3 | `ontology show` → JSON stdout | `src/cli.rs:1352` `emit_domain_line(json)` | `src/cli.rs:1346` `let json = publish_customer(OutletId::C3, Product::CustomerJson(&cv))` | Json / Customer / Whole |
+| C4 | `ontology overview` → 文本 | `src/cli.rs:1386` `emit_domain_text(text)` | `src/cli.rs:1382` `let text = publish_customer(OutletId::C4, Product::Overview(&ov))` | Text / Customer / Whole |
+| C5 | `ontology overview --json` | `src/cli.rs:1380` `emit_domain_line(json_text)` | `src/cli.rs:1376` `let json_text = publish_customer(OutletId::C5, Product::Overview(&ov))` | Json / Customer / Whole |
+| H1 | `GET /` 首页 | `src/server/http.rs:344` `Html(rendered.into_text())` | `src/server/http.rs:341` `pipeline::render(OutletId::H1, Product::Text(html))` | Html / Customer / Whole |
+| H2 | `GET /api/graph` | `src/server/http.rs:200` `Json(rendered.into_value())`（`publish_json` 里那一行） | `src/server/http.rs:280` `publish_json(OutletId::H2, …)` → `pipeline::publish_value` | Json / Customer / Whole |
+| H3 | `GET /api/node` | 同上（同一处 `publish_json`，出口不同） | `src/server/http.rs:305` `publish_json(OutletId::H3, …)` → `pipeline::publish_value` | Json / Customer / **PerNode** |
+| M1–M5 | 5 个 MCP 工具 | `src/mcp/serve.rs:321` `p::encode_result(id, p::tool_call_result(…))` | `src/mcp/serve.rs:315` `pipeline::publish_value(OutletId::McpTools, value)`（**同一调用点**） | Json / Customer / Whole |
 
 > 机读版是 `src/domain/pipeline.rs` 的 `pub const OUTLETS: &[Outlet]`（33 条，带 `path` + `call_site` needle）。
-> 判据 `tests/test_req107_outlet_pipeline.rs::test_req107_cli_five_customer_outlets_are_wired` /
-> `…http_three_outlets_are_wired` / `…mcp_five_tools_share_one_pipeline_call` 逐条核 needle。
+> 第 1 轮只有「表 → 源码」这一个方向；**第 2 轮加了反向**（`tests/test_req107_source_enumeration.rs`），
+> 逐条核 needle 的三条判据仍在 `tests/test_req107_outlet_pipeline.rs`。
 
 ### 1.2 33 条口径（分组 13 / 8 / 9 / **2** / 1）
 
@@ -70,6 +74,10 @@
 
 ### 2.1 类型与签名
 
+> ⭐ **第 2 轮改动（QA B2 / A11 R-B）**：出口只传 `OutletId`，轨道由 `spec_of(id)` **查表**；
+> `OutletSpec` 全字段私有、`spec_of` 模块私有、`publish_error_text` **已删除**。
+> 下面是**当前**的签名（第 1 轮的版本见 git 历史与 §10.3）。
+
 ```rust
 // src/domain/pipeline.rs
 pub enum Track { Customer, Modeling, Internal, Static, ErrorPath }
@@ -78,8 +86,13 @@ impl Track { pub const fn gated(self) -> bool { matches!(self, Track::Customer |
 pub enum Format { Html, Json, Text }
 pub enum Granularity { Whole, PerNode }
 
-pub struct OutletSpec { pub id: &'static str, pub track: Track, pub format: Format, pub granularity: Granularity }
-// 13 个具名常量：OutletSpec::C1 / … / H3 / MCP_TOOLS / Z1 / Z2 / Z3 / D1
+/// 出口的**唯一身份**（第 2 轮）：出口只能交代「我是哪条出口」。
+pub enum OutletId { C1, C2, C3, C4, C5, H1, H2, H3, McpTools, Z1, Z2, Z3, D1 }
+
+/// 声明本体：字段**全私有**，无公开构造器；`Outlet.spec` 也是私有字段。
+pub struct OutletSpec { id: &'static str, track: Track, format: Format, granularity: Granularity }
+/// ⛔ **模块私有**：出口拿不到任何 `OutletSpec` 的值（因此也改不了 track）。
+const fn spec_of(id: OutletId) -> OutletSpec;
 
 pub enum Product<'a> {
     CustomerHtml { view: &'a CustomerView, sampling: &'a [String] },
@@ -89,26 +102,29 @@ pub enum Product<'a> {
     ErrorText(String),
 }
 
-/// 文本轨唯一入口。命中 ⇒ Err；**不自己 exit**。
-pub fn render(spec: OutletSpec, product: Product<'_>) -> Result<OutletRender, PipelineError>;
+/// 文本轨唯一入口（CLI 客户出口 / 首页 / 建模投影 / 错误文案）。命中 ⇒ Err；**不自己 exit**。
+pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, PipelineError>;
 /// 结构化轨唯一入口（HTTP / MCP）。命中 ⇒ Err，消息逐字取自 mcp::tools::guard。
-pub fn publish_value(spec: OutletSpec, value: Value) -> Result<GuardedValue, PipelineError>;
-/// 错误路径（Z1）：safe_error（比闸更保守）。
-pub fn publish_error_text(spec: OutletSpec, raw: &str) -> OutletRender;
+pub fn publish_value(id: OutletId, value: Value) -> Result<GuardedValue, PipelineError>;
 /// 装配期前处理（/api/graph /api/node / MCP 五工具共用一份已剔视图）。
 pub fn prepare_view(view: &CustomerView) -> FilteredView;
 
 /// ⛔ 字段全私有、无公开构造器 —— 出口只有拿到它才能写出（AC-003 的类型层）。
 pub struct OutletRender { text: String, report: DropReport, outlet: &'static str }
 pub struct GuardedValue  { text: String, value: Value }
+
+/// 第 2 轮：客户字节的写出函数**只收** `OutletRender`（裸 `&str` 编译不过）。
+pub fn emit_domain_text(rendered: OutletRender);   // cli.rs
+pub fn emit_domain_line(rendered: OutletRender);   // cli.rs
 ```
+
 
 ### 2.2 为什么这样切
 
 | 切法 | 理由 |
 | --- | --- |
 | **「前处理」与「闸」分成两个阶段** | 判据不同（标识符形态 vs 建模术语）、命中后的动作不同（减一条 vs 整份不发）、失败语义不同（静默删条目必须报 stderr vs 拒绝发布）。顺序不可交换：先剔后闸才能让可减的条目减掉、不可减的仍到达闸门（REQ-104 的全部价值建立在这个顺序上）。 |
-| **轨道进 spec、`gated()` 在管线里判** | 「拦不拦」从「出口自觉」变成「声明 + 单一判定点」。误标轨道 ⇒ 行为立刻变（TC-022 的行为半）。 |
+| **轨道由 `OutletId` 查表、`gated()` 在管线里判** | 「拦不拦」从「出口自觉」变成「身份 + 单一查表点」。第 2 轮把 spec 从出口手里拿走（QA B2）：出口连一个可写轨道字段都没有，误标只能通过「换 ID」，而那会被 `OUTLET_ID_TOKENS` 与 `pairing_ok` 两层抓住（§10.3）。 |
 | **包装类型 + 私有构造器** | 让「不经过管线就拿着一个可写出的产物」**表达不出来**。这是唯一能挡住「换一种写法绕过」的判据（源码否定式只能挡拼写）。 |
 | **`render` 返回 `Result` 而**不** `exit`** | 判定（拦不拦）与政策（退出码 / 500 / `isError`）分开：CLI 的 `Err → exit 2` 只在 `cli::publish_customer` 一处，出口函数体里一条判红分支都没有（TC-002 直接扫函数体）。 |
 | **`publish_value` 复用 `mcp::tools::guard` 本体** | 纪律 H：不抄第二份判据。命中消息因此**逐字**等于收口前，500 / `isError` 正文零变化。 |
@@ -296,7 +312,10 @@ H1_index.html, H2_graph.json, H3_node_1.json, H3_node_2.json, M1..M5.json}` +
 | H2/H3/M（装配期） | `property_filter::report()` 的原文 | 同上统一形状 | 同上 |
 | 全部客户出口（闸命中时） | 三个不同措辞（`⚠ 客户视图页面泄露了建模术语：…` / `⚠ 客户视图泄露了建模术语：…` / `⚠ 业务总览泄露了建模术语：… / 文本 …`） | `⚠ 客户视图泄露了建模术语（出口 {id}）：{hits:?}` | 同上（命中清单**仍然只进 stderr**，REQ-106 AC-002 未被破坏） |
 
-**内容没有减少**：原名、条数、前 20 条上限都保留了（§3·③ 的裁定）。
+**内容口径的一处**变化（第 2 轮按 QA §6.3 订正）：对象名明细**从「不限条数」变成与前 20 条共享上限**
+（`pipeline.rs::DropReport::stderr_line` 的 `SHOW = 20`）。原名、四类计数、`其余 N 条省略` 都保留了，
+但**条数上限确实收紧了** —— 上一版写「内容没有减少」不准确，这里如实改成「明细上限统一为 20，
+超出部分只报数量」。影响面只限 stderr（AC-005 口径外）。
 
 ---
 
@@ -375,7 +394,7 @@ restored byte-identical: True
 
 ## 7 · `git diff --numstat` + 红线零触碰（AC-010-7）
 
-### 7.1 提交（5 个，均为 `[Dev] … (关联: REQ-107)`）
+### 7.1 提交（第 1 轮 **7 个** `[Dev]` 提交 + 1 个 `[BA]` 登记提交；**第 2 轮** 1 个 `[Dev]` 提交（见 `git log`））
 
 ```
 6ac37d6 [Dev] golden 字节比对（基线 b714f48 生成 + 管线产出对账）与夹具 (关联: REQ-107)
@@ -512,6 +531,187 @@ TC-008 的「代码块里出现包装类型名与一次字面量构造」这一�
   - **R1**：`diff` 在 `OUTLETS` 里登记为 `Track::Internal`（内部轨、不过闸）；
   - **R2**：`src/domain/diff.rs:53` 的注释改为「给 CLI 与**建模人员**看」，并附上 R1/R3 的理由；
   - **R3**：换行不转义**未修**，登记在 §8-4。
+
+---
+
+## 10 · 第 2 轮修复（QA 3 条阻断 + A11 四条硬性要求）
+
+> 作业单：`BA/demands/REQ-107/qa-review.md`（QA 在独立 worktree 做了 12 次变异）。
+> 这一轮**只修阻断**，没有重写第 1 轮的管线 / 13 条接线 / golden / 红线成果。
+
+### 10.1 结论：5 条全部消除，且都用**新名字 / 新路由 / 新出口**做了变异实测
+
+| # | 阻断 / 要求 | 根因（QA 的原话） | 本轮的修法 | 判据 | 变异实测 |
+| --- | --- | --- | --- | --- | --- |
+| **B1** | AC-003 「漏接即红」 | `OUTLETS` 只做「表 → 源码」**单向** needle 对账 | **反向枚举**：扫 `src/` 全目录的写点，逐个对账登记表（剥注释 + 抹字符串） | `tests/test_req107_source_enumeration.rs::t1` | 攻击 #3 新增 `/api/raw` ⇒ **红**（T1+T5） |
+| **B2** | AC-001 「拦不拦不由出口决定」 | `OutletSpec.track` 是 `pub` 字段 | 出口只传 **`OutletId`（enum）**；轨道由 `spec_of(id)` **查表**；`OutletSpec` 全字段私有、`spec_of` 模块私有、`Outlet.spec` 私有 | `t3` + `pipeline.rs:713` 的 `pairing_ok` | 攻击 #4a 字面写法 ⇒ **编译不过**（E0599）；等价可编译形态 4b ⇒ **红**（T3） |
+| **B3** | A9 #2「原来能抓的现在抓不到」 | 出口侧「先写后判」失守 | 写出函数**只收 `OutletRender`**（裸 `&str` 编译不过）+ T2 要求实参是管线产物且**赋值在写出之前** + G-4 的 ③ 补上时序 | `cli.rs:645/650` + `t2` + `test_binary_output_guard::pipeline_site_verdict` ③ | 攻击 #5a 字面写法 ⇒ **编译不过**（E0308）；可编译形态 5b/5c ⇒ **红**（T1） |
+| **B4** | 公开构造器只挡 `new` 拼写（R-C） | 判据匹配字符串 `pub fn new(` | 枚举**全仓所有 `pub fn`** 是否返回 `OutletRender`/`GuardedValue`（含 `-> Self` 的 impl 方法） | `t4`；`publish_error_text` 一并删除 | 攻击 #2 `pub fn craft(String)` ⇒ **红**（T4） |
+| **B5** | 自造本地判据仍全绿 | 只查「有没有直调已登记的名字」 | 出口文件**逐函数登记**（`OUTLET_FNS`）+ 全仓 `mod` 登记（`MODULES`）+ T2 禁止产物被再次交给别的函数 | `t2` / `t5` / `t6` | 攻击 #1 `fn local_ok` + 真改写出 ⇒ **红**（T5+T2） |
+
+> **与 QA 建议的一处偏离（如实登记）**：A11 R-D 建议「写出方法只在 `GuardedValue` 上提供」。
+> 我实现成「`cli::emit_domain_text/line` 的**实参类型**是 `OutletRender`」——
+> 拿裸 `&str` 调它们同样**编译不过**，强度等价，且不必把 stdout 写进 domain 层
+> （`pipeline.rs` 现在仍然一行 stdout 都没有，由 `t7` 钉住）。
+
+### 10.2 B1 · 源码 → 登记表（R-A）
+
+新增 `tests/test_req107_source_enumeration.rs`（7 条判据，T1–T7）。**T1** 的做法：
+
+1. `src_files()` **递归遍历 `src/`**（新文件自动进来，⛔ 没有写死文件清单）；
+2. `strip_comments`（词法级，剥注释）→ 再 `blank_strings`（把**字符串字面量内容**抹成空格）。
+   为什么多这一步：`src/cli.rs:396-402` 的退出码政策是一段**多行字符串**，里面原样写着
+   `emit_domain_text_with(&text.replace(..), |judged| …)` 作为**例子** —— 不抹掉就会把
+   文档示例当成真实写点（假红）。两个视图**行号严格对齐**（本轮踩过：转义符吃掉换行会让
+   二者错位 17 行，`write_points` 因此改成先定位行、再按括号配平拼窗口）；
+3. 枚举写点：`println!` / `print!` / `emit_domain_text` / `emit_domain_line` /
+   `emit_domain_text_with` / `write_stdout` / `Json(` / `Html(` / `fs::write(` /
+   `encode_result(` / `tool_call_result(`（词边界判定，`eprintln!` 不算 `println!`）；
+   写出机制**本体**（`emit_domain_*` / `write_stdout` / `encode_result` 的定义体）整段跳过；
+4. 每个写点必须：① 该行落在 `OUTLETS.call_site` 的 needle 集合里，**或**
+   ② 落在 `NON_CUSTOMER_WRITES`（**文件 + needle + 期望命中数 + 理由**，22 条），**或**
+   ③ 所在文件在 `NON_OUTLET_FILES`（精确路径 + 理由，5 条：`mcp/protocol.rs` 是返回
+   `String` 的**构造器**，4 个 `src/bin/*` 是运维二进制）；
+5. 白名单**双向**：每条 needle 的实际命中数必须**恰好**等于登记值（少一个 = 过期，多一个 =
+   有人照着抄了一份）。
+6. 同时把第 1 轮 N1 的洞堵上：登记表 → 源码那一侧也改用**剥注释后**的源码做 needle 命中。
+
+实时数字：`src/` 下 60 个 `.rs`，非管线文件里共 **39** 个写点，其中 17 个由 `OUTLETS` 登记覆盖、
+22 个由 `NON_CUSTOMER_WRITES` 覆盖；`src/domain/pipeline.rs` 排除在枚举外（它是登记表与写出机制
+的定义处，其 `OUTLETS` 字面量里必然含 needle 文本），另由 **T7** 断言它一行 stdout 宏都没有。
+
+### 10.3 B2 · `OutletId` 查表（R-B）
+
+```rust
+// src/domain/pipeline.rs:243
+pub enum OutletId { C1, C2, C3, C4, C5, H1, H2, H3, McpTools, Z1, Z2, Z3, D1 }
+// src/domain/pipeline.rs:291  —— ⛔ 模块私有
+const fn spec_of(id: OutletId) -> OutletSpec { … }
+// src/domain/pipeline.rs:636 / 727
+pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, PipelineError>
+pub fn publish_value(id: OutletId, value: Value) -> Result<GuardedValue, PipelineError>
+```
+
+- `OutletSpec` 字段**全私有**（`pipeline.rs:191`），且**没有 `pub const` / `pub fn` 能造出一个值**；
+  `Outlet.spec` 也改成私有字段（读轨道走 `o.track()` / `o.format()` / `o.granularity()`）。
+- 运行时第二道：`pairing_ok`（`pipeline.rs:713`）—— 客户类产物（`CustomerHtml/CustomerJson/Overview`）
+  只能从 `Track::Customer` 入口发布；`ErrorText` 只能走 `Z1`。所以「换一个不过闸的 ID 把客户视图发出去」
+  会当场 `Err`，而不是静默绕过。
+- 源码第三道：`OUTLET_ID_TOKENS`（`t3`）逐文件登记 `OutletId::` 记号的**次数**；
+  换 ID / 多加一处管线调用都让次数对不上。
+
+### 10.4 B3 + B5 · 出口拿不到「未过闸的字节」+ 不许第二份判据（R-D / 纪律 H）
+
+- **类型层**：`emit_domain_text/line` 的实参是 `OutletRender`（`cli.rs:645/650`）⇒
+  「先 `println!` 一份手拼字节、再调管线判定」在出口层**编译不过**（实测 E0308，见 §10.6 #5）。
+- **T2（源码层）**：每条客户写出的实参必须是**裸标识符**，且其 `let` 绑定**直接**来自
+  `publish_customer(` / `pipeline::render(`；赋值行必须在写出行之前；赋值与写出之间，
+  该标识符只许出现在 `.dropped_object_count()` / `.report()` / `.outlet()`，或
+  **`fs::write(` / `err(` 的实参位**上的 `.as_str()`。
+  ⇒ `if !local_ok(json.as_str()) { … }` 这种「产物交给另一个函数再判一遍」当场红（实测见 #1）。
+- **T5（函数登记）**：三个出口文件（`cli.rs` / `server/http.rs` / `mcp/serve.rs`）里的
+  **每一个 `fn` 定义**都必须登记在 `OUTLET_FNS`（43 条，按文件 + 名字 + 用途）⇒ 新增
+  `fn local_ok`（QA 的攻击形态）或新增一个 handler 都会红。
+- **T6（模块登记）**：全仓 `mod x;` 声明（52 条）逐个登记 ⇒ 「把判据拆到新模块再调用」也会红。
+- **G-4 收敛（既有守卫同步收紧）**：`test_binary_output_guard::pipeline_site_verdict` 的 ③
+  从「`let <binding> = <任意>.as_str()`」改成「`let <binding> = <管线入口>(…)` **且**赋值行在写出之前」。
+  旧口径正是 QA 实测「先写后判全绿」的那一格；新口径连同 `has_entry`/判据直调一起，
+  对四个 `pipeline` 站点逐个跑 M-P1（摘管线）/ M-P2（加本地判据）/ M-P3（自拼产物）三个变异。
+
+### 10.5 B4 · 公开构造器枚举（R-C）
+
+`t4` 枚举**全仓** `pub fn` / `pub const fn` / `pub async fn` 的签名（`fn` 行 + 下两行，覆盖跨行签名），
+命中「返回 `OutletRender` / `GuardedValue` / `Result<…>` / impl 内的 `-> Self`」的点，
+要求恰好是 `render` / `publish_value` 两个、且都在 `src/domain/pipeline.rs`。
+⇒ 名字换不换无所谓（`craft` / `forged` / 别的都行），**只按返回类型判**。
+配套删掉了 `publish_error_text`（第 1 轮唯一的公开产物工厂，QA N6）：Z1 现在也走
+`render(OutletId::Z1, Product::ErrorText(…))`（`http.rs:251-266`）。
+
+### 10.6 5 种攻击形态的实测（变异三元组，纪律 G）
+
+装置：在本 worktree 就地改一处 → 记**被改文件 sha256** + 只含该处改动的 patch →
+跑判据 → 用**改前快照**逐字节还原（`git checkout` 不适用：本轮改动尚未提交）。
+⛔ 编译不过的一律**不当作执行结果**，另注「写法已不可编译」。
+
+| # | 攻击 | 被改文件 sha256（攻击前 → 攻击后） | patch 关键内容 | 结果 |
+| --- | --- | --- | --- | --- |
+| 1 | 自造 `fn local_ok(s) -> bool { !s.contains("key") }` + **真的**用它跳过写出 + 保留管线调用 | `src/cli.rs` `C5CACC1A…BAFC` → `00F69409…4237` | `+fn local_ok(…);`（模块级）+ `+if !local_ok(json.as_str()) { eprintln!(…); return Ok(()); }` 插在管线赋值与 `emit_domain_line(json)` 之间 | **红 ×2**：`t5`（fn 未登记）+ `t2`（产物在写出前被交给别的函数） |
+| 2 | 公开构造器改名 `pub fn craft(text: String) -> Self` | `src/domain/pipeline.rs` `88C28710…F034D` → `A7B56ADD…D2FAC` | `+impl OutletRender { pub fn craft(text: String) -> Self { Self { text, report: DropReport::default(), outlet: "C3" } } }` | **红 ×1**：`t4`（实际 `["craft","publish_value","render"]`） |
+| 3 | 新增真实路由 `GET /api/raw`（零闸、零剔除、**不入表**） | `src/server/http.rs` `6BEF88DF…3C4C` → `AAA33CD6…2A4C` | `+.route("/api/raw", get(get_raw))` + `+async fn get_raw(…) -> Json<Value> { Json(to_value(&*state.graph)…) }` | **红 ×2**：`t1`（`http.rs:278 Json(` 未登记）+ `t5`（`fn get_raw` 未登记） |
+| 4a | 出口一行 `spec.track = Track::Internal` | `src/cli.rs` `C5CACC1A…BAFC` → `84A72CDD…EAF9` | `+let mut spec = OutletSpec::C3; +spec.track = Track::Internal;` 并把 `spec` 传给 `publish_customer` | **编译不过**（`error[E0599]: no associated function or constant named C3`、`E0061` 参数个数）⇒ **该写法已不存在**，不算执行结果 |
+| 4b | 等价的可编译形态：把出口身份换成**建模轨** `OutletId::D1` | `src/cli.rs` `C5CACC1A…BAFC` → `8A97AA4D…9591` | `-OutletId::C3 +OutletId::D1`（C3 分支） | **红 ×1**：`t3`（`D1` 2 次/登记 1 次；`C3` 0 次）；运行时另有 `pairing_ok` 把 `CustomerJson` 从建模轨入口拒掉 |
+| 5a | 未过闸字节先写 stdout：`emit_domain_line(&raw)` 放在管线调用之前 | `src/cli.rs` `C5CACC1A…BAFC` → `F19895D1…3272` | `+let raw = serde_json::to_string_pretty(&cv)?; +crate::cli::emit_domain_line(&raw);` | **编译不过**（`error[E0308] mismatched types`）⇒ 类型层挡住，不算执行结果 |
+| 5b | 同一形态的**可编译**写法：`println!("{raw}")` | `src/cli.rs` `C5CACC1A…BAFC` → `4DBDDA6B…1CBA` | `+let raw = …; +println!("{raw}");` 插在管线调用之前 | **红 ×1**：`t1`（`cli.rs:1340 println!(` 未登记） |
+| 5c | 用**闭包式**写出送未过闸字节：`emit_domain_text_with(&raw, \|_\| ())` | `src/cli.rs` `C5CACC1A…BAFC` → `D16F5DA9…38A9` | `+let raw = …; +crate::cli::emit_domain_text_with(&raw, \|_\| ());` | **红 ×1**：`t1`（`emit_domain_text_with(` 未登记；D2 的登记 needle 带 `&text`，抄不过去） |
+
+> 每次攻击后都用快照还原，`git status` 已核过只含本轮真实改动；
+> `src/bin/ontok-gate-preflight.rs` 全程只在 A8 里挪出/挪回，sha256
+> `C7CF95E2…322D` 前后一致（见 §10.8）。
+
+### 10.7 本轮对既有测试的改动（逐条说明「没有放宽」）
+
+| 文件 | 改了什么 | 为什么不是放宽 |
+| --- | --- | --- |
+| `tests/test_binary_output_guard.rs` | `pipeline_site_verdict` ③ 从 `.as_str()` 形状 → 「直接由管线入口赋值 + 时序」；`has_entry` 去掉已删除的 `publish_error_text`；M-P3 / `judge_like_line` 的锚点跟着新形状 | ③ **更严**（旧口径不认管线来源、也不管时序）；M-P1/M-P2 两个变异一字未动，M-P3 仍必须红 |
+| `tests/test_req107_track_manifest.rs` | TC-022 的「`mislabelled.track = Track::Customer`」改成「同一份产物走客户轨出口 `C3`」+ 新增「`CustomerJson` 不许从 `D1` 进入」 | 原写法在这一版**编译不过**（字段已私有）；新写法验的是同一件事（轨道决定拦不拦），并多钉一条「换 ID 不能关闸」 |
+| `tests/test_req107_scope_error_gate.rs` | `publish_error_text(` → `pipeline::render(` + `Product::ErrorText(`；新增 `!body.contains("publish_error_text(")` | 断言只增不减；还多钉了「错误路径的公开工厂已删除」 |
+| `tests/test_req107_outlet_pipeline.rs` | C2 needle 改 `std::fs::write(p, html.as_str())`；新增 `let html = publish_customer(` 断言；入口签名清单去掉 `publish_error_text` | 新增的断言钉的是「`html` 必须是管线产物本身」——比只钉「两个分支用同一个变量」更严 |
+| `tests/test_req107_guard_granularity.rs` / `test_req107_pipeline_bytes.rs` / `test_req107_static_texts.rs` / `test_property_filter.rs` | 只做 `OutletSpec::X` → `OutletId::X` 的机械替换（含 `MCP_TOOLS` → `McpTools`） | 断言内容逐字未改；`test_property_filter` 的三条 needle 仍然各自命中 |
+| `tests/test_exit_ordering_req106.rs` | **一字未改** | 它现在验的是管线内部时序（仍 7 passed）；出口侧时序由 T2 + G-4 ③ 接上（QA B3 指的就是这一格） |
+
+### 10.8 本轮实测命令与结果（本机 Windows + 无 PostgreSQL）
+
+A8 绕行：`src/bin/ontok-gate-preflight.rs` 挪到 `%TEMP%\req107-dev-r2\`，
+跑完挪回，**sha256 前后一致**：`C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo test --test test_req107_source_enumeration` | **7 passed / 0 failed**（T1–T7） |
+| `cargo test --test test_req107_outlet_pipeline` | 12 passed |
+| `cargo test --test test_binary_output_guard` | 7 passed |
+| `cargo test --test test_exit_ordering_req106` | 7 passed |
+| `cargo test --test test_req107_track_manifest` | 2 passed |
+| `cargo test --test test_req107_guard_granularity` | 4 passed |
+| `cargo test --test test_req107_pipeline_bytes` | 1 passed |
+| `cargo test --test test_req107_scope_error_gate` | 4 passed |
+| `cargo test --test test_req107_static_texts` | 3 passed |
+| `cargo test --test test_req107_red_lines` | 2 passed |
+| `cargo test --test test_req107_zero_visible_change` | 3 passed |
+| `cargo test --test test_property_filter` | 10 passed |
+| `cargo test --test test_graph_server` | 9 passed |
+| `cargo test --test test_guard_manifest_req081` | 6 passed |
+| `cargo test --test test_model_view` | 10 passed |
+| `cargo test --test test_overview` | 17 passed |
+| `cargo test --doc` | **4 passed**（两条 `compile_fail` 仍 ok） |
+| `cargo test --lib` | **168 passed / 2 failed** —— 两条都是 `MissingEnv("ONTOK_TEST_DATABASE_URL")`（`db::apply` / `extract::introspect`），**环境不具备**，与本轮改动无关 |
+| `cargo test --test test_no_write_path` | 3 passed / 1 failed（同一个 env） |
+| `cargo test --test test_retained_names_req084` | **跑不了**（A10：它 `include_str!` 那个 unix-only bin；bin 挪出时编不过，挪回时 bin 本身在本机编不过） |
+| `test_mcp_server` / `test_domain_print_sites_binary_req078` | **未跑**（需 PG，环境不具备；与第 1 轮同一限制） |
+
+### 10.9 本轮**没有**做 / 仍然存在的边界（⛔ 不许读成「已封堵」）
+
+1. **枚举认的是构造拼写**（`println!` / `emit_domain_*` / `Json(` / `Html(` / `encode_result(` /
+   `fs::write(`）。用别的机制往 stdout 写（自建 `std::io::stdout()`、第三方日志宏）**抓不到**；
+   补强在类型层（`emit_domain_*` 只收 `OutletRender`），但 `emit_domain_text_with(&str, …)` 这个
+   建模轨闭包入口仍在 —— 它的**新调用点**会被 `t1` 抓住（5c 实测），可它的**实参来源**只由
+   REQ-078 的 G-1 守卫覆盖（D2 一处）。
+2. **T2 的窗口**只看「管线赋值 → 写出」之间。「在调用管线**之前**用一个闭包式本地判据决定
+   要不要调管线」不在 T2 覆盖内（`fn` 形式会被 T5 抓好，**闭包形式抓不到**）。
+3. **HTTP handler 返回裸 `String` / `(StatusCode, String)`** 这类不走 `Json(`/`Html(` 的响应体
+   不在 `t1` 的构造枚举里（它在 `http.rs` 里新增函数会被 T5 抓；改的是已有函数则抓不到）。
+4. `NON_OUTLET_FILES` 里的 4 个运维二进制只做**整文件**豁免：在 `src/bin/` 里新增写点不会红
+   （新增**文件**会红，因为目录是现场遍历的）。
+5. `test_retained_names_req084` 在本机**跑不了**（A10），它对 `DOMAIN_PRINT_SITES` 的基线没有复核。
+6. 卡点② 的「`Granularity` 参与执行」仍然是**声明性**的（QA §7.3 的 N2 未修，属非阻断）。
+   `src/domain/pipeline.rs` 的 `render` 仍然不读 `granularity`（只有 H3 的「逐节点」由
+   handler 形态决定）。
+
+**我认为最可能被第 3 轮 QA 打回的一点**：**B5 的「闭包形式本地判据」**。
+`let local_ok = |s: &str| s.contains("key");` 不会进 `OUTLET_FNS`（那不是 `fn` 定义），
+若它只作用在**重新拼出来的字符串**上（不碰管线产物），T1（没有新写点）/T2（产物没被碰）/
+T3–T7 都不会红。要彻底封它，只能把出口函数的**允许语句集**也做成登记表（成本远大于本需求），
+或者让 `serde_json::to_string_pretty(` / `render_html(` 这类 domain 生产者在出口文件里
+**整体禁用** —— 后者是可行的下一步，但会与 D1（建模投影）的现有写法冲突。
 
 ---
 

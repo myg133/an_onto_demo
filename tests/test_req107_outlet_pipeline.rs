@@ -147,7 +147,7 @@ fn fn_body<'a>(src: &'a str, name: &str) -> Option<String> {
 fn test_req107_outlet_only_declares_format_and_track() {
     // ① 管线入口的签名里不许有「要不要过闸 / 要不要剔除」这类开关。
     let pipe = prod(PIPELINE_SRC);
-    for entry in ["pub fn render(", "pub fn publish_value(", "pub fn publish_error_text("] {
+    for entry in ["pub fn render(", "pub fn publish_value("] {
         let at = pipe
             .find(entry)
             .unwrap_or_else(|| panic!("管线里找不到入口 `{entry}`"));
@@ -206,8 +206,8 @@ fn test_req107_outlet_only_declares_format_and_track() {
     for rel in OUTLET_FILES {
         let src = prod(rel);
         assert!(
-            src.contains("OutletSpec::"),
-            "{rel} 里没有任何 `OutletSpec::` —— 出口没有声明轨道/格式，那它一定在自决"
+            src.contains("OutletId::"),
+            "{rel} 里没有任何 `OutletId::` —— 出口没有声明自己是谁，那它一定在自决"
         );
     }
     // 登记表里每条都必须把轨道与格式**都**填好（类型层：枚举，不是字符串开关）。
@@ -376,11 +376,18 @@ fn test_req107_cli_five_customer_outlets_are_wired() {
         assert_eq!(o.format(), want, "{id} 的格式声明不对");
     }
 
-    // ② C1（stdout）与 C2（--out 文件）必须**共用同一份产物**：同一个变量名 `html`。
+    // ② C1（stdout）与 C2（--out 文件）必须**共用同一份产物**：同一个变量名 `html`，
+    //    而且那个 `html` 就是管线产物本身（第 2 轮：`let html = publish_customer(…)`，
+    //    不再有「先 `.as_str()` 派生一份再写」的中间形态）。
     assert!(
         cli.contains("crate::cli::emit_domain_text(html)")
-            && cli.contains("std::fs::write(p, html)"),
+            && cli.contains("std::fs::write(p, html.as_str())"),
         "C1/C2 必须写**同一份** `html`（`--out` 分支与 stdout 分支引用同一个变量）"
+    );
+    assert!(
+        cli.contains("let html = publish_customer("),
+        "`html` 必须**直接**由管线入口赋值（写出函数只收 `OutletRender`）—— \
+         否则「先写后判」又在出口层活过来了"
     );
 }
 
@@ -400,7 +407,7 @@ async fn test_req107_http_three_outlets_are_wired() {
         );
     }
     assert_eq!(
-        OUTLETS.iter().find(|o| o.id == "H3").unwrap().spec.granularity,
+        OUTLETS.iter().find(|o| o.id == "H3").unwrap().granularity(),
         ontok::domain::pipeline::Granularity::PerNode,
         "H3（/api/node）必须是**逐节点**粒度（卡点②的裁定）"
     );
@@ -552,8 +559,8 @@ fn test_req107_mcp_five_tools_share_one_pipeline_call() {
         criterion_sites(branch)
     );
     assert!(
-        branch.contains("OutletSpec::MCP_TOOLS"),
-        "`tools/call` 分支里找不到管线调用点 `OutletSpec::MCP_TOOLS`"
+        branch.contains("OutletId::McpTools"),
+        "`tools/call` 分支里找不到管线调用点 `OutletId::McpTools`"
     );
 
     // ② 行为半。每条工具用**能取到脏数据**的实参（不传脏实参就等于没测到闸）。
@@ -787,7 +794,7 @@ fn test_req107_type_layer_blocks_off_pipeline_construction() {
     }
     assert!(
         !pipe.contains("pub fn new("),
-        "管线里出现了 `pub fn new(` —— 公开构造器会直接绕过闸"
+        "管线里出现了 `pub fn new(` —— 公开构造器会直接绕过闸（`pub fn` 全枚举见 `test_req107_source_enumeration.rs`）"
     );
 
     // ③ 反空转：**在 crate 内**构造是合法的（`OutletRender::build` 就在做这件事），
@@ -876,7 +883,7 @@ if !leaked.is_empty() { std::process::exit(2); }
     assert!(!hits.is_empty());
 
     // ④ 反向自证：只有管线调用的串必须 0 命中（防判据被改成恒红）。
-    let clean = "let rendered = crate::domain::pipeline::render(OutletSpec::C3, Product::CustomerJson(&cv));";
+    let clean = "let rendered = crate::domain::pipeline::render(OutletId::C3, Product::CustomerJson(&cv));";
     assert_eq!(criterion_sites(clean).len(), 0);
 
     // ③ 实物：三个出口文件各自 0 命中（与 TC-001 同源，但这里逐文件报数）。

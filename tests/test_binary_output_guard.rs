@@ -1046,12 +1046,11 @@ fn pipeline_site_verdict(
     let has_entry = lines.iter().take(hi + 1).skip(lo).any(|l| {
         l.contains("pipeline::render(")
             || l.contains("pipeline::publish_value(")
-            || l.contains("pipeline::publish_error_text(")
             || l.contains("publish_customer(")
     });
     if !has_entry {
         return Some(format!(
-            "`{}` 里找不到管线入口（`pipeline::render` / `publish_value` / `publish_error_text`）\
+            "`{}` 里找不到管线入口（`pipeline::render` / `publish_value`）\
              —— 登记表说有管线、源码里已经摘掉了",
             site.enclosing_fn
         ));
@@ -1071,17 +1070,47 @@ fn pipeline_site_verdict(
         }
     }
 
-    // ③ 写出去的绑定必须是从管线产物派生的。
+    // ③ 写出去的绑定**必须就是管线产物的名字**（第 2 轮收紧）。
+    //
+    // 收口第一版认的是 `let <binding> = <x>.as_str()`：它只证明「从某个东西派生」，
+    // 既不证明那个「某个东西」是管线产物，也不管**时序** —— QA 实测「出口先写一份手拼
+    // 字节、再去调管线」在这一格是全绿的（阻断 B3）。
+    //
+    // 第 2 轮起写出函数只收 `OutletRender`（裸 `&str` **编译不过**），所以这里改为：
+    // 绑定必须**直接**由管线入口赋值（`let <binding> = publish_customer(…)`），
+    // 且该赋值行必须在写出之前。
     let pattern = format!("let {} = ", site.binding);
-    let derived = lines
+    let assign = lines
         .iter()
+        .enumerate()
         .take(hi + 1)
         .skip(lo)
-        .any(|l| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"));
-    if !derived {
+        .find(|(_, l)| {
+            l.trim_start().starts_with(&pattern)
+                && (l.contains("publish_customer(") || l.contains("pipeline::render("))
+        });
+    let Some((assign_line, _)) = assign else {
         return Some(format!(
-            "`{}` 里找不到 `let {} = <管线产物>.as_str();` —— \
-             写出去的绑定不是从管线产物派生的，`pipeline` 这一格是空的",
+            "`{}` 里找不到 `let {} = <管线入口>(…)` —— 写出去的绑定不是管线产物本身，\
+             `pipeline` 这一格是空的（第 2 轮：写出函数只收 `OutletRender`，\
+             「先派生一个 `&str` 再写」已不再算接线）",
+            site.enclosing_fn, site.binding
+        ));
+    };
+    // 时序：管线赋值必须在写出**之前**（反过来的形状正是 REQ-106 的原始病）。
+    let write_after = lines
+        .iter()
+        .enumerate()
+        .skip(assign_line + 1)
+        .take(hi.saturating_sub(assign_line))
+        .any(|(_, l)| {
+            (l.contains("emit_domain_text(") || l.contains("emit_domain_line("))
+                && mentions_path(l, &site.binding)
+        });
+    if !write_after {
+        return Some(format!(
+            "`{}` 里 `{}` 的管线赋值之后找不到写出 —— 时序要么被颠倒（先写后判），\
+             要么这个站点根本没写出去",
             site.enclosing_fn, site.binding
         ));
     }
@@ -1628,8 +1657,8 @@ fn g4_guard_is_not_vacuous() {
         let pattern = format!("let {} = ", site.binding);
         let dl = m3
             .iter()
-            .position(|l| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"))
-            .unwrap_or_else(|| panic!("[{}] 找不到派生行 `{pattern}…as_str()`", site.command));
+            .position(|l| l.trim_start().starts_with(&pattern) && l.contains("publish_customer("))
+            .unwrap_or_else(|| panic!("[{}] 找不到派生行 `{pattern}publish_customer(…)`", site.command));
         m3[dl] = format!(
             "                let {} = String::from(\"客户视图\");",
             site.binding
@@ -1641,7 +1670,7 @@ fn g4_guard_is_not_vacuous() {
             )
         });
         assert!(
-            v3.contains("不是从管线产物派生的"),
+            v3.contains("不是管线产物本身"),
             "🔴 [{}] 的 M-P3 虽然红了，但红的不是「绑定不是管线产物」那一格：{v3}",
             site.command
         );
@@ -1758,7 +1787,9 @@ fn judge_like_line(lines: &[String], site: &DomainPrintSite) -> Option<usize> {
         .enumerate()
         .take(hi + 1)
         .skip(lo)
-        .find(|(_, l)| l.trim_start().starts_with(&pattern) && l.contains(".as_str()"))
+        .find(|(_, l)| {
+            l.trim_start().starts_with(&pattern) && l.contains("publish_customer(")
+        })
         .map(|(i, _)| i)
 }
 

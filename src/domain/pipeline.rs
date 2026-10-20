@@ -2,9 +2,19 @@
 //!
 //! # 一句话
 //!
-//! 出口只声明**格式 + 轨道 + 闸粒度**，管线负责
-//! 「前处理（剔除 / 清洗）→ 发布闸 → 可写出的产物」。
-//! 「拦不拦」由 [`OutletSpec::track`] 决定，**出口代码无权决定**。
+//! 出口只交代**自己是谁**（[`OutletId`]，一个枚举），管线负责
+//! 「查表得到轨道 / 格式 / 粒度 → 前处理（剔除 / 清洗）→ 发布闸 → 可写出的产物」。
+//! 「拦不拦」由 `spec_of(id).track` 决定 —— 出口**连一个可写的轨道字段都拿不到**
+//! （[`OutletSpec`] 全字段私有、无公开构造器、也不出现在任何公开函数的参数里）。
+//!
+//! # REQ-107 第 2 轮（QA 3 条阻断的修复）
+//!
+//! | 阻断 | 修法 |
+//! | --- | --- |
+//! | B2 · `spec.track` 可被出口赋值 | 出口只传 [`OutletId`]；轨道由 [`spec_of`] **查表**决定。`OutletSpec` 不再是 `pub` 字段的载体 |
+//! | B3 · 出口可以「先写后判」 | 写出函数（`cli::emit_domain_text/line`）**只接受** [`OutletRender`]，拿裸 `&str` 写客户字节**编译不过** |
+//! | B4 · 公开构造器只挡 `new` 拼写 | 客户产物的公开消费方法穷举登记；判据**枚举全部 `pub fn` 返回该类型**的定义点（不是匹配某个名字） |
+//! | B1 · 新出口不接管线仍绿 | `tests/test_req107_source_enumeration.rs` 做**源码 → 登记表**枚举：扫 `src/` 全目录的写点与 [`OutletId`] 出现点，逐个对账 |
 //!
 //! # 为什么要有这个模块（病根）
 //!
@@ -180,16 +190,16 @@ impl Granularity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutletSpec {
     /// 登记表里的编号（`C3` / `H3` / `M1-M5` / `Z1` …）。
-    pub id: &'static str,
-    pub track: Track,
-    pub format: Format,
-    pub granularity: Granularity,
+    ///
+    /// ⛔ 第 2 轮起：**字段全部私有**。出口再也拿不到这个类型的一个值 ——
+    /// 它只作为 [`OUTLETS`] 的私字段与管线内部查表结果存在。
+    id: &'static str,
+    track: Track,
+    format: Format,
+    granularity: Granularity,
 }
 
-/// `OutletSpec` 的**唯一构造方式**（关联常量）。
-///
-/// ⛔ 刻意不提供 `fn new(...)`：出口要接哪个规格，必须用**具名常量**
-/// （`OutletSpec::C3`）—— 「随手拼一个 spec」在源码里立刻看得见。
+/// `OutletSpec` 的**唯一构造方式**：模块私有（⛔ 没有 `pub fn new`、没有 `pub const`）。
 impl OutletSpec {
     const fn of(
         id: &'static str,
@@ -200,39 +210,112 @@ impl OutletSpec {
         Self { id, track, format, granularity }
     }
 
-    // ── 客户类 13 条（§一）──
-    pub const C1: Self = Self::of("C1", Track::Customer, Format::Html, Granularity::Whole);
-    pub const C2: Self = Self::of("C2", Track::Customer, Format::Html, Granularity::Whole);
-    pub const C3: Self = Self::of("C3", Track::Customer, Format::Json, Granularity::Whole);
-    pub const C4: Self = Self::of("C4", Track::Customer, Format::Text, Granularity::Whole);
-    pub const C5: Self = Self::of("C5", Track::Customer, Format::Json, Granularity::Whole);
-    pub const H1: Self = Self::of("H1", Track::Customer, Format::Html, Granularity::Whole);
-    pub const H2: Self = Self::of("H2", Track::Customer, Format::Json, Granularity::Whole);
-    /// ⚠️ **逐节点**：一个坏节点只拒发那一个节点（卡点②的裁定）。
-    pub const H3: Self = Self::of("H3", Track::Customer, Format::Json, Granularity::PerNode);
-    /// M1–M5 共用**同一个**调用点（`serve.rs` 的 `tools/call` 分支）。
-    pub const MCP_TOOLS: Self =
-        Self::of("M1-M5", Track::Customer, Format::Json, Granularity::Whole);
+    /// 编号（人读 / 报错定位）。
+    pub const fn id(self) -> &'static str {
+        self.id
+    }
 
-    // ── 零闸位点 ──
-    /// Z1 `check_scope` 的不匹配分支。
-    pub const Z1: Self = Self::of("Z1", Track::ErrorPath, Format::Json, Granularity::Whole);
-    /// Z2 `tools/list`（AC-008：运行时闸）。
-    pub const Z2: Self = Self::of("Z2", Track::Static, Format::Json, Granularity::Whole);
-    /// Z3 `initialize` 的整段 result（模板正文 + serverInfo + 项目名）。
-    pub const Z3: Self = Self::of("Z3", Track::Static, Format::Json, Granularity::Whole);
+    /// 轨道。**只读** —— 出口手上根本没有 [`OutletSpec`] 的值可赋值。
+    pub const fn track(self) -> Track {
+        self.track
+    }
 
-    // ── 建模轨 ──
-    /// D1 `ontology show --model-view`：**唯一**真走管线的建模出口。
-    ///
-    /// 它的存在让「误标轨道 ⇒ 行为要变」可观察（AC-007 的判据）：
-    /// 同一个 spec 把 `track` 换成 `Customer`，同一份产物就会被闸拦住。
-    pub const D1: Self = Self::of("D1", Track::Modeling, Format::Json, Granularity::Whole);
+    pub const fn format(self) -> Format {
+        self.format
+    }
 
-    // ── 内部轨 ──
-    /// 内部运维输出的轨道声明（本轮的 9 条内部出口只**登记**，不改写出路径）。
-    pub const INTERNAL: Self = Self::of("I", Track::Internal, Format::Text, Granularity::Whole);
+    pub const fn granularity(self) -> Granularity {
+        self.granularity
+    }
 }
+
+/// ⭐ REQ-107 第 2 轮 · 出口的**唯一身份**。
+///
+/// 出口只能交代「我是哪一条出口」，**不能**交代「我这条要不要过闸」。
+/// 轨道 / 格式 / 粒度由 [`spec_of`] **查表**决定 —— 于是
+/// 「出口把 `spec.track` 改成 `Track::Internal` 从而关掉闸门」（QA 变异 #4）
+/// 在源码里**表达不出来**：既没有 `OutletSpec` 的值，也没有可写的字段。
+///
+/// 新增一条出口 ⇒ 必须在这里加一个变体 + 在 [`spec_of`] 里登记轨道，
+/// 源码枚举判据（`tests/test_req107_source_enumeration.rs`）会逐个对账
+/// `src/` 里出现的 `OutletId::` 记号，未登记的组合立刻红。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutletId {
+    // ── 客户类 13 条 ──
+    C1,
+    C2,
+    C3,
+    C4,
+    C5,
+    H1,
+    H2,
+    H3,
+    /// M1–M5 共用**同一个**调用点（`serve.rs` 的 `tools/call` 分支）。
+    McpTools,
+    // ── 零闸位点 ──
+    Z1,
+    Z2,
+    Z3,
+    // ── 建模轨 ──
+    D1,
+}
+
+impl OutletId {
+    /// 登记表里的编号（报错与登记对账用）。
+    pub const fn code(self) -> &'static str {
+        match self {
+            OutletId::C1 => "C1",
+            OutletId::C2 => "C2",
+            OutletId::C3 => "C3",
+            OutletId::C4 => "C4",
+            OutletId::C5 => "C5",
+            OutletId::H1 => "H1",
+            OutletId::H2 => "H2",
+            OutletId::H3 => "H3",
+            OutletId::McpTools => "M1-M5",
+            OutletId::Z1 => "Z1",
+            OutletId::Z2 => "Z2",
+            OutletId::Z3 => "Z3",
+            OutletId::D1 => "D1",
+        }
+    }
+}
+
+/// ⭐ **轨道 / 格式 / 粒度的唯一事实源**：出口 ID → 规格。
+///
+/// ⛔ 模块私有。出口**给不出一条规格**，只能给出 ID；因此
+/// 「这条出口要不要过闸」这件事在出口代码里没有表达形式。
+///
+/// D2–D8 / I1–I9 / Z4 不在这里：它们不真走管线，轨道只在 [`OUTLETS`]
+/// 里作为**登记事实**出现（[`Enforcement::DeclaredOnly`] / [`Enforcement::InternalOnly`]）。
+const fn spec_of(id: OutletId) -> OutletSpec {
+    match id {
+        OutletId::C1 => OutletSpec::of("C1", Track::Customer, Format::Html, Granularity::Whole),
+        OutletId::C2 => OutletSpec::of("C2", Track::Customer, Format::Html, Granularity::Whole),
+        OutletId::C3 => OutletSpec::of("C3", Track::Customer, Format::Json, Granularity::Whole),
+        OutletId::C4 => OutletSpec::of("C4", Track::Customer, Format::Text, Granularity::Whole),
+        OutletId::C5 => OutletSpec::of("C5", Track::Customer, Format::Json, Granularity::Whole),
+        OutletId::H1 => OutletSpec::of("H1", Track::Customer, Format::Html, Granularity::Whole),
+        OutletId::H2 => OutletSpec::of("H2", Track::Customer, Format::Json, Granularity::Whole),
+        // ⚠️ **逐节点**：一个坏节点只拒发那一个节点（卡点②的裁定）。
+        OutletId::H3 => OutletSpec::of("H3", Track::Customer, Format::Json, Granularity::PerNode),
+        OutletId::McpTools => {
+            OutletSpec::of("M1-M5", Track::Customer, Format::Json, Granularity::Whole)
+        }
+        // Z1 `check_scope` 的不匹配分支：不过闸，但走 `safe_error`（更保守）。
+        OutletId::Z1 => OutletSpec::of("Z1", Track::ErrorPath, Format::Json, Granularity::Whole),
+        // Z2 `tools/list`（AC-008：运行时闸）。
+        OutletId::Z2 => OutletSpec::of("Z2", Track::Static, Format::Json, Granularity::Whole),
+        // Z3 `initialize` 的整段 result（模板正文 + serverInfo + 项目名）。
+        OutletId::Z3 => OutletSpec::of("Z3", Track::Static, Format::Json, Granularity::Whole),
+        // D1 `ontology show --model-view`：**唯一**真走管线的建模出口。
+        OutletId::D1 => OutletSpec::of("D1", Track::Modeling, Format::Json, Granularity::Whole),
+    }
+}
+
+/// 登记表里「非管线轨」的规格占位（轨道是**登记事实**，出口不消费它）。
+const MODELING: OutletSpec = OutletSpec::of("D", Track::Modeling, Format::Text, Granularity::Whole);
+const INTERNAL: OutletSpec = OutletSpec::of("I", Track::Internal, Format::Text, Granularity::Whole);
 
 // ══════════════════════════════════════════════════════════════
 // 产物
@@ -544,10 +627,29 @@ impl GuardedValue {
 // 入口
 // ══════════════════════════════════════════════════════════════
 
-/// 文本轨的**唯一入口**（CLI 的五条客户出口、首页、建模投影）。
+/// 文本轨的**唯一入口**（CLI 的五条客户出口、首页、建模投影、错误文案）。
+///
+/// 第一个参数是 [`OutletId`]（**不是** spec）：出口交代自己是谁，
+/// 轨道 / 格式 / 粒度在这里查表得到。
 ///
 /// 命中发布闸 ⇒ `Err(PipelineError::Leaked)`；**一个字节都不会产出**。
-pub fn render(spec: OutletSpec, product: Product<'_>) -> Result<OutletRender, PipelineError> {
+pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, PipelineError> {
+    let spec = spec_of(id);
+    // ① 产物形态必须与出口身份相容（第 2 轮新增）。
+    //
+    // 这一条堵的是「换一个 ID 来关闸」：`Product::CustomerJson` 只能从
+    // `Track::Customer` 的出口进来 —— 拿 `OutletId::D1`（建模轨，不过闸）
+    // 去发布客户视图会被当场拒绝，而不是静默绕过闸门。
+    if !pairing_ok(spec, &product) {
+        return Err(PipelineError::render(
+            spec,
+            format!(
+                "出口 {} 的产物形态与轨道不相容（{}）：客户类产物只能从客户轨入口发布",
+                spec.id,
+                spec.track.as_str()
+            ),
+        ));
+    }
     match product {
         Product::CustomerHtml { view, sampling } => {
             let page = render_html(view, sampling);
@@ -593,28 +695,37 @@ pub fn render(spec: OutletSpec, product: Product<'_>) -> Result<OutletRender, Pi
 
         Product::ErrorText(raw) => {
             // 比闸更保守：命中就是**整句换掉**（`safe_error` 的既有语义）。
-            Ok(publish_error_text(spec, &raw))
+            //
+            // ⚠️ 干净文案**原样返回** —— 运维必须能看出「本服务绑的是哪个项目」
+            // （`tests/test_req107_scope_error_gate.rs` 的对照组钉住这一点）。
+            Ok(OutletRender::build(spec, crate::mcp::tools::safe_error(&raw), DropReport::default()))
         }
     }
 }
 
-/// 错误文案轨的唯一入口（Z1）。
+/// 产物形态 ↔ 轨道 的相容性（[`render`] 的第一道运行时不变式）。
 ///
-/// 比发布闸**更保守**：`safe_error` 命中时把**整句**换成通用说明
-/// （闸只拒发、不改写；错误路径必须给客户端一句人话，所以只能换）。
-///
-/// ⚠️ 干净文案**原样返回** —— 运维必须能看出「本服务绑的是哪个项目」
-/// （`tests/test_req107_scope_error_gate.rs` 的对照组钉住这一点）。
-pub fn publish_error_text(spec: OutletSpec, raw: &str) -> OutletRender {
-    let safe = crate::mcp::tools::safe_error(raw);
-    OutletRender::build(spec, safe, DropReport::default())
+/// | 产物 | 允许的轨道 | 理由 |
+/// | --- | --- | --- |
+/// | `CustomerHtml` / `CustomerJson` / `Overview` | **只能** `Customer` | 客户视图必须过闸；换 ID 不能关闸 |
+/// | `Text` | `Customer`（过闸）或 `D1`（建模豁免） | 首页整页 / 建模投影 |
+/// | `ErrorText` | **只能** `ErrorPath` | 只有 Z1 走 `safe_error` 改写语义 |
+fn pairing_ok(spec: OutletSpec, product: &Product<'_>) -> bool {
+    match product {
+        Product::CustomerHtml { .. } | Product::CustomerJson(_) | Product::Overview(_) => {
+            spec.track == Track::Customer
+        }
+        Product::Text(_) => spec.track == Track::Customer || spec.id == "D1",
+        Product::ErrorText(_) => spec.track == Track::ErrorPath,
+    }
 }
 
 /// 结构化轨的唯一入口（HTTP `/api/graph` `/api/node`、MCP 全部响应、首页不由它走）。
 ///
 /// 命中 ⇒ `Err`，消息**逐字**取自 `mcp::tools::guard` —— 所以 500 正文与
 /// `isError: true` 的文案在收口前后**一个字节都不变**。
-pub fn publish_value(spec: OutletSpec, value: Value) -> Result<GuardedValue, PipelineError> {
+pub fn publish_value(id: OutletId, value: Value) -> Result<GuardedValue, PipelineError> {
+    let spec = spec_of(id);
     if spec.track.gated() {
         // ⛔ 判据只复用，不复制：`guard` 的内部实现一行没改。
         match crate::mcp::tools::guard(&value) {
@@ -707,10 +818,15 @@ pub struct Outlet {
     /// 该出口的**写出点**或**管线调用点**的唯一源码子串。
     ///
     /// ⚠️ 已知边界：它是拼写级的。判据钉的是「登记与源码没有漂移」，
-    /// 钉不住「语义等价改写」—— 补强在类型层与源码否定式。
+    /// 钉不住「语义等价改写」—— 补强在类型层与源码枚举
+    /// （`tests/test_req107_source_enumeration.rs` 做**源码 → 登记表**方向的枚举，
+    /// 每个写点/`OutletId::` 记号都必须逐个落在登记集合里）。
     pub call_site: &'static str,
     /// 出口声明（格式 + 轨道 + 闸粒度）。
-    pub spec: OutletSpec,
+    ///
+    /// ⛔ **私有字段**（第 2 轮）：出口连一个 `OutletSpec` 的值都拿不到，
+    /// 更谈不上去改它的 `track`。读轨道请走 `track()` / `format()` / `granularity()`。
+    spec: OutletSpec,
     pub enforcement: Enforcement,
     /// 豁免依据。**建模轨必须非空**（AC-007：「豁免不许沉默」）。
     pub exemption_reason: &'static str,
@@ -718,10 +834,14 @@ pub struct Outlet {
 
 impl Outlet {
     pub fn track(&self) -> Track {
-        self.spec.track
+        self.spec.track()
     }
     pub fn format(&self) -> Format {
-        self.spec.format
+        self.spec.format()
+    }
+    /// 闸粒度（卡点②的裁定结果）。只读 —— 出口无权改。
+    pub fn granularity(&self) -> Granularity {
+        self.spec.granularity()
     }
 }
 
@@ -740,7 +860,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "C1",
         path: "src/cli.rs",
         call_site: "crate::cli::emit_domain_text(html)",
-        spec: OutletSpec::C1,
+        spec: spec_of(OutletId::C1),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -748,8 +868,8 @@ pub const OUTLETS: &[Outlet] = &[
         id: "C2",
         path: "src/cli.rs",
         // C2 与 C1 共用**同一份**产物（`html`），只是写到文件而不是 stdout。
-        call_site: "std::fs::write(p, html)",
-        spec: OutletSpec::C2,
+        call_site: "std::fs::write(p, html.as_str())",
+        spec: spec_of(OutletId::C2),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -757,7 +877,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "C3",
         path: "src/cli.rs",
         call_site: "crate::cli::emit_domain_line(json);",
-        spec: OutletSpec::C3,
+        spec: spec_of(OutletId::C3),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -765,7 +885,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "C4",
         path: "src/cli.rs",
         call_site: "crate::cli::emit_domain_text(text);",
-        spec: OutletSpec::C4,
+        spec: spec_of(OutletId::C4),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -773,7 +893,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "C5",
         path: "src/cli.rs",
         call_site: "crate::cli::emit_domain_line(json_text);",
-        spec: OutletSpec::C5,
+        spec: spec_of(OutletId::C5),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -781,24 +901,24 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "H1",
         path: "src/server/http.rs",
-        call_site: "OutletSpec::H1",
-        spec: OutletSpec::H1,
+        call_site: "Ok(Html(rendered.into_text()))",
+        spec: spec_of(OutletId::H1),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "H2",
         path: "src/server/http.rs",
-        call_site: "OutletSpec::H2",
-        spec: OutletSpec::H2,
+        call_site: "Ok(Json(rendered.into_value()))",
+        spec: spec_of(OutletId::H2),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "H3",
         path: "src/server/http.rs",
-        call_site: "OutletSpec::H3",
-        spec: OutletSpec::H3,
+        call_site: "Ok(Json(rendered.into_value()))",
+        spec: spec_of(OutletId::H3),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -806,40 +926,40 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "M1",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::MCP_TOOLS",
-        spec: OutletSpec::MCP_TOOLS,
+        call_site: "p::tool_call_result(&text, structured)",
+        spec: spec_of(OutletId::McpTools),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "M2",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::MCP_TOOLS",
-        spec: OutletSpec::MCP_TOOLS,
+        call_site: "p::tool_call_result(&text, structured)",
+        spec: spec_of(OutletId::McpTools),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "M3",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::MCP_TOOLS",
-        spec: OutletSpec::MCP_TOOLS,
+        call_site: "p::tool_call_result(&text, structured)",
+        spec: spec_of(OutletId::McpTools),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "M4",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::MCP_TOOLS",
-        spec: OutletSpec::MCP_TOOLS,
+        call_site: "p::tool_call_result(&text, structured)",
+        spec: spec_of(OutletId::McpTools),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
     Outlet {
         id: "M5",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::MCP_TOOLS",
-        spec: OutletSpec::MCP_TOOLS,
+        call_site: "p::tool_call_result(&text, structured)",
+        spec: spec_of(OutletId::McpTools),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -847,16 +967,16 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "D1",
         path: "src/cli.rs",
-        call_site: "OutletSpec::D1",
-        spec: OutletSpec::D1,
+        call_site: "crate::cli::emit_domain_line(mv_json);",
+        spec: spec_of(OutletId::D1),
         enforcement: Enforcement::Pipeline,
-        exemption_reason: "建模术语在建模轨是**要被裁决的内容**，不是泄露（cli.rs 的 `--model-view` 分支原话 + `model_view.rs` 顶部）；轨道由 OutletSpec 声明，闸按声明不执行。",
+        exemption_reason: "建模术语在建模轨是**要被裁决的内容**，不是泄露（cli.rs 的 `--model-view` 分支原话 + `model_view.rs` 顶部）；轨道由 `spec_of(OutletId::D1)` 查表声明，闸按查表结果不执行。",
     },
     Outlet {
         id: "D2",
         path: "src/cli.rs",
         call_site: "crate::cli::emit_domain_text_with(&text,",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`review show` 是 FDE 通道的建模投影：每行无条件打 `key=`，过客户闸会恒命中。改用结构化溯源自检（`audit_fde_channel`），与词表**无交集**。",
     },
@@ -864,7 +984,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D3",
         path: "src/cli.rs",
         call_site: "× 2 轨 → accepted",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`review decide --accept-all` 打的是裁决结果（提案 id / 条目数 / 轨道名）—— 建模动作回执，不是客户视图。",
     },
@@ -872,7 +992,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D4",
         path: "src/cli.rs",
         call_site: "item {} 的 {} 轨 → {}",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`review decide --item/--track` 同上：单条裁决回执（序号 / 轨道 / 决定），零客户视图字段。",
     },
@@ -880,7 +1000,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D5",
         path: "src/cli.rs",
         call_site: "提案 {alias} 已导入，共",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`propose import` 打的是导入回执（别名 / 条目数 / 条目 kind + target_key）——target_key 是建模 key 本身，属建模轨内容。",
     },
@@ -888,7 +1008,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D6",
         path: "src/cli.rs",
         call_site: "被拦：{} —— {}",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`proposal apply` 的**被拦清单**是建模轨的诊断（被哪条领域校验挡住），payload 未转义是已登记缺陷（`cli.rs` 自陈 + REQ-078 G-6「载荷面=有」）。",
     },
@@ -896,7 +1016,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D7",
         path: "src/cli.rs",
         call_site: "提案已应用 → v{seq}",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`proposal apply` 成功回执（新版本号 + id）—— 建模动作结果，零客户视图字段。",
     },
@@ -904,7 +1024,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "D8",
         path: "src/cli.rs",
         call_site: "应用失败：{e}",
-        spec: OutletSpec::D1,
+        spec: MODELING,
         enforcement: Enforcement::DeclaredOnly,
         exemption_reason: "`proposal apply` 失败回执（领域错误原文）。⚠️ 失败也写 stdout 是既有行为，本轮不改（改它属于另一个需求的 stdout/stderr 口径统一）。",
     },
@@ -913,7 +1033,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I1",
         path: "src/cli.rs",
         call_site: "概念声明 v{} 已导入提案",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：概念声明导入回执（指纹 / 规则 / 提案别名），运维面。",
     },
@@ -921,7 +1041,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I2",
         path: "src/cli.rs",
         call_site: "内容指纹\\t{d}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`concept digest` 的指纹/版本/契约三行，校验工具输出。",
     },
@@ -929,7 +1049,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I3",
         path: "src/cli.rs",
         call_site: "项目 {} id={}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`project new` 回执（项目名 + uuid）。",
     },
@@ -937,7 +1057,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I4",
         path: "src/cli.rs",
         call_site: "{n}\\t{i}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`project list` 的 TSV。",
     },
@@ -945,7 +1065,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I5",
         path: "src/cli.rs",
         call_site: "新版本 seq={} id={}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`version new` 回执。",
     },
@@ -953,7 +1073,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I6",
         path: "src/cli.rs",
         call_site: "v{}\\t{}\\t{}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`version list` 的 TSV（序号 / id / 冻结状态）。",
     },
@@ -961,7 +1081,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I7",
         path: "src/cli.rs",
         call_site: "已冻结 v{}",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`version freeze` 回执。",
     },
@@ -969,7 +1089,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I8",
         path: "src/cli.rs",
         call_site: "无差异",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`ontology diff` 无差异。BA 已裁定（R1）：diff 归**建模轨**、豁免发布闸；换行不转义登记为已知限制（R3）。",
     },
@@ -977,7 +1097,7 @@ pub const OUTLETS: &[Outlet] = &[
         id: "I9",
         path: "src/cli.rs",
         call_site: "共 {} 处变化：",
-        spec: OutletSpec::INTERNAL,
+        spec: INTERNAL,
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部：`ontology diff` 有差异（逐条 `Change::summary()`）。同上 R1/R3。",
     },
@@ -985,24 +1105,24 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
-        call_site: "OutletSpec::Z1",
-        spec: OutletSpec::Z1,
+        call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
+        spec: spec_of(OutletId::Z1),
         enforcement: Enforcement::Pipeline,
         exemption_reason: "错误路径：不过闸，但走 `safe_error`（命中即整句换掉），比闸更保守。",
     },
     Outlet {
         id: "Z2",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::Z2",
-        spec: OutletSpec::Z2,
+        call_site: "p::encode_result(id, rendered.into_value())",
+        spec: spec_of(OutletId::Z2),
         enforcement: Enforcement::Pipeline,
         exemption_reason: "静态文本：AC-008 裁定**纳入运行时闸**（见 .feature/design-req107.md §五）。",
     },
     Outlet {
         id: "Z3",
         path: "src/mcp/serve.rs",
-        call_site: "OutletSpec::Z3",
-        spec: OutletSpec::Z3,
+        call_site: "p::encode_result(id, rendered.into_value())",
+        spec: spec_of(OutletId::Z3),
         enforcement: Enforcement::Pipeline,
         exemption_reason: "静态文本 + 动态项目名/版本：AC-008 裁定**纳入运行时闸**（测试守卫枚举不了动态部分）。",
     },
@@ -1089,8 +1209,9 @@ mod tests {
         assert!(line.contains("样例订单/客户编号"), "运维面必须带原名：{line}");
     }
 
-    /// 声明为「建模」的产物不会被闸拦住；同一份产物声明为「客户」就必须被拦。
-    /// 这是 AC-007「误标要能被观察到」的最小自证。
+    /// 声明为「建模」的产物不会被闸拦住；同一份产物走**客户轨**就必须被拦。
+    /// 这是 AC-007「误标要能被观察到」的最小自证（第 2 轮起：轨道由 `OutletId` 查表，
+    /// 所以在 crate 内也要用两条不同的 ID 表达「同一份产物、不同轨道」）。
     #[test]
     fn mislabeling_a_modeling_product_turns_it_red() {
         let modeling = serde_json::json!({ "key": "样例主键", "cardinality": "1:N" });
@@ -1098,15 +1219,60 @@ mod tests {
         // 前提自检：这份产物**确实**含建模术语，否则下面两条是空转。
         assert!(!scan_modeling_terms(&text).is_empty());
 
-        let ok = render(OutletSpec::D1, Product::Text(text.clone()));
+        let ok = render(OutletId::D1, Product::Text(text.clone()));
         assert!(ok.is_ok(), "建模轨不该被闸拦住");
+        assert_eq!(ok.unwrap().as_str(), text, "建模轨必须逐字节原样输出");
 
-        let mut mislabelled = OutletSpec::D1;
-        mislabelled.track = Track::Customer;
-        let err = render(mislabelled, Product::Text(text)).expect_err("误标为客户类必须被拦");
+        // 干净文本走客户轨 ⇒ 放行（证明「客户轨」不是恒红）。
+        let clean = r#"{"name":"样例客户"}"#.to_string();
+        assert!(render(OutletId::C3, Product::Text(clean)).is_ok());
+
+        let err = render(OutletId::C3, Product::Text(text.clone()))
+            .expect_err("客户轨遇到建模术语必须被拦（轨道决定，不是出口决定）");
         assert!(err.is_leak());
         assert!(!err.message().is_empty());
         assert!(!err.message().contains("主键"), "错误文案不许回显词条：{}", err.message());
+
+        // ⭐ 第 2 轮：**换 ID 关闸**这条路也被堵住 —— 客户类产物不能从建模轨进来。
+        let cv = crate::domain::view::CustomerView { objects: vec![], relations: vec![] };
+        let mismatch = render(OutletId::D1, Product::CustomerJson(&cv))
+            .expect_err("客户类产物不许从建模轨出口发布（换 ID 不能关闸）");
+        assert!(
+            !mismatch.is_leak(),
+            "这一条应当报「产物形态与轨道不相容」，而不是冒充发布闸命中"
+        );
+        assert!(mismatch.message().contains("不相容"), "{}", mismatch.message());
+    }
+
+    /// ⭐ 第 2 轮 · `spec_of` 的轨道必须与登记表一致（同一份事实，两个读者）。
+    #[test]
+    fn spec_table_and_registry_agree_on_track() {
+        for (id, want) in [
+            (OutletId::C1, Track::Customer),
+            (OutletId::C5, Track::Customer),
+            (OutletId::H1, Track::Customer),
+            (OutletId::H3, Track::Customer),
+            (OutletId::Z1, Track::ErrorPath),
+            (OutletId::Z2, Track::Static),
+            (OutletId::Z3, Track::Static),
+            (OutletId::D1, Track::Modeling),
+        ] {
+            assert_eq!(spec_of(id).track(), want, "{} 的轨道查表结果不对", id.code());
+            let o = outlet(id.code()).unwrap_or_else(|| panic!("登记表里没有 {}", id.code()));
+            assert_eq!(o.track(), want, "登记表与 spec_of 对 {} 的轨道说法不一致", id.code());
+        }
+        // M1–M5 共用**一个** ID（登记表里是五条，逐条对账）。
+        assert_eq!(spec_of(OutletId::McpTools).track(), Track::Customer);
+        for i in 1..=5 {
+            let o = outlet(&format!("M{i}")).expect("登记表里必须有 M1–M5");
+            assert_eq!(o.track(), Track::Customer, "M{i} 的轨道必须与 spec_of 一致");
+        }
+        // C2 复用 C1 的产物与声明（QA N4：C2 没有自己的管线调用点）。
+        assert_eq!(spec_of(OutletId::C2).track(), Track::Customer);
+        assert_eq!(spec_of(OutletId::C2).format(), Format::Html);
+        // 逐节点粒度只有 H3 一条（卡点②的裁定）。
+        assert_eq!(spec_of(OutletId::H3).granularity(), Granularity::PerNode);
+        assert_eq!(spec_of(OutletId::H2).granularity(), Granularity::Whole);
     }
 
     /// 装配期前处理：过闸前就减掉标识符形态的属性，真·建模术语**不吃掉**。

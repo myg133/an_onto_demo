@@ -11,7 +11,7 @@
 //! # 裁定：**运行时闸**（AC-008 的二选一）
 //!
 //! `tools/list` 与 `initialize` 的整段 result 都经 `pipeline::publish_value`
-//! （`OutletSpec::Z2` / `Z3`）。理由见 `.feature/design-req107.md` §五：
+//! （`OutletId::Z2` / `Z3`）。理由见 `.feature/design-req107.md` §五：
 //! ① 「MCP 的全部外送」真的收在一个函数上，AC-003 的漏接判据自动覆盖它们；
 //! ② 静态文本今天干净 ⇒ 零可见变化；③ 测试守卫**枚举不了** Z3 里的动态部分
 //! （项目名 + 版本号），只做测试守卫等于只守了一半。
@@ -185,7 +185,7 @@ fn test_req107_initialize_instructions_template_body_is_guarded() {
         "项目名带守门词时 instructions 漏了：{dirty_text}"
     );
 
-    // ④ 响应半：`initialize` 的整段 result 走运行时闸（`OutletSpec::Z3`）。
+    // ④ 响应半：`initialize` 的整段 result 走运行时闸（`OutletId::Z3`）。
     let r = reply(
         &ctx(),
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
@@ -203,8 +203,8 @@ fn test_req107_initialize_instructions_template_body_is_guarded() {
     let serve = common::strip_comments(&common::read_source("src/mcp/serve.rs"));
     let serve_code = serve.split("#[cfg(test)]").next().unwrap_or("").to_string();
     for (branch, spec) in [
-        ("\"tools/list\" =>", "OutletSpec::Z2"),
-        ("\"initialize\" =>", "OutletSpec::Z3"),
+        ("\"tools/list\" =>", "OutletId::Z2"),
+        ("\"initialize\" =>", "OutletId::Z3"),
     ] {
         let at = serve_code
             .find(branch)
@@ -248,7 +248,7 @@ fn test_req107_z4_index_template_is_covered_by_tests_and_the_homepage_gate() {
     let end = tail[1..].find("\nasync fn ").map(|n| n + 1).unwrap_or(tail.len());
     let index_fn = &tail[..end];
     assert!(
-        index_fn.contains("OutletSpec::H1"),
+        index_fn.contains("OutletId::H1"),
         "H1 没有经由管线：{index_fn}"
     );
     assert!(
