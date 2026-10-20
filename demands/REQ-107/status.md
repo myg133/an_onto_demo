@@ -17,8 +17,8 @@
 - [x] `demands/REQ-107/demand.md` —— 范围 / 不做 / 三个卡点 / 红线纪律 / 交付物
 - [x] `.feature/manifest.json` —— worktree 分配登记
 - [x] `demands/REQ-107/acceptance.md` —— **基于两份独立摸底清单**（HTTP/MCP 一份、CLI/HTML 一份），非凭印象
-- [ ] QA 生成测试用例
-- [ ] 派 Dev 编码
+- [x] QA 生成测试用例（29 条，P0=17；覆盖矩阵 6 条如实标注「无法机判」）
+- [ ] 派 Dev 编码 —— **已派**（2026-10-20 16:20，分 5 阶段，先出设计再写代码）
 
 ## 摸底结论（2026-10-20，两份独立 explore）
 
@@ -48,3 +48,10 @@
 | 后果 | **本机无法跑全量 `cargo test`**（62 suite / 846 passed 的基线无法在此复核）；单个 `--test <name>` 与 `--lib` 可跑 |
 | 派单要求 | Dev **不许伪造全量数字**（纪律 E / L）。必须在交付物里写明「全量基线本机不可复核」并给出它能跑的那部分实测结果 |
 
+
+## 用例与 AC 的互校（QA 回来后补）
+
+- QA 报了 **4 个 AC 缺陷**，已全部裁定并写入 `acceptance.md` §七 A1–A7：
+  ① 计数不闭合（34 vs 33，差 Z4，Z4 不是出口）；② AC-005 与 AC-006 冲突（Z1 是唯一允许的可见变化）；
+  ③ 既有 `test_property_filter.rs:341` 必红 ⇒ **改写不许删**；④ `property_filter.rs:139` 与 REQ-103 的边界（两套否定式断言各管一段）。
+- QA 指出三条「最可能被做成假绿」：TC-016（golden 用改后代码生成 ⇒ diff 恒空）、TC-010（M3 盲区）、TC-023（`description` 今天恰好干净 ⇒ `assert!(!is_empty())` 零判别力）。已进 Dev briefing。
