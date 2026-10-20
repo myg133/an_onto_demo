@@ -1,0 +1,60 @@
+{
+  "objects": [
+    {
+      "name": "样例客户",
+      "note": "样例客户这张表的用途说明",
+      "belongs_to": null,
+      "aliases": [
+        "样例甲方"
+      ],
+      "properties": [
+        {
+          "name": "客户编号ID",
+          "note": null,
+          "required": true,
+          "sample": "样例-001"
+        },
+        {
+          "name": "下单时间",
+          "note": "样例客户第一次下单的时间",
+          "required": false,
+          "sample": null
+        }
+      ]
+    },
+    {
+      "name": "样例订单",
+      "note": null,
+      "belongs_to": "样例客户",
+      "aliases": [],
+      "properties": [
+        {
+          "name": "金额",
+          "note": null,
+          "required": true,
+          "sample": "100"
+        },
+        {
+          "name": "样例属性说明",
+          "note": null,
+          "required": false,
+          "sample": null
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "样例客户",
+      "to": "样例订单",
+      "how_many": "一对多",
+      "meaning": "拥有"
+    },
+    {
+      "from": "样例订单",
+      "to": "样例客户",
+      "how_many": "多对一",
+      "meaning": "属于"
+    }
+  ]
+}

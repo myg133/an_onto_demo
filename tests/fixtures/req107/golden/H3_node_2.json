@@ -1,0 +1,1 @@
+{"aliases":[],"belongs_to":"样例客户","name":"样例订单","note":null,"properties":[{"name":"金额","note":null,"required":true,"sample":"100"},{"name":"样例属性说明","note":null,"required":false,"sample":null}]}

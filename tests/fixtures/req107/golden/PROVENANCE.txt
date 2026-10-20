@@ -1,0 +1,14 @@
+b714f48
+# REQ-107 · AC-005 golden 的来源与生成方式（⛔ 不要手改本文件，也不要手改同目录的 golden）
+#
+# 这些文件产自**基线 worktree**，不是用收口后的代码生成的：
+#   git worktree add --detach .review-workspace/req107/base b714f48
+#   copy tests/common/req107.rs + tests/test_req107_zero_visible_change.rs into it
+#   REQ107_OUT=<abs>/.review-workspace/req107/before cargo test --test test_req107_zero_visible_change -- --nocapture req107_write_golden
+#
+# 收口后的同一套生成器产出 after/，git diff --no-index before after 为**空**（逐字节相同）。
+# 每份的 sha256 在 SHA256SUMS 里，判据会与文件内容互校（防手改一个小字符让它「对上」）。
+#
+# C2 复用 C1_html.txt：ontology show --html --out 与 stdout 分支写的是**同一份** page.html。
+# Z1（GET /api/graph?project=wrong&version=2）**不在**本 golden 集：AC-006 要求它的 400 正文变化，
+# 而 AC §七 A2 裁定那是**唯一**允许的可见变化。
