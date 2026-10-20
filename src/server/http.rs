@@ -172,19 +172,39 @@ fn err(status: StatusCode, msg: &str) -> Response {
 
 /// 过守门器再发出去。
 ///
-/// ⛔ 守门器**复用 `mcp::tools::guard` 本身** —— 不是抄一份判据。
-/// 抄一份就会漂：MCP 那条路放过的东西，这条路可能挡住（或反过来）。
-/// 命中时 `guard` 把具体词条写 stderr、返回不含词条的通用文案，
-/// 所以守门词不会从错误响应里漏出去。
-fn guarded<T: serde::Serialize>(value: &T) -> Result<Json<serde_json::Value>, Response> {
-    let v = serde_json::to_value(value)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("生成响应时出错：{e}")))?;
-    match crate::mcp::tools::guard(&v) {
-        Ok(text) => Ok(Json(serde_json::from_str(&text).unwrap_or(json!({})))),
-        Err(msg) => {
+/// # ⚠️ REQ-107：本函数已并入管线，**不再**在出口层判
+///
+/// 收口前这里是 `guarded()`：出口自己调 `mcp::tools::guard` 决定「发不发」。
+/// 现在出口只声明「客户 / JSON / 整份」([`OutletSpec::H2`] / [`OutletSpec::H3`])，
+/// 判定在 [`crate::domain::pipeline::publish_value`] 里。
+/// ⛔ 守门器本体仍然只复用 `mcp::tools::guard`，**不是**抄一份。
+///
+/// # 两种 `Err` 分开说
+///
+/// - **闸命中**：`guard` 已经把命中的词条打到 stderr 了；这里只说「哪个出口」，
+///   响应正文用 `guard` 的 `Err` 文案（按设计不含任何建模术语）；
+/// - **序列化失败**：那是 bug，不是数据问题 —— 文案必须说清是「生成响应时出错」，
+///   不要冒充成「发布闸命中」（冒充会让运维去查数据，而问题在代码里）。
+fn publish_json(
+    spec: crate::domain::pipeline::OutletSpec,
+    value: Result<serde_json::Value, serde_json::Error>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let value = value.map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("生成响应时出错：{e}"),
+        )
+    })?;
+    match crate::domain::pipeline::publish_value(spec, value) {
+        Ok(rendered) => Ok(Json(rendered.into_value())),
+        Err(e) if e.is_leak() => {
             // `guard` 已经把命中的词条打到 stderr 了；这里只说「哪个出口」。
             eprintln!("✗ 只读图服务守门器命中建模术语，已拒绝出图。");
-            Err(err(StatusCode::INTERNAL_SERVER_ERROR, &msg))
+            Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message()))
+        }
+        Err(e) => {
+            eprintln!("✗ 只读图服务生成响应失败：{}", e.message());
+            Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message()))
         }
     }
 }
@@ -220,13 +240,22 @@ fn check_scope(
         )
     })?;
     if project != state.project.as_ref() || version != state.version {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
+        // ⭐ REQ-107 · AC-006（Z1）：项目名**不再裸拼**进 400 正文。
+        //
+        // 收口前这里是 `format!("本服务只对外提供 {} …", state.project)` 直接走 `err()`：
+        // 无闸、无 `safe_error`、无转义 —— 同一个项目名在首页被拒发，
+        // 在这里却能一个字不差地读回来。
+        //
+        // 现在走管线的**错误路径**（[`crate::domain::pipeline::publish_error_text`]）：
+        // 命中守门词 ⇒ 整句换成通用说明；干净项目名 ⇒ 原样回显（运维要能看出绑的是哪一份）。
+        let rendered = crate::domain::pipeline::publish_error_text(
+            crate::domain::pipeline::OutletSpec::Z1,
             &format!(
                 "本服务只对外提供 {} 第 {} 版这一份内容，别的一概不给。",
                 state.project, state.version
             ),
-        ));
+        );
+        return Err(err(StatusCode::BAD_REQUEST, rendered.as_str()));
     }
     Ok(())
 }
@@ -236,7 +265,11 @@ async fn get_graph(
     Query(q): Query<BTreeMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, Response> {
     check_scope(&q, &state)?;
-    guarded(&*state.graph)
+    // ⭐ REQ-107 · 出口 H2：声明「客户 / JSON / **整份**」—— 发不发由管线判。
+    publish_json(
+        crate::domain::pipeline::OutletSpec::H2,
+        serde_json::to_value(&*state.graph),
+    )
 }
 
 async fn get_node(
@@ -257,7 +290,11 @@ async fn get_node(
             "图里没有这个对象，刷新一下页面就好。",
         )
     })?;
-    guarded(node)
+    // ⭐ REQ-107 · 出口 H3：声明「客户 / JSON / **逐节点**」—— 一个坏节点只拒那一个。
+    publish_json(
+        crate::domain::pipeline::OutletSpec::H3,
+        serde_json::to_value(node),
+    )
 }
 
 /// 首页。
@@ -282,7 +319,22 @@ async fn get_node(
 /// 按设计就不含任何建模术语（命中词只进 stderr）。
 async fn index(State(state): State<AppState>) -> Result<Html<String>, Response> {
     match crate::server::page::index_html(&state.project, state.version) {
-        Ok(html) => Ok(Html(html)),
+        Ok(html) => {
+            // ⭐ REQ-107 · 出口 H1：整页在管线里过闸。
+            //
+            // 扫的是**渲染之后的整页**：模板本体（Z4）+ 已转义的项目名 + 静态文案
+            // 一次覆盖 —— 这是 AC-008 里 Z4「要不要运行时过闸」的答案：
+            // 不单独给模板来一遍（那会变成第二份判据遍历），而是让首页这条出口
+            // 把**最终字节**交给同一道闸。
+            match crate::domain::pipeline::render(
+                crate::domain::pipeline::OutletSpec::H1,
+                crate::domain::pipeline::Product::Text(html),
+            ) {
+                Ok(rendered) => Ok(Html(rendered.into_text())),
+                Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message())),
+            }
+        }
+        // 项目名的闸在 `page.rs` 里（与 MCP 侧 `instructions` 同一道）。
         Err(msg) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, &msg)),
     }
 }
@@ -419,15 +471,14 @@ pub fn state_from_view(
     // **`serve` 与 `server::http::tests` 都调它，没有第二份接线** ——
     // 放这里，生产接线与测试接线**不可能分叉**。
     //
-    // ⚠️ 剔除发生在**守门器（`guarded`）之前**，守门器**一行没改**：
+    // ⚠️ 剔除发生在**守门器（管线）之前**，守门器**一行没改**：
     // `demo3` 第 2 版有 3 个节点因为属性文案带 `pk` / `key` 被逐节点判拒发（HTTP 500），
     // 剔除后这 4 条属性不再进节点视图 ⇒ 91 个节点全部打得开；
     // 而真·建模术语剔不掉，照旧到达守门器、照旧拒发。
-    let filtered = crate::domain::property_filter::filter_view(view);
-    let report = filtered.report();
-    if !report.is_empty() {
-        eprintln!("{report}");
-    }
+    //
+    // ⭐ REQ-107：前处理与它的 stderr 报告**都收进管线**（`prepare_view`）——
+    // 三条出口（JSON / HTTP / MCP）共用同一份前处理与同一种报告形状。
+    let filtered = crate::domain::pipeline::prepare_view(view);
     let view = &filtered.view;
 
     let graph = crate::domain::graph::project(view);

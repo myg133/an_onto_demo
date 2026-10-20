@@ -22,7 +22,7 @@ use crate::db::snapshot_store::PgStore;
 use crate::domain::diff::diff_snapshots;
 use crate::domain::review::{summarize, Decision, Track};
 use crate::domain::snapshot::{ExtractedBy, ProvenanceSource};
-use crate::domain::view::{scan_modeling_terms, SnapshotView};
+use crate::domain::view::SnapshotView;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use serde_json::Value;
@@ -468,6 +468,14 @@ pub const WIRING_CLOSURE: &str = "closure";
 pub const WIRING_SAME_BINDING: &str = "same_binding";
 /// 接线形态：刻意不过判据。
 pub const WIRING_NONE: &str = "none";
+/// ⭐ REQ-107 · 接线形态：写出的是**管线产出**的包装类型（`OutletRender`）。
+///
+/// 与前两种的区别是**判据的位置**：判据不再在出口里、也不再是「先判后写」两条语句，
+/// 而是**在管线内**执行一次，出口拿到的只能是过了闸的产物（类型层保证）。
+///
+/// ⇒ 判据（`check_site`）对这一族要问的不是「判据收到了什么」，
+/// 而是「写出去的绑定是不是从管线产物派生的」「同一函数里还有没有判据直调」。
+pub const WIRING_PIPELINE: &str = "pipeline";
 
 /// `review show` 抬头前缀的**模板** —— 前缀原文的唯一事实源。
 pub const REVIEW_SHOW_PREFIX_TEMPLATE: &str = "提案 {alias} 状态={status}\n";
@@ -514,67 +522,65 @@ pub const DOMAIN_PRINT_SITES: &[DomainPrintSite] = &[
     DomainPrintSite {
         enclosing_fn: "ontology_cmd",
         command: "ontology show --html",
-        wiring: WIRING_SAME_BINDING,
-        binding: "page.html",
+        wiring: WIRING_PIPELINE,
+        binding: "html",
         prefix_template: "",
         trailing_newline: false,
-        judged_by: &["scan_modeling_terms"],
+        // ⭐ REQ-107：判据在 `domain::pipeline` 里执行一次，出口只拿到过了闸的产物
+        // （`OutletRender`，字段私有、无公开构造器）⇒ 出口层不再有判据调用。
+        judged_by: &[],
         projection_judged_by: &[],
         e2e_covered: true,
         note: "REQ-078 起由真进程字节比对覆盖（stdout 分支；--out 分支写同一份字节）。\
-         ⚠️ REQ-080 F-2：`same_binding` 族里「逐词元相等」**单独不足以**判红（shadowing 之后两边仍都叫 `page`）\
-         —— 判别力来自 REQ-080 加的「判据与写出之间不得重新绑定」那一格（逐站变异见 G-4）。\
-         独立的第二道防线是真进程字节比对；e2e 一旦被放松，这一族就只剩 G-1。",
+         ⭐ REQ-107 起改为 `pipeline` 接线：判据在管线内、出口只写管线产物 —— \
+         「判据收到的 == 打印出去的」由**类型**保证（`OutletRender` 造不出来），\
+         不再靠「两条语句读同一个绑定」这条约定。独立第二道防线仍是真进程字节比对。",
     },
     DomainPrintSite {
         enclosing_fn: "ontology_cmd",
         // ⚠️ 命令名就叫这个、不叫 `--json`：`ontology show` **没有** `--json` 标志，
         //    不带 `--html` / `--model-view` 时默认路径就直接打 JSON。
         command: "ontology show（默认 JSON）",
-        wiring: WIRING_SAME_BINDING,
+        wiring: WIRING_PIPELINE,
         binding: "json",
         prefix_template: "",
         trailing_newline: true,
-        judged_by: &["scan_modeling_terms"],
+        judged_by: &[],
         projection_judged_by: &[],
         e2e_covered: true,
         note: "REQ-078 起由真进程字节比对覆盖。\
-         ⚠️ REQ-080 F-2：`same_binding` 族里「逐词元相等」**单独不足以**判红\
-         （shadowing 之后两边仍都叫同一个名字）—— 判别力来自 REQ-080 加的\
-         「判据与写出之间不得重新绑定」那一格（逐站变异见 G-4）。\
-         独立的第二道防线是真进程字节比对；e2e 一旦被放松，这一族就只剩 G-1。",
+         ⭐ REQ-107 起改为 `pipeline` 接线：剔除（`filter_view`）与发布闸都在管线内，\
+         出口拿到的只能是过了闸的产物 ⇒ 「先判后写」不再是一条需要人记得的时序，\
+         而是一条**类型**（REQ-106 AC-001 的意图由结构承接）。\
+         独立第二道防线仍是真进程字节比对。",
     },
     DomainPrintSite {
         enclosing_fn: "ontology_cmd",
         command: "overview",
-        wiring: WIRING_SAME_BINDING,
+        wiring: WIRING_PIPELINE,
         binding: "text",
         prefix_template: "",
         trailing_newline: false,
-        judged_by: &["scan_modeling_terms"],
+        judged_by: &[],
         projection_judged_by: &[],
         e2e_covered: true,
         note: "REQ-078 起由真进程字节比对覆盖。\
-         ⚠️ REQ-080 F-2：`same_binding` 族里「逐词元相等」**单独不足以**判红\
-         （shadowing 之后两边仍都叫同一个名字）—— 判别力来自 REQ-080 加的\
-         「判据与写出之间不得重新绑定」那一格（逐站变异见 G-4）。\
-         独立的第二道防线是真进程字节比对；e2e 一旦被放松，这一族就只剩 G-1。",
+         ⭐ REQ-107 起改为 `pipeline` 接线（`Product::Overview`）：文本与 JSON 两条形态\
+         **都**在管线内过闸（保留收口前的过度拦截，AC-005 原样不动），出口只写其中一条。",
     },
     DomainPrintSite {
         enclosing_fn: "ontology_cmd",
         command: "overview --json",
-        wiring: WIRING_SAME_BINDING,
+        wiring: WIRING_PIPELINE,
         binding: "json_text",
         prefix_template: "",
         trailing_newline: true,
-        judged_by: &["scan_modeling_terms"],
+        judged_by: &[],
         projection_judged_by: &[],
         e2e_covered: true,
         note: "REQ-078 起由真进程字节比对覆盖。\
-         ⚠️ REQ-080 F-2：`same_binding` 族里「逐词元相等」**单独不足以**判红\
-         （shadowing 之后两边仍都叫同一个名字）—— 判别力来自 REQ-080 加的\
-         「判据与写出之间不得重新绑定」那一格（逐站变异见 G-4）。\
-         独立的第二道防线是真进程字节比对；e2e 一旦被放松，这一族就只剩 G-1。",
+         ⭐ REQ-107 起改为 `pipeline` 接线（`Product::Overview`）：与 `overview` 共用同一份\
+         产物与同一道闸，只有写出分支不同。",
     },
     DomainPrintSite {
         enclosing_fn: "proposal_cmd",
@@ -690,6 +696,39 @@ fn write_stdout(text: &str, newline: bool) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
         Err(e) => {
             eprintln!("✗ 渲染产物没能写进 stdout：{e}");
+            std::process::exit(EXIT_OPERATION_FAILED);
+        }
+    }
+}
+
+/// ⭐ REQ-107 · 客户类产物的**发布入口**（CLI 侧的唯一一处）。
+///
+/// # 为什么它不在 `ontology_cmd` 体内
+///
+/// 「拦不拦」是**判定**，在 `domain::pipeline` 里做；「命中后怎么办」是**政策**
+/// （stderr 报词条 + 退出码 `EXIT_LEAKED_MODELING_TERMS`，REQ-078 AC-004）。
+/// 两者分开，是为了让出口的函数体里**一条判红分支都没有** ——
+/// REQ-107 的 AC-002 直接扫出口函数体（`EXIT_LEAKED_MODELING_TERMS` /
+/// `std::process::exit(` / `if !leaked.is_empty()` 一律 0 命中）。
+///
+/// # 判据只**调用**、不复制
+///
+/// 本函数不含任何判据：它只把 `pipeline::render` 的 `Err` 映射成退出码。
+/// 命中清单（词条本身）只进 stderr，⛔ 不进 stdout（REQ-106 AC-002）。
+fn publish_customer(
+    spec: crate::domain::pipeline::OutletSpec,
+    product: crate::domain::pipeline::Product<'_>,
+) -> crate::domain::pipeline::OutletRender {
+    match crate::domain::pipeline::render(spec, product) {
+        Ok(rendered) => rendered,
+        Err(e) if e.is_leak() => {
+            let hits = e.hits();
+            eprintln!("⚠ 客户视图泄露了建模术语（出口 {}）：{:?}", e.outlet(), hits);
+            std::process::exit(EXIT_LEAKED_MODELING_TERMS);
+        }
+        Err(e) => {
+            // 渲染/序列化失败是 bug，不是数据问题 ⇒ 按操作性错误退出，不冒充「命中」。
+            eprintln!("✗ 出口 {} 的产物生成失败：{}", e.outlet(), e.message());
             std::process::exit(EXIT_OPERATION_FAILED);
         }
     }
@@ -1200,13 +1239,24 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 // 双轨状态机（`domain::review`）让 FDE 逐项裁决建模轨，
                 // 而建模轨**没有对应的视图**可看 —— 缺的就是这一环。
                 //
-                // ⚠️ **刻意不过 `scan_modeling_terms`**：建模术语在这一轨
-                // 是**要被裁决的内容**，不是泄露。客户视图的守门器只扫
-                // 客户视图那条路径，不受这里影响（两者是独立输出类型）。
+                // ⚠️ **刻意不过发布闸**：建模术语在这一轨是**要被裁决的内容**，
+                // 不是泄露。客户视图的守门器只扫客户视图那条路径，不受这里影响
+                // （两者是独立输出类型）。
+                //
+                // ⭐ REQ-107 · AC-007：这不是「因为它没调闸所以它是建模轨」——
+                // 轨道由 `OutletSpec::D1` **显式声明**（`Track::Modeling`），
+                // 是否过闸由**声明**决定。把同一份产物的 spec 换成 `Track::Customer`，
+                // 它当场就会被闸拦住（`pipeline` 的单元测试与
+                // `tests/test_req107_track_manifest.rs` 都钉住这一点）。
                 let mv = crate::domain::model_view::project_model_track(&snap);
-                // REQ-078：登记表里的站点，走唯一的出口。
                 let mv_json = serde_json::to_string_pretty(&mv)?;
-                crate::cli::emit_domain_line(&mv_json);
+                let rendered = publish_customer(
+                    crate::domain::pipeline::OutletSpec::D1,
+                    crate::domain::pipeline::Product::Text(mv_json),
+                );
+                // REQ-078：登记表里的站点，走唯一的出口。
+                let mv_json = rendered.as_str();
+                crate::cli::emit_domain_line(mv_json);
                 return Ok(());
             }
 
@@ -1235,95 +1285,55 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                         .map(|s| s.to_string())
                         .collect(),
                 };
-                let page = crate::domain::html_view::render_html(&cv, &sampling);
-
-                // 被剔除的对象**必须报出来** —— 静默少一个对象，
-                // 判读人会以为「系统里就这么些」，那是 fail-open。
-                if !page.skipped.is_empty() {
-                    eprintln!(
-                        "⚠ 有 {} 个对象名带建模用语，没上页面：{}",
-                        page.skipped.len(),
-                        page.skipped.join("、")
-                    );
-                }
-
-                // **HTML 也要过同一道守门**。JSON 干净不代表页面干净 ——
-                // 模板、CSS、静态文案都可能带进术语。fail-closed：
-                // 命中就拒绝出图，而不是「先写出去再说」。
-                let leaked_html = scan_modeling_terms(&page.html);
-                if !leaked_html.is_empty() {
-                    eprintln!("⚠ 客户视图页面泄露了建模术语：{leaked_html:?}");
-                    std::process::exit(crate::cli::EXIT_LEAKED_MODELING_TERMS);
-                }
-
-                if !page.skipped_props.is_empty() {
-                    eprintln!(
-                        "⚠ 有 {} 条属性带技术用语，没上页面（前 20 条）：{}",
-                        page.skipped_props.len(),
-                        page.skipped_props.iter().take(20).cloned().collect::<Vec<_>>().join("、")
-                    );
-                }
+                // ⭐ REQ-107 · 客户出口 C1/C2：前处理（页面级清洗）+ 发布闸 + 报告
+                // **全在管线里**。出口这一步只剩「声明格式（Html）」，不再自己
+                // 决定要不要剔、要不要拦、stderr 报什么形状。
+                //
+                // C1（stdout）与 C2（--out 文件）**共用同一份产物** `html` ——
+                // 它们写的是同一批字节，不是两份各自渲染的东西。
+                let rendered = publish_customer(
+                    crate::domain::pipeline::OutletSpec::C1,
+                    crate::domain::pipeline::Product::CustomerHtml {
+                        view: &cv,
+                        sampling: sampling.as_slice(),
+                    },
+                );
+                let html = rendered.as_str();
 
                 match &out {
                     Some(p) => {
-                        std::fs::write(p, &page.html)
+                        std::fs::write(p, html)
                             .with_context(|| format!("写不出 {p:?}"))?;
                         println!(
                             "已写出客户视图页面：{}（{} 个对象 · 抽样高亮 {} 个 · 自包含单文件，可离线打开）",
                             p.display(),
-                            cv.objects.len() - page.skipped.len(),
+                            cv.objects.len() - rendered.dropped_object_count(),
                             sampling.len()
                         );
                     }
                     // ⚠️ REQ-078：stdout 分支走登记表里那唯一的出口。
-                    // 判据（`scan_modeling_terms`，上面那条 fail-closed）与写出
-                    // 读的是**同一个绑定** `page.html` —— G-1 守卫钉住这一点。
-                    None => crate::cli::emit_domain_text(&page.html),
+                    // 写的是管线产物本身（`OutletRender` 里的字节），⛔ 没有二次加工。
+                    None => crate::cli::emit_domain_text(html),
                 }
                 return Ok(());
             }
 
-            // ── REQ-104 · 出口层属性级剔除 ──
+            // ── REQ-107 · 客户出口 C3（JSON）──
             //
-            // 判据在 `identifier_shape::has_raw_identifier`（全仓一份），本处**只调用**。
-            // 页面出口（上面的 `--html` 分支）在 `html_view` 里已有自己那套展示级清洗，
-            // **本轮不动它** —— 这里只管 JSON 出口。
+            // 收口前这里是「`filter_view` 剔除 → `to_string_pretty` → `scan` → 写出」
+            // 四步各自在本函数里；现在**全部**在 `domain::pipeline` 里，顺序
+            // （剔除 → 序列化 → 判定 → 才产出可写出的东西）由管线保证。
             //
-            // ⚠️ 剔除发生在**守门器之前**，守门器本身**一行没改**：
-            // 真·建模术语（`主键` / `基数` / `1:N`）不是标识符形态，剔不掉，
-            // 照旧到这里并照旧让整份视图 fail-closed（`exit 2`）。
-            let filtered = crate::domain::property_filter::filter_view(&cv);
-            let report = filtered.report();
-            if !report.is_empty() {
-                eprintln!("{report}");
-            }
-
-            let json = serde_json::to_string_pretty(&filtered.view)?;
-
-            // ── REQ-106 · AC-001：判定必须在写出**之前** ──
-            //
-            // REQ-106 之前这三行是「先 `emit_domain_line(&json)`、再判 `leaked`」：
-            // 命中建模术语时**完整视图已经逐字节落在 stdout 上**了，
-            // `exit 2` 只是个**事后信号**。于是
-            // `ontology show … > out.json` 照样写出一份带建模术语的完整视图 ——
-            // 「客户视图不得含建模术语」这条承诺在 JSON 出口上**可以绕过**。
-            //
-            // 现在顺序是 **判定 → 不通过则拒发 → 通过才写出**，
-            // 与同文件 `--html` 分支那条 fail-closed 同一纪律、同一时序。
-            let leaked = scan_modeling_terms(&json);
-            if !leaked.is_empty() {
-                // AC-002：诊断一律走 stderr。
-                //
-                // 命中清单**就是建模黑话本身**，写进 stdout 等于把它顺着重定向
-                // 一起发出去 —— 闸门挡住了正文，却从诊断里漏了后门
-                // （与 `mcp::tools::guard` 把词条只写 stderr 是同一条理由）。
-                // 这个出口在 stdout 上承诺的格式**只有一种**：客户视图 JSON。
-                eprintln!("⚠ 客户视图泄露了建模术语：{leaked:?}");
-                std::process::exit(crate::cli::EXIT_LEAKED_MODELING_TERMS);
-            }
+            // ⚠️ 剔除发生在**守门器之前**（管线的固定顺序）：真·建模术语
+            // （`主键` / `基数` / `1:N`）不是标识符形态、剔不掉，照旧到达闸门并被拒。
+            let rendered = publish_customer(
+                crate::domain::pipeline::OutletSpec::C3,
+                crate::domain::pipeline::Product::CustomerJson(&cv),
+            );
+            let json = rendered.as_str();
 
             // 走到这里 = 判定通过 ⇒ 才允许写出。stdout 上只会出现这一种格式。
-            crate::cli::emit_domain_line(&json);
+            crate::cli::emit_domain_line(json);
         }
         OntologyCmd::Overview { project, version, json } => {
             let p = s.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;
@@ -1343,24 +1353,23 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             let cv = crate::domain::view::project(&sv);
             let ov = crate::domain::overview::build_overview(&cv, &snap.concept_groups, &names);
 
-            // 与客户视图**同一道守门**：概念名是**新的**文案来源，
-            // 它可能带来建模术语或退化成 key 的名字。fail-closed。
-            let json_text = serde_json::to_string_pretty(&ov)?;
-            let leaked_json = scan_modeling_terms(&json_text);
-            let text = crate::domain::overview::render_overview_text(&ov);
-            let leaked_text = scan_modeling_terms(&text);
-            if !leaked_json.is_empty() || !leaked_text.is_empty() {
-                eprintln!(
-                    "⚠ 业务总览泄露了建模术语：{:?} / 文本 {:?}",
-                    leaked_json, leaked_text
-                );
-                std::process::exit(crate::cli::EXIT_LEAKED_MODELING_TERMS);
-            }
-
+            // ⭐ REQ-107 · 客户出口 C4/C5：两条形态**都**在管线内过闸
+            // （保留收口前的「任一条命中就整份不发」—— 那是既有行为，AC-005 原样保留），
+            // 出口只声明自己要哪一条形态。
             if json {
-                crate::cli::emit_domain_line(&json_text);
+                let rendered = publish_customer(
+                    crate::domain::pipeline::OutletSpec::C5,
+                    crate::domain::pipeline::Product::Overview(&ov),
+                );
+                let json_text = rendered.as_str();
+                crate::cli::emit_domain_line(json_text);
             } else {
-                crate::cli::emit_domain_text(&text);
+                let rendered = publish_customer(
+                    crate::domain::pipeline::OutletSpec::C4,
+                    crate::domain::pipeline::Product::Overview(&ov),
+                );
+                let text = rendered.as_str();
+                crate::cli::emit_domain_text(text);
             }
             if !ov.notes.is_empty() {
                 eprintln!(
