@@ -18,7 +18,18 @@
 //! | T6 | 全仓所有 `mod x;` 声明 | `MODULES`（新增模块即红） |
 //! | T7 | 管线模块自己的 stdout 宏 | 零命中（写出是出口的事） |
 //! | T8 | 每条 `Enforcement::Pipeline` 的**证据**（第 3 轮 F1） | 文件里必须存在携带 `OutletId::<X>` 的**管线调用**，且该调用与登记的写点**在同一个函数**里（或写点所在函数正是该调用的适配器） |
-//! | T9 | `Json(` / `Html(` 响应体的实参（第 3 轮 F4） | 必须是 `<绑定>.into_value()` / `<绑定>.into_text()`，且该绑定来自管线调用的 `Ok(..)` 分支 |
+//! | T9 | `Json(` / `Html(` 响应体的实参（第 3 轮 F4） | 必须是 `<绑定>.into_value()` / `<绑定>.into_text()`，且该绑定的**初始化式本身**就是管线调用（第 4 轮 B3②：不再接受「上游 20 行内出现过」） |
+//! | T10 | 全仓所有 `fn into_value` / `fn into_text` 的**定义**（第 4 轮 B3①） | 只许在管线模块里（本地 newtype 不能伪造 `.into_value()` 这个形状） |
+//!
+//! # 第 4 轮（`qa-review-3.md` / `acceptance.md §七 A14`）：B1–B5
+//!
+//! | 项 | 病 | 这一版的封法 |
+//! | --- | --- | --- |
+//! | **B1** | `Err` 通道：`Result<_, Response>` 的 `Err` 本来就是 `Response` ⇒ `return Err((StatusCode::OK, raw).into_response())` **4 行、签名不动**就吐客户图 | `.into_response(` 进 [`FORBIDDEN_MECHANISMS`]，五处错误通道用 [`INTO_RESPONSE_SITES`] **逐字钉住**（形状一改 / 多一处 / 少一处都红）；另禁 `StatusCode::OK`（Err 通道不许回 2xx） |
+//! | **B2** | [`prod()`] 在第一个 `#[cfg(test)]` 处**截断** ⇒ `http.rs` 文件尾部的生产代码不可见 | 改成**按花括号配对跳过** `#[cfg(test)]` 修饰的区间（区间抹成空行，行号 1:1） |
+//! | **B3** | 本地 newtype 伪造 `.into_value()` + `if false` 里的死调用 ⇒ 73/0 全绿 | ① T10（定义只在管线模块）；② T9 要求绑定初始化式本身就是管线调用 |
+//! | **B4** | 内联 `mod x { fn get_graph(…) }` 不被 `t6` 看见 | **方案 A**：内联 `mod` 的内容**展开纳入扫描**（`prod()` 不截断 + 全按文件文本扫），不额外禁写；理由见交付报告 §12.3 |
+//! | **B5** | `OUTLET_FNS` 是 `(文件, 函数名)` 集合 ⇒ 同名第二个函数免登记 | T5 里**同名重复定义即红**（[`duplicate_fns`]）—— 这也让 T8 的「按名字比同函数」重新成立 |
 //!
 //! ⛔ **不许写死文件清单**：T1/T4/T6 都从 `src/` 目录**现场遍历**，
 //! 新加的 `.rs` 自动进扫描范围（大多数情况下它没有登记 ⇒ 红）。
@@ -33,10 +44,14 @@
 //!   `encode_result(` / `fs::write(`）。**第 3 轮**已把「绕开全部构造」的三条路
 //!   （`std::io::stdout` / `write_all(` / `Response::builder` / `.body(` / `Body::from(`）
 //!   做成**否定式禁调**（[`FORBIDDEN_MECHANISMS`]，T1 内断言）——
-//!   它们不再「全绿」，而是**一出现就红**。
+//!   它们不再「全绿」，而是**一出现就红**。**第 4 轮**又把 `.into_response(` 与
+//!   `StatusCode::OK` 加了进去（B1）。
 //! - T2 只看「管线赋值 ↔ 写出」之间的窗口；「在管线调用**之前**用一个本地判据
 //!   决定要不要调管线」这种形态由 T5（fn 登记）与 T1（新写点）侧证，
-//!   **闭包形式的本地判据**不在 T5 覆盖内（诚实登记，见交付物 §11）。
+//!   **闭包形式的本地判据**不在 T5 覆盖内（诚实登记，见交付物 §12.7）。
+//! - `prod()` 跳过的是 `#[cfg(test)]` **区间**；`#[cfg(not(test))]` / `cfg_attr` 不在此列。
+//! - B1 的残余：`err(status, &raw)` 一类「错误通道携带任意文本」的形态**仍可表达**
+//!   （`err` 的第二个参数是 `&str`）—— 见交付报告 §12.7 的 P-2 残余，**不是已封堵**。
 
 mod common;
 
@@ -85,10 +100,106 @@ fn src_files() -> Vec<String> {
         .collect()
 }
 
-/// 生产代码（剥注释 + 砍掉 `#[cfg(test)]` 之后的部分）。
+/// 生产代码（剥注释 + **跳过** `#[cfg(test)]` 修饰的区间）。
+///
+/// # ⛔ 第 4 轮 B2：这里曾经是「截断」，不是「跳过」
+///
+/// 第 2–3 轮写的是 `raw.split("#[cfg(test)]").next()` ——
+/// **从第一个 `#[cfg(test)]` 起全部丢掉**。
+/// `src/server/http.rs` 的测试模块从 572 行一直到文件末尾（1246 行），
+/// 于是「把 handler 追加到文件末尾 + 一行 `.route(...)`」（5 行、零登记）
+/// 对 `t1` / `t3` / `t5` / `t8` / `t9` **全部不可见** ⇒ 13 目标 73/0 全绿。
+/// 这是 A13 明令禁止的「判据看着绿、其实没人管」的真空（`qa-review-3.md` §7-B2）。
+///
+/// # 现在的口径：花括号配对，跳过**区间**
+///
+/// - 只认 `#[cfg(test)]`（以及 `#[cfg(all(test, …))]`）**属性行**；
+///   从属性行起，按花括号配平找到它修饰的那个 item（`mod` / `impl` / `fn` …）的**结束行**；
+/// - 区间**抹成空行**（⛔ 不是删行）：`display` / `code` 两个视图的行号必须与源文件 1:1，
+///   `t8` 的「同函数」与 `t9` 的绑定定位都靠行号，删行会让所有报错行号漂移；
+/// - 配平用的是 [`blank_strings`] 视图（字符串里的 `{` / `}` 不算），
+///   否则测试模块里的一句 `"{}"` 就能把配平带偏。
+/// - 多个 `#[cfg(test)]` 模块、以及**嵌套**花括号（`mod` 里再套 `mod` / 闭包 / 结构体）
+///   都由配平处理，⛔ 不是「找第一个 `#[cfg(test)]` 就截断」，⛔ 也不是正则。
 fn prod(rel: &str) -> String {
-    let raw = strip_comments(&read_source(rel));
-    raw.split("#[cfg(test)]").next().unwrap_or("").to_string()
+    let display = strip_comments(&read_source(rel));
+    let lines: Vec<&str> = display.lines().collect();
+    let masked = blank_strings(&display);
+    let view: Vec<&str> = masked.lines().collect();
+    let mut skip = vec![false; lines.len()];
+
+    let mut i = 0usize;
+    while i < view.len() {
+        let t = view[i].trim_start();
+        let is_cfg_test = t.starts_with("#[cfg(test)]")
+            || t.starts_with("#[cfg(all(test,")
+            || t.starts_with("#[cfg(all(test)]");
+        if !is_cfg_test {
+            i += 1;
+            continue;
+        }
+        // 从属性行起配平花括号，直到「见过 `{` 且深度回到 0」。
+        let mut depth = 0i32;
+        let mut opened = false;
+        let mut end = None;
+        for (k, l) in view.iter().enumerate().skip(i) {
+            depth += l.matches('{').count() as i32;
+            depth -= l.matches('}').count() as i32;
+            if l.contains('{') {
+                opened = true;
+            }
+            if opened && depth <= 0 {
+                end = Some(k);
+                break;
+            }
+        }
+        match end {
+            // 区间抹空（含属性行与被修饰 item 的结束行）。
+            Some(e) => {
+                for s in skip.iter_mut().take(e + 1).skip(i) {
+                    *s = true;
+                }
+                i = e + 1;
+            }
+            // 没有花括号（`#[cfg(test)] use …;` 之类）：只抹属性行，继续往后扫。
+            None => {
+                skip[i] = true;
+                i += 1;
+            }
+        }
+    }
+
+    let mut out = String::with_capacity(display.len());
+    for (i, l) in lines.iter().enumerate() {
+        if !skip[i] {
+            out.push_str(l);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// 一个字符串里**内联**（`mod x { … }`）与**声明**（`mod x;`）模块的名字。
+///
+/// 第 4 轮 B4 选了**方案 A**（内联 mod 的内容**展开纳入扫描**，见 §12）：
+/// `prod()` 不再截断、`write_points` / `fn_definitions` / `id_tokens` 都是**按文件文本**
+/// 扫的，所以内联 `mod` 里的写点与函数本来就在扫描范围内 ——
+/// 这条函数只用于**反空转**（证明内联 mod 确实被当成同文件，而不是被当成注释跳过）。
+fn inline_mods(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in code.lines() {
+        let t = line.trim_start();
+        let t = t.strip_prefix("pub ").unwrap_or(t);
+        let Some(rest) = t.strip_prefix("mod ") else { continue };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() && rest[name.len()..].trim_start().starts_with('{') {
+            out.push(name);
+        }
+    }
+    out
 }
 
 /// 把**字符串字面量内容**抹成空格（保留引号与换行 ⇒ 行号与列宽都不变）。
@@ -402,7 +513,59 @@ const FORBIDDEN_MECHANISMS: &[(&str, &str)] = &[
     ("Response::builder", "F4：响应体由 `Response::builder` 手搓 ⇒ 不在 `Json(`/`Html(` 写点枚举内"),
     (".body(", "F4：`.body(…)` 直收裸串 —— 同上"),
     ("Body::from(", "F4：`Body::from(raw)` 由裸串构造响应体 —— 同上"),
+    (
+        "into_response(",
+        "B1：`Err` 通道自造响应体 —— `Result<_, Response>` 的 `Err` 本来就是 `Response`，\
+         于是 `return Err((StatusCode::OK, raw).into_response())` 四行、签名不动就吐客户图",
+    ),
+    (
+        "StatusCode::OK",
+        "B1：`Err` 通道不许回 2xx —— 200 只许来自 `Ok(<管线产物>)` 那条分支",
+    ),
 ];
+
+/// B1 · `into_response(` 的**逐字钉住**清单：`(文件, 语句窗口里必须出现的 needle, 期望命中数)`。
+///
+/// 为什么不是「整函数豁免」：`into_response(` 是「把某个东西变成 `Response`」的**总闸门**，
+/// 谁都能拿它拼响应体。今天它只出现在五处**错误通道**里（正文都是 `{"error": …}`，
+/// 不含任何客户字节）。这里把五处**逐字**钉住：
+///
+/// - 改掉其中任何一处的形状（例如把 `msg` 换成裸串）⇒ needle 找不到 ⇒ 红；
+/// - 在别处新加一处 ⇒ 「没被任何 needle 认领」⇒ 红；
+/// - 把它们挪进别的函数、或让同一个 needle 出现两次 ⇒ 计数对不上 ⇒ 红。
+///
+/// ⚠️ 禁调 needle 是 **`into_response(`**（**不带前导点**）：于是
+/// `x.into_response()`、`IntoResponse::into_response(x)`、`<T as IntoResponse>::into_response(x)`
+/// 都是同一格 —— 只封 `.into_response(` 那个拼写等于留三种别名。
+/// **函数定义行**（`fn into_response(self) -> Response`）不算调用，单独跳过
+/// （见 [`forbidden_mechanisms`] 里的 `is_fn_def`）。
+///
+/// ⛔ 这张表**不是**「已封住」的声明：见交付报告 §12.7 的 P-2 残余
+/// （`err(status, &raw)` 一类「错误通道携带任意文本」的形态仍可表达，已登记）。
+const INTO_RESPONSE_SITES: &[(&str, &str, usize)] = &[
+    (
+        "src/server/http.rs",
+        r#"(self.status(), Json(json!({ "error": msg })))"#,
+        1,
+    ),
+    (
+        "src/server/http.rs",
+        r#"(status, Json(json!({ "error": msg })))"#,
+        1,
+    ),
+    ("src/server/http.rs", "StatusCode::METHOD_NOT_ALLOWED.into_response()", 1),
+    // 405 的固定文案（与 `NON_CUSTOMER_WRITES` 里那条同源）：它上面的 `(` 元组以 `.into_response()` 收尾。
+    ("src/server/http.rs", "这里只读：只能看", 1),
+    // 401 的固定文案：同上。
+    ("src/server/http.rs", "没有可用的访问口令", 1),
+];
+
+/// B1 的语句窗口：命中行 + 往上 3 行。
+///
+/// 405 / 401 的 `.into_response()` 写在**续行**上，它的「被转换的表达式」在前 3 行内；
+/// 窗口刻意这么短，是为了不让相邻的上一处 `into_response(`（`err` 与
+/// `impl IntoResponse for ApiError` 只隔 5 行）互相顶替 pinned needle。
+const INTO_RESPONSE_WINDOW: usize = 3;
 
 /// 机制级豁免：**传输**函数里的 fd 写出（与 [`WRITER_FNS`] 同理）。
 ///
@@ -496,7 +659,19 @@ fn enclosing_fn(lines: &[String], idx: usize) -> Option<String> {
     }
 }
 
-/// 扫描一处源码里的**禁调机制**（F3/F4），跳过写出机制与传输层函数的函数体。
+/// 词边界（右侧）：`at` 处的字符之后不得紧跟标识符字符（`StatusCode::OKAY` 不算 `OK`）。
+fn boundary_ok_after(line: &str, at: usize) -> bool {
+    !line[at..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// 扫描一处源码里的**禁调机制**（F3/F4 + B1），跳过写出机制与传输层函数的函数体。
+///
+/// ⭐ 第 4 轮 B1：`.into_response(` 与 `StatusCode::OK` 也进了禁调集合。
+/// `.into_response(` 只有 [`INTO_RESPONSE_SITES`] 里**逐字钉住**的五处（全是错误通道）例外，
+/// 且钉住的每条命中数必须**恰好**等于期望值（双向，同 `NON_CUSTOMER_WRITES` 的口径）。
 fn forbidden_mechanisms(rel: &str, code: &str) -> Vec<String> {
     let lines: Vec<String> = code.lines().map(|s| s.to_string()).collect();
     let mut skip: Vec<(usize, usize)> = Vec::new();
@@ -512,12 +687,63 @@ fn forbidden_mechanisms(rel: &str, code: &str) -> Vec<String> {
             }
         }
     }
+    // pinned needle 的命中计数（B1 的双向那一半）。
+    let mut pin_hits: BTreeMap<&str, usize> = BTreeMap::new();
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if skip.iter().any(|(lo, hi)| i >= *lo && i <= *hi) {
             continue;
         }
         for (needle, why) in FORBIDDEN_MECHANISMS {
+            // ── B1 · `into_response(`：**不带前导点**，也**不做词边界检查** ──
+            // 三种别名必须同罪：`raw.into_response()`（接收者是标识符，`boundary_ok` 会漏）、
+            // `IntoResponse::into_response(x)`、`<T as IntoResponse>::into_response(x)`。
+            // 唯一例外：**函数定义行**（`fn into_response(self) -> Response`）。
+            if *needle == "into_response(" {
+                let mut hits = 0usize;
+                let mut from = 0usize;
+                while let Some(off) = line[from..].find(needle) {
+                    let at = from + off;
+                    from = at + 1;
+                    // 唯一例外：**函数定义**那一处（`fn into_response(self)`）——
+                    // 逐处判，不整行判（一行里可能既有 `fn x()` 又有调用）。
+                    if line[..at].trim_end().ends_with("fn") {
+                        continue;
+                    }
+                    hits += 1;
+                }
+                if hits == 0 {
+                    continue;
+                }
+                let lo = i.saturating_sub(INTO_RESPONSE_WINDOW);
+                let window = lines[lo..=i].join("\n");
+                if let Some((_, pinned, _)) = INTO_RESPONSE_SITES
+                    .iter()
+                    .find(|(f, n, _)| *f == rel && window.contains(n))
+                {
+                    *pin_hits.entry(pinned).or_insert(0) += hits;
+                } else {
+                    out.push(format!(
+                        "  - {rel}:{} `{needle}` —— {why}\n      （也不在 `INTO_RESPONSE_SITES` \
+                         钉住的错误通道里 ⇒ 这是一处**新造的响应体通道**）",
+                        i + 1
+                    ));
+                }
+                continue;
+            }
+            // ── B1 · `StatusCode::OK`：Err 通道不许回 2xx ──
+            if *needle == "StatusCode::OK" {
+                let mut from = 0usize;
+                while let Some(off) = line[from..].find(needle) {
+                    let at = from + off;
+                    from = at + 1;
+                    if !boundary_ok(line, at) || !boundary_ok_after(line, at + needle.len()) {
+                        continue;
+                    }
+                    out.push(format!("  - {rel}:{} `{needle}` —— {why}", i + 1));
+                }
+                continue;
+            }
             let mut from = 0usize;
             while let Some(off) = line[from..].find(needle) {
                 let at = from + off;
@@ -527,6 +753,19 @@ fn forbidden_mechanisms(rel: &str, code: &str) -> Vec<String> {
                 }
                 out.push(format!("  - {rel}:{} `{needle}` —— {why}", i + 1));
             }
+        }
+    }
+    // B1 的双向：钉住的每条错误通道**必须**原样出现，且次数相等。
+    for (file, pinned, expected) in INTO_RESPONSE_SITES {
+        if *file != rel {
+            continue;
+        }
+        let got = pin_hits.get(pinned).copied().unwrap_or(0);
+        if got != *expected {
+            out.push(format!(
+                "  - {rel} 的错误通道 `{pinned}` 期望被 `.into_response(` 命中 {expected} 次，\
+                 实际 {got} 次 —— 形状被改过（或有人把一处 `.into_response(` 挪了位置）"
+            ));
         }
     }
     out
@@ -737,8 +976,8 @@ fn t1_every_customer_write_point_is_registered() {
         smuggled.join("\n")
     );
 
-    // ⭐ F3 / F4（第 3 轮）：出口文件里**禁止**绕开全部已登记构造的写出机制。
-    // 反空转：三条形态必须被认出来（它们曾经各自 71 passed 全绿）。
+    // ⭐ F3 / F4（第 3 轮）+ B1（第 4 轮）：出口文件里**禁止**绕开全部已登记构造的写出机制。
+    // 反空转：每一种形态必须被认出来（它们曾经各自 71–73 passed 全绿）。
     let probes = [
         (
             "fn x() { let mut o = std::io::stdout().lock(); o.write_all(raw.as_bytes()); }",
@@ -748,14 +987,76 @@ fn t1_every_customer_write_point_is_registered() {
         ("fn x() { Response::builder().body(Body::from(raw)); }", "Response::builder"),
         ("fn x() { Response::builder().body(Body::from(raw)); }", ".body("),
         ("fn x() { Response::builder().body(Body::from(raw)); }", "Body::from("),
+        // ── B1（qa-review-3.md §7）：`Err` 通道的四行形态 ──
+        // `Result<_, Response>` 的 `Err` 本来就是 `Response`，签名一字不动就能吐客户图。
+        (
+            "fn x() { return Err((StatusCode::OK, raw).into_response()); }",
+            "into_response(",
+        ),
+        (
+            "fn x() { return Err((StatusCode::BAD_REQUEST, raw).into_response()); }",
+            "into_response(",
+        ),
+        // 接收者是**标识符**（`String: IntoResponse`）—— 词边界陷阱：
+        // `boundary_ok` 会把 `raw.into_response(` 当成「不是调用」，这一格必须单独钉。
+        ("fn x() { return Err(raw.into_response()); }", "into_response("),
+        // ⭐ 别名形态（第 4 轮的封法特意**不带前导点**）：UFCS 两种写法同罪。
+        (
+            "fn x() { return Err(IntoResponse::into_response((StatusCode::OK, raw))); }",
+            "into_response(",
+        ),
+        (
+            "fn x() { return Err(<String as IntoResponse>::into_response(raw)); }",
+            "into_response(",
+        ),
+        ("fn x() { let ok = StatusCode::OK; }", "StatusCode::OK"),
     ];
     for (src, want) in probes {
         let got = forbidden_mechanisms("src/cli.rs", src);
         assert!(
             got.iter().any(|m| m.contains(want)),
-            "禁调扫描器认不出 `{want}` ⇒ F3/F4 那两条又回到「全绿」：{got:?}"
+            "禁调扫描器认不出 `{want}` ⇒ F3/F4/B1 那几条又回到「全绿」：{got:?}"
         );
     }
+    // 反向：`fn into_response(self) -> Response` 是 **`IntoResponse` 的实现**，不是调用，
+    // 不许误伤（否则任何 impl 都会恒红）。
+    assert!(
+        forbidden_mechanisms(
+            "src/cli.rs",
+            "impl IntoResponse for E {\n    fn into_response(self) -> Response {\n        todo!()\n    }\n}"
+        )
+        .is_empty(),
+        "`fn into_response` 的**定义行**被当成调用 ⇒ 判据会恒红"
+    );
+    // 反向：`StatusCode::OKAY` 这类**不是** `OK` 的记号不许误伤（词边界右侧）。
+    assert!(
+        forbidden_mechanisms("src/cli.rs", "fn x() { let a = StatusCode::OKAY; }").is_empty(),
+        "右侧词边界失效：`StatusCode::OKAY` 被当成 `StatusCode::OK` ⇒ 判据会恒红"
+    );
+    // 反向：今天那五处**错误通道**的 `.into_response(` 必须**不**被判红（否则判据恒红）。
+    // 反探针用**真实源码**：合成片段做不到「五处都在、且互不顶替」。
+    assert!(
+        forbidden_mechanisms("src/server/http.rs", &prod("src/server/http.rs")).is_empty(),
+        "真实的五处错误通道被当成绕过 ⇒ 判据会恒红：{:?}",
+        forbidden_mechanisms("src/server/http.rs", &prod("src/server/http.rs"))
+    );
+    // 但它们被**逐字钉住**：形状一改就红。
+    assert!(
+        !forbidden_mechanisms(
+            "src/server/http.rs",
+            "fn err(status: StatusCode, msg: &str) -> Response {\n    (status, msg).into_response()\n}"
+        )
+        .is_empty(),
+        "`err()` 被改成直收裸串仍然全绿 ⇒ B1 的「逐字钉住」是空转"
+    );
+    assert!(
+        !forbidden_mechanisms(
+            "src/server/http.rs",
+            "fn err(status: StatusCode, msg: &str) -> Response {\n    (status, Json(json!({ \"error\": msg }))).into_response()\n}\nfn extra(m: &str) -> Response {\n    (StatusCode::BAD_REQUEST, m).into_response()\n}"
+        )
+        .is_empty(),
+        "同一文件里多出一处未被钉住的 `.into_response(` 仍然全绿 ⇒ B1 只封了一个函数"
+    );
     // 反向：写出机制本体 / MCP 传输层的 fd 写出必须放行（否则判据恒红）。
     assert!(
         forbidden_mechanisms(
@@ -1300,6 +1601,23 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
 
 ];
 
+/// ⭐ **纯函数**：一段源码里**重名**的函数定义（第 4 轮 B5）。
+///
+/// 登记粒度是 `(文件, 函数名)`：`get_graph` 登记过一次之后，第二个同名函数
+/// **不需要任何新登记**，`t8` 的「同函数」按名字比也会把它当成同一个函数
+/// （`qa-review-3.md` §4.6-d：内联 `mod qa_shadow { fn get_graph(…) }` ⇒ 73/0 全绿）。
+/// 函数名在一个文件里唯一，是「名字 ⇔ 函数」这条推理成立的前提。
+fn duplicate_fns(names: &[String]) -> Vec<String> {
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for n in names {
+        *seen.entry(n.as_str()).or_insert(0) += 1;
+    }
+    seen.into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(n, count)| format!("`fn {n}` 定义了 {count} 次"))
+        .collect()
+}
+
 #[test]
 fn t5_outlet_files_declare_every_function() {
     // 反空转：QA 变异 #1 的写法必须被枚举出来。
@@ -1313,6 +1631,26 @@ fn t5_outlet_files_declare_every_function() {
     );
     assert!(fn_definitions("let f = |x| x;").is_empty(), "闭包不是 fn 定义");
 
+    // ⭐ B4 / B5（第 4 轮）：内联 `mod x { … }` 里的函数**同样**在这个文件的函数清单里
+    // （方案 A：展开纳入扫描），于是同名第二个定义会被下面那圈判出来。
+    let shadow = "mod qa_shadow {\n    use super::*;\n    pub async fn get_graph(s: S) -> R { todo!() }\n}\nfn get_graph(s: S) -> R { todo!() }";
+    let got_shadow = fn_definitions(shadow);
+    assert_eq!(
+        got_shadow,
+        vec!["get_graph".to_string(), "get_graph".to_string()],
+        "内联 mod 里的函数没被枚举 ⇒ B4/B5 又回到「同名免登记」：{got_shadow:?}"
+    );
+    assert_eq!(inline_mods(shadow), vec!["qa_shadow".to_string()]);
+    assert_eq!(
+        duplicate_fns(&got_shadow),
+        vec!["`fn get_graph` 定义了 2 次".to_string()],
+        "重名函数认不出来 ⇒ 这条判据是空转"
+    );
+    assert!(
+        duplicate_fns(&fn_definitions("fn a() {}\nfn b() {}")).is_empty(),
+        "不重名的函数被算成重名 ⇒ 判据会恒红"
+    );
+
     let mut bad = Vec::new();
     for rel in OUTLET_FILES {
         let got = fn_definitions(&prod(rel));
@@ -1321,6 +1659,13 @@ fn t5_outlet_files_declare_every_function() {
             .filter(|(p, _, _)| p == rel)
             .map(|(_, n, _)| *n)
             .collect();
+        // ⭐ B5：同名函数重复定义必须红 —— 否则 `OUTLET_FNS` 的 (文件, 名字) 粒度
+        // 会让第二个 `get_graph` 免登记，`t8` 的「同函数」也会认错。
+        for dup in duplicate_fns(&got) {
+            bad.push(format!(
+                "  - {rel}: {dup} —— 登记粒度是 (文件, 函数名)，重名函数等于**免登记**（B5）"
+            ));
+        }
         for name in &got {
             if !want.contains(name.as_str()) {
                 bad.push(format!(
@@ -1672,6 +2017,126 @@ fn response_arg_product(arg: &str) -> Option<&str> {
         .or_else(|| arg.strip_suffix(".into_text()"))
 }
 
+/// 一个表达式**开头**就是一次管线调用吗（第 4 轮 B3 ②）。
+///
+/// 只看**头**：`let rendered = …` 的初始化式、或 `match …` 的被匹配表达式，
+/// 必须**本身**是 `publish_value(…)` / `publish_json(…)` / `publish_customer(…)` /
+/// `pipeline::render(…)` 之一。
+///
+/// ⛔ 第 3 轮的做法是「往上 20 行内出现过管线调用」—— 纯文本包含，
+/// `if false { publish_value(…) }` 的死调用、甚至字符串字面量都能满足
+/// （`qa-review-3.md` §4.3 的 a′ 因此 73/0 全绿）。
+fn pipeline_expr_head(expr: &str) -> Option<&'static str> {
+    let t0 = expr.trim_start();
+    let t = t0.strip_prefix('&').map(str::trim_start).unwrap_or(t0);
+    // `crate::domain::pipeline::publish_value(` 这层模块路径先剥掉
+    // （剥掉之后 `render(` 就是 `pipeline::render(`，仍要求是本模块的那个入口）。
+    if let Some(rest) = t.strip_prefix("crate::domain::pipeline::") {
+        if rest.starts_with("render(") {
+            return Some("pipeline::render(");
+        }
+        return PIPELINE_ENTRIES.iter().copied().find(|c| rest.starts_with(c));
+    }
+    PIPELINE_ENTRIES.iter().copied().find(|c| t.starts_with(c))
+}
+
+/// 第 `at` 行（0 基）**所属函数**的起始行（0 基）。
+///
+/// `product_origin` 必须只在**同一个函数**里找绑定：`check_scope` 里也有一处
+/// `let rendered = match rendered { … };`（Z1 的错误文案），跨函数找会把
+/// `index` 的 `Ok(rendered) => Ok(Html(rendered.into_text()))` 配到它头上。
+fn enclosing_fn_lo(lines: &[String], at: usize) -> usize {
+    let mut k = at;
+    loop {
+        if is_fn_def(&lines[k]) {
+            if let Some((lo, hi)) = fn_range_at(lines, k) {
+                if at >= lo && at <= hi {
+                    return lo;
+                }
+            }
+        }
+        if k == 0 {
+            return 0;
+        }
+        k -= 1;
+    }
+}
+
+/// `ident` 这个产物绑定的**初始化式**（第 4 轮 B3 ②）。
+///
+/// 返回 `Ok(())` 当且仅当初始化式**本身就是**一次管线调用：
+/// - `let <ident> = <pipeline call>(…)`；或
+/// - `match <pipeline call>(…) { Ok(<ident>) => … }`（今天 `http.rs` 的两处都是这种）。
+///
+/// 已知边界：只找**最近**的 `match`，不跟 `impl` / `mod` 路径（`t5` 已保证函数名唯一，
+/// 所以「名字 ⇔ 函数」成立）；嵌套 `match` 里再写响应体这一格由人工评审兜。
+fn product_origin(lines: &[String], ident: &str, at: usize) -> Result<(), String> {
+    // 只在**同一个函数**里找（跨函数会捡到别的函数的同名绑定）。
+    let fn_lo = enclosing_fn_lo(lines, at);
+    // ① `let <ident> = <初始化式>`（可能跨行，拼到分号配平为止）。
+    let let_pat = format!("let {ident} =");
+    let let_at = (fn_lo..at).rev().find(|i| {
+        lines
+            .get(*i)
+            .is_some_and(|l| l.trim_start().starts_with(&let_pat))
+    });
+    if let Some(i) = let_at {
+        let mut rhs = lines[i]
+            .split_once('=')
+            .map(|(_, r)| r.to_string())
+            .unwrap_or_default();
+        let mut k = i;
+        while !rhs.contains(';') && k + 1 < at {
+            k += 1;
+            rhs.push(' ');
+            rhs.push_str(lines.get(k).map(|s| s.as_str()).unwrap_or(""));
+        }
+        return match pipeline_expr_head(&rhs) {
+            Some(_) => Ok(()),
+            None => Err(format!(
+                "的 `let {ident} = …` 初始化式**不是管线调用**（是 `{}`）—— \
+                 第 {} 行",
+                rhs.trim().lines().next().unwrap_or("").trim(),
+                i + 1
+            )),
+        };
+    }
+    // ② `match <初始化式> { Ok(<ident>) => … }`。
+    let match_at = (fn_lo..at).rev().find(|i| {
+        lines
+            .get(*i)
+            .is_some_and(|l| l.trim_start().starts_with("match "))
+    });
+    let Some(m) = match_at else {
+        return Err(format!(
+            "在往上找不到 `let {ident} = …` 或 `match … {{ Ok({ident}) => … }}` 的绑定"
+        ));
+    };
+    let mut expr = lines[m].trim_start().to_string();
+    let mut k = m;
+    while !expr.contains('{') && k + 1 < at {
+        k += 1;
+        expr.push(' ');
+        expr.push_str(lines.get(k).map(|s| s.as_str()).unwrap_or(""));
+    }
+    let scrutinee = expr
+        .split_once("match ")
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .split('{')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    match pipeline_expr_head(&scrutinee) {
+        Some(_) => Ok(()),
+        None => Err(format!(
+            "绑定自第 {} 行的 `match {}` —— 被匹配的表达式**不是管线调用**（B3②）",
+            m + 1,
+            scrutinee.trim()
+        )),
+    }
+}
+
 #[test]
 fn t9_customer_response_bodies_come_from_the_pipeline() {
     // 反空转：三条形状（M6b / M10b 的手搓响应体）必须认不出来是产物。
@@ -1684,6 +2149,55 @@ fn t9_customer_response_bodies_come_from_the_pipeline() {
     );
     assert_eq!(response_arg_product(r#"json!({ "error": msg })"#), None);
     assert_eq!(response_arg_product(r#"serde_json::to_string_pretty(node).unwrap_or_default()"#), None);
+
+    // ⭐ B3 ②（第 4 轮）：产物的**初始化式本身**必须是管线调用。
+    let l = |s: &str| s.lines().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert!(
+        product_origin(
+            &l("fn x() {\n    let rendered = publish_value(OutletId::H2, v);\n    Ok(Json(rendered.into_value()))\n}"),
+            "rendered",
+            2
+        )
+        .is_ok(),
+        "`let <id> = publish_value(…)` 被当成「不是管线产物」⇒ 判据会恒红"
+    );
+    assert!(
+        product_origin(
+            &l("fn x() {\n    match crate::domain::pipeline::render(id, p) {\n        Ok(rendered) => Ok(Json(rendered.into_value())),\n    }\n}"),
+            "rendered",
+            2
+        )
+        .is_ok(),
+        "`match render(…) {{ Ok(<id>) => … }}` 被当成「不是管线产物」⇒ 判据会恒红"
+    );
+    // QA a′ 的形态：死调用 + 本地包装的初始化式 ⇒ 必须判红。
+    assert!(
+        product_origin(
+            &l("fn x() {\n    if false { let _ = publish_value(OutletId::H4, serde_json::json!({})); }\n    let rendered = QaRaw(serde_json::to_value(&*state.graph));\n    Ok(Json(rendered.into_value()))\n}"),
+            "rendered",
+            3
+        )
+        .is_err(),
+        "死调用 + 本地包装仍被当成管线产物 ⇒ a′ 仍然全绿（B3②）"
+    );
+    assert!(
+        product_origin(
+            &l("fn x() {\n    match Ok::<QaRaw, Response>(QaRaw(raw)) {\n        Ok(rendered) => Ok(Json(rendered.into_value())),\n    }\n}"),
+            "rendered",
+            2
+        )
+        .is_err(),
+        "`match Ok::<QaRaw, _>(…)` 被当成管线调用 ⇒ a′ 仍然全绿（B3②）"
+    );
+    assert!(
+        product_origin(
+            &l("fn x() {\n    let rendered = if false { publish_value(OutletId::H4, v) } else { raw };\n    Ok(Json(rendered.into_value()))\n}"),
+            "rendered",
+            2
+        )
+        .is_err(),
+        "把管线调用藏在 `if false` 里当初始化式仍然全绿 ⇒ B3② 只看「出现过」"
+    );
 
     let mut bad = Vec::new();
     let mut checked = 0usize;
@@ -1728,18 +2242,10 @@ fn t9_customer_response_bodies_come_from_the_pipeline() {
                 ));
                 continue;
             }
-            // 这个 `Ok(..)` 分支必须是**某次管线调用**的结果（往上 20 行内）。
-            let lo = p.line.saturating_sub(21);
-            let from_pipeline = lines
-                .iter()
-                .take(p.line - 1)
-                .skip(lo)
-                .any(|l| PIPELINE_ENTRIES.iter().any(|c| l.contains(c)));
-            if !from_pipeline {
-                bad.push(format!(
-                    "  - {rel}:{} 的 `{ident}` 不是来自管线调用的 `Ok(..)` 分支",
-                    p.line
-                ));
+            // ⭐ B3 ②（第 4 轮）：这个 `Ok(..)` 分支的**初始化式本身**必须是管线调用。
+            // ⛔ 第 3 轮这里是「往上 20 行内出现过管线调用」—— 死调用/字符串字面量都能满足。
+            if let Err(why) = product_origin(&lines, ident, p.line - 1) {
+                bad.push(format!("  - {rel}:{} 的 `{ident}` {why}", p.line));
             }
         }
     }
@@ -1753,6 +2259,77 @@ fn t9_customer_response_bodies_come_from_the_pipeline() {
     assert!(
         bad.is_empty(),
         "⛔ 客户响应体不是管线产物（F4：`Response::builder().body(raw)` 的同类形态）：\n{}",
+        bad.join("\n")
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// T10 · `into_value` / `into_text` 只许定义在管线模块（第 4 轮 B3 ①）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ **纯函数**：一段源码里 `into_value` / `into_text` 的**定义**（不是调用）。
+///
+/// 只认 `fn into_value` / `pub fn into_text` / trait 里的方法签名；
+/// `rendered.into_value()` 这种**调用**不算（`line[..at]` 不以 `fn` 结尾）。
+fn guarded_consumers(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in code.lines() {
+        for name in ["into_value", "into_text"] {
+            let mut from = 0usize;
+            while let Some(off) = line[from..].find(name) {
+                let at = from + off;
+                from = at + 1;
+                if !boundary_ok(line, at) || !boundary_ok_after(line, at + name.len()) {
+                    continue;
+                }
+                if line[..at].trim_end().ends_with("fn") {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn t10_into_value_is_defined_only_in_the_pipeline_module() {
+    // 反空转：QA a′ 的本地 newtype 必须被认出来。
+    let forged = "struct QaRaw(serde_json::Value);\nimpl QaRaw {\n    fn into_value(self) -> serde_json::Value { self.0 }\n}";
+    assert_eq!(
+        guarded_consumers(forged),
+        vec!["into_value".to_string()],
+        "本地 newtype 的 `fn into_value` 认不出来 ⇒ B3① 空转"
+    );
+    assert_eq!(
+        guarded_consumers("trait LocalShape { fn into_text(&self) -> String; }"),
+        vec!["into_text".to_string()],
+        "trait 里的 `fn into_text` 认不出来（换个名字定义同名方法就能绕）"
+    );
+    assert!(
+        guarded_consumers("let v = rendered.into_value();").is_empty(),
+        "**调用**被算成了**定义** ⇒ 判据会恒红"
+    );
+
+    // 实测：管线模块里恰好有这两个消费方法（否则下面那圈「管线外为 0」是空转）。
+    let pipe = guarded_consumers(&prod(PIPELINE_SRC));
+    assert!(
+        pipe.contains(&"into_value".to_string()) && pipe.contains(&"into_text".to_string()),
+        "管线模块里读不到 `into_value` / `into_text` ⇒ 这条判据在空转：{pipe:?}"
+    );
+
+    let mut bad = Vec::new();
+    for rel in src_files() {
+        if rel == PIPELINE_SRC {
+            continue;
+        }
+        for name in guarded_consumers(&prod(&rel)) {
+            bad.push(format!("  - {rel}: 定义了 `fn {name}`"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "⛔ 管线模块**之外**定义了 `into_value` / `into_text`（B3：本地 newtype 一行就能\
+         伪造 t9 要的那个形状）：\n{}",
         bad.join("\n")
     );
 }

@@ -831,7 +831,7 @@ QA 的命门：`OUTLETS` 里写 `enforcement: Enforcement::Pipeline` **没有任
 | # | 形态 | 危害 | 什么条件下会真漏 | 下一轮谁接手 / 怎么收 |
 | --- | --- | --- | --- | --- |
 | **P-1** | 闭包式本地判据 `let local_ok = \|s\| …`（M9，**73/0 全绿**） | 它能在**调管线之前**决定「这条出口写不写 / 写什么」，而且只作用在**重拼出来的串**上 ⇒ T2（只看管线产物被怎么用）永远看不到它 | 单用闭包 = **静默丢/改**（功能性），不直接泄漏——前提是最终写出的仍是管线产物（T2 钉着）。**与 P-2 组合**（手拼响应体）才是泄漏 | Dev（第 4 轮）。方案：给出口函数加「允许语句集」白名单（`let <id> = \|` / 管线调用之前的 `if … { return }` 一律要求登记用途）。成本中等 |
-| **P-2** | handler 返回裸 `String` / 元组（不走 `Json(`/`Html(`） | axum 对 `String` 有 `IntoResponse` ⇒ 响应体不进 T1 写点枚举，`Content-Type` 还变成 `text/plain` | 改**已有** handler 的**返回类型**（条件分支 `return Ok(raw_string)` 与 `Ok(Json<T>)` 不同型 ⇒ **编译不过**，所以静默后门要先改签名，diff 显眼）；或**新增**一个返回 `String` 的路由（T5 要求登记 fn、T1 无写点） | Dev（第 4 轮）。方案：对 3 个数据路由加「返回类型必须是 `Result<Json<..>, Response>` / `Result<Html<..>, Response>`」的**签名否定式**判据 |
+| **P-2** | handler 返回裸 `String` / 元组（不走 `Json(`/`Html(`）<br>⚠️ **第 4 轮已改写：见 §12.7**（本行第 3 轮的「要先改签名、diff 显眼」只对 `Ok` 通道成立，**漏了 `Err` 通道**） | axum 对 `String` 有 `IntoResponse` ⇒ 响应体不进 T1 写点枚举，`Content-Type` 还变成 `text/plain` | 改**已有** handler 的**返回类型**（条件分支 `return Ok(raw_string)` 与 `Ok(Json<T>)` 不同型 ⇒ **编译不过**，所以静默后门要先改签名，diff 显眼）；或**新增**一个返回 `String` 的路由（T5 要求登记 fn、T1 无写点）<br>⛔ **第 4 轮补**：`Result<Json<_>, Response>` 的 **`Err` 类型本来就是 `Response`** ⇒ `return Err((StatusCode::OK, raw).into_response())` **4 行、签名不动**就能吐未过闸的客户图（QA `F` 变异实测 73/0 全绿），已由 §12.2 封住 | Dev（第 4 轮）✔ 方案（对 3 个数据路由加返回类型判据）方向对；**第 4 轮已改为**「`.into_response(` 逐字钉住 + `StatusCode::OK` 禁调」（§12.2），残余 `err(status, &raw)` 已登记（§12.7） |
 | **P-3** | `NON_OUTLET_FILES` 对 4 个运维 bin + `mcp/protocol.rs` **整文件**豁免（M8，**73/0 全绿**） | 这 5 个文件里任何客户可见写出点都不会红；`src/bin/` 正是「顺手 println 调试」的高频位置 | 往 `ontok-propose` / `ontok-introspect` / `ontok-translate-names` 里打印客户视图字段或整份 JSON，且被当成运维回执发出去 | Dev（第 4 轮）。方案：`NON_OUTLET_FILES` 从「路径」改成「(路径, 函数名)」——4 个 bin 的写点集中在 `main` + 少数 fn，一次性登记即可（QA 估成本低） |
 
 **新增的一条窄边界（不是 P，但必须写）**：F3 的唯一豁免是 `src/mcp/serve.rs::write_mcp_line`（9 行）。
@@ -879,6 +879,229 @@ cargo test --test test_req107_source_enumeration --test test_req107_outlet_pipel
 
 ---
 
+## 12 · 第 4 轮修复（`qa-review-3.md` 的 B1 / B2 + A14 的 B3 / B4 / B5）
+
+> **对象**：`BA/demands/REQ-107/qa-review-3.md`（FAIL：**2 阻断 + 3 种新绿**）+ `acceptance.md §七 A14`。
+> **基线**：`867969b`（`develop b714f48`）。
+> **本轮只改一个文件**：`tests/test_req107_source_enumeration.rs`（`+562 / −22`）。
+> ⛔ `git status --porcelain src` **空** —— `src/` 一行没动，13 条出口接线一行没动，`OUTLETS` 没动。
+> ⚠️ 这意味着 B1–B5 **全部是判据侧**的修法（A14 给的修法本身也都是判据侧）。
+
+### 12.1 结论先行
+
+| # | 项 | 结果 | 证据（本机实测） |
+| --- | --- | --- | --- |
+| **B1** | `Err` 通道 `return Err((StatusCode::OK, raw).into_response())` | **封住（运行期判红）** | QA 现成变异 `F` 复跑：**73 passed / 1 failed**，`t1` 两处命中（`http.rs:284 into_response(` + `:284 StatusCode::OK`） |
+| **B2** | `prod()` 在第一个 `#[cfg(test)]` 处截断 | **封住（运行期判红）** | 新增变异 `B2only`（handler 追加到文件**末尾**、零登记）：**71 / 3**，`t1`/`t5`/`t9` 都指到 **`http.rs:1252`** |
+| **B3①** | 管线外定义 `fn into_value` / `fn into_text` | **封住（运行期判红）** | 新判据 `t10`；QA `a′` 复跑：**72 / 2**（`t9` + `t10`） |
+| **B3②** | `t9` 只认「上游 20 行内出现过管线调用」 | **封住（运行期判红）** | 同上；`t9` 文案指到 `match Ok::<QaRaw, Response>(QaRaw(…))` 被匹配表达式不是管线调用 |
+| **B4** | 内联 `mod x { fn get_graph(…) }` | **方案 A：展开纳入扫描**（理由见 §12.4） | 变异 `d2`（内联 mod + 追加到文件末尾 + **老实填表**）：**71 / 3**（`t5`+`t9`+`t10`） |
+| **B5** | `OUTLET_FNS` 是 `(文件, 函数名)` 集合 ⇒ 同名第二函数免登记 | **封住（运行期判红）** | `t5` 文案：`` `fn get_graph` 定义了 2 次 —— 登记粒度是 (文件, 函数名)，重名函数等于**免登记**（B5） `` |
+| — | 13 判据目标（未变异） | **74 passed / 0 failed**（原 73 + 新增 `t10`；每目标 10/12/4/1/2/4/3/2/3/10/7/7/9） | §12.8 |
+| — | `cargo test --lib` | **168 passed / 2 failed**（`MissingEnv`，**环境不具备**） | 与 QA 基线逐条一致 |
+| — | `cargo test --doc` | **4 passed** | 两条 `compile_fail` 仍在 |
+
+**7 种攻击全部「运行期判红」**：没有一次是编译失败挡住的（`log` 里无 `error[E…]`，
+`run.ps1` 摘出来的 `COMPILE| error: test failed …` 是 cargo 在**测试失败之后**的收尾报错）。
+
+### 12.2 B1 · `Err` 通道（`path:line`）
+
+| 内容 | 位置 |
+| --- | --- |
+| `into_response(`（**不带前导点**）进禁调集合（并新增 `StatusCode::OK`） | `tests/test_req107_source_enumeration.rs:510`（`FORBIDDEN_MECHANISMS`） |
+| 五处**错误通道**的逐字钉住清单 | 同文件 `:545`（`INTO_RESPONSE_SITES`）、窗口宽度 `:568`（`INTO_RESPONSE_WINDOW = 3`） |
+| 扫描器（含双向计数） | 同文件 `:675`（`forbidden_mechanisms`） |
+| 反空转探针（6 条正 + 5 条反） | 同文件 `t1`（`:917` 起） |
+
+**为什么 needle 是 `into_response(` 而不是 `.into_response(`**：只封带点的那种拼写等于留三种别名 ——
+`IntoResponse::into_response((StatusCode::OK, raw))`、`<String as IntoResponse>::into_response(raw)`、
+以及「先 `let r = …into_response()` 再 `return Err(r)`」的变体。现在的口径是
+**任何一处 `into_response(` 都算**，唯一的例外是**函数定义那一处**（`fn into_response(self) -> Response`，
+逐处判：`line[..at].trim_end().ends_with("fn")`），否则 `impl IntoResponse for ApiError` 的签名会恒红。
+
+**为什么是「逐字钉住」而不是「整函数豁免」**：`into_response(` 是「把任意东西变成 `Response`」的
+**总闸门**，今天它出现在五处错误通道（正文全是 `{"error": …}`）。如果按函数豁免，`require_token`
+（能拿到 `State`）就成了一个新的后门；所以改成**把五处语句形状逐字钉住**：
+
+| pinned needle（必须在 `into_response(` 命中行 + 往上 3 行内出现） | 处 | 为什么允许 |
+| --- | --- | --- |
+| `(self.status(), Json(json!({ "error": msg })))` | 1 | `impl IntoResponse for ApiError`：错误正文经 `message()→safe_error` |
+| `(status, Json(json!({ "error": msg })))` | 1 | `err()` 助手：错误通道的唯一构造点 |
+| `StatusCode::METHOD_NOT_ALLOWED.into_response()` | 1 | `fallback` 的 405：**无 body** |
+| `这里只读：只能看` | 1 | 405 的固定文案（与 `NON_CUSTOMER_WRITES` 同源） |
+| `没有可用的访问口令` | 1 | 401 的固定文案（不回显令牌） |
+
+双向口径与 `NON_CUSTOMER_WRITES` 相同：**多一处 ⇒ 红**（「没被任何 needle 认领」）、
+**少一处 / 形状被改 ⇒ 红**（「期望命中 N 次，实际 0 次」）。
+⚠️ 这张表与 `NON_CUSTOMER_WRITES` 里那两条 405/401 文案**耦合**：改文案时必须同时改两处，否则红 —— 这是有意的。
+
+另加一条 `StatusCode::OK` 禁调：`Err` 通道回 2xx **没有正当用法**（200 只许来自
+`Ok(<管线产物>)` 那条分支），它把 QA 那条「4 行、签名不动」的形态从**语义**上也堵住了
+（`err(StatusCode::OK, &raw)`、`(StatusCode::OK, …).into_response()` 都会先撞上它）。
+今天三个出口文件的生产代码里 `StatusCode::OK` **零出现**（QA 实测的那 8 处全在 `http.rs` 的测试模块里，
+`prod()` 现在会跳过它们）。
+
+### 12.3 B2 · `prod()` 从「截断」改成「跳过区间」（`path:line`）
+
+`tests/test_req107_source_enumeration.rs:124`。
+
+| 项 | 第 3 轮（被 QA 打穿） | 第 4 轮 |
+| --- | --- | --- |
+| 做法 | `raw.split("#[cfg(test)]").next()` —— **从第一个 `#[cfg(test)]` 起全丢** | 找 `#[cfg(test)]` / `#[cfg(all(test, …))]` **属性行** → 花括号配平找它修饰的 item 的**结束行** → 区间**抹成空行** |
+| `src/server/http.rs` 的后果 | 572 行之后的 674 行（测试模块 + **文件尾部一切**）对 `t1/t2/t3/t5/t8/t9` 不可见 | 只跳过 `mod tests { … }`（572–1246），**文件尾部新加的代码全部可见** |
+| 行号 | — | **1:1 保留**（抹空不删行）：`t8` 的同函数定位、`t9` 的绑定定位、报错行号都还能对到源码 |
+| 配平视图 | — | `blank_strings` 视图（字符串里的 `{` / `}` 不算），否则测试模块里的一句 `"{}"` 就能把配平带偏 |
+| 多个 / 嵌套 | — | 由循环 + 配平处理（不是正则、不是「找第一个」） |
+
+**实测（`B2only`）**：把 6 行零闸 handler 追加到 `http.rs` **最后**、加一行 `.route(...)`、零登记 ⇒
+`t1`（`:1252 Json(` 未登记）、`t5`（`fn qa_b2_raw` 未登记）、`t9`（响应体是 `serde_json::to_value(...)`）**三条同时红**。
+（QA 的第 3 轮同一形态是 73/0 全绿。）
+
+### 12.4 B3 · 两种伪造各堵一处（`path:line`）
+
+| # | 修法 | 位置 |
+| --- | --- | --- |
+| ① | 新判据 `t10`：全仓（`src/` 递归，`prod()` 视图）**任何** `fn into_value` / `fn into_text` 的**定义**都必须在 `src/domain/pipeline.rs` 里。`guarded_consumers()`：只认定义（`fn into_value(`），调用（`rendered.into_value()`）不算；trait 里的方法签名也算定义 | `:2274`（`guarded_consumers`）、`:2295`（`t10`） |
+| ② | `t9` 把「上游 20 行内出现过管线调用」换成 `product_origin()`：产物的**初始化式本身**必须是管线调用 —— `let <id> = <pipeline>(…)` 或 `match <pipeline>(…) { Ok(<id>) => … }`；只在**同一个函数**里找绑定（`enclosing_fn_lo`），`match` 的被匹配表达式取 `match` 与 `{` 之间那段再判**头** | `:2029`（`pipeline_expr_head`）、`:2048`（`enclosing_fn_lo`）、`:2073`（`product_origin`）、`:2141`（`t9`） |
+
+反空转（都写在测试里，不是口头论证）：`let rendered = QaRaw(serde_json::to_value(…))`、
+`match Ok::<QaRaw, _>(QaRaw(…))`、`let rendered = if false { publish_value(…) } else { raw }` **三种都必须 Err**；
+`let rendered = publish_value(…)` 与 `match crate::domain::pipeline::render(…) { Ok(rendered) => … }` **必须 Ok**。
+
+### 12.5 B4 + B5 · 选**方案 A**（展开），加一条**同名即红**
+
+**选择：方案 A（内联 `mod` 的内容展开纳入扫描），不选「禁止内联 mod」。理由三条：**
+
+1. **与既有语义一致**：`t1` / `t3` / `t5` / `t8` / `t9` 本来就是「按**文件文本**扫」，内联 `mod` 的内容本来就在文件里；
+   方案 B 等于要给一个「本来就能看见的代码」再加一条格式禁令，判据数量涨、解释成本也涨。
+2. **方案 B 会与 `#[cfg(test)] mod tests` 直接冲突**：三个出口文件里唯一的内联 mod 就是 `http.rs:573` 的
+   `mod tests`（B2 要跳过的正是它）。要禁内联 mod，就得先写一条「`#[cfg(test)]` 修饰的除外」的豁免 ——
+   凭空的第二条口子。
+3. **真正被打穿的不是 mod 本身，是名字**：QA 的 d 之所以全绿，是 `OUTLET_FNS` 用名字集合 + `t8` 按名字比同函数；
+   把内联 mod 的内容当同文件之后，**同名函数就是同一文件里的重复定义** ⇒ 一条去重判据同时封住 B4 与 B5。
+
+**B5 的实现**：`duplicate_fns()`（`:1610`）在 `t5`（`:1622`）里对每个出口文件的函数名做去重检查，
+重名 ⇒ 红并说明「登记粒度是 (文件, 函数名)，重名等于免登记」。
+副作用（好的）：`t8` 的「同函数」按名字比**重新变得可靠** —— 名字在一个文件里唯一 ⇔ 名字就是函数。
+**B4 的实现**：`prod()` 不再截断（§12.3）⇒ 内联 mod 的内容自动进扫描；
+另加 `inline_mods()`（`:188`）做反空转，证明 `mod x { … }` 确实被当成同文件而不是被当注释跳过。
+
+### 12.6 七种攻击的变异结果（纪律 G 三元组）
+
+> **装置**：`.review-workspace/req107/dev4/{mutate.ps1,run.ps1,restore.ps1}`（与第 3 轮同一套，`root` 改到 `dev4`）。
+> 每次：**唯一一次精确替换** → 记**被改文件 sha256 前/后** → `git diff --no-index` 存 patch（`logs/<ID>.patch`）
+> → 跑 13 个目标（`--no-fail-fast`）→ **从 stash 逐字节复原**并核 sha（每次都核过）。
+> 原文件 sha（本轮基线）：`http.rs 6BEF88DF…`、`pipeline.rs 88C28710…`、`cli.rs C5CACC1A…`、
+> `test_req107_outlet_pipeline.rs B395D8D0…`、`test_…_source_enumeration.rs EC5E747B…`。
+> （全部 8 次变异在**同一份判据文件**上重跑过一遍：第一次跑完后又把 B1 的 needle 从
+> `.into_response(` 扩成 `into_response(` 以覆盖 UFCS 别名，**换基线后 8 次全部复跑**，下表是复跑结果。）
+
+| # | 攻击 | 被改文件 sha256 前 → 后 | 结果（13 目标） | 红在哪 |
+| --- | --- | --- | --- | --- |
+| 1 | **M6b 老实填表**：`/api/raw` 零闸 + `OUTLETS` 加 `H4`(Pipeline, 借 H2 spec) + `OUTLET_FNS` + 计数 33/13→34/14 + ID 集合 | `http.rs 6BEF88DF→A55496F6`；`pipeline.rs 88C28710→5777AA64`；`test_…_source_enumeration.rs EC5E747B→7D45DC6C`；`outlet_pipeline.rs B395D8D0→65DDE32B` | 🟢 **72 / 2** | `t8`（找不到携带 `OutletId::H4` 的管线调用）+ `t9`（响应体是手搓 `to_value`） |
+| 2 | **M7 白名单**：`println!` 打客户 JSON + `NON_CUSTOMER_WRITES` 加 needle/计数 | `http.rs 6BEF88DF→A257A467`；`test_…_source_enumeration.rs EC5E747B→512902BB` | 🟢 **73 / 1** | `t1`（`:280` 白名单窗口含 `to_string_pretty(`） |
+| 3 | **M5d 直写 stdout**：`std::io::stdout().lock().write_all(raw)` | `cli.rs C5CACC1A→4A7E07B6` | 🟢 **73 / 1** | `t1`（`cli.rs:1350 std::io::stdout` + `:1351 write_all(`） |
+| 4 | **M10b 改已有 handler** + 条件分支 + `Response::builder().body(Body::from(raw))` | `http.rs 6BEF88DF→90FC9A35` | 🟢 **73 / 1** | `t1` **4 处**：`:282 Response::builder`、`:283 StatusCode::OK`（**本轮新增的 B1 检查也命中**）、`:285 .body(`、`:285 Body::from(` |
+| 5 | **a′ 本地 newtype 伪造 `.into_value()` + `if false` 死调用**（QA `A2` 原样） | `http.rs 6BEF88DF→BC565CA8`；`pipeline.rs 88C28710→A92C1E69`；`test_…_source_enumeration.rs EC5E747B→73C3DF87`；`outlet_pipeline.rs B395D8D0→29737DA8` | 🟢 **72 / 2** | `t10`（`http.rs` 定义了 `fn into_value`）+ `t9`（`qa_rendered` 的 `match` 被匹配表达式不是管线调用） |
+| 6 | **d2 内联 `mod` 同名 `get_graph` + 整块追加到 `http.rs` 文件末尾**（踩 B2）+ 老实填表 `H4` | `http.rs 6BEF88DF→EE0855B1`；`pipeline.rs 88C28710→41F00C31`；`test_…_source_enumeration.rs EC5E747B→173511E3`；`outlet_pipeline.rs B395D8D0→B226C955` | 🟢 **71 / 3** | `t5`（`` `fn get_graph` 定义了 2 次 ``，B5）+ `t9`（`:1273` 绑定不是管线调用）+ `t10`（`fn into_value`） |
+| 7 | **B1 的 `Err` 形态**：`if q.get("qa").is_some() { let raw = to_string(&*state.graph); return Err((StatusCode::OK, raw).into_response()); }`（QA `F` 原样，**4 行、签名不动**） | `http.rs 6BEF88DF→A2FE2AC4` | 🟢 **73 / 1** | `t1`：`:284 into_response(`（不在钉住的错误通道里）+ `:284 StatusCode::OK` |
+| + | **B2only**（为 B2 单独造）：零登记 handler 追加到文件**末尾** + 一行 `.route(...)` | `http.rs 6BEF88DF→64DE81DC` | 🟢 **71 / 3** | `t1`（`:1252 Json(` 未登记）+ `t5`（`fn qa_b2_raw` 未登记）+ `t9`（`:1252` 响应体不是管线产物） |
+
+**逐条的「谁挡住了」**：
+
+- M6b ⇒ 第 3 轮的 `t8`/`t9` 仍然有效，**未退化**；
+- M7 / M5d / M10b ⇒ F2 / F3 / F4 三条**未退化**（M10b 多命中一条，是 B1 的 `StatusCode::OK` 顺手加的）；
+- a′ ⇒ 旧版是 **73/0 全绿**，现在 `t9` **和** `t10` 同时红（两道独立的门：形状 + 定义处）；
+- d2 ⇒ 旧版（QA 的 d，把 mod 插在生产段）也是 **73/0 全绿**；现在 3 条红。⚠️ 诚实说明：
+  **`t8` 在 d2 下不红**（死调用与写点同名同函数，`t8` 的「同函数」判据本身看不见「死代码」），
+  挡住它的是 `t5` / `t9` / `t10`；而且**在 B2 修好之前它根本连看都看不见**；
+- F（`Err` 形态）⇒ 旧版 **73/0 全绿**，现在 `t1` 红（两道：`into_response(` 未钉住 + `StatusCode::OK`）。
+
+### 12.7 P-2 的登记**改写**（QA 第 4 轮 §5.2 的阻断项）
+
+> 旧登记（§11.7 P-2）只写了 `Ok` 通道：「改返回类型 ⇒ 编译不过 ⇒ diff 显眼」。
+> **那句对 `Ok` 通道成立，对 `Err` 通道不成立** —— `Result<Json<_>, Response>` 的 `Err` 类型**本来**就是 `Response`。
+
+| 通道 | 真实形态 | 真实危害 | 触发条件 | 现在谁挡 |
+| --- | --- | --- | --- | --- |
+| **`Ok` 通道**（返回裸 `String` / 元组 / `Html`） | `return Ok(raw_string)` 与 `Ok(Json<T>)` 不同型 ⇒ **编译不过**；要静默只能**改签名** | 漏出的是一份**未过闸的客户字节**，且 `Content-Type` 变 `text/plain`（浏览器不当 JSON 用，但 `curl`/脚本照收） | 改已有 handler 的签名，或新增一个返回 `String` 的路由 | `t5`（新 fn 必登记）+ `t1`（`String` 本身不是写点，但新路由/新 fn 会红）+ `t9`（`Json(`/`Html(` 的实参） |
+| **`Err` 通道**（QA 的 4 行） | `return Err((StatusCode::OK, raw).into_response())` —— **签名一字不动**（`Err` 就是 `Response`），4 行，不走 `Json(`/`Html(`/`Response::builder`/`.body(`/`Body::from(` | **与 M10b 完全同一后果**：`?qa=1` 直接吐未过闸的整份客户图（`state.graph` 与 H2 同源），**而且绕过 `check_scope`**（分支写在它前面就跳过了项目/版本校验）；代价只有 4 行 + 一个 `into_response()` | 在**任何**返回 `Result<_, Response>` 的 handler 里加一条 `if`，`return Err((StatusCode::OK, raw).into_response())`；`raw` 用 `serde_json::to_string(&*state.graph)` 一行就有 | **本轮封住**：`.into_response(` 进禁调集合（只有五处错误通道逐字钉住）+ `StatusCode::OK` 禁调 ⇒ `t1` 红（§12.6 #7 实测） |
+
+**⚠️ 残余（必须写清，不许读成「已封堵」）—— P-2 的第四种拼写：`err(status, &raw)`**
+
+- **形态**：`return Err(err(StatusCode::BAD_REQUEST, &raw));` —— `err()` 的第二参是 `&str`，
+  把客户字节塞进 `{"error": "<raw>"}` 的 JSON 字符串里，状态码是 4xx（不是 200，所以 `StatusCode::OK` 禁调挡不住）。
+- **危害**：客户数据仍然**字节级外泄**（`curl` 直接可读），只是不再是「浏览器会当页面渲染的那条路径」；
+  且同样跳过 `check_scope` / 管线判据。
+- **什么条件下会真漏**：有人想「把错误说清楚一点」，把已解析好的 `raw` 直接塞进 `err(…)` 的文案位。
+  **这是一种「善意」改动**，比恶意更难防。
+- **为什么本轮不封**：`err()` 的 12 个调用点里有 `e.message()` / `&msg` / `rendered.as_str()`（Z1 管线产物）等
+  **多种正当形状**，在源码层做「只许这几种」的否定式会立刻误伤 Z1 那条错误通道（那是本需求要保留的）；
+  真正的解法是**类型层**：`err()` 收一个只能由 `pipeline` / `safe_error` 造出来的 `ErrorText`。
+  这要动 `http.rs` 的错误通道签名（**13 条出口接线**的一部分），**超出本轮「不动接线」的范围**。
+- **接手人**：Dev（第 5 轮）/ BA 裁定是否接受为长期登记。方案：`pub struct ErrorText(String)`（无公开构造器）
+  + `err(status, msg: ErrorText)` + `safe_error` 返回 `ErrorText`。
+
+### 12.8 未退化复验（逐项实测）
+
+| 项 | 实测 | 判定 |
+| --- | --- | --- |
+| 13 目标（未变异） | **74 passed / 0 failed**（10 / 12 / 4 / 1 / 2 / 4 / 3 / 2 / 3 / 10 / 7 / 7 / 9）—— 原 73 + 新增 `t10` | ✅ 只增不减 |
+| `src/` 改动 | `git status --porcelain src` **空**（`OUTLETS` / 13 条接线 / `pipeline.rs` 零改动） | ✅ |
+| 五红线 `numstat` | `git diff --numstat develop -- tests/drop_rate.rs tests/test_fk_naming.rs src/domain/view.rs src/domain/review_view.rs src/mcp/tools.rs` → **空** | ✅ |
+| 无删测试 | `git diff --name-status develop -- tests` 无 `D`；本轮 diff 只删了**被替换的实现与文档行**（22 行，逐行核过） | ✅ |
+| 无新增 `#[ignore]` | 全仓属性行只有 `test_mcp_server.rs:553`（`develop` 同位置也有） | ✅ |
+| 断言只增 | `property_filter` 30、`exit_ordering_req106` 11、`binary_output_guard` 79（三个文件本轮**未改**） | ✅ |
+| `property_filter` 前 145 行 | `769763BB…5E94` = `769763BB…5E94`（**逐字节相同**）；`git diff develop HEAD` 的唯一差异是 **第 145 行之后插入的 12 行模块文档**（第 2 轮写的），**没有一行断言被动过** | ✅ 未退化。<br>⚠️ QA 上一轮报的 `D620DCD3…` vs `A1B5101D…` 我复现不出来 —— 差异在**取字节的口径**（我按 `git show` 的文本取前 145 行、LF 拼接、末尾补 `\n`）。**结论相同**（第 145 行之后才变），但**数字本身不可复现**，如实登记 |
+| golden | `git status --porcelain tests/fixtures` 空；`test_req107_zero_visible_change` 3 passed、`test_req107_pipeline_bytes` 1 passed | ✅ |
+| Z1 / Z2 / Z3 | `test_req107_scope_error_gate` 4 passed；`OutletsId::Z1/Z2/Z3` 记号在 `t3` 里仍是 1/1/1 | ✅ |
+| 13 条接线 | `OUTLETS` 未改 ⇒ 13 条一条没动；`t8` 绿说明证据仍在 | ✅ |
+
+### 12.9 本轮实测命令与结果（本机 Windows + 无 PostgreSQL）
+
+```powershell
+# A8：临时挪出 unix-only bin（⛔ 不删/不改内容），跑完挪回
+#   BEFORE = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+#   AFTER  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D   SAME=True
+cargo test --test test_req107_source_enumeration --test test_req107_outlet_pipeline `
+  --test test_req107_guard_granularity --test test_req107_pipeline_bytes `
+  --test test_req107_red_lines --test test_req107_scope_error_gate `
+  --test test_req107_static_texts --test test_req107_track_manifest `
+  --test test_req107_zero_visible_change --test test_property_filter `
+  --test test_exit_ordering_req106 --test test_binary_output_guard `
+  --test test_graph_server --no-fail-fast
+```
+
+| 命令 | 实测 |
+| --- | --- |
+| 13 个目标（未变异） | **74 passed / 0 failed** |
+| 7+1 次变异（**两遍**：B1 的 needle 从 `.into_response(` 扩成 `into_response(` 之后换基线**全部复跑**） | `M6b 72/2`、`M7 73/1`、`M5d 73/1`、`M10b 73/1`、`a′ 72/2`、`d2 71/3`、`F 73/1`、`B2only 71/3`（**全部运行期判红，零编译失败**） |
+| 复原后复跑（每次变异后都从 stash 逐字节复原并核 sha） | **74 / 0** |
+| `git diff --stat HEAD -- tests/test_req107_source_enumeration.rs` | `+562 / −22`（唯一被改的**被跟踪**判据文件；22 行删除全是**被替换的实现/文档**，逐行核过无断言丢失） |
+| `cargo test --lib` | **168 passed / 2 failed**（`db::apply` / `extract::introspect` = `MissingEnv`，**环境不具备**） |
+| `cargo test --doc` | **4 passed** |
+| `tests/test_retained_names_req084.rs` | **跑不了**（A10：`include_str!` 引用 unix-only bin，挪出期间编不过）——如实报 |
+| `git status --porcelain` 收工 | 只有 `tests/test_req107_source_enumeration.rs`（+ 本文件待提交）；`src/bin/ontok-gate-preflight.rs` 已挪回、sha 一致 |
+
+### 12.10 我认为第 5 轮最可能被打回的一点
+
+**`err(status, &raw)`（§12.7 的 P-2 残余）**。理由：它是**同一条 `Err` 通道**上剩下的那一种拼写，
+而 A14 已经把「`Err` 通道」定成本轮的阻断词；QA 只要把 `F` 变异里的 `into_response()` 换成
+`err(StatusCode::BAD_REQUEST, &raw)`，就会看到 `t1` 全绿（`Json(` 在 `err()` 里，且被白名单钉住）。
+我把它**如实登记**（危害 / 条件 / 接手人 / 类型层解法），**不写成已封堵** —— 但按 A13 的口径，
+「登记」要 QA 认可危害评估才算过关，而这条的危害（字节级外泄、绕过 `check_scope`）不轻。
+
+**第二可能**：`t9` 的「`match` 只找最近一处、不跟嵌套」：在一个 `match` 的 `Ok` 分支里再套一个
+`match`（外层是管线、内层是手搓），`product_origin` 会取**内层**的被匹配表达式而判红 —— 这是**偏严**的误红，
+不会漏；但如果有人写「先 `let rendered = publish_value(...)?;` 再 `match rendered { ... }`」，
+它会**误判为红**（偏严方向，可修，不构成绕过）。
+
+**第三可能**：`B2only` 这一格我只用「追加到文件末尾」验证；如果第 5 轮把恶意代码塞进
+**`#[cfg(test)]` 模块之外、但有 `#[cfg(not(test))]`** 的位置，`prod()` 仍然看得见（没有豁免），
+但如果有人用 `#[cfg(feature = "x")] mod …` 包一层，`prod()` 照样扫（它只跳过 `cfg(test)`）—— 方向是**偏严**。
+
+---
+
 ## 附 · 交付物清单
 
 | # | 交付物 | 位置 |
@@ -893,3 +1116,4 @@ cargo test --test test_req107_source_enumeration --test test_req107_outlet_pipel
 | 8 | 已知限制 | 本文件 §8 |
 | 9 | 异议 | 本文件 §9 |
 | 10 | 第 3 轮修复证据（F1–F4 + 8 次变异三元组 + P-1/P-2/P-3 危害评估） | 本文件 §11 + `.review-workspace/req107/dev3/{patches,logs,stash}/` |
+| 11 | 第 4 轮修复证据（B1–B5 + 7+1 次变异三元组 + P-2 改写 / P-2 残余） | 本文件 §12 + `.review-workspace/req107/dev4/{patches,logs,stash}/` |
