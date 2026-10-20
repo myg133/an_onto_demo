@@ -25,9 +25,15 @@
 //! 也就是「必须先过前处理与发布闸」。下面两条 doctest 把这件事钉在**编译期**：
 //!
 //! ```compile_fail
-//! use ontok::domain::pipeline::OutletRender;
-//! // 字段私有 ⇒ 管线之外**字面量构造**不出来。
-//! let forged = OutletRender { text: String::from("样例客户") };
+//! use ontok::domain::pipeline::{DropReport, OutletRender};
+//! // 三个字段全是私有的 ⇒ 管线之外**字面量构造**不出来。
+//! // ⚠️ 这里刻意把**三个字段都写全**：只写 `text` 的话，即使把 `text` 改成 `pub`，
+//! //    这条 doctest 仍会因「缺字段」而编不过 ⇒ 它证明的就不是「字段私有」了。
+//! let forged = OutletRender {
+//!     text: String::from("样例客户"),
+//!     report: DropReport::default(),
+//!     outlet: "C3",
+//! };
 //! ```
 //!
 //! ```compile_fail
