@@ -433,7 +433,7 @@ ccb3e87 [Dev] 出口管线骨架 + 类型层约束（OutletRender/GuardedValue �
 
 ### 7.5 判据自身的一处假红（如实登记，纪律 E）
 
-`test_req107_red_lines.rs` 第一版把「新增行里出现字面量 ` #[ignore] `」当判据 ——
+`test_req107_red_lines.rs` 第一版把「新增行里出现字面量 `#[ignore]`」当判据 ——
 于是**它自己的注释与代码**（以及 `test_req107_zero_visible_change.rs` 里
 「刻意不用 `#[ignore]`」那句话）全被算成「新增了 ignore」⇒ 判据**恒红 = 恒假**。
 
