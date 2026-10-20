@@ -263,3 +263,28 @@ AC-006 要求 Z1 的 400 响应体**必须变**（不再回显项目名），而
 
 1. **新测试文件不要加** `//! @guard-manifest: REQ-081` 标记 —— 否则 `tests/test_guard_manifest_req081.rs:904` 立刻红（除非同步改那套基线，而那超出本需求范围）。
 2. **本机只能** `cargo test --test <name>` 或 `cargo test --doc` / `--lib`；全量 `cargo test` 编不过。交付物必须写清跑的是哪一种。
+
+### A8 · 本机测试命令口径（Dev 实测推翻了我派单时的说法）
+
+**事实**：`cargo test --test <name>` 也会构建**全部 bin**，而 `src/bin/ontok-gate-preflight.rs` 的 `std::os::unix` 在 Windows 编不过
+⇒ 我派单时写的「单个 `--test` 可跑」**不成立**，QA 若照原口径跑 29 条用例会**全部构建失败**。
+
+**裁定（允许的绕行，唯一一种）**：
+1. 把 `src/bin/ontok-gate-preflight.rs` **临时挪出**（`Move-Item`/`mv`，⛔ **不许删除**），跑测试，**立即挪回**；
+2. 挪出前与挪回后各取一次 `sha256`，**必须一致**，并把两个值写进交付物；
+3. ⛔ 不许修改该文件内容、不许改 `Cargo.toml` 把它排除、不许加 `#[cfg(unix)]`（那属于另一个需求的改动）；
+4. 交付物必须写明：**哪些测试是这么跑出来的**，以及「全量口径须在 Linux 复核」。
+
+**QA 口径**：允许复用上述绕行；必须**独立复验** sha256 前后一致，并独立至少跑一遍 AC-003 的判据。
+
+### A9 · Dev 改写的既有测试清单（QA 逐行审的对象）
+
+A3 只点名了 1 条，Dev 实际改写了 **3 条**，均须 QA 逐行判「改紧还是放宽」：
+
+| # | 测试 | 授权 | QA 要判什么 |
+| --- | --- | --- | --- |
+| 1 | `test_property_filter::all_three_outlets_call_the_one_shared_function` | A3 授权 | 正向 → 否定式，是否**真的更严** |
+| 2 | `test_exit_ordering_req106` 的两条 | ⚠ **超出 A3** | 锚点从 `cli.rs` 迁到管线后，**断言内容是否等价**（时序仍被钉住） |
+| 3 | `test_binary_output_guard` 的 G-1/G-4 | ⚠ **超出 A3** | 新增 `WIRING_PIPELINE` 族是否**覆盖原有意图**，还是只换了个名字 |
+
+⛔ 判定标准：**不许**出现「原来能抓的变异，现在抓不到」。QA 必须对每条做变异确认。

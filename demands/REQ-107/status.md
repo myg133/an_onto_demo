@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**进行中**（2026-10-20 开工）
+**待验证**（2026-10-20 · Dev 已交付，等待 QA 代码审核）
 
 ## 状态流转
 
@@ -18,7 +18,7 @@
 - [x] `.feature/manifest.json` —— worktree 分配登记
 - [x] `demands/REQ-107/acceptance.md` —— **基于两份独立摸底清单**（HTTP/MCP 一份、CLI/HTML 一份），非凭印象
 - [x] QA 生成测试用例（29 条，P0=17；覆盖矩阵 6 条如实标注「无法机判」）
-- [ ] 派 Dev 编码 —— **已派**（2026-10-20 16:20，分 5 阶段，先出设计再写代码）
+- [x] 派 Dev 编码 —— 已交付（6 提交，8 个新判据文件，13/13 出口接线）
 
 ## 摸底结论（2026-10-20，两份独立 explore）
 
@@ -55,3 +55,9 @@
   ① 计数不闭合（34 vs 33，差 Z4，Z4 不是出口）；② AC-005 与 AC-006 冲突（Z1 是唯一允许的可见变化）；
   ③ 既有 `test_property_filter.rs:341` 必红 ⇒ **改写不许删**；④ `property_filter.rs:139` 与 REQ-103 的边界（两套否定式断言各管一段）。
 - QA 指出三条「最可能被做成假绿」：TC-016（golden 用改后代码生成 ⇒ diff 恒空）、TC-010（M3 盲区）、TC-023（`description` 今天恰好干净 ⇒ `assert!(!is_empty())` 零判别力）。已进 Dev briefing。
+
+## Dev 交付后新增的待办
+
+- [ ] QA 代码审核（**重点**：A9 的三条既有测试改写、A8 的测试绕行、AC-003 判据是否可被自造命名绕过）
+- [ ] 清理 `.review-workspace/req107/base`（Dev 为 golden 取证建的 detach worktree）
+- [ ] 合并后回收 `feature-REQ-107`
