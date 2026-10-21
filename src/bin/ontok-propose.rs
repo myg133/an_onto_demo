@@ -575,27 +575,39 @@ async fn main() -> Result<()> {
         p.with_file_name("proposal-rejected.json").to_string_lossy().to_string()
     });
 
-    // 待查 / 拒绝清单**不是提案**：它们没有 `extracted_by`，也不该被 import。
-    // 显式写 `"importable": false`，免得有人拿它们去 `propose import`
-    // 然后在 `propose import` 里再撞一次「项目不存在」以外的怪错误。
-    let side_file = |items: &[serde_json::Value], counts_note: &str| -> serde_json::Value {
-        serde_json::json!({
-            "project": project,
-            "base_version": base_version,
-            "round": round,
-            "importable": false,
-            "method": ontok::domain::confidence::METHOD,
-            "note": counts_note,
-            "items": items,
-        })
-    };
+    // 待查 / 拒绝清单都**不是主提案**：它们没有 `extracted_by`。
+    //
+    // ★ AC-015：`importable` 必须与「这份文件到底能不能导」**同真同假** ——
+    // `propose import` 现在把它当硬闸（不是约定）。
+    //
+    // | 文件 | 能不能导 | 为什么 |
+    // | --- | --- | --- |
+    // | `proposal-rejected.json` | **不能**（`false`） | 拒绝档（<0.30）连提案都不是；一次 `--accept-all` 就进本体 |
+    // | `proposal-pending.json` | **能**（`true`） | 待查清单就是要进审核界面的「证据不足」折叠区（设计概要 §五），只是不进主提案 |
+    //
+    // 之前两栏都写 `false`：那既让「带 false 的文件导得进去」（声明不生效），
+    // 又让待查清单**永远导不进来**（低档因此无法被人工审核）—— 两件事都是 bug。
+    let side_file =
+        |items: &[serde_json::Value], importable: bool, counts_note: &str| -> serde_json::Value {
+            serde_json::json!({
+                "project": project,
+                "base_version": base_version,
+                "round": round,
+                "importable": importable,
+                "method": ontok::domain::confidence::METHOD,
+                "note": counts_note,
+                "items": items,
+            })
+        };
     let pending_doc = side_file(
         &routing.pending,
-        "待查清单（0.30–0.60）：不进主提案；证据不足，需人工判断",
+        true,
+        "待查清单（0.30–0.60）：不进主提案；证据不足，需人工判断（可导入审核，但不自动进提案）",
     );
     let rejected_doc = side_file(
         &routing.rejected,
-        "被拒绝（<0.30）：不提案；每条都带 veto 理由",
+        false,
+        "被拒绝（<0.30）：不提案；每条都带 veto 理由。importable: false ⇒ propose import 会拒绝导入",
     );
     for p in [&pending_path, &rejected_path] {
         if let Some(parent) = std::path::Path::new(p).parent() {

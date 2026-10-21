@@ -65,6 +65,58 @@ pub const WEIGHTS: [(&str, f64); 5] = [
     ("target_is_key", 0.10),
 ];
 
+// ── veto 上限（**数值只在这里写一次**）────────────────────────────
+//
+// 这些常量同时被 [`score()`]（压顶）与 [`from_untrusted()`]（核对文件里的
+// `veto.cap`）使用。为什么不是一个数字写在 `score()` 里、另一个数字写在
+// 校验里：那样「上限表」本身就是第二个可被改的地方 —— 校验会拿文件里
+// 自己声明的那条上限来检查它自己（QA 攻击 f 的同构）。
+const CAP_TYPE_INCOMPATIBLE: f64 = 0.15;
+const CAP_ZERO_HIT: f64 = 0.20;
+const CAP_GENERIC_NAME_NO_EVIDENCE: f64 = 0.40;
+const CAP_ALL_NULL: f64 = 0.45;
+const CAP_PARTIAL_HIT: f64 = 0.75;
+const CAP_COMPOSITE_KEY_UNSUPPORTED: f64 = 0.50;
+const CAP_POLYMORPHIC_TARGET: f64 = 0.40;
+const CAP_SELF_REF_NON_UNIQUE: f64 = 0.50;
+const CAP_NO_DATA_EVIDENCE: f64 = 0.45;
+
+/// `veto.signal` → 上限（设计概要 §3.4 + A-2 的第 9 条）。
+///
+/// **这是上限表的唯一真相**：`score()` 压顶用这些值，`from_untrusted()`
+/// 核对不可信 JSON 里的 `veto.cap` 也读这张表。把文件里的 `cap` 改大
+/// 救不了一条 0 命中的关系 —— 它既过不了 `cap` 一致性，也过不了
+/// 「分数 ≤ 按证据推出的上限」那一条。
+pub const VETO_CAPS: [(&str, f64); 9] = [
+    ("type_incompatible", CAP_TYPE_INCOMPATIBLE),
+    ("zero_hit", CAP_ZERO_HIT),
+    ("generic_name_no_evidence", CAP_GENERIC_NAME_NO_EVIDENCE),
+    ("all_null", CAP_ALL_NULL),
+    ("partial_hit", CAP_PARTIAL_HIT),
+    ("composite_key_unsupported", CAP_COMPOSITE_KEY_UNSUPPORTED),
+    ("polymorphic_target", CAP_POLYMORPHIC_TARGET),
+    ("self_ref_non_unique", CAP_SELF_REF_NON_UNIQUE),
+    ("no_data_evidence", CAP_NO_DATA_EVIDENCE),
+];
+
+/// 查 veto 上限；未知信号名 ⇒ `None`（调用方决定是「拒绝」还是「不可能」）。
+pub fn veto_cap(signal: &str) -> Option<f64> {
+    VETO_CAPS.iter().find(|(n, _)| *n == signal).map(|(_, c)| *c)
+}
+
+/// **结构类** veto：证据在候选关系本身（复合键 / 多态列 / 自引用），
+/// 不在 `confidence.signals` 里。
+///
+/// 所以 AC-014 #3（「veto 必须出现在 signals 里」）对它们只能核到
+/// 「上限与表一致、分数不越上限」为止 —— **不是放过它们**：这三条只会
+/// 把分数往下压（0.40–0.50），而能把分数抬高到「高」档的那几条
+/// （0.15 / 0.20 / 0.75）全部有 `signals` 证据可核。
+const STRUCTURAL_VETOES: [&str; 3] = [
+    "composite_key_unsupported",
+    "polymorphic_target",
+    "self_ref_non_unique",
+];
+
 /// 泛化列名 —— 名字**不指向任何具体实体**，实测命中率极低（`batch_id` 0/5）。
 ///
 /// 名单来自设计概要 §3.1，**不是**「凡是 `*_id` 都算」：
@@ -438,7 +490,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
         if input.from_type != to {
             vetoes.push(Veto {
                 signal: "type_incompatible".into(),
-                cap: 0.15,
+                cap: CAP_TYPE_INCOMPATIBLE,
                 reason: format!(
                     "源列类型族 {:?} 与目标键列类型族 {:?} 不相容 —— 值永远比不中，关系不成立",
                     input.from_type, to
@@ -450,7 +502,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
         if f.sampled == 0 {
             vetoes.push(Veto {
                 signal: "all_null".into(),
-                cap: 0.45,
+                cap: CAP_ALL_NULL,
                 reason: format!(
                     "源列取不到任何非空样本（{}）——没有数据证据",
                     f.reason.as_deref().unwrap_or("空列")
@@ -459,7 +511,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
             if is_generic_column(&input.column) {
                 vetoes.push(Veto {
                     signal: "generic_name_no_evidence".into(),
-                    cap: 0.40,
+                    cap: CAP_GENERIC_NAME_NO_EVIDENCE,
                     reason: format!(
                         "泛化列名 {} + 无数据证据：名字不指向具体实体，数据也没能证明它指向 {}",
                         input.column, input.to_table
@@ -469,7 +521,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
         } else if f.matched == 0 {
             vetoes.push(Veto {
                 signal: "zero_hit".into(),
-                cap: 0.20,
+                cap: CAP_ZERO_HIT,
                 reason: format!(
                     "采了 {} 行、命中 0 行 —— 这是硬反驳（{} 里没有这些值）",
                     f.sampled, input.to_table
@@ -478,7 +530,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
         } else if f.matched < f.sampled {
             vetoes.push(Veto {
                 signal: "partial_hit".into(),
-                cap: 0.75,
+                cap: CAP_PARTIAL_HIT,
                 reason: format!(
                     "部分命中 {}/{} —— 有真实引用，但不完全（值域稀疏或存在多态）",
                     f.matched, f.sampled
@@ -492,14 +544,14 @@ pub fn score(input: &ScoreInput) -> Confidence {
         // 让它只能进「待查清单」。
         vetoes.push(Veto {
             signal: "no_data_evidence".into(),
-            cap: 0.45,
+            cap: CAP_NO_DATA_EVIDENCE,
             reason: "未采样（--no-sample 或源库不可连）：只有结构证据，缺少数据证据不算可信"
                 .into(),
         });
         if is_generic_column(&input.column) {
             vetoes.push(Veto {
                 signal: "generic_name_no_evidence".into(),
-                cap: 0.40,
+                cap: CAP_GENERIC_NAME_NO_EVIDENCE,
                 reason: format!("泛化列名 {} + 无数据证据", input.column),
             });
         }
@@ -507,14 +559,14 @@ pub fn score(input: &ScoreInput) -> Confidence {
     if input.composite_target_key {
         vetoes.push(Veto {
             signal: "composite_key_unsupported".into(),
-            cap: 0.50,
+            cap: CAP_COMPOSITE_KEY_UNSUPPORTED,
             reason: "目标表是复合主键，v1 不支持复合键引用（R2）".into(),
         });
     }
     if input.polymorphic {
         vetoes.push(Veto {
             signal: "polymorphic_target".into(),
-            cap: 0.40,
+            cap: CAP_POLYMORPHIC_TARGET,
             reason: format!(
                 "{} 是多态列（同表有 *_type 或多态词干），目标表由数据决定，不能靠列名定（R3）",
                 input.column
@@ -524,7 +576,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
     if input.self_ref && input.target_key != TargetKey::Primary {
         vetoes.push(Veto {
             signal: "self_ref_non_unique".into(),
-            cap: 0.50,
+            cap: CAP_SELF_REF_NON_UNIQUE,
             reason: "自引用且目标列不是主键（R4）：自引用必须指向唯一行".into(),
         });
     }
@@ -570,7 +622,197 @@ fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
-/// 从**不可信的 JSON** 读一条 confidence（AC-008 的入口判据）。
+/// 由 **`signals`（证据）**推出「按评分卡应当触发」的 veto 及上限。
+///
+/// 关键点：这里**不读文件里的 `veto` 字段**。文件说「我触发了 `zero_hit`」
+/// 不算数，要 `signals` 里的 `sampled` / `matched` 说得出来才算。于是
+/// 「把 `veto` 整段删掉再写个 0.99」与「把 `veto.cap` 改成 0.99」都失去意义 ——
+/// 分数仍然被**证据**给出的上限压住。
+///
+/// # 为什么 `generic_name_no_evidence` 还要附加条件
+///
+/// `name_match = 0.3` 说明「列名是泛化名」，但评分卡只在**没有数据证据**时
+/// 才把它升成 veto（有数据证据的情况下泛化名只是低分信号）。这里照抄
+/// 同一条触发条件 —— 否则一条 5/5 命中的 `batch_id` 关系会被误判成
+/// 「本该被 0.40 压顶」，于是合法的高分反被拒。
+fn evidence_vetoes(signals: &[Signal], data_evidence: DataEvidence) -> Vec<(&'static str, f64)> {
+    let find = |name: &str| signals.iter().find(|s| s.name == name);
+    let mut out: Vec<(&'static str, f64)> = Vec::new();
+    if let Some(h) = find("sample_hit_rate") {
+        if let (Some(sampled), Some(matched)) = (h.sampled, h.matched) {
+            if sampled == 0 {
+                out.push(("all_null", CAP_ALL_NULL));
+            } else if matched == 0 {
+                out.push(("zero_hit", CAP_ZERO_HIT));
+            } else if matched < sampled {
+                out.push(("partial_hit", CAP_PARTIAL_HIT));
+            }
+        }
+    }
+    if let Some(t) = find("type_compatible") {
+        if t.value < 1.0 {
+            out.push(("type_incompatible", CAP_TYPE_INCOMPATIBLE));
+        }
+    }
+    if data_evidence == DataEvidence::None {
+        out.push(("no_data_evidence", CAP_NO_DATA_EVIDENCE));
+    }
+    if let Some(n) = find("name_match") {
+        let no_data = data_evidence == DataEvidence::None
+            || find("sample_hit_rate").map_or(false, |h| h.sampled == Some(0));
+        if n.value <= 0.3 && no_data {
+            out.push(("generic_name_no_evidence", CAP_GENERIC_NAME_NO_EVIDENCE));
+        }
+    }
+    out
+}
+
+/// 「分数越上限」的报错要能让人**顺着文案找到那一行证据**。
+fn evidence_hint(name: &str, signals: &[Signal]) -> String {
+    let hit = signals
+        .iter()
+        .find(|s| s.name == "sample_hit_rate")
+        .and_then(|h| match (h.sampled, h.matched) {
+            (Some(s), Some(m)) => Some((s, m)),
+            _ => None,
+        });
+    match name {
+        "zero_hit" | "partial_hit" | "all_null" => match hit {
+            Some((s, m)) => format!("signals 里 sample_hit_rate 是 sampled={s} / matched={m}"),
+            None => "signals 里没有 sample_hit_rate 的 sampled/matched".to_string(),
+        },
+        "type_incompatible" => "signals 里 type_compatible < 1.0（类型族不相容）".to_string(),
+        "no_data_evidence" => "data_evidence = none（没采过样）".to_string(),
+        "generic_name_no_evidence" => "name_match = 0.3（泛化名）且没有数据证据".to_string(),
+        _ => "signals 与 veto 声明不一致".to_string(),
+    }
+}
+
+/// **AC-014 · 自证链**的三条入口校验（一个函数，两处调用：
+/// `propose import` 的 `NewItem::from_json` 与 `apply` 的 `link_from_item`）。
+///
+/// 背景（QA `qa-review.md` §3.2 攻击 f）：`method` / 范围 / `band` 三道校验
+/// 拦不住「把 `score` 从 0.20 改成 0.99、`veto` 原样保留」—— 那份提案会
+/// 一路落到 `link_types.confidence = 0.99`，审核界面打出
+/// 「`[高] 0.99 … 证据 0/5 … veto zero_hit 硬反驳`」这种自相矛盾的结论。
+///
+/// 三条判据（缺一即拒绝导入）：
+///
+/// | # | 校验 | 为什么 |
+/// | --- | --- | --- |
+/// | 1 | `score ≤ 每个触发 veto 的上限` | 否则 veto 只是注释 |
+/// | 2 | `signals[].weight` 与 `method` 的权重表**逐项相等** | 设计概要 §2.1：「可复核」 |
+/// | 3 | 每个 `veto` 信号名必须在 `signals` 里有**对应证据** | 防止「声明了 veto、但没有证据」 |
+///
+/// 第 1 条的「触发」由**证据**决定（[`evidence_vetoes`]），不由文件里的
+/// `veto` 字段决定 —— 这一条是这三条校验的关键：只要 `signals` 说
+/// 「5 行 0 命中」，`score` 就**不可能**是 0.99，写 `veto` 或删 `veto` 都一样。
+fn validate_self_evidence(
+    method: &str,
+    score: f64,
+    signals: &[Signal],
+    veto: Option<&Veto>,
+    data_evidence: DataEvidence,
+) -> Result<(), String> {
+    // ── 0. method 必须是有权重表的那一个 ─────────────────────────
+    //
+    // 若不拦，「把 method 改成 foo 再随便写权重」就能绕过第 2 条。
+    if method != METHOD {
+        return Err(format!(
+            "confidence.method = {method:?} 没有对应的权重表（本实现只有 {METHOD}）—— 分数无法复核"
+        ));
+    }
+
+    // ── 1. AC-014 #2：权重逐项相等 ───────────────────────────────
+    for s in signals {
+        let Some((_, want)) = WEIGHTS.iter().find(|(n, _)| *n == s.name) else {
+            return Err(format!(
+                "confidence.signals 里出现了权重表之外的信号 {:?} —— {METHOD} 只有 5 个信号；\
+                 veto 名（如 zero_hit）不是信号名，写进 signals 无从复核",
+                s.name
+            ));
+        };
+        if s.weight != *want {
+            return Err(format!(
+                "signals 权重与 {METHOD} 的权重表不一致：{} 的 weight = {}，权重表是 {:.2} —— 分数不可复核",
+                s.name, s.weight, want
+            ));
+        }
+    }
+
+    // ── 2. `sample_hit_rate` 的聚合量与取值必须自洽 ───────────────
+    //
+    // 拦的是「把 value 从 0.0 改成 1.0」这一类：命中率是 `sampled`/`matched`
+    // 的查表结果，不是自由变量。
+    if let Some(h) = signals.iter().find(|s| s.name == "sample_hit_rate") {
+        if let (Some(sampled), Some(matched)) = (h.sampled, h.matched) {
+            if matched > sampled {
+                return Err(format!(
+                    "signals 自相矛盾：sample_hit_rate 的 matched = {matched} > sampled = {sampled}"
+                ));
+            }
+            let expected = hit_rate_value(sampled, matched);
+            if (h.value - expected).abs() > 1e-9 {
+                return Err(format!(
+                    "signals 自相矛盾：sample_hit_rate 的 value = {} 与 {sampled}/{matched} 的查表值 {expected} 对不上",
+                    h.value
+                ));
+            }
+        }
+    }
+
+    // ── 3. AC-014 #3：声明的 veto 必须有证据 ─────────────────────
+    let derived = evidence_vetoes(signals, data_evidence);
+    if let Some(v) = veto {
+        let Some(canonical) = veto_cap(&v.signal) else {
+            return Err(format!(
+                "confidence.veto.signal = {:?} 不在 {METHOD} 的 veto 表里 —— 无上限可核",
+                v.signal
+            ));
+        };
+        // 上限表是**代码里的常量**，不是文件里写的那个数。
+        if v.cap != canonical {
+            return Err(format!(
+                "confidence.veto.cap = {} 与 {METHOD} 的记录不符（{} 应为 {:.2}）—— 上限表被改过",
+                v.cap, v.signal, canonical
+            ));
+        }
+        let evidenced = derived.iter().any(|(n, _)| *n == v.signal);
+        if !evidenced && !STRUCTURAL_VETOES.contains(&v.signal.as_str()) {
+            return Err(format!(
+                "声明了 veto {}，但 signals 里没有它 —— 没有对应证据（veto 不能只写在声明里）",
+                v.signal
+            ));
+        }
+    }
+
+    // ── 4. AC-014 #1：`score ≤ 每个触发 veto 的上限` ──────────────
+    //
+    // 先按**证据**推出来的上限判（删掉 `veto` 字段也逃不掉），
+    // 再按**声明**的那条判（防止声明一条更大的上限来抬高分数）。
+    for (name, cap) in &derived {
+        if score > *cap + 1e-9 {
+            return Err(format!(
+                "score {score:.2} 超过 veto {name} 的上限 {cap:.2} —— 分数与证据不自洽（{}）",
+                evidence_hint(name, signals)
+            ));
+        }
+    }
+    if let Some(v) = veto {
+        if let Some(cap) = veto_cap(&v.signal) {
+            if score > cap + 1e-9 {
+                return Err(format!(
+                    "score {score:.2} 超过 veto {} 的上限 {cap:.2} —— 分数与证据不自洽（{}）",
+                    v.signal,
+                    evidence_hint(&v.signal, signals)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 从**不可信的 JSON** 读一条 confidence（AC-008 / AC-014 的入口判据）。
 ///
 /// 为什么不让 serde 直接反序列化：`#[derive(Deserialize)]` 对**缺字段**
 /// 只有两种态度 —— 报一句 `missing field 'band'`（读者不知道这意味着什么），
@@ -581,7 +823,9 @@ fn round2(x: f64) -> f64 {
 /// - `score` 缺失 / 越界 ⇒ 拒绝；
 /// - `band` 是**派生量**：以 `score` 为准重算；若 JSON 里写了一个跟分数
 ///   对不上的 `band`，那是**被改过的**数据 ⇒ 拒绝（而不是悄悄改成对的）；
-/// - `signals` / `veto` / `data_evidence` 可缺省（前两者缺失时为空/无）。
+/// - `signals` / `veto` / `data_evidence` 可缺省（前两者缺失时为空/无），
+///   **但一旦写了，就必须与 `method` 的权重表、与彼此自洽**（AC-014，
+///   见 [`validate_self_evidence`]）。
 pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
     let method = v
         .get("method")
@@ -629,6 +873,8 @@ pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
         Some("none") => DataEvidence::None,
         Some(other) => return Err(format!("confidence.data_evidence = {other:?} 不是 sampled/none")),
     };
+    // ★ AC-014：分数必须与**证据**自洽（三条，见 `validate_self_evidence`）。
+    validate_self_evidence(method, score, &signals, veto.as_ref(), data_evidence)?;
     Ok(Confidence { score, method: method.to_string(), band, signals, veto, data_evidence })
 }
 
@@ -1324,6 +1570,205 @@ mod tests {
         .unwrap();
         assert_eq!(c.data_evidence, DataEvidence::None);
         assert_eq!(c.band, Band::Rejected);
+    }
+
+    // ── AC-014 · 自证链：分数不能脱离证据 ─────────────────────
+
+    /// 一条「5 行 0 命中」的真实证据五件套（就是 E5 那份的形状）。
+    fn zero_hit_signals() -> serde_json::Value {
+        serde_json::json!([
+            {"name": "sample_hit_rate", "value": 0.0, "weight": 0.45,
+             "sampled": 5, "matched": 0, "sample_digest": "sha256:bb"},
+            {"name": "name_match", "value": 0.6, "weight": 0.2},
+            {"name": "not_all_null", "value": 1.0, "weight": 0.15},
+            {"name": "type_compatible", "value": 1.0, "weight": 0.1},
+            {"name": "target_is_key", "value": 1.0, "weight": 0.1}
+        ])
+    }
+
+    fn zero_hit_confidence(score: f64, band: &str) -> serde_json::Value {
+        serde_json::json!({
+            "score": score,
+            "method": METHOD,
+            "band": band,
+            "signals": zero_hit_signals(),
+            "veto": {"signal": "zero_hit", "cap": 0.2, "reason": "采了 5 行、命中 0 行"},
+            "data_evidence": "sampled"
+        })
+    }
+
+    /// **QA 攻击 f 的原样复现**：`score` 0.20 → 0.99，`veto` / `signals` 原样。
+    ///
+    /// 变异自证：把 [`validate_self_evidence`] 第 4 段（上限判定）删掉，
+    /// 本测试立刻红 —— 那时的表现就是 QA 实测的
+    /// 「`[高] 0.99 … 证据 0/5 … veto zero_hit 硬反驳`」。
+    #[test]
+    fn ac014_tampered_score_above_veto_cap_is_rejected() {
+        let err = from_untrusted(&zero_hit_confidence(0.99, "high")).unwrap_err();
+        assert!(err.contains("0.99"), "要点名被改的分数：{err}");
+        assert!(err.contains("上限 0.20"), "要能定位到上限 0.20：{err}");
+        assert!(err.contains("不自洽"), "要说出这是「分数与证据不自洽」：{err}");
+        assert!(err.contains("sampled=5"), "要指到那一行证据：{err}");
+    }
+
+    /// 删掉 `veto` 整段也救不回来：上限由 **signals** 推，不由声明推。
+    #[test]
+    fn ac014_deleting_the_veto_does_not_rescue_a_high_score() {
+        let mut v = zero_hit_confidence(0.99, "high");
+        v.as_object_mut().unwrap().remove("veto");
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("超过 veto zero_hit 的上限 0.20"), "{err}");
+    }
+
+    /// AC-014 #2：权重改一个数字就拒（0.45 → 0.9）。
+    #[test]
+    fn ac014_weight_that_differs_from_the_table_is_rejected() {
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["signals"][0]["weight"] = serde_json::json!(0.9);
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("signals 权重与 evidence-scorecard-v1 的权重表不一致"), "{err}");
+        assert!(err.contains("0.45"), "要点名表里的值：{err}");
+    }
+
+    /// AC-014 #3：保留 `veto: zero_hit`、删掉对应证据信号 ⇒ 拒绝。
+    #[test]
+    fn ac014_veto_without_its_evidence_signal_is_rejected() {
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["signals"].as_array_mut().unwrap().remove(0); // 拿掉 sample_hit_rate
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("声明了 veto zero_hit"), "{err}");
+        assert!(err.contains("没有对应证据"), "{err}");
+    }
+
+    /// `veto.cap` 自己也是不可信输入：改大就拒（否则「上限表」可被文件改）。
+    #[test]
+    fn ac014_veto_cap_cannot_be_raised_by_the_file() {
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["veto"]["cap"] = serde_json::json!(0.99);
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("上限表被改过"), "{err}");
+        assert!(err.contains("0.20"), "{err}");
+
+        // 未知 veto 名也不行（没有上限可核）
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["veto"]["signal"] = serde_json::json!("trust_me");
+        assert!(from_untrusted(&v).is_err());
+    }
+
+    /// 命中率是 `sampled`/`matched` 的查表结果，不是自由变量。
+    #[test]
+    fn ac014_hit_rate_value_must_match_its_aggregates() {
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["signals"][0]["value"] = serde_json::json!(1.0);
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("查表值"), "{err}");
+
+        // matched > sampled 也拒
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["signals"][0]["matched"] = serde_json::json!(9);
+        assert!(from_untrusted(&v).is_err());
+    }
+
+    /// 未知 `method` / 权重表之外的信号名 ⇒ 拒绝（否则第 2 条可被绕过）。
+    #[test]
+    fn ac014_unknown_method_or_signal_name_is_rejected() {
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["method"] = serde_json::json!("my-own-v9");
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("没有对应的权重表"), "{err}");
+
+        let mut v = zero_hit_confidence(0.20, "rejected");
+        v["signals"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": "zero_hit", "value": 1.0, "weight": 0.0}));
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("权重表之外的信号"), "{err}");
+    }
+
+    /// **不许误伤**：真实评分卡产出的五种形状都能原样过闸（且读回来不变）。
+    ///
+    /// 这条是前面所有「拒绝」判据的对照：只拒被改过的，不拒算出来的。
+    #[test]
+    fn ac014_every_honest_score_passes_the_gate() {
+        let mk = |column: &str, to: &str, data: Option<SampleFacts>, polymorphic: bool| {
+            ScoreInput {
+                column: column.into(),
+                to_table: to.into(),
+                from_type: TypeFamily::Str,
+                to_type: Some(TypeFamily::Str),
+                target_key: TargetKey::Primary,
+                data,
+                composite_target_key: false,
+                polymorphic,
+                self_ref: false,
+            }
+        };
+        let facts = |s, m| SampleFacts { sampled: s, matched: m, digest: None, reason: None };
+        let cases = vec![
+            mk("customer_id", "customers", Some(facts(5, 5)), false),   // 高
+            mk("customer_id", "customers", Some(facts(5, 3)), false),   // 中（partial_hit）
+            mk("batch_id", "customers", Some(facts(5, 0)), false),      // 拒绝（zero_hit）
+            mk("group_id", "customers", Some(facts(0, 0)), false),      // 拒绝（all_null + generic）
+            mk("customer_id", "customers", None, false),                // 低（--no-sample）
+            mk("target_id", "customers", Some(facts(5, 5)), true),      // 结构 veto（polymorphic）
+        ];
+        for input in cases {
+            let c = score(&input);
+            let v = serde_json::to_value(&c).unwrap();
+            let back = from_untrusted(&v).unwrap_or_else(|e| {
+                panic!("真产出的分数被拒了（误伤）：{e}\n{v}");
+            });
+            assert_eq!(back, c, "读回来必须逐字段相同");
+        }
+    }
+
+    /// `score()` 用的每条上限都必须来自 [`VETO_CAPS`]（一张表，不是两份判据）。
+    #[test]
+    fn ac014_veto_caps_have_exactly_one_source_of_truth() {
+        assert_eq!(VETO_CAPS.len(), 9, "设计概要 §3.4 的 8 条 + A-2 的 no_data_evidence");
+        assert_eq!(veto_cap("zero_hit"), Some(0.20));
+        assert_eq!(veto_cap("type_incompatible"), Some(0.15));
+        assert_eq!(veto_cap("partial_hit"), Some(0.75));
+        assert_eq!(veto_cap("no_data_evidence"), Some(0.45));
+        assert_eq!(veto_cap("nope"), None);
+
+        let facts = |s, m| SampleFacts { sampled: s, matched: m, digest: None, reason: None };
+        let mut inputs = vec![];
+        for (column, data, poly) in [
+            ("customer_id", Some(facts(5, 5)), false),
+            ("customer_id", Some(facts(5, 3)), false),
+            ("batch_id", Some(facts(5, 0)), false),
+            ("group_id", Some(facts(0, 0)), false),
+            ("customer_id", None, false),
+            ("target_id", Some(facts(5, 5)), true),
+        ] {
+            inputs.push(ScoreInput {
+                column: column.into(),
+                to_table: "customers".into(),
+                from_type: TypeFamily::Str,
+                to_type: Some(TypeFamily::Str),
+                target_key: TargetKey::Plain,
+                data,
+                composite_target_key: false,
+                polymorphic: poly,
+                self_ref: false,
+            });
+        }
+        inputs.push(ScoreInput { from_type: TypeFamily::Str, to_type: Some(TypeFamily::Num), ..base() });
+        inputs.push(ScoreInput { composite_target_key: true, ..base() });
+        inputs.push(ScoreInput { self_ref: true, target_key: TargetKey::Plain, ..base() });
+        for input in inputs {
+            let c = score(&input);
+            if let Some(v) = &c.veto {
+                assert_eq!(
+                    veto_cap(&v.signal),
+                    Some(v.cap),
+                    "score() 给的 {} 上限与 VETO_CAPS 表不一致（一张表原则）",
+                    v.signal
+                );
+            }
+        }
     }
 
     // ── AC-011 · 校准分箱 ────────────────────────────────────

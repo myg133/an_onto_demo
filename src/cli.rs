@@ -1205,11 +1205,48 @@ async fn version_cmd(pool: &PgPool, cmd: VersionCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// AC-015 · 导入前的**顶层闸**：带 `importable: false` 的文件不是提案。
+///
+/// 为什么在 `cli` 里单独成一个函数而不是写在 `propose_cmd` 里：
+/// 它是**所有**导入通道都该过的一道门（今天只有 `propose import` 消费这类文件），
+/// 而「写在流程中间的一行 if」没法被单测钉住 —— 下一步有人重排 `propose_cmd`
+/// 就可能把它挪没了。判据要能单独执行。
+///
+/// 语义：
+/// - **缺省** ⇒ 可导入（REQ-108 之前的产物没有这个字段）；
+/// - **恰好 `true`** ⇒ 可导入；
+/// - 其它（`false` / `"false"` / `0` / `null`）⇒ **拒绝**（fail-closed：
+///   一个说不清自己能不能导的文件，不该被猜成能导）。
+pub fn ensure_importable(path: &std::path::Path, doc: &Value) -> anyhow::Result<()> {
+    if let Some(v) = doc.get("importable") {
+        if v.as_bool() != Some(true) {
+            anyhow::bail!(
+                "{} 顶层声明 importable = {} —— 这是被拒绝档，不能导入。\n\
+                 拒绝档（<0.30）的关系只记 veto 理由、不进本体；可导入的是主提案 \
+                 proposal.json（高/中档）与待查清单 proposal-pending.json（低档，\
+                 产出时就写 importable: true）。",
+                path.display(),
+                v
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
     let ProposeCmd::Import { file } = cmd;
     let text = std::fs::read_to_string(&file)
         .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
     let doc: Value = serde_json::from_str(&text)?;
+
+    // ★ AC-015：`importable: false` 必须是**硬闸**，不是文件里的约定。
+    //
+    // 背景（QA `qa-review.md` §7 N2）：`ontok-propose` 把「不提案」的关系写进
+    // `proposal-rejected.json`，并在顶层标 `importable: false`，但 `propose import`
+    // 完全不看这个字段 —— 原样导入 **EXIT=0**，10 条已知错误照样进提案表，
+    // 再来一次 `review decide --accept-all` + `apply` 就进了本体。
+    // **声明了却不管，比不声明更糟**：读文件的人会以为已经挡住了。
+    ensure_importable(&file, &doc)?;
 
     let projects = PgProjectStore::new(pool.clone());
     let proposals = PgProposalStore::new(pool.clone());

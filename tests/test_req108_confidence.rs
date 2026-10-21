@@ -233,6 +233,38 @@ fn test_req108_ac008_import_rejects_item_without_method() {
     assert!(ontok::db::proposal::NewItem::from_json(&tampered, 0).is_err());
 }
 
+// ── AC-015 · `importable: false` 是硬闸（第 2 轮）────────────
+
+/// QA 的 N2 实测：原样 `propose import` `proposal-rejected.json` → **EXIT=0**。
+///
+/// 这条把它钉死成判据：带 `importable: false` ⇒ 导入必须被拒，且理由要说出
+/// 「这是被拒绝档」；缺省 / `true` 仍然放行（主提案与待查清单）。
+///
+/// 变异自证：把 `ensure_importable` 里那段 `bail!` 删掉（回到「声明不生效」），
+/// 本测试立刻红 —— 那时的表现就是 10 条已知错误被一键灌进本体。
+#[test]
+fn test_req108_ac015_importable_false_is_a_hard_gate() {
+    let p = std::path::Path::new("proposal-rejected.json");
+    let err = ontok::cli::ensure_importable(p, &serde_json::json!({"importable": false}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("importable = false"), "要点名是哪个字段：{err}");
+    assert!(err.contains("被拒绝档"), "要说清「这是被拒绝档」：{err}");
+    assert!(err.contains("不能导入"), "{err}");
+
+    // 缺省（REQ-108 之前的产物）与 `true`（主提案 / 待查清单）⇒ 放行
+    assert!(ontok::cli::ensure_importable(p, &serde_json::json!({"items": []})).is_ok());
+    assert!(ontok::cli::ensure_importable(p, &serde_json::json!({"importable": true})).is_ok());
+
+    // 说不清的取值一律拒（fail-closed）
+    for bad in [serde_json::json!("false"), serde_json::json!(0), serde_json::json!(null)] {
+        assert!(
+            ontok::cli::ensure_importable(p, &serde_json::json!({"importable": bad})).is_err(),
+            "importable = {bad:?} 必须被拒（不能猜成能导）"
+        );
+    }
+}
+
 // ── 审核界面的置信度表（AC-010 的「审核界面必须有」）────────
 
 /// `review show --confidence` 的那张表：四档计数 + 档位标签 + 证据摘要 + veto 理由。
