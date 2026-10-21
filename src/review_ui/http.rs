@@ -29,6 +29,19 @@
 //! Bearer 解析 + 定长比较只能自备一份 —— 这是**认证**，不是**决策**：
 //! 纪律 H 保护的是「决策只能有一个实现」，两份认证的失败方式是**都拒绝**，
 //! 不会出现「一边接受、一边拒绝」的静默不一致。已登记在验证报告的已知限制里。
+//!
+//! # REQ-112 · 建议（suggestion）接在哪
+//!
+//! | 接口 | 变化 |
+//! | --- | --- |
+//! | `GET /api/review` | 每条多一个 `suggestion: {kind, reason}`；顶层多 `suggestion_counts` |
+//! | `GET /api/preview` | 多一个 `by` 口径：`confidence`（原样）/ `suggestion`（按建议） |
+//! | `POST /api/decide` | **一个字节都没动**（唯一写点不变，也不新增写端点） |
+//!
+//! 建议**不是**在本文件里算出来的 —— [`crate::domain::confidence::suggestion`] 是唯一实现。
+//! 本文件只做两件事：把 `payload.confidence` 解析成 `Confidence`，再问它一句。
+//! 于是「页面显示的档位」与「建议依据的档位」必然是同一个值（R6 同源，AC-009），
+//! 「条目上的建议」与「批量白名单」也必然是同一份判据（[`SuggestKind::enters_batch`]，AC-006 / AC-007）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -47,6 +60,7 @@ use crate::db::pg::StoreError;
 use crate::db::project::PgProjectStore;
 use crate::db::proposal::{PgProposalStore, ProposalItemRow, VIA_UI};
 use crate::db::snapshot_store::PgStore;
+use crate::domain::confidence::{suggestion, Confidence, SuggestKind, Suggestion};
 use crate::domain::review::{entry_state, summarize, Decision, EntryState, ItemView, Track};
 
 use super::ReviewArgs;
@@ -322,10 +336,32 @@ async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
         }
     }
 
+    // REQ-112 · 建议**只算一遍**：条目上的 `suggestion` 与下面那份分组计数
+    // 取的是同一个 `Vec` —— 两处各算一次的话，判据会漂（哪怕它是纯函数，
+    // 「有第二处调用点」本身就是可被改坏的地方）。
+    let suggestions: Vec<Suggestion> = rows.iter().map(suggestion_of).collect();
+
     let items: Vec<Value> = rows
         .iter()
         .zip(views.iter())
-        .map(|(r, v)| item_json(r, v, &reasons))
+        .zip(suggestions.iter())
+        .map(|((r, v), s)| item_json(r, v, &reasons, &s.brief()))
+        .collect();
+
+    // REQ-112 · 分组的**计数**（AC-008「分组计数与后端一致」）。
+    //
+    // 刻意在后端算好再发：页面自己数一遍就是第二份判据，早晚和后端数出两个数。
+    // 顺序取 [`SuggestKind::ALL`]（冲突在最前），页面照这个顺序渲染分组。
+    let mut counts: Vec<usize> = vec![0; SuggestKind::ALL.len()];
+    for s in &suggestions {
+        if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == s.kind) {
+            counts[i] += 1;
+        }
+    }
+    let suggestion_counts: serde_json::Map<String, Value> = SuggestKind::ALL
+        .iter()
+        .zip(counts.iter())
+        .map(|(k, n)| (k.as_str().to_string(), json!(n)))
         .collect();
 
     // REQ-111 · QA N2：`frozen` 取**版本行的真实状态**（`ontology_versions.frozen_at IS NOT NULL`），
@@ -344,10 +380,36 @@ async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
         "frozen": frozen,
         "items": items,
         "progress": progress_json(&rows, &views),
+        // REQ-112 · 建议分组计数（`conflict` 永远排第一 —— 冲突要最先被人看到）。
+        "suggestion_counts": suggestion_counts,
     }))
 }
 
-fn item_json(r: &ProposalItemRow, v: &ItemView, reasons: &BTreeMap<String, String>) -> Value {
+/// 条目 → 建议。**唯一取值点**：`/api/review` 与 `/api/preview` 都走这里。
+///
+/// # 为什么解析失败要变成 `none` 而不是「跳过」
+///
+/// `payload.confidence` 是导入时校验过的，理论上解析不会失败。但「理论上」不是保证：
+/// 若真有一份坏数据，**跳过**会让条目从页面上消失（人不签它，它也不会被签），
+/// 而 `none`（+ 明确写「无法解析」）会把它留在列表里且**不进**批量白名单。
+/// 两者都 fail-closed，后者可见 —— 选后者。
+fn suggestion_of(r: &ProposalItemRow) -> Suggestion {
+    match r.payload.get("confidence") {
+        None | Some(Value::Null) => suggestion(None),
+        Some(v) => match serde_json::from_value::<Confidence>(v.clone()) {
+            Ok(c) => suggestion(Some(&c)),
+            Err(_) => Suggestion::unreadable(),
+        },
+    }
+}
+
+/// 一条条目的建议 —— 给 `item_json` 用的紧凑形态 `{kind, reason}`。
+fn item_json(
+    r: &ProposalItemRow,
+    v: &ItemView,
+    reasons: &BTreeMap<String, String>,
+    sugg: &Value,
+) -> Value {
     let state = match entry_state(v) {
         EntryState::Passed => "passed",
         EntryState::Vetoed => "vetoed",
@@ -364,6 +426,9 @@ fn item_json(r: &ProposalItemRow, v: &ItemView, reasons: &BTreeMap<String, Strin
         // 置信度整块给出（score / band / method / signals / ai.rationale）——
         // 与 `review show --confidence` 是**同一份** payload 值，不是另算一份。
         "confidence": r.payload.get("confidence").cloned().unwrap_or(Value::Null),
+        // REQ-112 · 建议：`{kind, reason}`。`kind ∈ accept/lean_accept/review/reject/conflict/none`。
+        // 依据文案 ≤ 40 字（AC-008），页面直接显示，不让人对着 `kind` 猜理由。
+        "suggestion": sugg,
         // 证据原样给出：FDE 要能点开看依据，而不是只看到一个分数。
         "evidence": r.payload.get("evidence").cloned().unwrap_or_else(|| json!([])),
         // AC-009 · 审计：每一轨各自的最后一次改判时间与入口。
@@ -426,6 +491,10 @@ struct PreviewQuery {
     min_confidence: Option<f64>,
     /// 今天只允许 `unsigned`：批量**只作用于未签条目**，不做「一键全库」。
     scope: Option<String>,
+    /// **按什么算白名单**（REQ-112）：
+    /// - 省略 / `confidence` ⇒ REQ-111 的原口径（分数 ≥ `min_confidence`）；
+    /// - `suggestion` ⇒ 建议为 `accept` / `lean_accept` 的条目（AC-006 / AC-007）。
+    by: Option<String>,
 }
 
 async fn get_preview(
@@ -450,6 +519,25 @@ async fn get_preview(
             ));
         }
     }
+    // REQ-112 · 两种批量口径**不许混用**：混了就说不清「将接受 N 条」里的 N 是谁。
+    let by_suggestion = match q.by.as_deref() {
+        None | Some("confidence") => false,
+        Some("suggestion") => true,
+        Some(other) => {
+            return Err(fail(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "by 只有两种写法：suggestion（按建议）或 confidence（按分数），收到 {other:?}。"
+                ),
+            ));
+        }
+    };
+    if by_suggestion && q.min_confidence.is_some() {
+        return Err(fail(
+            StatusCode::BAD_REQUEST,
+            "by=suggestion 与 min_confidence 不能同时给 —— 两种口径混在一起，弹窗上的条数就没有唯一含义。",
+        ));
+    }
     // 阈值只在 0..=1 之间有意义；给别的值直接报错，不静默当成「不限」。
     if let Some(min) = q.min_confidence {
         if !(0.0..=1.0).contains(&min) {
@@ -465,6 +553,8 @@ async fn get_preview(
     let mut decided = 0usize;
     let mut below_band = 0usize;
     let mut no_confidence = 0usize;
+    // 按建议口径下，被排除的条目按 `kind` 分开计数（冲突/存疑/拒绝/无建议）。
+    let mut excluded_by_kind = [0usize; 6];
     for r in &rows {
         let st = match track {
             Track::Biz => &r.biz_status,
@@ -472,6 +562,19 @@ async fn get_preview(
         };
         if st != "pending" {
             decided += 1;
+            continue;
+        }
+        if by_suggestion {
+            // ⭐ AC-006 / AC-007：白名单判据**只有一个** —— `kind.enters_batch()`。
+            // `conflict` / `review` / `reject` / `none` 都不进（`none` 就是无置信度的实体条目）。
+            let kind = suggestion_of(r).kind;
+            if !kind.enters_batch() {
+                if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == kind) {
+                    excluded_by_kind[i] += 1;
+                }
+                continue;
+            }
+            whitelist.push(r.seq);
             continue;
         }
         if let Some(min) = q.min_confidence {
@@ -497,20 +600,28 @@ async fn get_preview(
         whitelist.push(r.seq);
     }
 
+    let mut excluded = serde_json::Map::new();
+    excluded.insert("decided".into(), json!(decided));
+    excluded.insert("below_band".into(), json!(below_band));
+    excluded.insert("no_confidence".into(), json!(no_confidence));
+    // 按建议口径的四类「不参与」—— 页面要把它们**说出来**，
+    // 否则「将接受 40 条」会让人以为剩下 12 条也被接受了。
+    for (i, k) in SuggestKind::ALL.iter().enumerate() {
+        excluded.insert(k.as_str().to_string(), json!(excluded_by_kind[i]));
+    }
+
     let preview_body = json!({
         "track": track_raw,
         "min_confidence": q.min_confidence,
         "scope": "unsigned",
+        // 口径本身也回显：请求少给一个参数时，页面不能靠自己的默认值猜。
+        "by": if by_suggestion { "suggestion" } else { "confidence" },
         // ⭐ 这个数就是页面弹窗上那句「将接受 N 条」的来源 —— **先看数、再执行**。
         "count": whitelist.len(),
         "total": rows.len(),
         // 白名单本身：页面照这份 items[] 逐条 POST，服务端没有批量写接口。
         "items": whitelist,
-        "excluded": {
-            "decided": decided,
-            "below_band": below_band,
-            "no_confidence": no_confidence,
-        },
+        "excluded": excluded,
     });
     Ok(Json(preview_body))
 }

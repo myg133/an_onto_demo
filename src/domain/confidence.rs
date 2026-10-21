@@ -199,6 +199,31 @@ const POLYMORPHIC_STEMS: [&str; 8] = [
 /// 远大于线性给出的 0.6；`0/5` 是**硬反驳**（0.0），不是「差了 0.2」。
 const HIT_RATE_TABLE: [f64; 6] = [0.0, 0.15, 0.3, 0.5, 0.8, 1.0];
 
+// ── 档位阈值（**数值只在这里写一次**）──────────────────────────
+//
+// REQ-112 的建议规则要按档位分派，`Band::of` 要按阈值分档。
+// 三个数字写两遍（一次在 `of` 里、一次在建议文案里）以后一定会漂 ——
+// 于是提成常量，两边都引用它（AC-009「与评分卡同源」的结构保证，
+// 不靠「记得同步」）。
+
+/// `≥ 0.90` ⇒ [`Band::High`]。
+pub const BAND_HIGH: f64 = 0.90;
+/// `≥ 0.60` ⇒ [`Band::Middle`]。
+pub const BAND_MIDDLE: f64 = 0.60;
+/// `≥ 0.30` ⇒ [`Band::Low`]；低于它 ⇒ [`Band::Rejected`]。
+pub const BAND_LOW: f64 = 0.30;
+
+// ── AI 语义分的两个判据阈值（REQ-112 规则表）────────────────────
+//
+// 放在**评分卡的模块里**而不是建议模块里：这两个数解释的是
+// `semantic_fit` 这个信号怎么读，与 0.90/0.60/0.30 是同一类东西
+// （「多少算够」），不是审核界面的展示参数。
+
+/// `semantic_fit ≥ 0.80` ⇒ 语义上站得住（配合高档 ⇒ 建议接受）。
+pub const FIT_ACCEPT: f64 = 0.80;
+/// `semantic_fit < 0.50` ⇒ 语义上被否定（配合「全命中」⇒ 冲突，不许替人决定）。
+pub const FIT_CONFLICT: f64 = 0.50;
+
 /// 四档（阈值见 [`Band::of`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -215,12 +240,16 @@ pub enum Band {
 
 impl Band {
     /// 阈值（BA 裁定 R6）：`≥0.90` 高 · `≥0.60` 中 · `≥0.30` 低 · 否则拒绝。
+    ///
+    /// ⚠️ REQ-112：三个数字**只写在这里的常量里**（[`BAND_HIGH`] / [`BAND_MIDDLE`] /
+    /// [`BAND_LOW`]），建议文案引用同一批常量 —— 否则「档位阈值」会有第二份写法，
+    /// 而那就是 AC-009「与评分卡不漂移」要防的事。
     pub fn of(score: f64) -> Self {
-        if score >= 0.90 {
+        if score >= BAND_HIGH {
             Band::High
-        } else if score >= 0.60 {
+        } else if score >= BAND_MIDDLE {
             Band::Middle
-        } else if score >= 0.30 {
+        } else if score >= BAND_LOW {
             Band::Low
         } else {
             Band::Rejected
@@ -1275,6 +1304,309 @@ impl BandCounts {
             c.add(*b);
         }
         c
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// REQ-112 · **建议**（`confidence → {kind, reason, signals}`）
+// ══════════════════════════════════════════════════════════════
+//
+// # 为什么这个函数住在评分卡模块里，而不是审核界面里
+//
+// 建议是**对已有信号的读法**，不是新的判断来源：它读 `band`（[`Band::of`] 的产物）、
+// `signals` 里的 `sampled` / `matched` / `semantic_fit`、以及 `veto`。
+// 把这些常量搬到一个「建议模块」里，等于让「多少分算高」出现第二处定义 ——
+// 那就是 AC-009 要防的漂移。所以：**同一模块、同一批常量、同一份信号**。
+//
+// # 为什么它是纯函数（AC-001）
+//
+// 需求的第一条纪律是**零模型调用**：审核 135 条目若每条问一次模型，
+// 十几万 token，而且每审一次就重算 ⇒ 同一份提案两次打开建议会不一样。
+// 纯函数把「确定性」变成**结构保证**：本文件读不到时钟、读不到环境、读不到网络，
+// 输入相同 ⇒ 输出逐字相同（`tests/test_req112_suggestion.rs` 直接断言两次调用相等）。
+//
+// # 建议**不是结论**（AC-003）
+//
+// 七条规则里唯一不许「替人决定」的是**冲突**：`band = high`（证据支持）
+// 但 `semantic_fit < 0.50`（语义否定）且 `matched == sampled`（数据全命中）。
+// REQ-109 实测过 3 条「5/5 命中却被 AI 判 0.0」—— 把它们判成接受或拒绝
+// 都是替人做决定，所以显式标 `conflict`，并**排除在批量白名单之外**。
+//
+// # 规则表（顺序即优先级，从上往下第一条命中即返回）
+//
+// | # | 条件 | `kind` |
+// | --- | --- | --- |
+// | ① | veto 含 `zero_hit` / `type_incompatible` | `reject` |
+// | ② | `band = high` 且 `fit ≥ 0.80` | `accept` |
+// | ③ | `band = high` 且 `fit < 0.50` 且 `matched == sampled` | `conflict` |
+// | ④ | `band = middle` | `lean_accept` |
+// | ⑤ | `band = low` | `review` |
+// | ⑥ | `band = rejected` | `reject` |
+// | ⑦ | 无 `confidence` | `none` |
+// | ⑧ | 其余（`band = high` 但 `fit ∈ [0.50, 0.80)`，或**没做**语义判断） | `review` |
+//
+// ⑧ 是**规则表没覆盖的那一格**，需求没写，但它真的存在（真实数据里
+// high 档有一半是「AI 关 / fit = 0.50」）。这里不猜、不默认成 `accept`：
+// 落到 ⑧ 的一律 `review`（人工核对），因为「高置信度」本身不等于「可以签」。
+
+/// 建议的取值。**六种，不多不少** —— 页面、预览白名单、JSON 都用这一份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestKind {
+    /// 证据与语义都站得住
+    Accept,
+    /// 证据中等 —— 倾向接受，但建议看一眼
+    LeanAccept,
+    /// 证据不足 / 高置信度但语义分不够 —— 建议人工核对
+    Review,
+    /// 硬反驳或分数低
+    Reject,
+    /// ⚠️ 证据支持但 AI 否定 —— **不许自动签**，也不许判成拒绝
+    Conflict,
+    /// 没有置信度可依赖（规则抽取的实体条目）
+    None,
+}
+
+impl SuggestKind {
+    /// 线上取值（`snake_case`，与 serde 一致）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SuggestKind::Accept => "accept",
+            SuggestKind::LeanAccept => "lean_accept",
+            SuggestKind::Review => "review",
+            SuggestKind::Reject => "reject",
+            SuggestKind::Conflict => "conflict",
+            SuggestKind::None => "none",
+        }
+    }
+
+    /// 人读标签（只出现在页面与报告里，**不进 JSON 字段值**）。
+    pub fn label_zh(self) -> &'static str {
+        match self {
+            SuggestKind::Accept => "接受",
+            SuggestKind::LeanAccept => "倾向接受",
+            SuggestKind::Review => "人工核对",
+            SuggestKind::Reject => "拒绝",
+            SuggestKind::Conflict => "冲突",
+            SuggestKind::None => "无建议",
+        }
+    }
+
+    /// ⭐ 进不进「按建议接受」的白名单（AC-006 / AC-007）。
+    ///
+    /// 只有 `accept` / `lean_accept` 进 —— 冲突、存疑、拒绝、无建议**一律不进**。
+    /// 这是**唯一**的白名单判据：预览接口与测试都调它，页面不自己判。
+    pub fn enters_batch(self) -> bool {
+        matches!(self, SuggestKind::Accept | SuggestKind::LeanAccept)
+    }
+
+    /// 页面分组顺序：**冲突最前**（AC-008），其余按严重程度递减。
+    ///
+    /// 冲突排最前的理由：它是**唯一**一类「程序不知道该听谁的」条目，
+    /// 混在「接受/拒绝」里就会被当成一条普通建议扫过去。
+    pub fn group_rank(self) -> u8 {
+        match self {
+            SuggestKind::Conflict => 0,
+            SuggestKind::Reject => 1,
+            SuggestKind::Review => 2,
+            SuggestKind::LeanAccept => 3,
+            SuggestKind::Accept => 4,
+            SuggestKind::None => 5,
+        }
+    }
+
+    /// 六种取值的**固定顺序**（计数与页面分组都用它，保证确定性）。
+    pub const ALL: [SuggestKind; 6] = [
+        SuggestKind::Conflict,
+        SuggestKind::Reject,
+        SuggestKind::Review,
+        SuggestKind::LeanAccept,
+        SuggestKind::Accept,
+        SuggestKind::None,
+    ];
+}
+
+/// 一条建议所依据的**具体信号**（AC-001 的 `signals` 项）。
+///
+/// 每个字段都是**置信度里已经有的值**，这里只做取值搬运，不做二次推断：
+/// 于是「这条建议为什么是这样」永远能顺着字段找回原始证据。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SuggestionSignals {
+    /// 评分卡给出的档位（`high` / `middle` / `low` / `rejected`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// `sample_hit_rate` 的命中数 / 采样数（**只有采过样才有**）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled: Option<u32>,
+    /// AI 语义分；**缺失 ≠ 0**（没判过与判成 0 是两件事）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_fit: Option<f64>,
+    /// 生效的 veto 信号名
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub veto: Option<String>,
+}
+
+impl SuggestionSignals {
+    /// 从一条 `confidence` 里把信号搬出来（**只搬不算**）。
+    pub fn of(c: &Confidence) -> Self {
+        let find = |name: &str| c.signals.iter().find(|s| s.name == name);
+        let hit = find("sample_hit_rate");
+        Self {
+            band: Some(c.band.as_str().to_string()),
+            score: Some(c.score),
+            matched: hit.and_then(|h| h.matched),
+            sampled: hit.and_then(|h| h.sampled),
+            semantic_fit: find(SIGNAL_SEMANTIC_FIT).map(|s| s.value),
+            veto: c.veto.as_ref().map(|v| v.signal.clone()),
+        }
+    }
+
+    /// 证据短语（`5/5`）：没采过样时说「无采样」，**不说 `0/0`**
+    /// （`0/0` 读起来像「一条都没命中」，而事实是「没看」）。
+    fn hits_zh(&self) -> String {
+        match (self.matched, self.sampled) {
+            (Some(m), Some(s)) => format!("{m}/{s}"),
+            _ => "无采样".to_string(),
+        }
+    }
+}
+
+/// 一条建议 —— **只由 [`Confidence`] 确定性推导**。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Suggestion {
+    pub kind: SuggestKind,
+    /// 一句人读依据（**≤ 40 字**，AC-008；由下面的测试钉住）。
+    pub reason: String,
+    /// 依据落在哪些信号上（不在 HTTP 面上暴露，但测试与报告要能用它复核）
+    pub signals: SuggestionSignals,
+}
+
+impl Suggestion {
+    /// 置信度块**存在但解析不了**时的建议：`none` + 明确说「解析不了」。
+    ///
+    /// 为什么不是「当成 accept/reject」：解析失败意味着不知道该信什么，
+    /// 唯一安全的落点是「无建议」—— 而 `none` **不进**批量白名单（AC-007）。
+    pub fn unreadable() -> Self {
+        Self {
+            kind: SuggestKind::None,
+            reason: "置信度块无法解析 —— 按无建议处理".to_string(),
+            signals: SuggestionSignals::default(),
+        }
+    }
+
+    /// 页面/接口用的紧凑形态：`{kind, reason}`。
+    pub fn brief(&self) -> serde_json::Value {
+        serde_json::json!({ "kind": self.kind.as_str(), "reason": self.reason })
+    }
+}
+
+/// 无置信度时的依据文案（**唯一写法**）。
+pub const REASON_NO_CONFIDENCE: &str = "规则抽取，无置信度可依赖";
+
+/// **建议入口**（纯函数，AC-001）。
+///
+/// 输入 `None`（条目没有 `confidence`）⇒ `none`。
+/// 输入 `Some` ⇒ 按上面的规则表**从上往下第一条命中**。
+///
+/// # 为什么用 `Option<&Confidence>` 而不是 `&Confidence`
+///
+/// 「无置信度」是需求里的一条**正经规则**（⑦），不是错误分支。
+/// 用 `Option` 让调用方在**类型上**必须处理它，而不是靠 `unwrap_or_default()`
+/// 编一份空分数出来 —— 那会把「没有判断依据」说成「分数是 0」。
+pub fn suggestion(confidence: Option<&Confidence>) -> Suggestion {
+    let Some(c) = confidence else {
+        return Suggestion {
+            kind: SuggestKind::None,
+            reason: REASON_NO_CONFIDENCE.to_string(),
+            signals: SuggestionSignals::default(),
+        };
+    };
+    let signals = SuggestionSignals::of(c);
+    let (kind, reason) = classify(c, &signals);
+    Suggestion { kind, reason, signals }
+}
+
+/// 规则表本体（顺序即优先级）。见模块注释里的那张表。
+fn classify(c: &Confidence, s: &SuggestionSignals) -> (SuggestKind, String) {
+    // ── ① veto 硬反驳：**永远第一** ──────────────────────────
+    //
+    // 「采样 0/N」与「类型不相容」是**反驳**，不是扣分项：
+    // 分数再高也不该签（评分卡用上限压顶，建议用优先级表达同一件事）。
+    if let Some(v) = &c.veto {
+        match v.signal.as_str() {
+            "zero_hit" => {
+                return (
+                    SuggestKind::Reject,
+                    format!("采样 {} 全不命中（硬反驳）", hits_zero_first(s)),
+                );
+            }
+            "type_incompatible" => {
+                return (SuggestKind::Reject, "类型不相容（硬反驳）".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    match c.band {
+        // ── ②③⑧ 高档：由 AI 语义分决定「接受 / 冲突 / 人工核对」 ──
+        Band::High => match (s.semantic_fit, s.matched, s.sampled) {
+            (Some(fit), Some(matched), Some(sampled)) if fit >= FIT_ACCEPT => (
+                SuggestKind::Accept,
+                format!("采样 {matched}/{sampled} + AI fit {fit:.2}"),
+            ),
+            // ⚠️ 冲突：证据支持（全命中）但 AI 否定。**不许自动签，也不许判拒绝。**
+            (Some(fit), Some(matched), Some(sampled))
+                if fit < FIT_CONFLICT && matched == sampled =>
+            {
+                (
+                    SuggestKind::Conflict,
+                    format!("{matched}/{sampled} 命中但 AI 判 {fit:.2} —— 需人工判"),
+                )
+            }
+            // ⑧ 中间态（fit ∈ [0.50, 0.80)）或全命中但语义分不够
+            (Some(fit), Some(matched), Some(sampled)) => (
+                SuggestKind::Review,
+                format!("采样 {matched}/{sampled}，AI fit {fit:.2} 未达 {FIT_ACCEPT:.2}"),
+            ),
+            // ⑧ 没做语义判断（AI 关）或没采样：高档只剩结构信号，不值得替人签
+            _ => {
+                let reason = match (s.matched, s.sampled) {
+                    (Some(m), Some(sampled)) => {
+                        format!("采样 {m}/{sampled} 但无 AI 语义判断 —— 建议抽查")
+                    }
+                    _ => "高档但无采样、无 AI 语义判断 —— 建议人工核对".to_string(),
+                };
+                (SuggestKind::Review, reason)
+            }
+        },
+        // ── ④ 中档：倾向接受，但要说「看一眼」 ──────────────────
+        Band::Middle => (
+            SuggestKind::LeanAccept,
+            format!("证据中等（{}），建议看一眼再签", s.hits_zh()),
+        ),
+        // ── ⑤ 低档：证据不足 ───────────────────────────────────
+        Band::Low => (
+            SuggestKind::Review,
+            format!("证据不足（分数 {:.2}）—— 建议人工核对", c.score),
+        ),
+        // ── ⑥ 拒绝档：分数低于阈值 ─────────────────────────────
+        Band::Rejected => (
+            SuggestKind::Reject,
+            format!("分数 {:.2} 低于 {BAND_LOW:.2} —— 建议拒绝", c.score),
+        ),
+    }
+}
+
+/// `zero_hit` 的分子**永远是 0**（否则就不叫零命中），所以文案按 `0/N` 拼 ——
+/// 不写成 `{matched}/{sampled}`，免得哪天数据异常时打出「3/5 全不命中」这种自相矛盾的话。
+fn hits_zero_first(s: &SuggestionSignals) -> String {
+    match s.sampled {
+        Some(sampled) => format!("0/{sampled}"),
+        None => "0/0".to_string(),
     }
 }
 
