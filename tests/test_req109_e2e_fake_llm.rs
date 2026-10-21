@@ -26,6 +26,8 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+
+mod common;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -35,7 +37,7 @@ use serde_json::Value;
 const BIN: &str = env!("CARGO_BIN_EXE_ontok-propose");
 
 fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    common::crate_root()
 }
 
 fn db_url() -> Option<String> {

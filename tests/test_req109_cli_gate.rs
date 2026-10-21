@@ -12,6 +12,8 @@
 //! AI 关时**没有**任何 LLM 环境变量也必须能正常跑完；`--refresh` 只在 AI 开时有意义。
 
 use std::path::{Path, PathBuf};
+
+mod common;
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ontok-propose");
@@ -23,7 +25,7 @@ const LLM_ENVS: [&str; 3] = [
 ];
 
 fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    common::crate_root()
 }
 
 struct Run {
