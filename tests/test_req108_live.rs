@@ -24,6 +24,8 @@
 //! - 不证明权重是最优的（那要校准数据，见 `ontok confidence calibrate`）；
 //! - 不证明「换个客户库也对」—— 本判据的证据强度就是**这一个库**。
 
+mod common;
+
 use ontok::domain::confidence::{Band, BandCounts, DataEvidence};
 use ontok::extract::introspect::{introspect_with_keys, KeyCatalog, SchemaReport};
 use ontok::extract::names::TableNames;
@@ -63,12 +65,33 @@ fn source_url() -> Option<String> {
     None
 }
 
+/// 勘查（带重试）。
+///
+/// 为什么需要重试：源库在一个**代理**后面（非标准端口），连续快速建/拆连接时
+/// 偶发被重置 —— 实测「一次跑 5 条 live 判据」时会撞上，单独跑则不会。
+/// 这是**测试环境**的性质，不是生产路径的缺陷：`ontok-introspect` 一次只建
+/// 两条只读连接。所以重试只放在判据里，且失败三次才红。
+async fn introspect_retry(url: &str) -> (SchemaReport, KeyCatalog) {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        match introspect_with_keys(url).await {
+            Ok(v) => return v,
+            Err(e) => {
+                last = format!("{e:#}");
+                tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt + 1))).await;
+            }
+        }
+    }
+    panic!("只读勘查连续 3 次失败（源库/代理不可用）：{last}");
+}
+
 fn names() -> TableNames {
-    let raw = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/extract/table_names.json"
-    ))
-    .expect("读不到翻译表");
+    // ⚠️ 走 `common::crate_root()` 而不是 `env!("CARGO_MANIFEST_DIR")`：
+    // 编译期锚点会让「二进制在 A 编好、拿到 B 跑」时去读**已回收的目录**
+    //（REQ-046 的事故）。`test_anchor_guard` 的 G-1 会直接判红。
+    let path = common::crate_root().join("src/extract/table_names.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("读不到翻译表 {}：{e}", path.display()));
     TableNames::load(&raw).expect("翻译表不合法")
 }
 
@@ -119,7 +142,7 @@ async fn test_req108_ac002_sampling_is_read_only_and_deterministic() {
     assert_eq!(ro, "on", "AC-002：采样会话必须只读（SHOW transaction_read_only = on）");
 
     // 采样坐标一律来自**目录事实**（主键列），不猜
-    let (report, keys) = introspect_with_keys(&url).await.expect("只读勘查");
+    let (report, keys) = introspect_retry(&url).await;
     let specs: Vec<SampleSpec> = KNOWN_WRONG
         .iter()
         .map(|(f, c, t)| spec_of(&candidate_for(&report, &keys, f, c, t)))
@@ -176,7 +199,7 @@ async fn test_req108_ac006_nine_known_errors_all_rejected() {
         eprintln!("SKIP test_req108_ac006：未设置 SRC_URL / ONTOK_SOURCE_DATABASE_URL");
         return;
     };
-    let (report, keys) = introspect_with_keys(&url).await.expect("只读勘查");
+    let (report, keys) = introspect_retry(&url).await;
     let pool = sample_pool(&url).await.expect("只读采样池");
     // 抽取只跑一次（9 条判据共用同一份 items —— 它们判的是同一个「当前本体」）
     let names = names();
@@ -249,6 +272,121 @@ async fn test_req108_ac006_nine_known_errors_all_rejected() {
     pool.close().await;
 }
 
+/// AC-003 · **产物里不许出现任何采样原值**（采样值回查命中数必须为 0）。
+///
+/// # 这条判据的构造
+///
+/// 1. **独立**地把 9 条关系的前 5 个原值查出来（刻意**不复用**生产 SQL：
+///    用生产查询去验「生产查询没落原值」是自证）；
+/// 2. 逐个在 `proposal.json` / `proposal-pending.json` / `proposal-rejected.json`
+///    / `stats.json` 里做子串回查；
+/// 3. 断言命中 **0**。
+///
+/// # 短值的处理（如实登记，不假装通过）
+///
+/// 长度 < 4 的值（`1` / `42` / `0`）在任何 JSON 里都会撞上数字，
+/// 子串回查对它**没有判别力**。所以这类值单独计数、**不计入违规**，
+/// 并在输出里写明「不可判别 N 个」—— 藏着不说才是 fail-open。
+///
+/// 需要环境变量 `REQ108_ARTIFACT_DIR` 指向 `ontok-propose` 的产物目录。
+#[tokio::test]
+async fn test_req108_ac003_artifacts_contain_no_sampled_values() {
+    let (Some(url), Ok(dir)) = (source_url(), std::env::var("REQ108_ARTIFACT_DIR")) else {
+        eprintln!("SKIP test_req108_ac003：需要 SRC_URL + REQ108_ARTIFACT_DIR");
+        return;
+    };
+    let (report, keys) = introspect_retry(&url).await;
+    let pool = sample_pool(&url).await.expect("只读采样池");
+
+    // ① 独立取样（与生产同一语义：按主键排序、去重、取前 5）
+    fn quote_ident(s: &str) -> String {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    }
+    let mut raw_values: Vec<String> = Vec::new();
+    for (f, c, t) in KNOWN_WRONG {
+        let cand = candidate_for(&report, &keys, f, c, t);
+        let Some(pk) = cand.from_key.as_deref() else { continue };
+        let sql = format!(
+            "SELECT ({})::text FROM {} WHERE {} IS NOT NULL ORDER BY {} LIMIT 25",
+            quote_ident(c),
+            quote_ident(f),
+            quote_ident(c),
+            quote_ident(pk)
+        );
+        let rows: Vec<String> = sqlx::query_scalar(&sql)
+            .fetch_all(&pool)
+            .await
+            .expect("独立取样查询失败（检查只读权限）");
+        let mut seen: Vec<String> = Vec::new();
+        for v in rows {
+            if !seen.contains(&v) {
+                seen.push(v);
+            }
+            if seen.len() == 5 {
+                break;
+            }
+        }
+        raw_values.extend(seen);
+    }
+    pool.close().await;
+    assert!(!raw_values.is_empty(), "一个原值都没取到 —— 判据会变成空转");
+
+    // ② 产物
+    let dir = std::path::Path::new(&dir);
+    let mut artifacts: Vec<(String, String)> = Vec::new();
+    for name in ["proposal.json", "proposal-pending.json", "proposal-rejected.json", "stats.json"] {
+        let p = dir.join(name);
+        if let Ok(body) = std::fs::read_to_string(&p) {
+            artifacts.push((name.to_string(), body));
+        }
+    }
+    assert!(
+        artifacts.iter().any(|(n, _)| n == "proposal.json"),
+        "{} 下没有 proposal.json —— REQ108_ARTIFACT_DIR 指错了？",
+        dir.display()
+    );
+    // 反空转：产物里**必须**有 digest（否则「没查到原值」只是因为产物是空的）
+    let proposal = &artifacts.iter().find(|(n, _)| n == "proposal.json").unwrap().1;
+    assert!(
+        proposal.contains("sha256:"),
+        "proposal.json 里连 sample_digest 都没有 —— 采样根本没跑，这条判据是空转"
+    );
+
+    // ③ 回查
+    let mut hits: Vec<String> = Vec::new();
+    let mut discriminative = 0usize;
+    let mut short = 0usize;
+    for (i, v) in raw_values.iter().enumerate() {
+        if v.chars().count() < 4 {
+            short += 1;
+            continue;
+        }
+        discriminative += 1;
+        for (name, body) in &artifacts {
+            if body.contains(v.as_str()) {
+                // ⚠️ **不回显原值**：只报「哪个产物里出现了第 N 个样本」，
+                // 连值本身都不打印 —— 否则这条判据自己就把原值漏进日志。
+                hits.push(format!("{name} 里出现了第 {} 个样本值", i + 1));
+            }
+        }
+    }
+    println!(
+        "\n── AC-003 · 原值回查 ─────────────────────────────\n  样本值 {} 个（可判别 {} · 短值不可判别 {}）\n  产物 {} 份\n  命中 {}",
+        raw_values.len(),
+        discriminative,
+        short,
+        artifacts.len(),
+        hits.len()
+    );
+    assert!(
+        hits.is_empty(),
+        "AC-003：产物里出现了采样原值（命中 {} 处）：\n{}",
+        hits.len(),
+        hits.join("\n")
+    );
+    assert!(discriminative > 0, "可判别的样本值为 0 —— 这条判据没起作用");
+}
+
 /// AC-007 · **部分命中不得落「高」**：机制在地（部分命中 ⇒ ≤0.75）。
 ///
 /// ⚠️ 这条判据的**口径**必须说清楚（见交付报告 §「AC 自身的问题」）：
@@ -292,7 +430,7 @@ async fn test_req108_live_band_distribution_report() {
         eprintln!("SKIP test_req108_live_band_distribution_report：未设置 SRC_URL / ONTOK_SOURCE_DATABASE_URL");
         return;
     };
-    let (report, keys) = introspect_with_keys(&url).await.expect("只读勘查");
+    let (report, keys) = introspect_retry(&url).await;
     let names = names();
     let outcome = extract(&report, &names, "req108-live", "test", "0").expect("抽取");
     let candidates = link_candidates(&outcome.proposal.items, &keys);

@@ -380,19 +380,15 @@ pub(crate) async fn read_only_pool(url: &str) -> Result<PgPool> {
 
 /// 连源库并勘查。
 ///
-/// **本次签名与产出逐字节不变**（REQ-003 起的既有入口，被
-/// `ontok-gate-preflight` 等调用点依赖）。要拿 REQ-108 的键事实请用
-/// [`introspect_with_keys`] —— 本函数只是它的薄壳。
-pub async fn introspect(url: &str) -> Result<SchemaReport> {
-    Ok(introspect_with_keys(url).await?.0)
-}
-
-/// 连源库并勘查，**同时**返回主键 / 单列唯一索引目录（REQ-108 · AC-001）。
+/// **签名与产出逐字节不变**（REQ-003 起的既有入口，`ontok-gate-preflight`
+/// 与 `tests/test_read_only_guard.rs` 都依赖这个形状：后者的接线判据
+/// 在这条函数体里找 `ensure_read_only(&read_only)?;`）。
 ///
-/// 与 [`introspect`] 走**同一条只读池**、同一次连接，产物里
-/// `SchemaReport` 那部分与旧版逐字段相同 —— 键目录是**附加**输出，
-/// 由调用方（`ontok-introspect`）注入产物的 `tables[i]`。
-pub async fn introspect_with_keys(url: &str) -> Result<(SchemaReport, KeyCatalog)> {
+/// REQ-108 的键事实**不在这条路径里**：见 [`key_catalog`] / [`introspect_with_keys`]。
+/// 刻意不把键查询塞进本函数 —— 那会让上面那条接线判据的锚点失效
+///（它按 `pub async fn introspect` 切函数体），于是「勘查前必须 fail-closed
+/// 校验只读」这条 AC-101 红线会**静默掉出覆盖范围**。
+pub async fn introspect(url: &str) -> Result<SchemaReport> {
     let pool = read_only_pool(url).await?;
 
     let server_version: String = sqlx::query_scalar("SELECT version()")
@@ -464,12 +460,75 @@ pub async fn introspect_with_keys(url: &str) -> Result<(SchemaReport, KeyCatalog
     let tcmap: std::collections::HashMap<String, Option<String>> =
         tbl_comments.into_iter().collect();
 
-    // ── REQ-108 · AC-001：主键与单列唯一索引 ───────────────────────────
-    //
-    // 两条都**只读 `information_schema` / `pg_catalog`**（与上面同一红线：
-    // 本文件不碰任何业务数据行）。
-    //
-    // ⚠️ 主键按**列**取、再在 Rust 里折叠成「单列 / 复合」：
+    pool.close().await;
+
+
+    // 折叠成表级结构
+    let mut tables: Vec<TableMeta> = Vec::new();
+    for (tname, _tname2, cname, dtype, nullable, cmt, is_pk) in rows {
+        let col = ColumnMeta {
+            name: cname,
+            data_type: dtype,
+            nullable,
+            comment: cmt.filter(|s| !s.trim().is_empty()),
+            is_primary_key: is_pk,
+        };
+        match tables.iter_mut().find(|t| t.name == tname) {
+            Some(t) => t.columns.push(col),
+            None => tables.push(TableMeta {
+                comment: tcmap.get(&tname).cloned().flatten().filter(|s| !s.trim().is_empty()),
+                column_count: 0,
+                commented_count: 0,
+                name: tname,
+                columns: vec![col],
+            }),
+        }
+    }
+    for t in &mut tables {
+        t.column_count = t.columns.len();
+        t.commented_count = t.columns.iter().filter(|c| c.comment.is_some()).count();
+    }
+
+    let table_count = tables.len();
+    let column_count: usize = tables.iter().map(|t| t.column_count).sum();
+    let commented_column_count: usize = tables.iter().map(|t| t.commented_count).sum();
+
+    Ok(SchemaReport {
+        server_version: server_version.lines().next().unwrap_or("").to_string(),
+        transaction_read_only: read_only,
+        schema: TARGET_SCHEMA.to_string(),
+        table_count,
+        column_count,
+        commented_column_count,
+        foreign_key_count: foreign_key_count.max(0) as usize,
+        tables,
+        introspected_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// **键事实目录**（REQ-108 · AC-001）：主键 + 单列唯一索引。
+///
+/// # 为什么是**独立的一条只读连接**，不再塞进 [`introspect`]
+///
+/// 1. `tests/test_read_only_guard.rs` 的接线判据按 `pub async fn introspect`
+///    切函数体，在**那具身体里**找 `ensure_read_only(&read_only)?;` ——
+///    把键查询塞进去会让它按新的切分点取到半截函数，于是 AC-101 的
+///    「勘查前必须 fail-closed 校验只读」**静默掉出覆盖范围**（判据还是绿的）。
+/// 2. 两条 SQL 都是 `pg_catalog` 的小查询（这张库 96 行量级），多一次连接
+///    约 100ms，换的是 REQ-003 那条红线一分不动 —— 值得。
+///
+/// 只读保证与勘查器同一套：走 [`read_only_pool`]，连上后立刻校验
+/// `transaction_read_only = on`（这里也判一次，不靠「反正是同一个池」这句话）。
+pub async fn key_catalog(url: &str) -> Result<KeyCatalog> {
+    let pool = read_only_pool(url).await?;
+    let read_only: String =
+        sqlx::query_scalar("SELECT current_setting('default_transaction_read_only')")
+            .fetch_one(&pool)
+            .await
+            .context("读不回 transaction_read_only，只读保证无法验证")?;
+    ensure_read_only(&read_only)?;
+
+    // 主键按**列**取、再在 Rust 里折叠成「单列 / 复合」：
     // `information_schema` 里没有「这个主键是单列吗」这一列，
     // 在 SQL 侧拼一个 `count(*) = 1` 会把「复合」与「无主键」压成同一个
     // `false` —— 而 R2（复合键上限 0.50）恰恰要区分这两者。
@@ -509,53 +568,18 @@ pub async fn introspect_with_keys(url: &str) -> Result<(SchemaReport, KeyCatalog
     .context("读单列唯一索引失败")?;
 
     pool.close().await;
+    Ok(fold_keys(&pk_rows, &uniq_rows))
+}
 
-    let keys = fold_keys(&pk_rows, &uniq_rows);
-
-    // 折叠成表级结构
-    let mut tables: Vec<TableMeta> = Vec::new();
-    for (tname, _tname2, cname, dtype, nullable, cmt, is_pk) in rows {
-        let col = ColumnMeta {
-            name: cname,
-            data_type: dtype,
-            nullable,
-            comment: cmt.filter(|s| !s.trim().is_empty()),
-            is_primary_key: is_pk,
-        };
-        match tables.iter_mut().find(|t| t.name == tname) {
-            Some(t) => t.columns.push(col),
-            None => tables.push(TableMeta {
-                comment: tcmap.get(&tname).cloned().flatten().filter(|s| !s.trim().is_empty()),
-                column_count: 0,
-                commented_count: 0,
-                name: tname,
-                columns: vec![col],
-            }),
-        }
-    }
-    for t in &mut tables {
-        t.column_count = t.columns.len();
-        t.commented_count = t.columns.iter().filter(|c| c.comment.is_some()).count();
-    }
-
-    let table_count = tables.len();
-    let column_count: usize = tables.iter().map(|t| t.column_count).sum();
-    let commented_column_count: usize = tables.iter().map(|t| t.commented_count).sum();
-
-    Ok((
-        SchemaReport {
-            server_version: server_version.lines().next().unwrap_or("").to_string(),
-            transaction_read_only: read_only,
-            schema: TARGET_SCHEMA.to_string(),
-            table_count,
-            column_count,
-            commented_column_count,
-            foreign_key_count: foreign_key_count.max(0) as usize,
-            tables,
-            introspected_at: chrono::Utc::now().to_rfc3339(),
-        },
-        keys,
-    ))
+/// 勘查 + 键事实目录（REQ-108 · AC-001 的装配入口）。
+///
+/// 两次只读会话（理由见 [`key_catalog`]）。返回的 `SchemaReport`
+/// 与 [`introspect`] 逐字段相同 —— 键目录是**附加**输出，
+/// 由调用方（`ontok-introspect`）注入产物的 `tables[i]`。
+pub async fn introspect_with_keys(url: &str) -> Result<(SchemaReport, KeyCatalog)> {
+    let report = introspect(url).await?;
+    let keys = key_catalog(url).await?;
+    Ok((report, keys))
 }
 
 /// 勘查未注释表（真实库有 20+ 张零注释表，抽取器对它们只能靠列名猜）。

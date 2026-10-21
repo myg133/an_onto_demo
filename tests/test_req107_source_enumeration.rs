@@ -793,6 +793,21 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
     ("src/cli.rs", "提案未通过：可应用", 1, "`proposal apply` 的汇总回执（条数），与 D6 的逐条被拦清单同源"),
     ("src/cli.rs", "已写出客户视图页面", 1, "C2（`--out`）写文件之后的**回执**：路径 / 对象数 / 抽样数，不是客户字节本身"),
     ("src/cli.rs", "x.summary()", 1, "`ontology diff` 的逐条变化行（I9 的子行；diff 已裁定归建模轨，R1/R3）"),
+    // ── REQ-108 · 置信度的两处运维面输出（都不是客户视图）──
+    (
+        "src/cli.rs",
+        "{band_lines}",
+        1,
+        "`review show --confidence` 的分档表：档位 / 分数 / 关系名 / 证据摘要 / veto 理由。\
+         分数是**内部质量指标**，客户视图逐字不读（AC-010）；这一段是审核者显式带开关才输出的",
+    ),
+    (
+        "src/cli.rs",
+        "{report_lines}",
+        1,
+        "`confidence calibrate` 的分箱表：分数区间 / 条数 / 人工接受数 / 接受率 / 平均分。\
+         运维面统计量，零客户视图字段（条目名都不打）",
+    ),
     // ── HTTP：错误通道（正文都过 `safe_error` 或为固定文案）──
     ("src/server/http.rs", "(self.status(), Json(json!({ \"error\": msg })))", 1, "`ApiError::into_response`：`msg` 来自 `ApiError::message()`，已经过 `safe_error`"),
     ("src/server/http.rs", "(status, Json(json!({ \"error\": msg })))", 1, "`err()` 助手：调用方传的是固定文案或 Z1 的 `safe_error` 产物；这是**错误通道**的唯一构造点"),
@@ -1564,6 +1579,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/cli.rs", "publish_customer", "管线适配器（Err → 退出码）"),
     ("src/cli.rs", "run", "入口分发"),
     ("src/cli.rs", "concept_cmd", "子命令 handler"),
+    // REQ-108 · 置信度：审核界面与校准命令（都不写客户视图字节）
+    (
+        "src/cli.rs",
+        "render_confidence_table",
+        "运维辅助（`review show --confidence` 的分档表渲染，纯文本、零客户字段）",
+    ),
+    ("src/cli.rs", "confidence_cmd", "子命令 handler（`confidence calibrate`）"),
     ("src/cli.rs", "project_cmd", "子命令 handler"),
     ("src/cli.rs", "version_cmd", "子命令 handler"),
     ("src/cli.rs", "propose_cmd", "子命令 handler"),

@@ -988,21 +988,31 @@ async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()>
         }
     }
 
-    println!("置信度校准 · project={project}{}", match version {
-        Some(v) => format!(" · base_version=v{v}"),
-        None => " · 全部提案".to_string(),
-    });
-    println!("  方法        : {}", crate::domain::confidence::METHOD);
-    println!(
-        "  计分条目    : {} 条（已决 {} · 待决 {} —— 待决**不进**分母）",
+    // ⚠️ **整段只往 stdout 写一次**：REQ-107 的写点登记表（
+    // `tests/test_req107_source_enumeration.rs` 的 `t1`）要求 cli.rs 里
+    // **每一处** stdout 写点要么是出口、要么在白名单里。校准表是运维面，
+    // 但它有十几行——一次拼好、一次写出，登记面就只剩一处。
+    let mut report_lines = String::new();
+    report_lines.push_str(&format!(
+        "置信度校准 · project={project}{}\n",
+        match version {
+            Some(v) => format!(" · base_version=v{v}"),
+            None => " · 全部提案".to_string(),
+        }
+    ));
+    report_lines.push_str(&format!(
+        "  方法        : {}\n", crate::domain::confidence::METHOD
+    ));
+    report_lines.push_str(&format!(
+        "  计分条目    : {} 条（已决 {} · 待决 {} —— 待决**不进**分母）\n",
         rows.len(),
         samples.len(),
         pending
-    );
+    ));
 
     let bins = crate::domain::confidence::calibration_bins(&samples);
-    println!();
-    println!("  分箱          条数   人工接受   接受率     平均分");
+    report_lines.push('\n');
+    report_lines.push_str("  分箱          条数   人工接受   接受率     平均分\n");
     for b in &bins {
         let rate = match (b.acceptance_rate(), b.sufficient()) {
             (Some(r), true) => format!("{:>6.1}%", r * 100.0),
@@ -1011,30 +1021,30 @@ async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()>
             (None, _) => "      —".to_string(),
         };
         let mean = if b.count == 0 { "—".to_string() } else { format!("{:.2}", b.mean_score) };
-        println!(
-            "  {:<12} {:>5}   {:>7}   {}   {:>6}",
+        report_lines.push_str(&format!(
+            "  {:<12} {:>5}   {:>7}   {}   {:>6}\n",
             b.label(),
             b.count,
             b.accepted,
             rate,
             mean
-        );
+        ));
     }
-    println!();
+    report_lines.push('\n');
     if samples.is_empty() {
-        println!(
+        report_lines.push_str(
             "  结论        : **样本不足**（没有任何已决的计分条目）—— 不输出命中率结论。\n\
-             \x20             先跑一轮 propose import → review decide（业务轨），再回来校准。"
+             \x20             先跑一轮 propose import → review decide（业务轨），再回来校准。",
         );
     } else if let Some(ece) = crate::domain::confidence::expected_calibration_error(&bins) {
-        println!(
-            "  结论        : 样本充足（每箱 ≥ {} 条）· ECE = {:.2}",
+        report_lines.push_str(&format!(
+            "  结论        : 样本充足（每箱 ≥ {} 条）· ECE = {:.2}\n",
             crate::domain::confidence::MIN_BIN_SAMPLES,
             ece
-        );
-        println!(
+        ));
+        report_lines.push_str(
             "  读法        : 接受率 < 平均分 = 分数偏高（该收紧）；> = 分数偏低（可以放宽），\n\
-             \x20             但**调权重必须先有覆盖率**（设计概要 §九 G4：本采样只验存在性）"
+             \x20             但**调权重必须先有覆盖率**（设计概要 §九 G4：本采样只验存在性）",
         );
     } else {
         let thin: Vec<String> = bins
@@ -1042,12 +1052,13 @@ async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()>
             .filter(|b| !b.sufficient())
             .map(|b| format!("{}（{} 条）", b.label(), b.count))
             .collect();
-        println!(
+        report_lines.push_str(&format!(
             "  结论        : **样本不足** —— 以下分箱 < {} 条：{}。不输出命中率结论、不算 ECE。",
             crate::domain::confidence::MIN_BIN_SAMPLES,
             thin.join("、")
-        );
+        ));
     }
+    println!("{report_lines}");
     Ok(())
 }
 
