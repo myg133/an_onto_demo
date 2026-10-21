@@ -53,6 +53,11 @@ pub enum Cmd {
     Ontology { #[command(subcommand)] cmd: OntologyCmd },
     /// REQ-010 · 业务概念组（§7.1 阶段 3）
     Concept { #[command(subcommand)] cmd: ConceptCmd },
+    /// REQ-108 · 置信度校准（AC-011）
+    ///
+    /// 把「分数」与「人工最终决定」对起来，输出**分箱命中率**。
+    /// 样本不足时**明确说样本不足**，不输出 0% / 100% 冒充结论。
+    Confidence { #[command(subcommand)] cmd: ConfidenceCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -181,6 +186,28 @@ pub enum ProposeCmd {
     Import {
         #[arg(long)]
         file: PathBuf,
+    },
+}
+
+/// REQ-108 · 置信度相关命令（AC-011）。
+#[derive(Subcommand)]
+pub enum ConfidenceCmd {
+    /// 输出**分箱命中率**（分数 vs 人工接受）
+    ///
+    /// 分箱：`0.00–0.30 / 0.30–0.60 / 0.60–0.75 / 0.75–0.90 / 0.90–1.00`。
+    /// 人工决定取**业务轨**（`biz_status`）：关系对不对是业务判断，
+    /// 建模轨判的是「建得规不规范」，不是同一件事。
+    ///
+    /// ⚠️ **任一分箱 < 5 条 ⇒ 整份报「样本不足」，不输出接受率结论、不算 ECE。**
+    /// 空库运行同样明确提示 —— 不打印 `0%`（那是「一条都没接受」，
+    /// 而事实是「一条都没判过」，两者完全不同）。
+    Calibrate {
+        /// 项目名（该项目的全部提案条目一起统计）
+        #[arg(long)]
+        project: String,
+        /// 只统计挂在某个基版本上的提案？省略 = 该项目的全部提案
+        #[arg(long)]
+        version: Option<i32>,
     },
 }
 
@@ -850,6 +877,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Ontology { cmd } => ontology_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
+        Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
         Cmd::McpServer { project, version } => {
             // 冻结闸门在 `mcp::prepare` 里：未冻结就 Err ⇒ 这里退出码非零。
             //
@@ -896,6 +924,133 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 /// 说的「Agent 是提议者不是决定者」被架空。所以这里只做一件事：
 /// **把声明翻译成 `add_concept_group` 提案条目**，之后与实体类型条目
 /// 走完全相同的 `review decide` → `proposal apply`。
+/// REQ-108 · **校准命令**（AC-011）：分数 → 分箱 → 人工接受率。
+///
+/// # 数据从哪来
+///
+/// `proposal_items.confidence`（REAL）+ `biz_status`（人工决定）。两栏都在
+/// 同一条提案条目上，所以不需要跨表拼「这条关系后来被接受了吗」——
+/// 判定本来就是**条目级**的。
+///
+/// # 为什么人工决定取**业务轨**
+///
+/// 双轨的语义不同：业务轨判「这条关系对不对」，建模轨判「建得规不规范」。
+/// 校准要的是**正确率**，所以只能取业务轨。取建模轨会把「关系对、但基数标错」
+/// 的条目算成「没接受」，于是分数高低与口径无关地混在一起。
+///
+/// # 样本不足时**不给结论**
+///
+/// 设计概要 §六：任一分箱 < 5 条 ⇒ 标「样本不足」。空库同理。
+/// ⛔ 绝不输出 `0%` 或 `100%` —— 那不是「准确率 0」或「准确率 100」，
+/// 而是「没有样本」，两者的差别正是 AC-011 要守的。
+async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()> {
+    let ConfidenceCmd::Calibrate { project, version } = cmd;
+
+    let projects = PgProjectStore::new(pool.clone());
+    let p = projects
+        .get_by_name(&project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}"))?;
+
+    // 已决 = 业务轨有明确决定（`accepted` / `rejected`）。
+    // `pending` 不算「未接受」—— 那是「还没判」，进分母会把接受率稀释成噪声。
+    // 所以下面**只取** `biz_status IN ('accepted','rejected')`，
+    // 另外单独查一个总数，把「待决」报出来。
+    let mut sql = String::from(
+        // `confidence` 列是 `REAL`（float4）；这里显式转 float8 ——
+        // 评分卡用的是 f64，别在解码处留一次 f32 截断（0.15 这类值会漂）。
+        "SELECT pi.confidence::float8, pi.biz_status
+         FROM proposal_items pi
+         JOIN proposals p ON p.id = pi.proposal_id
+         WHERE p.project_id = $1
+           AND pi.confidence IS NOT NULL",
+    );
+    if version.is_some() {
+        // 只统计挂在某个基版本上的提案（`base_version_id` 对应的 seq）
+        sql.push_str(
+            " AND p.base_version_id IN (
+                 SELECT id FROM ontology_versions WHERE project_id = $1 AND seq = $2)",
+        );
+    }
+    let mut q = sqlx::query_as::<_, (f64, String)>(&sql).bind(p.id);
+    if let Some(v) = version {
+        q = q.bind(v);
+    }
+    let rows = q.fetch_all(pool).await?;
+
+    let mut samples: Vec<(f64, bool)> = Vec::new();
+    let mut pending = 0usize;
+    for (score, status) in &rows {
+        match status.as_str() {
+            "accepted" => samples.push((*score, true)),
+            "rejected" => samples.push((*score, false)),
+            _ => pending += 1,
+        }
+    }
+
+    println!("置信度校准 · project={project}{}", match version {
+        Some(v) => format!(" · base_version=v{v}"),
+        None => " · 全部提案".to_string(),
+    });
+    println!("  方法        : {}", crate::domain::confidence::METHOD);
+    println!(
+        "  计分条目    : {} 条（已决 {} · 待决 {} —— 待决**不进**分母）",
+        rows.len(),
+        samples.len(),
+        pending
+    );
+
+    let bins = crate::domain::confidence::calibration_bins(&samples);
+    println!();
+    println!("  分箱          条数   人工接受   接受率     平均分");
+    for b in &bins {
+        let rate = match (b.acceptance_rate(), b.sufficient()) {
+            (Some(r), true) => format!("{:>6.1}%", r * 100.0),
+            // ⛔ 样本不足时**不印百分比**（0% / 100% 都是冒充结论）
+            (Some(_), false) => "  样本不足".to_string(),
+            (None, _) => "      —".to_string(),
+        };
+        let mean = if b.count == 0 { "—".to_string() } else { format!("{:.2}", b.mean_score) };
+        println!(
+            "  {:<12} {:>5}   {:>7}   {}   {:>6}",
+            b.label(),
+            b.count,
+            b.accepted,
+            rate,
+            mean
+        );
+    }
+    println!();
+    if samples.is_empty() {
+        println!(
+            "  结论        : **样本不足**（没有任何已决的计分条目）—— 不输出命中率结论。\n\
+             \x20             先跑一轮 propose import → review decide（业务轨），再回来校准。"
+        );
+    } else if let Some(ece) = crate::domain::confidence::expected_calibration_error(&bins) {
+        println!(
+            "  结论        : 样本充足（每箱 ≥ {} 条）· ECE = {:.2}",
+            crate::domain::confidence::MIN_BIN_SAMPLES,
+            ece
+        );
+        println!(
+            "  读法        : 接受率 < 平均分 = 分数偏高（该收紧）；> = 分数偏低（可以放宽），\n\
+             \x20             但**调权重必须先有覆盖率**（设计概要 §九 G4：本采样只验存在性）"
+        );
+    } else {
+        let thin: Vec<String> = bins
+            .iter()
+            .filter(|b| !b.sufficient())
+            .map(|b| format!("{}（{} 条）", b.label(), b.count))
+            .collect();
+        println!(
+            "  结论        : **样本不足** —— 以下分箱 < {} 条：{}。不输出命中率结论、不算 ECE。",
+            crate::domain::confidence::MIN_BIN_SAMPLES,
+            thin.join("、")
+        );
+    }
+    Ok(())
+}
+
 async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
     let ConceptCmd::Digest { file } = cmd else {
         let ConceptCmd::Import { file, project, base_version, round } = cmd else {

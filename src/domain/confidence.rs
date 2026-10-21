@@ -632,6 +632,103 @@ pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
     Ok(Confidence { score, method: method.to_string(), band, signals, veto, data_evidence })
 }
 
+/// 校准分箱（AC-011）—— 一个分数区间里「多少条 / 人工接受多少」。
+///
+/// 区间是**左闭右开**（最后一箱右端闭），见 [`calibration_bins`] 的分箱表。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalibrationBin {
+    pub low: f64,
+    pub high: f64,
+    /// 落在这一箱、且**已有人工决定**的条数
+    pub count: usize,
+    /// 其中人工接受的条数
+    pub accepted: usize,
+    /// 这一箱的平均分（`count == 0` ⇒ 0.0，打印时显示 `—`）
+    pub mean_score: f64,
+}
+
+impl CalibrationBin {
+    /// 接受率。`count == 0` ⇒ `None`（**不是 0%** —— 空箱没有比率）。
+    pub fn acceptance_rate(&self) -> Option<f64> {
+        if self.count == 0 {
+            None
+        } else {
+            Some(self.accepted as f64 / self.count as f64)
+        }
+    }
+
+    /// 这一箱样本够不够下结论（设计概要 §六：任一分箱 < 5 条 ⇒ 样本不足）。
+    pub fn sufficient(&self) -> bool {
+        self.count >= MIN_BIN_SAMPLES
+    }
+
+    pub fn label(&self) -> String {
+        format!("{:.2}–{:.2}", self.low, self.high)
+    }
+}
+
+/// 分箱最小样本数（设计概要 §六）。
+pub const MIN_BIN_SAMPLES: usize = 5;
+
+/// 五档分箱的边界（与设计概要 §六 一致）。
+pub const CALIBRATION_EDGES: [f64; 6] = [0.0, 0.3, 0.6, 0.75, 0.9, 1.0];
+
+/// **分箱**：`(score, accepted)` 序列 → 五档统计。
+///
+/// 输入顺序无关（统计量），输出顺序固定（低→高），同一份数据两次运行逐字节相同。
+pub fn calibration_bins(samples: &[(f64, bool)]) -> Vec<CalibrationBin> {
+    let mut bins: Vec<CalibrationBin> = (0..CALIBRATION_EDGES.len() - 1)
+        .map(|i| CalibrationBin {
+            low: CALIBRATION_EDGES[i],
+            high: CALIBRATION_EDGES[i + 1],
+            count: 0,
+            accepted: 0,
+            mean_score: 0.0,
+        })
+        .collect();
+    let mut sums = vec![0.0f64; bins.len()];
+    for (score, accepted) in samples {
+        let s = score.clamp(0.0, 1.0);
+        // 左闭右开；最后一箱闭合（1.0 必须落进 0.9–1.0，不能被丢弃）
+        let idx = (0..bins.len())
+            .find(|i| {
+                let last = *i == bins.len() - 1;
+                s >= bins[*i].low && (s < bins[*i].high || (last && s <= bins[*i].high))
+            })
+            .unwrap_or(bins.len() - 1);
+        bins[idx].count += 1;
+        if *accepted {
+            bins[idx].accepted += 1;
+        }
+        sums[idx] += s;
+    }
+    for (i, b) in bins.iter_mut().enumerate() {
+        if b.count > 0 {
+            b.mean_score = round2(sums[i] / b.count as f64);
+        }
+    }
+    bins
+}
+
+/// **ECE**（期望校准误差）：`Σ (nᵢ/N) · |接受率ᵢ − 平均分ᵢ|`。
+///
+/// 只在**全部分箱都达到最小样本数**时返回 `Some` —— 样本不足时算出来的 ECE
+/// 是个噪声数，印出来会被当成结论（AC-011 明令禁止）。
+pub fn expected_calibration_error(bins: &[CalibrationBin]) -> Option<f64> {
+    let total: usize = bins.iter().map(|b| b.count).sum();
+    if total == 0 || bins.iter().any(|b| !b.sufficient()) {
+        return None;
+    }
+    let ece: f64 = bins
+        .iter()
+        .map(|b| {
+            let rate = b.acceptance_rate().unwrap_or(0.0);
+            (b.count as f64 / total as f64) * (rate - b.mean_score).abs()
+        })
+        .sum();
+    Some(round2(ece))
+}
+
 /// 四档计数（AC-009 的「统计四档条数」）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BandCounts {
@@ -1229,4 +1326,79 @@ mod tests {
         assert_eq!(c.band, Band::Rejected);
     }
 
+    // ── AC-011 · 校准分箱 ────────────────────────────────────
+
+    /// 五档分箱的**边界**：左闭右开、最后一箱闭合；1.0 不能被丢掉。
+    #[test]
+    fn calibration_bins_respect_the_edges() {
+        let samples = [
+            (0.0, true),   // [0.0,0.3)
+            (0.29, false), // [0.0,0.3)
+            (0.3, true),   // [0.3,0.6)
+            (0.6, true),   // [0.6,0.75)
+            (0.75, true),  // [0.75,0.9)
+            (0.9, true),   // [0.9,1.0]
+            (1.0, false),  // [0.9,1.0] ← 上界必须闭合
+        ];
+        let bins = calibration_bins(&samples);
+        assert_eq!(bins.len(), 5, "五档（设计概要 §六）");
+        let counts: Vec<usize> = bins.iter().map(|b| b.count).collect();
+        assert_eq!(counts, vec![2, 1, 1, 1, 2], "边界归属：{counts:?}");
+        assert_eq!(bins.iter().map(|b| b.accepted).sum::<usize>(), 5);
+        // 标签与边界可读
+        assert_eq!(bins[0].label(), "0.00–0.30");
+        assert_eq!(bins[4].label(), "0.90–1.00");
+        // 平均分（0.0 与 0.29 的均值 0.145 —— 两位小数取整落 0.14，
+        // 因为 0.145 在二进制里是 0.1449999…；这条断言钉的是**取整规则**本身）
+        assert!((bins[0].mean_score - 0.14).abs() < 1e-9, "{}", bins[0].mean_score);
+        // 越界输入被夹住，不产生第 6 箱
+        let odd = calibration_bins(&[(-1.0, false), (2.0, true)]);
+        assert_eq!(odd.iter().map(|b| b.count).sum::<usize>(), 2);
+        assert_eq!(odd[0].count, 1);
+        assert_eq!(odd[4].count, 1);
+    }
+
+    /// **样本不足**：任一分箱 < 5 条 ⇒ 不给接受率结论、不算 ECE（AC-011）。
+    ///
+    /// 变异自证：把 `sufficient()` 改成恒 `true`，`ece` 会变成 `Some`，
+    /// 于是「1 条样本」也能印出一个像模像样的 0% / 100% —— 那正是 AC 禁止的事。
+    #[test]
+    fn calibration_refuses_to_conclude_on_thin_samples() {
+        // 每箱都 < 5
+        let thin: Vec<(f64, bool)> = (0..4).map(|i| (0.05 + i as f64 * 0.2, i % 2 == 0)).collect();
+        let bins = calibration_bins(&thin);
+        assert!(bins.iter().any(|b| !b.sufficient()));
+        assert_eq!(expected_calibration_error(&bins), None, "样本不足时不算 ECE");
+
+        // 空库（一条已决样本都没有）：每一箱都是 0 条，接受率必须是 None（不是 0%）
+        let empty = calibration_bins(&[]);
+        assert_eq!(empty.len(), 5);
+        assert!(empty.iter().all(|b| b.count == 0));
+        assert!(empty.iter().all(|b| b.acceptance_rate().is_none()));
+        assert_eq!(expected_calibration_error(&empty), None);
+
+        // 每箱 ≥ 5 ⇒ 才给结论
+        let mut thick: Vec<(f64, bool)> = Vec::new();
+        for (low, high) in [(0.0, 0.3), (0.3, 0.6), (0.6, 0.75), (0.75, 0.9), (0.9, 1.0)] {
+            let mid = (low + high) / 2.0;
+            for i in 0..5 {
+                // 每箱接受 4/5，平均分是箱中值 ⇒ ECE > 0
+                thick.push((mid, i < 4));
+            }
+        }
+        let bins = calibration_bins(&thick);
+        assert!(bins.iter().all(|b| b.sufficient()));
+        for b in &bins {
+            assert_eq!(b.acceptance_rate(), Some(0.8), "5 条里接受 4 条");
+        }
+        let ece = expected_calibration_error(&bins).expect("样本足够，必须算 ECE");
+        assert!(ece > 0.0 && ece < 0.5, "ECE = {ece}");
+    }
+
+    /// 同一份样本两次分箱逐字段相同（AC-005 的口径也适用于校准）。
+    #[test]
+    fn calibration_is_reproducible() {
+        let samples: Vec<(f64, bool)> = (0..40).map(|i| ((i as f64) / 40.0, i % 3 == 0)).collect();
+        assert_eq!(calibration_bins(&samples), calibration_bins(&samples));
+    }
 }
