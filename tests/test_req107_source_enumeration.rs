@@ -1758,6 +1758,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "introspect"),
     ("src/extract/mod.rs", "names"),
     ("src/extract/mod.rs", "propose"),
+    // REQ-108 · 只读确定性采样器（AC-002 / AC-003）
+    ("src/extract/mod.rs", "sample"),
     ("src/mcp/mod.rs", "protocol"),
     ("src/mcp/mod.rs", "serve"),
     ("src/mcp/mod.rs", "tools"),
