@@ -6,7 +6,10 @@
 
 ### AC-001 · 图接口返回权威分组
 
-- `GET /api/graph` 返回 `groups: [{key, display_name, members[], reason?}]`
+- `GET /api/graph` 返回 `groups: [{id, display_name, members[], scope_hint?}]`
+- ⚠️ **字段名是 `id` 不是 `key`**（BA 裁定 A-1）：`key` 在发布闸词表 `MODELING_TERMS` 里（`src/domain/view.rs:902`），
+  写成线上键名会让**每次带分组的 `/api/graph` 被闸拒发**。`Node` 早有同一先例（`graph.rs:110 serde(rename = "id")`）。
+- 判据：带分组的响应里**不得出现**线上键 `"key"`；`{"id":…}` 必须过闸、`{"key":…}` 必须被拒（正反两条都要有）
 - 每个节点带 `group`（无组则 `null`），且 `node.group` 必须等于某 `groups[].key` 或 `null`
 - 判据：真的建一个概念组 ⇒ `groups` 出现、成员节点 `group` 正确；未分组项目 ⇒ `groups: []` 且全 `null`
 
@@ -72,3 +75,30 @@
 - **H** 分组只有一处权威（`concept_groups`）；⛔ 页面/接口都不许再算
 - **G** 变异三元组；编译失败不算执行
 - **S** AC 也会错，发现直接说
+
+---
+
+## 三 · Dev 交付后的裁定
+
+### A-1 · `groups[].key` 改 `groups[].id`（**接受 Dev 的判断**）
+
+Dev 交付时字段叫 `id`，与 AC 字面的 `key` 不符。它的理由：**`key` 在发布闸词表里**。
+
+**BA 独立核实成立**：
+
+```
+src/domain/view.rs:902   pub const MODELING_TERMS: &[&str] = &[ "pk", "primary_key", "cardinality",
+                            "ordinal", "evidence", "disjoint", "extracted_by", "proposed_by",
+                            "approved_by", "key", "外键", "基数", "主键", "证据" ];
+```
+
+且 `Node` 早在 `graph.rs:110` 就用 `#[serde(rename = "id")]` 绕开同一问题——**先例一致**。
+
+**裁定：改 AC 为 `id`**。⛔ 不放宽 `guard()`（红线），⛔ 不叫 `key` 然后接受 500。
+
+**顺带记一个真实的产品张力**：`"key"` 是业务词（API Key），却被列入建模术语。现在的处理靠「整体等于 `key`」才命中（`License Key` 不误伤）。**这是词表与业务词汇天然冲突的地方**，下一轮若要治，方向是「按位置/上下文判」而不是「加词/删词」。
+
+### A-2 · 交付里的两点要 QA 独立验
+
+1. **`id` 的选择不是自说自话**：QA 要做变异——把线上的 `id` 改成 `key`，确认 `/api/graph` 真的被闸拒（否则「必须叫 id」这个约束就是编的）。
+2. **往返是在副本项目上做的**（`anspire_excl_r115`），因为 `apply` 拒绝冻结 base。QA 要确认：副本与源是**同一份快照**（同 84 实体 / 52 关系），且真实项目 `anspire_excl` 上**确实没有分组**（页面应显示未分组，不是偷偷用了副本的组）。
