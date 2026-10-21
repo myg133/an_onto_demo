@@ -414,7 +414,7 @@ async fn test_req107_http_three_outlets_are_wired() {
 
     // 行为半：干净视图 ⇒ 三条都 200。
     let clean = fixture_view(false);
-    let st = ontok::server::http::state_from_view(&clean, "样例项目", 2, "correct-horse-battery");
+    let st = ontok::server::http::state_from_view(&clean, "样例项目", 2, "correct-horse-battery", 0);
     let app = ontok::server::http::build_router(st.clone());
     let ids: Vec<String> = st_graph_keys(&clean);
 
@@ -443,7 +443,7 @@ async fn test_req107_http_three_outlets_are_wired() {
     // 反向半：视图里有一个**脏对象名** ⇒ /api/graph 整份拒发（500），
     // 而 /api/node 取那个**干净**对象仍然 200（逐节点粒度的证据）。
     let dirty = fixture_view(true);
-    let st2 = ontok::server::http::state_from_view(&dirty, "样例项目", 2, "correct-horse-battery");
+    let st2 = ontok::server::http::state_from_view(&dirty, "样例项目", 2, "correct-horse-battery", 0);
     let app2 = ontok::server::http::build_router(st2.clone());
     let keys2 = st_graph_keys(&dirty);
 
@@ -671,18 +671,19 @@ fn ctx(view: ontok::domain::view::CustomerView) -> ontok::mcp::tools::OntologyCo
 // ══════════════════════════════════════════════════════════════
 
 #[test]
-fn test_req107_outlet_registry_matches_the_33_baseline() {
-    // ① 条数：口径 D 是 33（CLI 22 + HTTP 4 + MCP 7）。
-    assert_eq!(OUTLETS.len(), 33, "口径 D 是 33（acceptance.md §零）");
+fn test_req107_outlet_registry_matches_the_declared_baseline() {
+    // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）= 39。
+    assert_eq!(OUTLETS.len(), 39, "33（REQ-107）+ 6（REQ-110 TTL 出口）");
 
-    // ② 分组：客户 13 / 建模 8 / 内部 9 / 静态 2 / 错误路径 1。
+    // ② 分组：客户 17 / 建模 10 / 内部 9 / 静态 2 / 错误路径 1。
     //
     // ⚠️ 与 TC-007 用例原文的差异（**AC/用例自身缺陷**，纪律 S）：
     // 原文写 `Static == 3`（Z2,Z3,Z4）+ ErrorPath 1 ⇒ 13+8+9+3+1 = **34**，
     // 与它自己断言的 `OUTLETS.len() == 33` 矛盾。按 A1 的裁定（Z4 不是出口）
     // 这里取 Static == 2，Z4 单列 `STATIC_TEMPLATES`。已在交付物「异议」登记。
-    assert_eq!(outlet_count(Track::Customer), 13);
-    assert_eq!(outlet_count(Track::Modeling), 8);
+    // REQ-110 把客户 13→17、建模 8→10（+6 条 TTL 出口），其余分组不动。
+    assert_eq!(outlet_count(Track::Customer), 17);
+    assert_eq!(outlet_count(Track::Modeling), 10);
     assert_eq!(outlet_count(Track::Internal), 9);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
@@ -695,10 +696,10 @@ fn test_req107_outlet_registry_matches_the_33_baseline() {
     assert_eq!(ids.len(), total, "ID 必须唯一");
 
     let mut want: Vec<String> = Vec::new();
-    want.extend((1..=5).map(|i| format!("C{i}")));
-    want.extend((1..=3).map(|i| format!("H{i}")));
+    want.extend((1..=7).map(|i| format!("C{i}")));
+    want.extend((1..=5).map(|i| format!("H{i}")));
     want.extend((1..=5).map(|i| format!("M{i}")));
-    want.extend((1..=8).map(|i| format!("D{i}")));
+    want.extend((1..=10).map(|i| format!("D{i}")));
     want.extend((1..=9).map(|i| format!("I{i}")));
     want.push("Z1".into());
     want.push("Z2".into());

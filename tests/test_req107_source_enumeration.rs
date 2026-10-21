@@ -382,6 +382,10 @@ const WRITE_CONSTRUCTS: &[&str] = &[
     "fs::write(",
     "encode_result(",
     "tool_call_result(",
+    // ⭐ REQ-110 · `text/turtle` 响应：`get_ttl` 返回 `(HeaderMap, String)`，
+    // 由 axum 自己变成响应（出口层禁调 `Response::builder` / `.into_response()`）。
+    // 这个形状必须进枚举，否则 TTL 响应体就成了**没人登记**的写点。
+    "Ok((headers,",
 ];
 
 /// 写出机制**本体**（定义处）：这些函数体里的 `write_stdout(` / `encode_result(`
@@ -1313,14 +1317,20 @@ fn t2_customer_writes_take_pipeline_products_only() {
 /// `OutletSpec` 的字段全私有、无公开构造器，`render` 只收 `OutletId`。
 const OUTLET_ID_TOKENS: &[(&str, &str, usize)] = &[
     ("src/cli.rs", "OutletId::C1", 1),
-
     ("src/cli.rs", "OutletId::C3", 1),
     ("src/cli.rs", "OutletId::C4", 1),
     ("src/cli.rs", "OutletId::C5", 1),
+    // ⭐ REQ-110 · TTL 导出。C7 / D10 与 C6 / D9 写的是**同一份**产物，
+    // 证据记号共享（见 `evidence_token`），所以这里没有自己的记号。
+    ("src/cli.rs", "OutletId::C6", 1),
     ("src/cli.rs", "OutletId::D1", 1),
+    ("src/cli.rs", "OutletId::D9", 1),
     ("src/server/http.rs", "OutletId::H1", 1),
     ("src/server/http.rs", "OutletId::H2", 1),
     ("src/server/http.rs", "OutletId::H3", 1),
+    // ⭐ REQ-110 · `/api/ontology.ttl` 与 `/api/scope`
+    ("src/server/http.rs", "OutletId::H4", 1),
+    ("src/server/http.rs", "OutletId::H5", 1),
     ("src/server/http.rs", "OutletId::Z1", 1),
     ("src/mcp/serve.rs", "OutletId::McpTools", 1),
     ("src/mcp/serve.rs", "OutletId::Z2", 1),
@@ -1614,6 +1624,10 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/server/http.rs", "check_scope", "HTTP 路由/装配"),
     ("src/server/http.rs", "get_graph", "HTTP 路由/装配"),
     ("src/server/http.rs", "get_node", "HTTP 路由/装配"),
+    // ⭐ REQ-110 · 页面可达性与 TTL 导出
+    ("src/server/http.rs", "get_scope", "HTTP 路由/装配（gated 作用域，页面壳拿它）"),
+    ("src/server/http.rs", "get_ttl", "HTTP 路由/装配（gated TTL 导出，与 CLI 同一条序列化路径）"),
+    ("src/server/http.rs", "ttl_file_name", "HTTP 路由/装配（下载文件名白名单化）"),
     ("src/server/http.rs", "index", "HTTP 路由/装配"),
     ("src/server/http.rs", "read_only_not_allowed", "HTTP 路由/装配"),
     ("src/server/http.rs", "normalize_405", "HTTP 路由/装配"),
@@ -1787,6 +1801,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/domain/mod.rs", "review"),
     ("src/domain/mod.rs", "review_view"),
     ("src/domain/mod.rs", "snapshot"),
+    // ⭐ REQ-110 · Turtle（OWL）序列化：纯函数、零依赖、确定性
+    ("src/domain/mod.rs", "ttl"),
     ("src/domain/mod.rs", "view"),
     ("src/extract/mod.rs", "cardinality"),
     // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）
@@ -1943,6 +1959,9 @@ fn pipeline_calls(code: &str) -> Vec<PipelineCall> {
 fn evidence_token(id: &str) -> String {
     match id {
         "C2" => "C1".to_string(),
+        // ⭐ REQ-110：`--out` 与 stdout 写**同一份** TTL 产物 —— 与 C2/C1 同一条口径。
+        "C7" => "C6".to_string(),
+        "D10" => "D9".to_string(),
         "M1" | "M2" | "M3" | "M4" | "M5" => "McpTools".to_string(),
         other => other.to_string(),
     }

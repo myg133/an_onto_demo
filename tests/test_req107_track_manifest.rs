@@ -70,12 +70,12 @@ fn fn_body(src: &str, name: &str) -> String {
 }
 
 // ══════════════════════════════════════════════════════════════
-// TC-021 · 8 个建模出口在登记表里显式声明 track = Modeling
+// TC-021 · 10 个建模出口在登记表里显式声明 track = Modeling
 // ══════════════════════════════════════════════════════════════
 
 #[test]
 fn test_req107_modeling_track_is_explicitly_declared() {
-    // ① 恰好 8 条，ID 集合 == {D1..D8}。
+    // ① 恰好 10 条，ID 集合 == {D1..D10}（D9/D10 = REQ-110 的 TTL 导出）。
     let ids: Vec<&str> = OUTLETS
         .iter()
         .filter(|o| o.track() == Track::Modeling)
@@ -83,9 +83,11 @@ fn test_req107_modeling_track_is_explicitly_declared() {
         .collect();
     let mut got = ids.clone();
     got.sort_unstable();
-    let want: Vec<String> = (1..=8).map(|i| format!("D{i}")).collect();
+    let mut want: Vec<String> = (1..=10).map(|i| format!("D{i}")).collect();
+    // 与 `got.sort_unstable()` 同一口径（字典序：D10 排在 D2 前面）。
+    want.sort();
     let got: Vec<String> = got.iter().map(|s| s.to_string()).collect();
-    assert_eq!(got, want, "建模轨必须是 D1..D8 这 8 条（多一条少一条都红）");
+    assert_eq!(got, want, "建模轨必须是 D1..D10 这 10 条（多一条少一条都红）");
 
     // ② 每条 needle 必须在源码里命中（登记与源码不许漂移）。
     let mut sources: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
@@ -102,7 +104,7 @@ fn test_req107_modeling_track_is_explicitly_declared() {
     assert!(missing.is_empty(), "建模轨的站点标注漂移了：{missing:?}");
 
     // ③ 建模轨所在的函数体里**零判据直调**（豁免是被声明的，不是被漏掉的）。
-    //    `ontology_cmd` 里同时住着 C1–C5 与 D1 —— 所以这一格实际验的是
+    //    `ontology_cmd` 里同时住着 C1–C7 与 D1/D9/D10 —— 所以这一格实际验的是
     //    「出口层整体没有判据直调」，与 AC-003 同源。
     let cli = common::strip_comments(&sources["src/cli.rs"]);
     let cli = cli.split("#[cfg(test)]").next().unwrap_or("").to_string();

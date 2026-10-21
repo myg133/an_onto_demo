@@ -78,7 +78,12 @@ async fn actual_bytes() -> Vec<(&'static str, Vec<u8>)> {
     out.push(("C5", ov_json.into_bytes()));
 
     // ── H1 / H2 / H3（走**生产接线** `state_from_view` + 真实路由）──
-    let st = ontok::server::http::state_from_view(&cv, PROJECT, 2, TOKEN);
+    //
+    // ⚠️ REQ-110：`state_from_view` 多了一个 `action_type_count` 参数
+    // （只影响 TTL 文件头的有损声明）。⇒ 本文件的「在基线上也要能编译」
+    // 这条**历史属性到此为止**：生成器是在 b714f48 的一次性步骤，
+    // golden 已经产出并锚定；判据本身（逐字节比 golden）不受影响。
+    let st = ontok::server::http::state_from_view(&cv, PROJECT, 2, TOKEN, 0);
     let app = ontok::server::http::build_router(st.clone());
     let get = |uri: String| {
         let app = app.clone();
