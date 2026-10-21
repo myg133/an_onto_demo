@@ -16,6 +16,13 @@
 //! 真库（`anspire_ai` v2）上的 83 / 866 / 52、两次导出逐字节相同。
 //! 「rdflib 解析 0 错误 + 与 `ai-ontology.ttl` 同构」由交付报告里的
 //! **外部验证脚本**给出（`python -c "rdflib..."`）—— 这是环境事实，不是本文件能替代的。
+//!
+//! # A-7 的覆盖假设
+//!
+//! 文件头在闸的扫描范围之外（AC-008 强制它写 `cardinality`），前提是**头部的内容
+//! 在正文里同样扫得到**。这条前提的落点就是头部默认前缀 IRI 与正文本体 IRI 同源：
+//! `a7_header_prefix_iri_must_equal_the_body_ontology_iri` 一旦红，说明头部换了
+//! 数据来源，「头在闸外不减少覆盖」就不再成立。
 
 mod common;
 
@@ -64,6 +71,34 @@ fn clean_view() -> CustomerView {
             how_many: "多对一".into(),
             meaning: "归属于".into(),
         }],
+    }
+}
+
+/// 建模轨夹具：只要**非空**即可（A-7 钉的是头部/本体 IRI 的关系，不依赖数据形状）。
+fn model_fixture() -> ontok::domain::model_view::ModelTrackView {
+    use ontok::domain::model_view::{ModelEntityView, ModelPropertyView, ModelTrackView};
+    ModelTrackView {
+        seq: 2,
+        extracted_by: None,
+        entity_types: vec![ModelEntityView {
+            key: "order".into(),
+            display_name: "订单".into(),
+            description: Some("一张订单".into()),
+            aliases: vec![],
+            parent: None,
+            disjoint_with: vec![],
+            properties: vec![ModelPropertyView {
+                name: "下单时间".into(),
+                column: "created_at".into(),
+                nullable: false,
+                note: None,
+                sample: None,
+            }],
+            evidence: vec![],
+        }],
+        link_types: vec![],
+        action_types: vec![],
+        functions: vec![],
     }
 }
 
@@ -223,6 +258,145 @@ fn ac008_the_constant_header_is_outside_the_gated_bytes() {
     assert!(!doc.body().contains("cardinality"), "正文里不许出现（否则闸会恒命中）");
     let hits = ontok::domain::view::scan_modeling_terms(doc.body());
     assert!(hits.is_empty(), "干净视图的正文不该命中任何守门词：{hits:?}");
+}
+
+// ══════════════════════════════════════════════════════════════
+// A-7 · 头部默认前缀 IRI == 正文本体 IRI（闸的覆盖假设）
+// ══════════════════════════════════════════════════════════════
+
+/// 机械解析头部 `@prefix : <IRI> .` 的 IRI（**默认前缀**那一行，必须恰好一条）。
+///
+/// ⛔ 不做 `contains` / 前缀匹配：逐行按结构切出 `<` 与 `>` 之间那段，
+/// 并要求 `>` 之后**正好**是 ` .`。行不是这个形状 ⇒ 不计数（不猜）。
+fn parse_default_prefix_iri(ttl: &str) -> String {
+    const HEAD: &str = "@prefix : <";
+    let mut found: Vec<String> = Vec::new();
+    for line in ttl.lines() {
+        let b = line.as_bytes();
+        if b.len() < HEAD.len() || &b[..HEAD.len()] != HEAD.as_bytes() {
+            continue;
+        }
+        let rest = &line[HEAD.len()..];
+        let Some(close) = rest.find('>') else { continue };
+        let iri = &rest[..close];
+        if &rest[close..] != "> ." {
+            continue;
+        }
+        assert!(!iri.is_empty(), "头部默认前缀 IRI 为空：{line}");
+        assert!(
+            !iri.as_bytes().iter().any(u8::is_ascii_whitespace),
+            "头部默认前缀 IRI 里出现了空白：{line}"
+        );
+        found.push(iri.to_string());
+    }
+    assert_eq!(
+        found.len(),
+        1,
+        "头部必须恰好有一条 `@prefix : <…> .`，实际 {} 条：{found:?}",
+        found.len()
+    );
+    found.pop().expect("已断言非空")
+}
+
+/// 机械解析正文 `<IRI> a owl:Ontology ;` 的主语 IRI（必须恰好一条）。
+///
+/// ⛔ 同样不用宽松判据：要求**行首**就是 `<`，`>` 之后正好是 ` a owl:Ontology`
+/// 再接 ` ;` 或 ` .`。这样注释行、`rdfs:comment` 字面量里的同形文字都不会被误采。
+fn parse_body_ontology_iri(ttl: &str) -> String {
+    const MARK: &str = "a owl:Ontology";
+    let mut found: Vec<String> = Vec::new();
+    for line in ttl.lines() {
+        if line.as_bytes().first() != Some(&b'<') {
+            continue;
+        }
+        let Some(close) = line[1..].find('>').map(|i| i + 1) else { continue };
+        let tail = &line[close + 1..];
+        let t = tail.as_bytes();
+        if t.len() < MARK.len() + 1 || t[0] != b' ' || &t[1..1 + MARK.len()] != MARK.as_bytes() {
+            continue;
+        }
+        let rest = &tail[1 + MARK.len()..];
+        if rest != " ;" && rest != " ." {
+            continue;
+        }
+        let iri = &line[1..close];
+        assert!(!iri.is_empty(), "正文本体 IRI 为空：{line}");
+        found.push(iri.to_string());
+    }
+    assert_eq!(
+        found.len(),
+        1,
+        "正文必须恰好有一条 `<…> a owl:Ontology`，实际 {} 条：{found:?}",
+        found.len()
+    );
+    found.pop().expect("已断言非空")
+}
+
+/// 断言一份导出的 A-7 不变量。
+///
+/// **A-7 原话是「逐字相同」**；实测形态是：
+/// 头部 `@prefix : <https://ontok.local/xxx#>` / 正文 `<https://ontok.local/xxx> a owl:Ontology`。
+/// Turtle 的前缀 IRI 是「命名空间 + 片段分隔符」：那个 `#` 是**分隔符**，
+/// 不属于命名空间 IRI。所以判据机械化为——
+/// **把头部 IRI 的那个 `#` 剥掉之后，两个 IRI 逐字相同**（不是「以…开头」）。
+///
+/// 反过来说：只要头部 IRI 在 `#` 之前多/少任何一个字节，本条就红。
+fn assert_a7_invariant(track: &str, project: &str, ttl: &str) {
+    let prefix_iri = parse_default_prefix_iri(ttl);
+    let body_iri = parse_body_ontology_iri(ttl);
+    // 交付证据（`--nocapture` 可见）：两个 IRI 的实际取值。
+    eprintln!(
+        "A-7 现场：{track} project={project:?}\n  头部 @prefix : <{prefix_iri}>\n  \
+         正文 <{body_iri}> a owl:Ontology"
+    );
+
+    let header_ns_iri = prefix_iri.strip_suffix('#').unwrap_or_else(|| {
+        panic!(
+            "{track}：头部默认前缀 IRI 不以片段分隔符 `#` 结束，\
+             无法与正文本体 IRI 对齐：<{prefix_iri}>"
+        )
+    });
+    assert_eq!(
+        header_ns_iri, body_iri,
+        "{track}（project={project:?}）：头部前缀与正文本体 IRI 不一致 —— \
+         头部可能引入了新的数据来源，闸的覆盖假设（A-7）不再成立\n\
+         头部 @prefix : <{prefix_iri}>\n正文 <{body_iri}> a owl:Ontology"
+    );
+}
+
+/// **反证（防空转）**：只改头部 IRI 一个字符，判据必须分辨得出来。
+///
+/// 没有这一段，上面那条可能只是「同一个变量比它自己」——
+/// 这里证明它比的是**两个独立解析出来的值**（也是「宽松写法」与「解析后相等」的分界）。
+fn assert_a7_catches_a_drift(track: &str, ttl: &str) {
+    let prefix_iri = parse_default_prefix_iri(ttl);
+    let anchor = format!("@prefix : <{prefix_iri}>");
+    let drifted = ttl.replacen(&anchor, &format!("@prefix : <{prefix_iri}drift>"), 1);
+    assert_ne!(drifted, ttl, "{track}：反证夹具没生效（没找到头部前缀行）");
+    let d_prefix = parse_default_prefix_iri(&drifted);
+    let d_body = parse_body_ontology_iri(&drifted);
+    assert_ne!(
+        d_prefix.strip_suffix('#').unwrap_or(d_prefix.as_str()),
+        d_body.as_str(),
+        "{track}：头部 IRI 被改动后判据仍然相等 ⇒ 判据是空转的"
+    );
+}
+
+#[test]
+fn a7_header_prefix_iri_must_equal_the_body_ontology_iri() {
+    // 多组项目名（含 `#` / 空格 / 汉字）：IRI 的字符集不是重点，
+    // 重点是两条 IRI 必须由**同一个**值派生 —— 一旦头部改从别处取 IRI，这里就红。
+    for project in ["anspire_ai", "样例项目", "带 # 与 / 的项目名"] {
+        let o = TtlOptions { project, version: 2, base: DEFAULT_BASE, action_type_count: 0 };
+        let doc = serialize_customer(&clean_view(), &o);
+        assert_a7_invariant("C6 客户轨", project, doc.doc());
+        if project == "anspire_ai" {
+            assert_a7_catches_a_drift("C6 客户轨", doc.doc());
+        }
+    }
+    // 建模轨走同一个 `finish()`，但入口不同 —— 两轨都钉（防只改一条路径）。
+    let doc = serialize_model(&model_fixture(), &opts());
+    assert_a7_invariant("D9 建模轨", opts().project, doc.doc());
 }
 
 // ══════════════════════════════════════════════════════════════
