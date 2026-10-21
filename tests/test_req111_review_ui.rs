@@ -514,6 +514,83 @@ async fn ac007_write_after_freeze_is_conflict_with_the_concrete_reason() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// QA N9（改判为阻断）· apply 之后仍能写
+// ══════════════════════════════════════════════════════════════
+
+/// ⛔ 服务开着的时候提案被 `ontok proposal apply` 应用掉：写入口必须变成
+/// **409 + 点名「已 applied」**，而不是 200 说「改判成功」。
+///
+/// 为什么用**真二进制**：QA 的复现是「另一个终端里 `proposal apply`」——
+/// 这里就跑那两条命令（`review decide --accept-all` + `proposal apply`），
+/// 服务侧仍拿着启动时那份 `ReviewState`（**基版本仍未冻结**，只查冻结会放过它）。
+#[tokio::test]
+async fn apply_after_start_is_a_conflict_and_leaves_the_rows_alone() {
+    let f = fixture(
+        "req111_apply_late",
+        vec![entity("customer", "客户"), entity("order", "订单")],
+    )
+    .await;
+    let app = app(&f).await; // 启动闸门通过时：提案 pending、v1 未冻结
+
+    // ① 对照组：apply 之前，同一条 POST 是 200 —— 409 不是把正常写入也拒了。
+    let (s, ctl) = call(
+        &app,
+        "POST",
+        "/api/decide",
+        Some(TOKEN),
+        Some(json!({"item": 1, "track": "biz", "decision": "accept"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "apply 之前应当能签：{ctl}");
+
+    // ② 另一个终端：两轨签完（apply 的前提）再应用提案。
+    let pid = f.proposal_id.to_string();
+    let (code, _, err) = run_bin(
+        env!("CARGO_BIN_EXE_ontok"),
+        &["review", "decide", "--proposal", &pid, "--project", &f.project, "--accept-all"],
+    );
+    assert_eq!(code, 0, "--accept-all 应当成功：{err}");
+    let (code, _, err) = run_bin(
+        env!("CARGO_BIN_EXE_ontok"),
+        &["proposal", "apply", "--proposal", &pid, "--project", &f.project],
+    );
+    assert_eq!(code, 0, "proposal apply 应当成功：{err}");
+    let after_apply = PgProposalStore::new(f.pool.clone())
+        .get(f.proposal_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_apply.status, "applied");
+    // apply 完成时的那一份逐行快照（含 `--accept-all` 签下的条目）。
+    let at_apply = rows(&f).await;
+
+    // ③ 服务仍在运行（基版本仍未冻结）—— 这次改判必须被 409 拦下。
+    //    刻意选一条**真的会改变状态**的写入（item 2 已被 `--accept-all` 接受，
+    //    这里要 reject）—— 闸门失灵的话库里一定看得见。
+    let (s, b) = call(
+        &app,
+        "POST",
+        "/api/decide",
+        Some(TOKEN),
+        Some(json!({"item": 2, "track": "biz", "decision": "reject"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT, "已 applied 的提案再签必须 409：{b}");
+    let v = body_json(&b);
+    let why = v["error"].as_str().expect("错误正文必须带 error 字段");
+    assert!(why.contains("applied"), "文案要点名「已 applied」：{why}");
+    assert!(why.contains("不能再改判"), "文案要说清不能再改判：{why}");
+
+    // ④ 库里没变：把 apply 完成时那一份逐行快照与 409 之后对比 ——
+    //    「想签的那条（item 2）」与其它行都必须一字不差。
+    assert_eq!(
+        rows(&f).await,
+        at_apply,
+        "409 之后提案条目一行都不许变（与 apply 完成时一致）"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // AC-008 · 与 serve 隔离（这个测试进程内能证的那一半）
 // ══════════════════════════════════════════════════════════════
 
@@ -629,6 +706,36 @@ async fn read_api_carries_both_tracks_confidence_rationale_and_evidence() {
     assert_eq!(rel["evidence"][0]["claim"], json!("按命名约定推断"));
     // 候选定义（FDE 要裁决的原始内容）
     assert_eq!(rel["payload"]["from_type"], json!("customer"));
+}
+
+// ══════════════════════════════════════════════════════════════
+// 读接口：`frozen` 必须来自版本行（QA N2）
+// ══════════════════════════════════════════════════════════════
+
+/// QA N2：`GET /api/review` 的 `frozen` 不许硬编码 —— 服务开着的时候版本被冻上，
+/// 读接口必须跟着变成 `true`（写接口那边已经是 409）。
+#[tokio::test]
+async fn read_api_reports_the_real_frozen_flag() {
+    let f = fixture("req111_frozen_flag", vec![entity("customer", "客户")]).await;
+    let app = app(&f).await;
+
+    let (s, b) = call(&app, "GET", "/api/review", Some(TOKEN), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body_json(&b)["frozen"], json!(false), "未冻结时必须说 false：{b}");
+
+    // ⭐ 运行中冻上：启动校验已经过去了，字段仍必须跟着版本行走。
+    PgProjectStore::new(f.pool.clone())
+        .freeze(f.version_id)
+        .await
+        .unwrap();
+
+    let (s, b) = call(&app, "GET", "/api/review", Some(TOKEN), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        body_json(&b)["frozen"],
+        json!(true),
+        "冻结后 frozen 必须来自版本行，不许硬编码：{b}"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -22,10 +22,14 @@
 | 幂等 | ✅ accept → reject 后终态 `rejected`，条目行数不变（135） |
 | 双向一致 | ✅ 页面签 ⇒ `review show` 读到；CLI 签 ⇒ `GET /api/review` 读到（`via=cli`） |
 | 冻结拒绝 | ✅ 启动 `exit=1`（点名 `v1 已冻结`）；运行中提交 **HTTP 409** + 具体原因 |
+| 已应用提案 | ✅ 服务运行中被 `proposal apply` 后，再 POST ⇒ **HTTP 409** +「已 applied…不能再改判」（QA N9；`apply_after_start_is_a_conflict_and_leaves_the_rows_alone`），库中决策与 apply 时逐行一致 |
 | 审计 | ✅ 每轨 `decided_at` + `via`（页面 `ui` / CLI `cli`） |
-| 测试 | lib **245**（= 基线）· doc **4**（= 基线）· 32 个基线套件 **313**（**= 基线，一条不少**）· 新增套件 **12** · 合计 36 套件 **349** |
+| 测试 | lib **245**（= 基线）· doc **4**（= 基线）· 32 个基线套件 **313**（**= 基线，一条不少**）· 新增套件 **14** · 合计 36 套件 **351** |
 | 新依赖 | ✅ **零**（`Cargo.toml` 未改） |
 | 红线 | ✅ 四红线 + `tools.rs` + `guard()` + `property_filter` G1–G4 **零改动**（`git diff --numstat` 为空） |
+
+> 耗时口径：上表的「页面路径 **7.69 s**（7.75×）」是**页面发出的 270 个 HTTP 请求**的墙钟，
+> **不含浏览器渲染 / 点击间隔** —— 把页面真正点一遍还要加上人手时间（见 §4 的口径说明）。
 
 ---
 
@@ -52,12 +56,12 @@
 | `src/review_ui/http.rs` | `179-219` | `serve` —— **只绑回环** + 口令长度 + 横幅（打印绑定地址与提案别名） |
 | `src/review_ui/http.rs` | `222-246` | `build_router`：`/`、`GET /api/review`、`GET /api/preview`、`POST /api/decide`、fallback |
 | `src/review_ui/http.rs` | `252-287` | `check_token`（每个 `/api/*` 的第一行）+ 定长比较 |
-| `src/review_ui/http.rs` | `289-411` | `GET /api/review`：条目 + 双轨状态 + 置信度（含 AI 理由）+ 证据 + 候选定义 + 进度 |
+| `src/review_ui/http.rs` | `290-430` | `GET /api/review`：条目 + 双轨状态 + 置信度（含 AI 理由）+ 证据 + 候选定义 + 进度 + `frozen`（版本行真实状态，QA N2） |
 | `src/review_ui/http.rs` | `415-508` | `GET /api/preview`：**条数** + `items[]` 白名单 + 排除项计数（只读） |
 | `src/review_ui/http.rs` | `532-604` | `POST /api/decide`：**唯一写点** → `decide_item(..., VIA_UI)` → 回执（状态 + 审计 + 进度） |
-| `src/review_ui/http.rs` | `607-623` | `ensure_unfrozen` —— **每次写前**再查冻结（AC-007） |
+| `src/review_ui/http.rs` | `615-652` | `ensure_unfrozen` —— **每次写前**再查「提案仍 `pending`」（QA N9）+「基版本未冻结」（AC-007） |
 | `src/review_ui/page.rs` | `25-` | 独立 HTML（零外部资源、零数据壳）：列表 / 过滤 / 逐条签 / **批量先预览** / 进度条 |
-| `tests/test_req111_review_ui.rs` | 全文 | 12 条判据（AC-001~011 的行为面 + 真二进制双向一致） |
+| `tests/test_req111_review_ui.rs` | 全文 | 14 条判据（AC-001~011 的行为面 + 真二进制双向一致 + QA N9/N2 回归） |
 | `tests/test_req107_outlet_pipeline.rs` | `354-359` / `678-720` | 登记对视对账**纳入** `src/review_ui/http.rs`；条数 39→44、内部 9→14、ID 集合 +R1–R5 |
 | `tests/test_req107_source_enumeration.rs` | `1818-1822` | `MODULES` 登记 `review_ui` / `http` / `page` |
 | `tests/test_req108_confidence.rs` / `test_req109_ai_semantic.rs` | 各 +5 行 | `ProposalItemRow` 字面量补 4 个审计栏（全部 `None`） |
@@ -113,7 +117,7 @@ AC-005 要求「同 `item+track` 连签**不产生两条记录**」，AC-009 又
 | **AC-009** 审计可区分 | `decided_at` + `via`（`cli`/`ui`） | ✅ | `ac009_audit_distinguishes_ui_from_cli`：页面签 ⇒ 库 `biz_via="ui"`、`biz_decided_at` 非空、`model_via` 仍 NULL；CLI 签 ⇒ `model_via="cli"`；实测 API 回执 `via.model=cli` |
 | **AC-010** 不退化 | 基线一条不少；禁改禁删 | ✅ | lib **245** / doc **4** / 32 套件 **313** 全部 = 基线；四红线 + `tools.rs` + `property_filter` 的 `git diff --numstat` 为空；无 `#[ignore]`、无删测试、`Cargo.toml` 未改 |
 
-> AC-011 不存在（验收只有 AC-001~010）；新套件 12 条是**行为判据**，不是新 AC。
+> AC-011 不存在（验收只有 AC-001~010）；新套件 14 条是**行为判据**，不是新 AC。
 
 ---
 
@@ -167,9 +171,9 @@ RESTORE moved=True sha256_before=C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DC
 | doc（`cargo test --doc`） | **4** | 4 | ✅ 一条不少 |
 | 32 个基线回归套件 | **313** | 313 | ✅ **一条不少**（逐套件见下） |
 | `test_req110_ttl`（REQ-110 新增） | **15** | 14（REQ-110 报告口径） | ✅ 全绿（该文件 `#[test]` 实测 15 条；本轮未触碰） |
-| 新增套件 `test_req111_review_ui` | **12** | — | 新增 |
+| 新增套件 `test_req111_review_ui` | **14** | — | 新增 |
 | 另跑（受影响）`test_read_only_guard` / `test_domain_print_sites_binary_req078` | 5 / 4 | 5 / 4 | ✅ |
-| **套件合计（36 个）** | **349** | 336 | ✅ 313 一条不少 + 36 新增/受影响 |
+| **套件合计（36 个）** | **351** | 336 | ✅ 313 一条不少 + 36 新增/受影响 |
 
 <details>
 <summary>逐套件（本轮实测，全部 0 failed）</summary>
@@ -194,8 +198,8 @@ RESTORE moved=True sha256_before=C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DC
 | `test_proposal` | 9 | `test_view` | 26 |
 | **小计（32 套件 = 基线 313）** | **313** | | |
 | `test_req110_ttl` | 15 | `test_read_only_guard` | 5 |
-| `test_domain_print_sites_binary_req078` | 4 | `test_req111_review_ui`（新） | 12 |
-| **合计** | **349** | | |
+| `test_domain_print_sites_binary_req078` | 4 | `test_req111_review_ui`（新） | 14 |
+| **合计** | **351** | | |
 
 </details>
 
@@ -574,10 +578,9 @@ sha after  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D   
 > `tests/test_retained_names_req084.rs` 用 `include_str!("../src/bin/ontok-gate-preflight.rs")`，
 > 挪开绕行文件时它**编不过** —— 既有问题、不在 32 个基线套件里，本轮未触碰。
 >
-> ⚠️ `tests/test_anchor_guard.rs::no_bare_env_manifest_dir_outside_anchor_file` 在**基线上就是红的**
-> （`HEAD` 的 `tests/test_req109_cli_gate.rs:26` / `tests/test_req109_e2e_fake_llm.rs:38` 各有一处
-> 裸 `env!("CARGO_MANIFEST_DIR")`）。本轮**未触碰**这两个文件；新测试只用
-> `env!("CARGO_BIN_EXE_ontok")`（不在该守卫的判定范围内）。**不是本轮引入**，也不在 32 个基线套件里。
+> ✅ `tests/test_anchor_guard.rs::no_bare_env_manifest_dir_outside_anchor_file`
+> **REQ-109 引入的红已由 hotfix `abf1c9f` 修复；本分支实测 3 passed / 0 failed。**
+> （`abf1c9f` 是基线 `f624c1a` 的祖先；旧的「基线上就是红的」说法已过期，别再把绿灯当红灯。）
 
 **另跑（受 CLI / 依赖面影响，均绿，0 failed）**：`test_req109_cli_gate` 6 · `test_project` 10 ·
 `test_hierarchy` 16 · `test_snapshot_freeze_gate` 2 · `test_review_show_binary_req072` 7。

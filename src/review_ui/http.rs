@@ -8,11 +8,12 @@
 //! 也就是 `ontok review decide` 走的那一个函数（纪律 H）。
 //! `git grep -n 'decide_item('` 只会有「定义 + CLI 调用 + 本文件调用」三处。
 //!
-//! # 四次「写前再校验」（AC-007 / 需求风险 4）
+//! # 写前再校验（AC-007 / 需求风险 4 / QA N9）
 //!
 //! 启动时校验一次（[`prepare`]），**每次写之前**再校验一次
-//! （[`ensure_unfrozen`]）。只做启动校验是不够的：版本可能在服务运行期间被
-//! `ontok version freeze` 冻上，而页面还开着 —— 那时的写入必须**当场失败**，
+//! （[`ensure_unfrozen`]）。只做启动校验是不够的：服务运行期间有两件事会变 ——
+//! ① 版本被 `ontok version freeze` 冻上；② 提案被 `ontok proposal apply` 应用掉
+//! （此时基版本**仍未冻结**，只看冻结会放过它）。两种情况的写入都必须**当场失败**，
 //! 并把「为什么」原样送到页面（不是一句「失败」）。
 //!
 //! # 为什么错误响应是 `(StatusCode, Json<Value>)` 元组
@@ -327,12 +328,20 @@ async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
         .map(|(r, v)| item_json(r, v, &reasons))
         .collect();
 
+    // REQ-111 · QA N2：`frozen` 取**版本行的真实状态**（`ontology_versions.frozen_at IS NOT NULL`），
+    // 不缓存启动时的结论 —— 服务运行中版本可能被冻上，读接口不能跟着说假话。
+    let frozen = PgProjectStore::new(state.pool.clone())
+        .is_frozen(state.base_version_id)
+        .await
+        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读版本状态失败：{e}")))?;
+
     Ok(json!({
         "project": state.project.as_ref(),
         "proposal": state.proposal_alias.as_ref(),
         "base_version": state.base_seq,
-        // 启动时已确认未冻结；运行中被冻结会在 /api/decide 上当场报 409。
-        "frozen": false,
+        // 每次读都查一次版本行：服务运行中版本可能被冻上，这个字段不能说假话。
+        // （QA N2：这里曾硬编码 `false`，冻结后读接口还在说「未冻结」。）
+        "frozen": frozen,
         "items": items,
         "progress": progress_json(&rows, &views),
     }))
@@ -553,8 +562,8 @@ async fn post_decide(
         )
     })?;
 
-    // ⭐ 需求风险 4 / AC-007：**每次写前再校验冻结**。启动校验挡不住
-    // 「服务开着的时候版本被冻上」—— 那正是最容易被误签的时间窗。
+    // ⭐ 需求风险 4 / AC-007 / QA N9：**每次写前再校验**。启动校验挡不住
+    // 「服务开着的时候版本被冻上 / 提案被 apply 掉」—— 那正是最容易被误签的时间窗。
     ensure_unfrozen(&state).await?;
 
     // ⭐ 唯一写路径：与 `ontok review decide` **同一个函数**（纪律 H）。
@@ -603,8 +612,29 @@ async fn post_decide(
     Ok(Json(decide_body))
 }
 
-/// 写前冻结校验（AC-007）。**每次都查库**，不缓存启动时的结论。
+/// 写前闸门（AC-007 / QA N9）。**每次都查库**，不缓存启动时的结论。
+///
+/// 两道，缺一不可：
+/// 1. 提案必须**仍是 `pending`** —— `ontok proposal apply` 能在服务开着的时候把
+///    它变成 `applied`，而此时**基版本仍未冻结**；只查冻结会放过这次写入，
+///    回执就会对用户说「改判成功」，而这份提案已经不再接受审核；
+/// 2. 基版本必须**仍未冻结** —— `ontok version freeze` 同样能在运行中发生。
 async fn ensure_unfrozen(state: &ReviewState) -> Result<(), ApiErr> {
+    let proposal = PgProposalStore::new(state.pool.clone())
+        .get(state.proposal_id)
+        .await
+        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读提案状态失败：{e}")))?
+        .ok_or_else(|| fail(StatusCode::INTERNAL_SERVER_ERROR, "提案不见了。"))?;
+    if proposal.status != "pending" {
+        return Err(fail(
+            StatusCode::CONFLICT,
+            format!(
+                "提案 {} 已 {}（不是 pending），不能再改判 —— 已经应用的提案不再接受审核。",
+                state.proposal_alias, proposal.status
+            ),
+        ));
+    }
+
     let frozen = PgProjectStore::new(state.pool.clone())
         .is_frozen(state.base_version_id)
         .await
