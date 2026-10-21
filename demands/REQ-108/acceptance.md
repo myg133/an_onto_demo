@@ -271,3 +271,60 @@ Dev 把待查档的 `importable` 从 `false` 改成 `true`。**采纳**，理由
 | **R4** | 未实现「按权重重算 score 必须相等」 | 权重与 veto 双向锁死后，单改 score 已过不了闸；重算属于加固，可后续 |
 
 ⚠️ 这三条必须写进交付物的「已知限制」，⛔ 不许写成「已封堵」。
+
+---
+
+## 六 · 第 3 轮裁定（QA 复验 PASS 带 4 条非阻断，BA 把 R5 改判为**阻断**）
+
+### A-13 · R5 必须修（`data_evidence: sampled` 却没有采样信号）
+
+QA 实测的完整攻击链：
+
+```json
+{ "score": 0.99, "method": "evidence-scorecard-v1",
+  "data_evidence": "sampled",
+  "signals": [ 只留 name_match / type_compatible / target_is_key / not_all_null ] }
+```
+
+**没有 `sample_hit_rate`、也没有 `veto`** ⇒ `import` / `decide` / `apply` **全部 EXIT=0** ⇒
+快照里 E5 变成 `0.99 / high`，`data_evidence` 仍是 `sampled`。
+
+**为什么它必须修（而不是像 R2/R4 那样登记）**：
+
+| 项 | R1（已修） | **R5** |
+| --- | --- | --- |
+| 手法 | 声明了分数，**整个证据链删掉** | 声明了分数，**只删最强的那个证据** |
+| 结果 | 已拒绝 | **通过** |
+
+两者是同一件事的粗细版本。QA 说「这是同类里最省事的一条」，正说明它比 R2/R4 更容易被顺手做出来。
+
+**修法（QA 给的，约 5 行）**：
+
+| 条件 | 要求 |
+| --- | --- |
+| `data_evidence == "sampled"` | `signals` 里**必须**有 `sample_hit_rate`，且其 `sampled/matched` 与顶层一致 |
+| `data_evidence == "none"` | 走既有 `no_data_evidence`（≤0.45），且 `signals` 里**不得**有 `sample_hit_rate` |
+| `data_evidence` 缺失 | 按 `sampled` 处理（严格侧） |
+
+**判据（可证伪）**：构造上面那份 JSON ⇒ `import` 必须 exit≠0，文案指明「声明了采样证据但没有 sample_hit_rate 信号」。
+
+### A-14 · 三条文档/口径问题（本轮一并修）
+
+| # | 问题 | 要求 |
+| --- | --- | --- |
+| **N7** | 第 3 轮没更新 `verification-report.md`，**§11 不存在**，报告止于 §10.6 | 补 §11（R1 修复 + `confidence: null` 裁定 + 本轮数字） |
+| **N6** | 「31 套件 307 passed」与实测 **302** 差 5（`live` 与 `source_enumeration` 互换的口径） | 报告与交付说明里给出**套件名单**，数字必须能对上名单 |
+| **N8** | `test_req107_source_enumeration` 不在标准回归集，导致「31 套件全绿」有覆盖盲区 | 把它**加入回归集**，并在报告里列出回归集名单 |
+
+### A-15 · QA 的两条判断，采纳
+
+1. **t5 补登记 = 遵守规则，不是放宽**（QA 回 `4acbf5a` 复现 9/1 红，且放宽需要改的四个开关全部零改动）⇒ **采纳，合规**。
+2. **`confidence: null` 按「未声明」放行**（null 不携带分数，只会降级为未评分，不抬高）⇒ **采纳**。
+
+### A-16 · 已知限制（更新）
+
+R2 / R4 仍按 A-12 登记不动。**R5 修完后**，同一类的剩余风险只有：
+
+> **伪造全套自洽证据**（连 `sampled/matched` 一起改成 5/5 并重算分数）——
+> 这需要连 `sample_digest` 一起伪造，而 digest 可回源库复采证伪。
+> 置信度防的是**诚实错误**，不是**有 DB 写权限的恶意篡改**（那是另一个信任边界）。
