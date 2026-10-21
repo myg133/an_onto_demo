@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**待验证（第 3 轮）**（2026-10-21 · R5 已封，QA 终验中）
+**已验证**（2026-10-21 · QA 终验 PASS，0 阻断；待合并）
 
 ## 状态流转
 
@@ -124,3 +124,19 @@ Dev 另关掉 4 种：删 `veto`、改 `veto.cap`、改命中率 `value`、**绕
 **apply 侧第二道闸**：改库后 apply 仍 exit 1，`version list` 只有 v1，**不写 v2**。
 
 **测试**：lib **230**（+3 R5 单测）/ doc 4 / 32 套件 **313 passed**；六红线 + `guard()` + G1–G4 + Cargo 零改动。
+
+## QA 终验（`qa-review-3.md`）· **PASS，0 阻断，建议合并**
+
+| 检查 | 结果 |
+| --- | --- |
+| **R5 是否真封** | ✅ A-13 四条判据全过（真 CLI）：① sampled 缺 `sample_hit_rate` ⇒ exit 1；② none 却带采样信号 ⇒ exit 1；③ `--no-sample` 真产出 ⇒ exit 0；④ 真 `proposal.json` 148 条 ⇒ exit 0 |
+| apply 侧第二道闸 | ✅ 独立复现：改库后 apply exit 1，`version list` 只有 v1，**不写 v2** |
+| 同类新洞 | **无新增**。三种变体：A「伪造 sampled/matched=5/5 + value=1.0」⇒ 能走到 v2，但属 **A-12/A-16 已登记的 R2**（伪造全套自洽证据）；B 删 `data_evidence` 整段 ⇒ exit 1；C `value` 与查表值不符 ⇒ exit 1 |
+| 9/9 已知错误 | ✅ 仍全部 rejected（E1–E7 digest 7/7 与上轮逐位相同；E8/E9 不产出 + 构造复算 0.15） |
+| 幂等 | ✅ 两次运行 4 份产物 sha256 全同；items 与上轮 deep-equal |
+| 客户视图 | ✅ grep `confidence/score/band` = 0；1.0 vs 0.99 两项目客户视图 **JSON/HTML 逐字节相同** |
+| 测试 | ✅ lib 230 / doc 4 / **32 套件 313**（70+218+5+10+10，逐套件对上报告 §11.3） |
+| 红线 | ✅ 六红线 + `tools.rs` + `guard()` + `property_filter.rs` diff 空；0 删测试 / 0 新增 `#[ignore]` |
+
+> ⚠️ **合并时必须保留**：R2 / R3 / R4 仍为**已知限制**，⛔ 不许在任何交付说明里写成「已封堵」。
+> 置信度防的是**诚实错误**，不是**有 DB 写权限的恶意篡改**（A-16）。
