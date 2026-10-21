@@ -105,18 +105,40 @@ pub struct GraphProjection {
 ///
 /// ⚠️ 因此 AC-001 里写的 `groups[].key` 在**线上**呈现为 `groups[].id`。
 /// 这不是改名，是那道闸决定的唯一可行拼写（同 [`Node::key`] 的既有裁定）。
+///
+/// # `scope_hint`：客户可见的**组说明**（C-3 口径）
+///
+/// REQ-010 的**业务总览**一直把 `scope_hint` 当 `summary` 交给客户
+/// （`ontology overview` 的 C4/C5、MCP `list_concepts` 的 M1）——
+/// 也就是说**在产品原有语义里它就是客户字段**，不是评审人备注。
+///
+/// 所以图上**带它**（与总览口径一致，C-3）。它之所以安全，是因为
+/// `concept import` 会先用客户发布闸判它（C-1：命中即拒不导入）——
+/// 不会出现「快照里有脏说明、出图时整份 500」。
+///
+/// ⚠️ **已知设计缺陷（下一轮）**：`scope_hint` 现在**一个字段两种用途** ——
+/// 既是客户可见摘要，又容易被写成内部备注（`concept suggest` 以前就往里写
+/// 「算法建议…待人审」）。`concept suggest` 现在写**空**（C-2），但正确做法是拆成
+/// `scope_hint`（客户可见，过闸）+ `review_note`（内部轨，不过闸）。
+/// 拆字段要动 REQ-010 的 schema 与快照，不在本轮。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     #[serde(rename = "id")]
     pub key: String,
     /// 给人看的组名（来自声明，可能是人改过的业务名）。
+    ///
+    /// ⚠️ 这是**客户可见**的字段，所以 `concept import` 会先用
+    /// `scan_modeling_terms` 判它（B-2/C-1：坏组名在导入时就被拒，而不是出图时整份 500）。
     pub display_name: String,
     /// 成员 = **图里的节点标识**（[`Node::key`]），不是快照的实体 key。
     ///
     /// 声明文件里写的是实体 key；[`declared_groups`] 把 key 换成展示名，
     /// 这里再换成节点标识 —— 两级换算的原因见 [`declared_groups`] 与 L2。
     pub members: Vec<String>,
-    /// 一句话说明（声明里的 `scope_hint`，原样带出）。
+    /// 一句话组说明（客户可见；来自声明的 `scope_hint`）。
+    ///
+    /// 与总览的 `summary` **同一个来源**（C-3：两个出口口径一致）。
+    /// 导入时已过客户闸（C-1），所以这里不会因为词表词打挂出图。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_hint: Option<String>,
 }
@@ -129,6 +151,8 @@ pub struct Group {
 /// 2. 展示名 → 节点标识：[`project_grouped`]（重名时落到**第一个**，见 L2）。
 ///
 /// ⛔ 第二级**不是**「再猜一次分组」—— 它只查表，不判断谁属于谁。
+///
+/// ⚠️ `scope_hint` 在这里**只是搬运**（与总览同源，C-3），不是评审备注。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeclaredGroup {
     pub key: String,
@@ -378,6 +402,7 @@ pub fn declared_groups(snapshot: &crate::domain::snapshot::Snapshot) -> Vec<Decl
             key: g.key.clone(),
             display_name: g.display_name.clone(),
             members,
+            // 与业务总览的 `summary` 同源（C-3）：客户可见的组说明，导入时已过闸（C-1）。
             scope_hint: g.scope_hint.clone(),
         });
     }
@@ -438,6 +463,7 @@ pub fn project_grouped(v: &CustomerView, declared: &[DeclaredGroup]) -> GraphPro
             key: d.key.clone(),
             display_name: d.display_name.clone(),
             members,
+            // 客户可见的组说明（C-3）；与总览 `summary` 同一口径。
             scope_hint: d.scope_hint.clone(),
         });
     }
@@ -471,6 +497,25 @@ pub fn project_grouped(v: &CustomerView, declared: &[DeclaredGroup]) -> GraphPro
 //   `RelationView.meaning` / `.how_many` 进来时**已经是中文**，
 //   本层原样取用。数量词复用 `html_view::count_phrase`（同一份函数，非副本）。
 //   唯一的新逻辑是「展示名 → 节点标识」的重名处理，本仓库内无第二份。
+//
+// **L4 · 组成员只算图里看得见的（REQ-115）。**
+//   `concept_groups.members` 写的是**实体 key**，而客户视图会挡掉「展示名退化成
+//   key」的对象。这类成员在 `declared_groups` 里能找到展示名、却在
+//   `project_grouped` 里查不到节点 ⇒ **不进 `groups[].members`**。
+//   后果边界：页面上数出来的 N 与点得到的对象永远一致；代价是「声明了但看不见」
+//   的那几个**不参与计数**（真实库现场：84 实体 → 83 节点）。
+//   要如实看见它们，得让客户视图带上 key（`view.rs` 是禁改红线）⇒ 另一条需求。
+//   **已知且未封堵。**
+//
+// **L5 · `scope_hint` 一个字段两种用途（REQ-115 · 设计缺陷，下一轮拆）。**
+//   它在产品原有语义里是**客户可见的组说明**（业务总览 C4/C5/M1 的 `summary`），
+//   却又容易被写成内部备注（`concept suggest` 以前就往里写「算法建议…待人审」）。
+//   本轮的两条缓解：
+//     ① `concept import` 把 `scope_hint` 与 `display_name`、组 `key` 一起过客户闸（C-1）
+//        ⇒ 客户可见的说明必须客户安全；
+//     ② `concept suggest` 往 `scope_hint` 写**空**（C-2）⇒ 建议层不再把内部话塞进客户字段。
+//   ⛔ 根本修法是**拆字段**：`scope_hint`（客户可见，过闸）+ `review_note`（内部轨，不过闸）。
+//   那要改 REQ-010 的 schema 与快照，**下一轮做**。别在本轮「顺手」放宽闸来兼容脏说明。
 
 #[cfg(test)]
 mod tests {

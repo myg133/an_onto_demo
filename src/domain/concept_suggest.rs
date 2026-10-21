@@ -88,8 +88,12 @@ pub const DECLARATION_VERSION: &str = "1.0.0";
 /// `source` 的取值（AC-010）：这份声明是**算法建议**，不是人签的结论。
 pub const SOURCE_ALGORITHM: &str = "algorithm-suggest";
 
-/// 每组的一句说明（会进 `/api/graph` 的 `scope_hint`，所以**不得**含守门词）。
-pub const SCOPE_HINT: &str = "算法建议：按关系拓扑自动分组，待人审";
+// ⭐ C-2：本模块**不写** `scope_hint`（见 `suggest` 的组构造处）。
+//
+// `scope_hint` 是**客户可见的组说明**（业务总览的 `summary`、图上的组说明），
+// 而「算法建议 / 按拓扑分组 / 待人审」是**内部备注** —— 它属于 `declared_by`
+// 与 `rule`（不进客户视图）。两者混用正是本轮修掉的设计缺陷：
+// 正确做法是拆出 `review_note`（内部轨、不过客户闸），那是下一轮的事。
 
 /// 迭代上限。正常数据 2–3 轮就收敛；给足余量只为防病态输入死循环。
 const MAX_PASSES: usize = 50;
@@ -190,7 +194,11 @@ pub fn suggest(input: &SuggestInput<'_>) -> ConceptDeclaration {
                     .iter()
                     .map(|&i| entities[i].0.to_string())
                     .collect(),
-                scope_hint: Some(SCOPE_HINT.to_string()),
+                // ⭐ C-2：`scope_hint` **不写**（None）。
+                //    它是客户可见的组说明（总览 `summary` / 图上组说明），
+                //    「算法建议 / 待人审」是内部备注 —— 属于 `declared_by` / `rule`。
+                //    ⛔ 别为了「留个说明」把内部话塞进客户字段。
+                scope_hint: None,
                 // 算法建议**没有被审过**，这是「明确声明拿不准」而不是沉默。
                 low_confidence: Some(true),
                 // 建议层不是抽取器，不伪造 `extracted_by`；
@@ -463,6 +471,25 @@ mod tests {
         let (ent, ln) = two_triangles();
         let d = run(&ent, &ln);
         assert_eq!(d.verify(), Ok(()), "产出的声明必须可直接 import");
+    }
+
+    /// ⭐ C-2：`scope_hint` 是**客户可见**字段（业务总览的 `summary`）——
+    /// 建议层**不写**它。内部来源在 `declared_by` / `rule` 里，不在客户字段里。
+    #[test]
+    fn test_suggest_writes_no_customer_facing_note() {
+        let (ent, ln) = two_triangles();
+        let d = run(&ent, &ln);
+        for g in &d.groups {
+            assert_eq!(g.scope_hint, None, "组 {} 的 scope_hint 不是空的（C-2）", g.key);
+        }
+        assert!(d.declared_by.contains("concept-suggest"), "来源要在 declared_by 里");
+        assert!(d.rule.contains("贪心模块度"), "规则要在 rule 里");
+        // 产物必须能过 C-1 的组字段闸（display_name / scope_hint / key 都干净）。
+        assert_eq!(
+            crate::domain::concept::scan_group_names(&d.groups),
+            vec![],
+            "suggest 自己的产物必须过得了导入闸"
+        );
     }
 
     #[test]

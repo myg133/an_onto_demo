@@ -8,16 +8,18 @@
   "assigned_at": "2026-10-22 00:54:00",
   "plan": "BA/demands/REQ-115/demand.md",
   "acceptance": "BA/demands/REQ-115/acceptance.md",
-  "status": "进行中（实现完成，待 QA 审核）",
-  "scope": "src/domain/{graph,concept,concept_suggest,mod}.rs + src/server/{http,page}.rs + src/cli.rs + H1 golden 重锚 + 新测试（test_req115_groups / req115 group_probe）",
+  "status": "进行中（QA 首轮 FAIL → 按裁定 C 修复 C-1/C-2/C-3，待复审）",
+  "scope": "src/domain/{graph,concept,concept_suggest,pipeline,mod}.rs + src/server/{http,page}.rs + src/cli.rs + H1 golden 重锚 + 新测试（test_req115_groups / req115 group_probe）",
   "notes": [
     "用户问「归并没效果？」——查清是三层都空：concept_groups=0 / http.rs 写死 parent:None / 页面 0 命中。",
     "权威层只有一处：concept_groups（import→双轨签→apply）；建议层 concept suggest 只产声明文件、不写库。",
-    "⛔ AC-001 的 groups[].key 在线上叫 id：key 是发布闸词表里的词，写成线上键名会让每次带分组的 /api/graph 500（Node 早已因此把 key 改叫 id）。",
-    "H1 golden 重锚：d8bd4581…（32396 字节）→ e665a0ad…（49728 字节）；H2 及其余 11 份逐字节未动。",
-    "真实库往返已跑：anspire_excl v2 → suggest（9 组 / 84 对象）→ import → 双轨签 → apply → freeze → /api/graph groups=9。",
-    "suggest 两次运行 sha256 相同；跑前跑后 concept_groups/proposals/ontology_versions/proposal_items 指纹相同。",
-    "折叠是纯前端状态：setFold/foldAll/relayout 里没有 fetch/ask/api；导出 TTL 与 ontology show 折叠前后逐字节相同。",
+    "⛔ AC-001 的 groups[].key 在线上叫 id：key 是发布闸词表里的词，写成线上键名会让每次带分组的 /api/graph 500。",
+    "⭐ QA 阻断根因（BA 裁定 C 纠正）：scope_hint 在 REQ-010 里就是客户可见的组说明（总览 summary），却被写成内部备注 ⇒ 一个字段两种用途。",
+    "C-1：concept import 对 display_name / scope_hint / 组 key 跑客户闸，命中即拒并点名组+字段+词条；C-2：suggest 不再写 scope_hint；C-3：图与总览同口径（都带 scope_hint，因为导入时已过闸）。",
+    "真库实测：AI 声明原样 import 被拒（api_entitlement / scope_hint / key）；改「未持 Key」→「未持凭证」重算 digest 后全链路 200 / 8 组 / 83 成员；ontology overview（C4/C5）exit 0。",
+    "H1 golden 重锚：d8bd4581…（32396 字节）→ c8d5e148…（49936 字节）；H2 及其余 11 份逐字节未动。",
+    "suggest 两次运行 sha256 相同（abc9068a…）；折叠前后 TTL 与 ontology show 逐字节相同。",
+    "下一轮待办（已登记）：把 scope_hint 拆成 scope_hint（客户可见）+ review_note（内部轨）。",
     "本机无 headless 浏览器 ⇒ 折叠/组圈只有源码级 + 纯函数级（Node 探针）+ 真 HTTP 级判据，未做真浏览器手测。"
   ]
 }

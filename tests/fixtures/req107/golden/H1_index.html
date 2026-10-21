@@ -1013,6 +1013,8 @@ function showGroups() {
     h += '<div class="grp"><div><b>' + esc(g.display_name) + '</b> <span class="meta">' +
       g.members.length + ' 个对象</span> <button data-g="' + esc(g.id) + '" data-fold="' +
       (FOLD[g.id] ? "0" : "1") + '">' + (FOLD[g.id] ? "展开" : "折叠") + "</button></div>";
+    // ⭐ C-3：`scope_hint` 是**客户可见的组说明**（与业务总览的 summary 同一口径），
+    //    所以这里照常显示；导入时它已过客户闸（C-1），不会打挂出图。
     if (g.scope_hint) h += '<div class="meta">' + esc(g.scope_hint) + "</div>";
     h += memberList(g.members) + "</div>";
   }

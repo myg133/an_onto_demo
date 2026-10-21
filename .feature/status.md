@@ -1,11 +1,47 @@
 # 开发状态 · REQ-115 概念分组与图上的归并
 
 > worktree `feature-REQ-115` · 分支 `feature/REQ-115` · 基线 `develop` `71ae770` · **未 push**
-> 本轮性质：**实现完成，待 QA 审核**（PR 与状态机流转由 BA 决定，Dev 不发布）
+> 本轮性质：**QA 判 FAIL（1 阻断）→ 第 2 轮按 BA 裁定 (C) 修复**：
+> C-1 组字段纳入导入闸 / C-2 `suggest` 不写客户字段 / C-3 图与总览同口径
 
 - **需求**：REQ-115 · 概念分组与图上的归并（AC-001~AC-011）
-- **状态**：进行中（已交付，待 QA）
+- **状态**：进行中（阻断已修，待 QA 复审）
 - **日期**：2026-10-22
+
+## 第 2 轮 · QA 阻断修复（BA 裁定 C）
+
+QA 实测：AI 的 8 组声明走完 import → 签 → apply → freeze 后，`GET /api/graph` **500**，
+stderr `守门器命中 1 项建模术语 ["key"]`。根因：`api_entitlement.scope_hint` 里的
+「未持 **Key**」被发布闸当成词条 `key`，而 `scope_hint` 被原样带到了线上。
+
+BA 纠正了「scope_hint 是评审注解」这个前提：它在 REQ-010 里就是**客户可见的组说明**
+（业务总览 C4/C5/M1 的 `summary`）。所以真正的病灶是**一个字段两种用途**。裁定 (C)：
+
+| # | 项 | 落点 | 一句话 |
+| --- | --- | --- | --- |
+| **C-1** | 组字段纳入**导入闸** | `src/domain/concept.rs:349` `scan_group_names`（`display_name` / `scope_hint` / `key`）；`src/cli.rs:1211` | 命中即拒，报**组 + 字段 + 词条**；⛔ 不静默剔除、⛔ 不改写 |
+| **C-2** | `suggest` **不写** `scope_hint` | `src/domain/concept_suggest.rs:201`（`scope_hint: None`） | 客户字段留空；算法来源在 `declared_by` / `rule` |
+| **C-3** | 图与总览**同口径** | `src/domain/graph.rs:125`（`Group.scope_hint` 恢复）；`src/server/page.rs:1160` | 两个出口都带它 —— 因为导入时已过闸（C-1） |
+
+判据（真库）：
+
+```text
+# C-1 ①：AI 声明**原样** import ⇒ 被拒（点名组 + 字段 + 词条）
+exit 1 · 组 `api_entitlement` 的 scope_hint 含建模术语 `key`
+# C-1 ②：display_name 命中（把 customer_account.display_name 改成「客户与 Key 子账号」）
+exit 1 · 组 `customer_account` 的 display_name 含建模术语 `key`
+# C-1 ③：把「未持 Key」改成「未持凭证」、重算 digest ⇒ 导入成功
+概念声明 v1.0.0 已导入提案 p1 … 共 8 个概念组
+# 往返：签 → apply → v4 → freeze → serve
+GET /api/graph?project=anspire_excl_r115&version=4
+  status = 200 · nodes=83 · groups=8 · covered=83
+  raw contains literal "key" = False · raw contains scope_hint = True（C-3 同口径）
+# 新发现的出口（C4/C5）也验掉：
+ontology overview --version 4             → exit 0
+ontology overview --version 4 --json      → exit 0
+# C-2：suggest 产出 9 组，scope_hint 全为 null
+groups with scope_hint = 0 · sha256 两次相同 abc9068a…
+```
 
 ## 本轮改了什么
 
@@ -13,44 +49,50 @@
 | --- | --- | --- | --- |
 | 1 | `/api/graph` 返回 `groups` + 节点 `group` | `src/domain/graph.rs` / `src/server/http.rs` | 权威层只有 `concept_groups`；三态 `groups` 保证 H2 golden 不动 |
 | 2 | 页面：组圈 / 折叠 / 组面板 / 组内引力 | `src/server/page.rs` | 默认全折叠；折叠 = 一个「组名 + N」的聚合节点；⛔ 页面不算分组 |
-| 3 | `ontok concept suggest` | `src/cli.rs` / `src/domain/concept_suggest.rs` | 贪心模块度（整数打分、有序迭代）；只产声明文件、**不写库** |
+| 3 | `ontok concept suggest` | `src/cli.rs` / `src/domain/concept_suggest.rs` | 贪心模块度（整数打分、有序迭代）；只产声明文件、**不写库**；`scope_hint` 留空 |
 | 4 | 无组时如实显示「未分组」 | `src/server/page.rs` | `GROUPS.length === 0` ⇒ 一个聚合节点都不画，⛔ 无默认组 |
-| 5 | 往返 | 真库 `anspire_excl` → `anspire_excl_r115` | suggest → import → 双轨签 → apply → freeze → 图 `groups=9` |
-| 6 | H1 golden 重锚 | `tests/fixtures/req107/golden/*` | `d8bd4581…`（32396）→ `e665a0ad…`（49728）；其余 12 份逐字节未动 |
+| 5 | 往返 | 真库 `anspire_excl` → `anspire_excl_r115` | suggest（9 组）与 AI（8 组，改一句措辞后）各走了一遍 import → 签 → apply → freeze → 图 + 总览 |
+| 6 | H1 golden 重锚 | `tests/fixtures/req107/golden/*` | `d8bd4581…`（32396）→ `c8d5e148…`（49936）；其余 12 份逐字节未动 |
 
 ## 判据实测（摘要，细节见 `verification-report.md`）
 
 | 判据 | 实测 |
 | --- | --- |
-| 真库 `/api/graph` 有组 | `nodes=83 edges=52 groups=9`，`node.group` 一致性 `bad=0` |
-| 真库 `/api/graph` 无组 | `groups:[]` + 83 个 `group:null`，**没有默认组** |
+| `/api/graph` 有组（AI 8 组，C 轮） | `status=200 · nodes=83 · groups=8 · covered=83`，无字面 `"key"`，`scope_hint` 在（C-3） |
+| `/api/graph` 有组（suggest 9 组） | `nodes=83 / groups=9 / covered=45 / ungrouped=38` |
+| `/api/graph` 无组 | `groups:[]` + 83 个 `group:null`，**没有默认组** |
+| `ontology overview`（C4/C5） | v4 上 **exit 0**（C 轮新验的出口，已不再 500） |
 | 折叠态节点数（Node 探针） | `7 = 3 组 + 4 未分组`，`exit 0` |
 | 无组（Node 探针） | 渲染单元 = 对象数、零聚合单元 |
-| `concept suggest` 两次 | sha256 相同（5 次运行全同） |
-| suggest 不写库 | 库指纹 `b4ad1c172ad37f28` 跑前跑后相同 |
+| `concept suggest` 两次 | sha256 相同（C-2 后 `abc9068a…`，两次一致） |
+| suggest 不写库 | 库指纹 `b4ad1c172ad37f28` 跑前跑后相同（代码未动） |
 | 折叠不改数据 | TTL / `ontology show` 折叠前后 sha256 两两相同 |
 | 页面不算分组 | 剥注释后 7 个算法词全 0；只读 `DATA.groups` |
+| C-1 三种实测 | ① scope_hint 命中拒 ② display_name 命中拒 ③ 都干净 ⇒ 导入成功 |
+| 审核界面 | `/api/review` 条目 `payload.scope_hint` 仍是完整原文 |
 | 401 | 无 token `/api/graph` → 401，正文不回显分组内容 |
 
 ## 测试
 
 ```text
-lib 284 / doc 4 · 集成 74 个目标：799 passed / 3 failed（3 条均为既有红灯，基线复现）
-新增 tests/test_req115_groups.rs（12 passed）
+lib 290 / doc 4 · 集成 74 个目标：800 passed / 3 failed（3 条均为既有红灯，基线复现）
+新增 tests/test_req115_groups.rs（13 passed）
 绕行：src/bin/ontok-gate-preflight.rs 挪开 → 跑 → 挪回；sha256 前后 c7cf95e2…；Test-Path=True
       代价 test_retained_names_req084 编不过（与 REQ-113/114 同一口径）
 ```
 
 ## 如实登记
 
-1. **AC-001 的 `groups[].key` 在线上叫 `id`** —— `key` 是发布闸词表里的词，写成线上键名会让
-   每次带分组的 `/api/graph` 500。这是 AC 与红线的冲突，最可能被 QA 打回（见报告 §8.1）。
-2. **未做真浏览器手测**（本机无 headless 浏览器）；组圈观感 / 折叠动画 / 引力手感只有源码级 + Node 探针。
-3. **组成员只算图里看得见的**：声明按实体 key 写，客户视图挡掉的对象不进 `members`
-   （真库现场 84 实体 → 83 节点）。
-4. **同名对象只能落到第一个**（继承 REQ-093 L2）。
-5. **不改 `concept import` 的审核语义**，不做 AI 命名（需求「不做」列表）。
-
+1. **设计缺陷（下一轮拆字段）**：`scope_hint` 一个字段两种用途 —— 既是客户可见的组说明
+   （总览 `summary`），又容易被写成内部备注。本轮靠 C-1（导入时过闸）+ C-2（suggest 不写）
+   缓解；根本修法是拆成 `scope_hint`（客户可见，过闸）+ `review_note`（内部轨，不过闸），
+   要动 REQ-010 的 schema 与快照，**下一轮**。
+2. **AC-001 的 `groups[].key` 在线上叫 `id`**（`key` 是闸词，写成键名会 500）——与 C-1 是
+   同一道闸的「键名/值」两面。需 BA/QA 裁定 AC 措辞（见报告 §8.1）。
+3. **AI 声明需要人改一句**：`api_entitlement.scope_hint` 里的「未持 Key」→「未持凭证」
+   （报错会点名；我们不替作者猜业务措辞）。改完重算 digest 即可全链路通过。
+4. **未做真浏览器手测**（本机无 headless 浏览器）；组圈观感 / 折叠动画 / 引力手感只有源码级 + Node 探针。
+5. **组成员只算图里看得见的**：真库现场 84 实体 → 83 节点；同名对象只顾第一个（REQ-093 L2）。
 ---
 
 # 历史：REQ-114 页面图交互升级

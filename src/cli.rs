@@ -1205,6 +1205,22 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
         // 不静默接受，也不「顺手帮他升一级」—— 那等于替他做版本决定。
         decl.verify()?;
 
+        // ⭐ REQ-115 · C-1：组字段是**客户可见**的（`/api/graph` 的 `groups[]` 与
+        // 业务总览的 `summary`），所以在**导入时**就过客户发布闸 —— 坏声明根本进不来，
+        // 而不是流到快照/出图阶段才让整份 500。⛔ 不静默剔除、⛔ 不改写字段。
+        let bad_names = crate::domain::concept::scan_group_names(&decl.groups);
+        if !bad_names.is_empty() {
+            let listed: Vec<String> = bad_names.iter().map(|h| format!("  - {h}")).collect();
+            anyhow::bail!(
+                "概念声明被拒绝导入：有 {} 处组字段会撞上客户发布闸（这些字段会出现在 \
+                 /api/graph 的 groups[] 与业务总览的 summary 里）——\n{}\n\
+                 请改措辞后重算指纹（ontok concept digest --file …）再导入。\
+                 ⛔ 不会静默剔除，也不会替你改写。",
+                bad_names.len(),
+                listed.join("\n")
+            );
+        }
+
         let projects = PgProjectStore::new(pool.clone());
         let proposals = PgProposalStore::new(pool.clone());
         let p = projects.get_or_create(&project).await?;

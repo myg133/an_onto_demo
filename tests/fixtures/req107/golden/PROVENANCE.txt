@@ -54,10 +54,17 @@ b714f48
 #   H1 的字节 = `INDEX_HTML` 常量本身（H1 出口仍是 `Product::Text`，干净模板过闸后
 #   逐字节返回，服务端不做任何拼装）。sha256 已同步进 SHA256SUMS，只记**最终态**：
 #     旧（REQ-114 最终态）d8bd4581c264a483815c0bf67636966da190b3799e8abbaa79c6f5a2a849c5c0（32396 字节）
-#     新（REQ-115 最终态）e665a0add9c1e4c5ae8a055ec7d88343e4b38a1c16eafdcd1801926e0abf7155（49728 字节）
+#     新（REQ-115 最终态）c8d5e148a647d84b81d2d1186430dfb6455979f786725a8a5bcd714548ed7c51（49936 字节）
 #   重锚方式：从 `page.rs` 抽出 `r##"…"##` 常量本体逐字节写出（不手抄、不编辑器另存），
 #   再由 `tests/test_req107_pipeline_bytes.rs`（真路由 + 管线）复核逐字节相等。
 #   ⛔ 同样别「为了让它对上」手改 H1：要改就改模板，再按同一条方式重锚并更新 sha256。
+#
+#   ⚠️ 页面的第二次变化（QA 阻断修复 · 第 2 轮 C-1/C-2/C-3）：
+#   组面板**照常显示 `scope_hint`**（客户可见的组说明，与业务总览的 `summary` 同一口径，C-3）。
+#   之所以不再有「一句话打挂整份图」的风险，是因为**导入时**就过客户闸（C-1：
+#   `display_name` / `scope_hint` / 组 `key` 命中即拒），而且 `concept suggest` 不再往
+#   `scope_hint` 写内部备注（C-2）。QA 阻断的那一句（`api_entitlement.scope_hint` 里的
+#   「未持 Key」）现在会在 `concept import` 被点名拒绝，而不是出图时整份 500。
 #
 #   ⚠️ 为什么 H2_graph.json 可以**不变**（REQ-115 明明加了 `groups`）：
 #   `/api/graph` 的分组落在**另一个装配入口**（`state_from_view_with_groups`），

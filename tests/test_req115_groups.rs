@@ -69,6 +69,8 @@ fn view() -> CustomerView {
 }
 
 /// 权威层的声明（成员 = **展示名**，这是 `graph::declared_groups` 换算后的形状）。
+///
+/// `scope_hint` 是**客户可见的组说明**（C-3，与业务总览的 `summary` 同源）。
 fn declared() -> Vec<DeclaredGroup> {
     vec![
         DeclaredGroup {
@@ -130,9 +132,15 @@ async fn groups_and_node_membership_are_on_the_wire() {
     assert_eq!(groups[0]["id"], "g-甲乙");
     assert_eq!(groups[0]["display_name"], "甲乙一体");
     assert_eq!(groups[0]["members"], json!(["甲", "乙"]));
-    assert_eq!(groups[0]["scope_hint"], "样例范围");
     assert_eq!(groups[1]["id"], "g-丙");
-    assert!(groups[1].get("scope_hint").is_none(), "没有说明就不写这一栏，不凭空造");
+
+    // ⭐ C-3：`scope_hint` 是客户可见的组说明（与业务总览 summary 同源），图上带它；
+    //    它之所以安全，是因为导入时已过客户闸（C-1）。
+    assert_eq!(groups[0]["scope_hint"], "样例范围");
+    assert!(
+        groups[1].get("scope_hint").is_none(),
+        "没写说明就不写这一栏（不凭空造）"
+    );
 
     // 每个节点**都有** group 字段；值的集合 ⊆ 组标识 ∪ {null}
     let ids: Vec<&str> = groups.iter().filter_map(|g| g["id"].as_str()).collect();
@@ -276,6 +284,7 @@ fn declared_groups_maps_entity_keys_to_display_names() {
     assert_eq!(got[0].display_name, "甲乙一体");
     // 实体 key 换成展示名；快照里没有的成员**不臆造**（它会在投影里被跳过）
     assert_eq!(got[0].members, vec!["甲".to_string(), "乙".to_string()]);
+    // ⭐ C-3：`scope_hint` 与业务总览的 `summary` 同源 —— 图这一侧照搬。
     assert_eq!(got[0].scope_hint.as_deref(), Some("样例范围"));
 }
 
@@ -326,6 +335,53 @@ async fn a_group_with_no_visible_member_is_not_rendered_as_a_default_group() {
     }
 }
 
+// ── C-1 · 组字段在**导入时**过客户闸（display_name / scope_hint / key）──
+
+#[test]
+fn group_fields_are_checked_before_import_not_when_serving() {
+    use ontok::domain::concept::{scan_group_names, ConceptGroup};
+
+    let clean = ConceptGroup {
+        key: "api_entitlement".to_string(),
+        display_name: "API 密钥与授权".to_string(),
+        members: vec!["licenses".to_string()],
+        scope_hint: Some("客户手上有什么凭证、以及未持凭证的试用请求".to_string()),
+        low_confidence: None,
+        extracted_by: None,
+        evidence: vec![],
+    };
+    assert_eq!(
+        scan_group_names(std::slice::from_ref(&clean)),
+        vec![],
+        "三个客户可见字段都干净时必须放行"
+    );
+
+    // ① display_name 命中
+    let mut bad = clean.clone();
+    bad.display_name = "未持 Key 的权益".to_string();
+    let hits = scan_group_names(&[bad]);
+    assert_eq!(hits.len(), 1, "display_name 里的 Key 必须被抓住：{hits:?}");
+    assert_eq!(
+        hits[0].to_string(),
+        "组 `api_entitlement` 的 display_name 含建模术语 `key`",
+        "报错要点名组 + 字段 + 词条"
+    );
+
+    // ② scope_hint 命中（QA 阻断的那一句；它也是客户可见的组说明）
+    let mut bad = clean.clone();
+    bad.scope_hint = Some("客户手上有什么凭证、以及未持 Key 的试用请求".to_string());
+    let hits = scan_group_names(&[bad]);
+    assert_eq!(hits.len(), 1, "scope_hint 里的 Key 必须被抓住：{hits:?}");
+    assert_eq!(hits[0].field, "scope_hint");
+    assert_eq!(
+        hits[0].to_string(),
+        "组 `api_entitlement` 的 scope_hint 含建模术语 `key`"
+    );
+
+    // ③ 两者都干净 ⇒ 放行（C-1 的第三种实测）
+    assert_eq!(scan_group_names(&[clean]), vec![]);
+}
+
 // ── AC-006 · 页面不许自己算分组 ─────────────────────────
 
 #[test]
@@ -342,6 +398,11 @@ fn the_page_consumes_groups_and_contains_no_grouping_algorithm() {
     ] {
         assert!(html.contains(need), "页面缺少 REQ-115 的分组渲染落点：{need}");
     }
+    // ⭐ C-3：`scope_hint` 是客户可见的组说明 —— 页面照常显示（导入时已过闸）。
+    assert!(
+        html.contains("g.scope_hint"),
+        "页面应当显示客户可见的组说明（C-3）"
+    );
     let lowered = html.to_lowercase();
     for bad in ["louvain", "modularity", "community", "cluster", "greedy"] {
         assert!(
