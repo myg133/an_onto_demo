@@ -115,3 +115,12 @@
 **保留**：`.review-workspace/req107/{dev3,dev4,*-logs,*-patches,mutations}`（约 10 MB）—— Dev/QА 报告 §11.6 / §12 引用了这些三元组证据，**不删**
 
 **结果**：`git worktree list` 只剩 5 个正常 worktree（仓库根 / BA / code / Deploy / feature-REQ-107）
+
+## 2026-10-21 — REQ-107 合并后回收
+
+- 合并：`git merge --no-ff feature/REQ-107` → `develop` `4573269`（合并前 `is-ancestor` = YES）
+- 合并后 `cargo check --lib` ✅；五红线 + `mcp/tools.rs` 的 `numstat` 相对 `b714f48` **为空**
+- 回收：`git worktree remove feature-REQ-107`（exit 0）→ `git push origin --delete feature/REQ-107` → `git branch -D feature/REQ-107`
+- ⚠️ **`git branch -d` 二次误报**：判定基准是 HEAD（`workspace`）不是 `develop`，报「not fully merged」。
+  与 **2026-10-10** 那条教训同因。⇒ 规程固定为「先 `merge-base --is-ancestor <branch> <目标分支>` 核实，再用 `-D`」
+- 状态：REQ-107 `已验证` → **`已完成`**

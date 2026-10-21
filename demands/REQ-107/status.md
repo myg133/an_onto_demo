@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已验证**（2026-10-20 · QA 第 5 轮 PASS，0 阻断；待开 PR）
+**已完成**（2026-10-21 · 已合并 `develop` `4573269`，worktree 已回收）
 
 ## 状态流转
 
@@ -189,3 +189,24 @@
 - [ ] **BA 已修**：`verification-report.md` §11.5 的过期结论句（「手搓响应体不登记也红」）→ 已加 BA 更正，指向 P-5
 - [ ] 推 `feature/REQ-107` 并开 PR 到 `develop`（**需用户确认**）
 - [ ] PR 合并后回收：`feature-REQ-107` worktree + `.review-workspace/req107/{base,qa2,qa3,qa4}` + 分支
+
+## 合并与回收（2026-10-21）
+
+| 项 | 值 |
+| --- | --- |
+| 合并方式 | `git merge --no-ff feature/REQ-107` → `develop` **`4573269`** |
+| 合并前核实 | `git merge-base --is-ancestor feature/REQ-107 develop` = **YES** |
+| 合并后编译 | `cargo check --lib` ✅（46.65s） |
+| 红线复核 | `git diff --numstat b714f48..HEAD` 对五红线 + `tools.rs` = **空** |
+| 远程分支 | `feature/REQ-107` **已删除** |
+| worktree | `feature-REQ-107` **已移除**（`git worktree remove`，exit 0） |
+| 本地分支 | 用 `git branch -D` 删除（`-d` 报「未完全合并」是**误报**，见下） |
+
+⚠️ **再次踩到已登记的坑**：`git branch -d` 的合并判定基准是 **当前分支（HEAD = workspace）**，不是目标分支 `develop`。
+`feature/REQ-107` 合入的是 `develop`，所以 `-d` 报「not fully merged」——这是**误导性报错**。
+⇒ 先 `merge-base --is-ancestor feature/REQ-107 develop` 核实 = YES，再用 `-D` 删除，**提交全部在 develop，零数据丢失**。
+这条 `cleanup-log.md` 在 2026-10-10 已记过一次，**本次是第二次**，说明「删分支前先对目标分支核实」必须写进肌肉记忆。
+
+## 状态流转（完整）
+
+`草稿`（2026-10-17 拆出）→ `已就绪` → `进行中`（10-20 开单）→ `待验证`（10-20 Dev 交付）→ `已退回` ×3（3 轮 QA FAIL）→ `待验证` → **`已验证`**（10-20 QA 第 5 轮 PASS）→ **`已完成`**（10-21 合并）
