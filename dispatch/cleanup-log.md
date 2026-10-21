@@ -136,3 +136,13 @@
 
 **本轮新增的一条流程教训**：QA 与 Dev 各自报「31 套件全绿 / 300 passed」时，实测差 5 条——**整体性断言失真，因为清单与断言对不上**。
 ⇒ 规程：**报告必须列出回归集名单，数字要能逐项对上**（已写进 REQ-108 的 A-14）。
+
+## 2026-10-21 — REQ-109 合并后回收 + 真实业务运行
+
+- 合并：`git merge --no-ff feature/REQ-109` → `develop` `5737ecf`（合并前 `is-ancestor`=YES，合并后 `cargo check --lib` ✅）
+- 红线：相对 `a8a51ed`，四红线 + `mcp/tools.rs` numstat **为空**
+- 回收：`git worktree remove feature-REQ-109` + `git branch -D`（远程分支从未推过）
+- 真实运行（`anspire_open_uat` + `qwen36-27B`）：83 实体 / 81 关系 / 61 条读到样本；
+  分档 **AI 开 高39·中13·低19·拒绝10 / AI 关 高43·中9·低16·拒绝13**；**token 消耗 0（全部命中缓存）**
+- ⚠️ **使用陷阱**：REQ-108 后 schema 产物新增 `primary_key` / `unique_columns`。
+  用旧 schema 跑新 propose ⇒ 采样读不到、全部 `data_evidence=none`、AI 不判。**必须先重新 introspect**。
