@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已退回**（2026-10-21 · 第 2 轮 QA 判 PASS，但 R5「删掉最强证据」改判阻断）
+**待验证（第 3 轮）**（2026-10-21 · R5 已封，QA 终验中）
 
 ## 状态流转
 
@@ -91,7 +91,7 @@ Dev 另关掉 4 种：删 `veto`、改 `veto.cap`、改命中率 `value`、**绕
 1. **`4acbf5a` 上 `test_req107_source_enumeration::t5` 本来就是红的** —— 原因：`ensure_importable` 是新函数，没登记进 `OUTLET_FNS`，而 t5 要求「出口文件的每个函数都要登记」。⇒ **上一轮「31 套件 300 passed」的基线不成立**。Dev 补了一行登记（登记 ≠ 放宽），现全绿。
 2. 既有测试改动 2 处（fixture 补全）：`absent_optional_fields_…` 保留全部原断言，只把已失效的 `signals==[]` 断言换成最小证据链；`review_confidence_table_shape` 改走 `score(--no-sample)` 真产出。**Dev 称均为收紧**，需 QA 逐行判。
 
-**当前测试数字**：lib **227** / doc **4** / 31 套件 **307 passed / 0 failed**。
+**当前测试数字**（以最新一轮为准）：lib **230** / doc **4** / **32 套件 313 passed / 0 failed**。⚠️ 早前写的「31 套件 307」是口径差（`live 5` 与 `source_enumeration 10` 互换），已作废。
 
 ## QA 第 2 轮复验（`qa-review-2.md`，451 行）
 
@@ -109,3 +109,18 @@ Dev 另关掉 4 种：删 `veto`、改 `veto.cap`、改命中率 `value`、**绕
 
 **新洞 R5**：`删 veto + 删 sample_hit_rate + score 0.99` ⇒ import/decide/apply 全过，快照变 0.99/high。
 **BA 改判阻断**：这是 R1 的变体（R1 删整条证据链、R5 删最强那条），修法约 5 行。
+
+## 第 4 轮修复（`d4e3c68`）· R5 封口 + 文档口径
+
+| 项 | 修法 |
+| --- | --- |
+| **R5** | `validate_self_evidence` 第 4 段（`confidence.rs:796`）：`data_evidence = sampled`（缺失按严格侧）⇒ signals 必须有 `sample_hit_rate` 且 `sampled/matched` 齐全（空壳也拒）；`data_evidence = none` ⇒ signals **不得**出现 `sample_hit_rate` |
+| 收口 | import（`db/proposal.rs:109`）与 apply（`domain/apply.rs:309`）都走 `from_untrusted`，无第二份判据 |
+| **N7** | `verification-report.md` 补 §11（R1 修复 / `confidence:null` 裁定 / R5 / 回归集名单） |
+| **N6** | 给出**逐套件名单**：70（13 出口）+ 218（16 邻域）+ 5（live）+ 10（confidence）+ 10（source_enumeration）= **313**；「307」作废 |
+| **N8** | `test_req107_source_enumeration` 加入回归集（并列入名单） |
+
+**4 条判据实测**：攻击链 exit 1；反向（none 却带采样信号）exit 1；`--no-sample` 真产出 exit 0；真 `proposal.json` 148 条 exit 0。
+**apply 侧第二道闸**：改库后 apply 仍 exit 1，`version list` 只有 v1，**不写 v2**。
+
+**测试**：lib **230**（+3 R5 单测）/ doc 4 / 32 套件 **313 passed**；六红线 + `guard()` + G1–G4 + Cargo 零改动。
