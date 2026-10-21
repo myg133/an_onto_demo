@@ -19,7 +19,8 @@
 | --- | --- |
 | `veto = zero_hit` / `type_incompatible` | `reject` |
 | `band = high` + `fit ≥ 0.8` | `accept` |
-| `band = high` + `fit < 0.5` + `matched == sampled` | **`conflict`** |
+| ~~`band = high` + `fit < 0.5` + `matched == sampled`~~ → **`matched == sampled > 0` 且 `fit < 0.5`（不限档位）** | **`conflict`** |
+|   └ 说明：**原写法不可达** —— `fit=0.0` 时分数 = 1−0.15 = **0.85**，永远进不了 high 档；见 §三 A-5 |
 | `band = middle` | `lean_accept` |
 | `band = low` | `review` |
 | `band = rejected` | `reject` |
@@ -120,3 +121,51 @@ Dev 问：高档（fit 缺失或 ∈[0.5,0.8)）共 14 条，是判「人工核�
 | --- | --- | --- |
 | `test_retained_names_req084` 跑不了 | `include_str!` 引 `ontok-gate-preflight.rs`，绕行挪开时必然编不过 | 既有问题，**不算退化** |
 | `test_agent_orchestration::test_cli_end_to_end_...byte_identical` 1 红 | A/B 实测：`src/` 还原到基线 `4178a4e` 后同一行同样红；成因是本机无 `ONTOK_SOURCE_DATABASE_URL`，采样默认开 ⇒ 关系条目落 pending | **QA 必须自己 A/B 复现**，不许采信 |
+
+---
+
+## 四 · QA 首轮裁定（FAIL 1 阻断 → 选 A）
+
+### A-5 · B-1 阻断成立：冲突规则在**自身动机案例**上不可达
+
+**QA 的算术**（我复核成立）：
+
+```
+score_with_semantic(结构全 1.0, 采样 5/5, fit = 0.0)
+  = 0.3825+0.17+0.1275+0.085+0.085 + 0.15×0.0
+  = 0.85  ⇒  band = middle（不是 high）
+```
+
+而 AC-002 的冲突行要求 `band = high` ⇒ **永远不触发**。
+冲突窗口实测只有 `fit ∈ [0.30, 0.50)`，而当前模型只给 `{0, 0.5, 1.0}` ⇒ **规则在真实链路上结构性不可达**。
+
+**根因是我的规格矛盾**：AC-002 表写了 `band=high` 约束，AC-003 正文没有——两者在 `fit<0.30` 区间互斥。
+
+**裁定：选 A（保承诺，改实现）**
+
+> `classify` 在**档位分派之前**先判冲突：
+> `matched == sampled && sampled > 0 && fit < 0.5` ⇒ `conflict`（**不限档位**）
+
+| 项 | 说明 |
+| --- | --- |
+| 为什么不是 B | B 要删掉「程序不替人决定」的承诺——那是这条需求唯一的价值主张 |
+| 真实数据影响 | **无**（当前 0 条冲突），但规则从此**可达** |
+| AC-002 | 已订正为「不限档位」 |
+| AC-003 | 保持不变（现在与 AC-002 一致） |
+
+### A-6 · N-2：冲突不能被**另一条批量路径**放进去
+
+QA 实测：REQ-111 的「按置信度档位」批量（`min_confidence=0.9`）会把 `conflict`（0.85）和 `review` 一起放进白名单。
+
+**裁定：两条批量路径都必须走 `enters_batch()` 这一个判据**，`conflict` 与 `none` 一律排除。
+⛔ 不许「按置信度批量」和「按建议批量」各有一套白名单。
+
+### A-7 · N-1 / N-3 / N-4 / N-5 处置
+
+| # | 项 | 处置 |
+| --- | --- | --- |
+| **N-1** | 「81 条」是 3 份产物拼的（52 + 18 + 11） | **BA 在 demand/status 标注口径**；待审 p1 只有 52 条 |
+| **N-3** | `.feature/verification-report.md` 仍是 REQ-111 的（REQ-112 0 命中）；`.feature/status.md` 是 REQ-002 旧文；A-3 的「无冲突样本/无浏览器验证」未登记 | **Dev 必须补**：报告写 REQ-112 段，A-3 两条如实登记 |
+| **N-4** | `page.rs:313` 硬编码 0.9/0.75 给档位徽章上色（REQ-111 既有，非建议链路） | **登记**，本轮不修（会扩大范围） |
+| **N-5** | 冲突分组只有源码级断言，无浏览器验证 | **接受**，与本数据集无冲突样本一致；登记 |
+
