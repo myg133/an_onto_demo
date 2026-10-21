@@ -100,3 +100,18 @@
 **未做（留待负责人拍板）**：
 - `BA/sprint/current.md` 仍停在 Sprint 1 / REQ-002（`demand` 已到 REQ-106）
 - 仓库根 `README.md` 的「当前状态」停在 2026-10-04
+
+## 2026-10-21 — REQ-107 收尾：清理 5 个 review worktree
+
+**背景**：QA/Dev 在 `.review-workspace/req107/` 下留了 5 个 detach worktree 做变异复验（`base` @`b714f48`、`qa2` @`4bbd8ac`、`qa3` @`867969b`、`qa4` @`757f88c`、`qa-mut` @`b55d07c`），合计约 **16.8 GB**（每个都带 `target/`）。
+
+**回收前核对**：
+- 5 个 worktree 逐个 `git status --porcelain`；只有 `base` 脏（3 个 `??` 未跟踪文件）
+- 其中 `tests/qa_golden_recompute.rs` 是 **QA 独立复算 golden 的脚本**（`qa-review.md` 引用它作证据）⇒ **先复制到 `demands/REQ-107/evidence/`**，再删
+- 另两个 `??`（`tests/common/req107.rs`、`tests/test_req107_zero_visible_change.rs`）与 feature 分支同名文件 **sha256 逐字节相同**（`7682E9A9…` / `60F480EA…`）⇒ 可安全丢弃
+
+**执行**：`git worktree remove --force` ×5 → `git worktree prune`
+
+**保留**：`.review-workspace/req107/{dev3,dev4,*-logs,*-patches,mutations}`（约 10 MB）—— Dev/QА 报告 §11.6 / §12 引用了这些三元组证据，**不删**
+
+**结果**：`git worktree list` 只剩 5 个正常 worktree（仓库根 / BA / code / Deploy / feature-REQ-107）
