@@ -184,3 +184,13 @@
 - 回收：两个 feature worktree + 分支；另清掉 QA 留下的 4 个 `.review-workspace` worktree（req113/baseline、req113/qa、req114/qa-baseline、req114/qa-mut）
 - 真实库复跑（`anspire_excl`）：**勘查 96 → 排除 12 → 抽取 84（闭合 true）**；实体 84 / 关系 82；token **1140**（缓存命中 99%）；审核全签 → v2 冻结 → TTL 83 对象/52 关系
 - `proposals.inputs.exclusions.counts` 落库正确：`{seen:96, excluded:12, extracted:84, stale:0, flagged:11}`
+
+## 2026-10-22 — REQ-115 合并与回收
+
+- 合并：`feature/REQ-115` → `develop` **`a85383a`**（4 个提交：`7718061` → `cc7e44a` → `efa2239`）
+- 禁改面：`http.rs` 仅分组管道（79/9 行，路由与鉴权未动）；`tools.rs` / `property_filter.rs` / `Cargo.*` 零 diff
+- 合并后 `cargo check --lib` ✅；golden H1 `c8d5e148…`（49936B）与 `INDEX_HTML` 逐字节一致
+- 回收：feature worktree + 分支；QA 的 2 个 worktree 已由 QA 自行清理
+- 真实数据：新建 `anspire_grouped`（96→排除 12→84 对象），本体 v2 + 8 组 v3（冻结）
+- 验证：`GET /api/graph` 200 / 83 节点 / **8 组** / 未分组 0 / 响应无字面 `"key"`；`ontology overview` **exit 0**
+- 声明改动留痕：`code/out/concept-declaration-ai-v2.json`（v1.0.1，digest `04ffce330779807d`，「未持 Key」→「未持凭证」）
