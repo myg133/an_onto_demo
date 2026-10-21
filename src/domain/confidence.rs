@@ -1327,10 +1327,15 @@ impl BandCounts {
 //
 // # 建议**不是结论**（AC-003）
 //
-// 七条规则里唯一不许「替人决定」的是**冲突**：`band = high`（证据支持）
-// 但 `semantic_fit < 0.50`（语义否定）且 `matched == sampled`（数据全命中）。
-// REQ-109 实测过 3 条「5/5 命中却被 AI 判 0.0」—— 把它们判成接受或拒绝
-// 都是替人做决定，所以显式标 `conflict`，并**排除在批量白名单之外**。
+// 七条规则里唯一不许「替人决定」的是**冲突**：`matched == sampled`（数据全命中，
+// 且真的采过样）但 `semantic_fit < 0.50`（语义否定）。REQ-109 实测过
+// 「5/5 命中却被 AI 判 0.0」—— 把它们判成接受或拒绝都是替人做决定，
+// 所以显式标 `conflict`，并**排除在批量白名单之外**。
+//
+// ⚠️ 冲突**不限档位**，而且必须在档位分派**之前**判（BA 裁定 A-5）：
+// `fit = 0.0` 时分数 = `1 − 0.15`（语义项权重）**上限就是 0.85 ⇒ `band = middle`**。
+// 若把冲突挂在 `band = high` 上，这条规则在它自己点名的那个案例上**永远不触发**
+// （QA 首轮 B-1：同样的形状被判成 `lean_accept` 并进了批量白名单）。
 //
 // # 规则表（顺序即优先级，从上往下第一条命中即返回）
 //
@@ -1338,7 +1343,7 @@ impl BandCounts {
 // | --- | --- | --- |
 // | ① | veto 含 `zero_hit` / `type_incompatible` | `reject` |
 // | ② | `band = high` 且 `fit ≥ 0.80` | `accept` |
-// | ③ | `band = high` 且 `fit < 0.50` 且 `matched == sampled` | `conflict` |
+// | ③ | `matched == sampled` 且 `sampled > 0` 且 `fit < 0.50`（**不限档位**，先于档位分派） | `conflict` |
 // | ④ | `band = middle` | `lean_accept` |
 // | ⑤ | `band = low` | `review` |
 // | ⑥ | `band = rejected` | `reject` |
@@ -1551,22 +1556,29 @@ fn classify(c: &Confidence, s: &SuggestionSignals) -> (SuggestKind, String) {
         }
     }
 
+    // ── ③ 冲突：**在档位分派之前**判（BA 裁定 A-5 / QA 首轮 B-1）─────
+    //
+    // 「数据说成立、语义说不成立」：`matched == sampled`（且真采过样）却
+    // `fit < 0.50`。这个形状**不限档位** —— 因为 `fit = 0.0` 时分数上限是
+    // `0.85`（语义项权重 0.15），`band` 只可能是 `middle`：只要给它加上
+    // `band = high` 的前置条件，这条规则就**碰不到它自己要防的案例**。
+    // 放在 `match c.band` 之前，保证 `fit < 0.30` 时不会被 `middle ⇒ lean_accept` 抢走。
+    if let (Some(fit), Some(matched), Some(sampled)) = (s.semantic_fit, s.matched, s.sampled) {
+        if sampled > 0 && matched == sampled && fit < FIT_CONFLICT {
+            return (
+                SuggestKind::Conflict,
+                format!("{matched}/{sampled} 命中但 AI 判 {fit:.2} —— 需人工判"),
+            );
+        }
+    }
+
     match c.band {
-        // ── ②③⑧ 高档：由 AI 语义分决定「接受 / 冲突 / 人工核对」 ──
+        // ── ②⑧ 高档：由 AI 语义分决定「接受 / 人工核对」 ──────────
         Band::High => match (s.semantic_fit, s.matched, s.sampled) {
             (Some(fit), Some(matched), Some(sampled)) if fit >= FIT_ACCEPT => (
                 SuggestKind::Accept,
                 format!("采样 {matched}/{sampled} + AI fit {fit:.2}"),
             ),
-            // ⚠️ 冲突：证据支持（全命中）但 AI 否定。**不许自动签，也不许判拒绝。**
-            (Some(fit), Some(matched), Some(sampled))
-                if fit < FIT_CONFLICT && matched == sampled =>
-            {
-                (
-                    SuggestKind::Conflict,
-                    format!("{matched}/{sampled} 命中但 AI 判 {fit:.2} —— 需人工判"),
-                )
-            }
             // ⑧ 中间态（fit ∈ [0.50, 0.80)）或全命中但语义分不够
             (Some(fit), Some(matched), Some(sampled)) => (
                 SuggestKind::Review,

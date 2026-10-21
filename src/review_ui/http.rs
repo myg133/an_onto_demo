@@ -35,13 +35,17 @@
 //! | 接口 | 变化 |
 //! | --- | --- |
 //! | `GET /api/review` | 每条多一个 `suggestion: {kind, reason}`；顶层多 `suggestion_counts` |
-//! | `GET /api/preview` | 多一个 `by` 口径：`confidence`（原样）/ `suggestion`（按建议） |
+//! | `GET /api/preview` | 多一个 `by` 口径：`confidence`（分数阈值）/ `suggestion`（按建议） |
 //! | `POST /api/decide` | **一个字节都没动**（唯一写点不变，也不新增写端点） |
 //!
 //! 建议**不是**在本文件里算出来的 —— [`crate::domain::confidence::suggestion`] 是唯一实现。
 //! 本文件只做两件事：把 `payload.confidence` 解析成 `Confidence`，再问它一句。
 //! 于是「页面显示的档位」与「建议依据的档位」必然是同一个值（R6 同源，AC-009），
 //! 「条目上的建议」与「批量白名单」也必然是同一份判据（[`SuggestKind::enters_batch`]，AC-006 / AC-007）。
+//!
+//! ⚠️ **两条批量口径共用那一个判据**（BA 裁定 A-6 / QA 非阻断 N-2）：`by=confidence`
+//! 只在 `enters_batch()` 为真的条目里再按分数筛；否则一条 `score = 0.85` 的冲突
+//! 在 `min_confidence = 0.80` 下会被自动接受，「冲突永不被自动接受」就只对另一种口径成立。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -492,9 +496,32 @@ struct PreviewQuery {
     /// 今天只允许 `unsigned`：批量**只作用于未签条目**，不做「一键全库」。
     scope: Option<String>,
     /// **按什么算白名单**（REQ-112）：
-    /// - 省略 / `confidence` ⇒ REQ-111 的原口径（分数 ≥ `min_confidence`）；
+    /// - 省略 / `confidence` ⇒ REQ-111 的原口径（分数 ≥ `min_confidence`），
+    ///   但**同样**要过 `enters_batch()`（A-6 / N-2）；
     /// - `suggestion` ⇒ 建议为 `accept` / `lean_accept` 的条目（AC-006 / AC-007）。
     by: Option<String>,
+}
+
+/// **白名单判据**（AC-006 / AC-007 / A-6）—— 两条批量口径**都走这一个函数**。
+///
+/// 唯一实现是 [`SuggestKind::enters_batch`]（只有 `accept` / `lean_accept` 为真）；
+/// 本函数只多做一件事：**不入白名单时按 kind 报数**，让页面能把
+/// 「冲突 1 条、人工核对 1 条……这些不参与」说出来。
+///
+/// # 为什么要有这个函数
+///
+/// QA 非阻断 N-2 实测：`min_confidence = 0.80` 的「按档位」批量把
+/// 一条 `score = 0.85` 的 `conflict` 放进了白名单。根因不是判据错了，
+/// 而是那条路径**根本没调判据**。把它抽成一个函数后，两条路径的差别
+/// 只剩「还按不按分数筛」——「谁能被自动接受」永远只有一个答案。
+fn batch_gate(kind: SuggestKind, excluded_by_kind: &mut [usize; 6]) -> bool {
+    if kind.enters_batch() {
+        return true;
+    }
+    if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == kind) {
+        excluded_by_kind[i] += 1;
+    }
+    false
 }
 
 async fn get_preview(
@@ -568,10 +595,7 @@ async fn get_preview(
             // ⭐ AC-006 / AC-007：白名单判据**只有一个** —— `kind.enters_batch()`。
             // `conflict` / `review` / `reject` / `none` 都不进（`none` 就是无置信度的实体条目）。
             let kind = suggestion_of(r).kind;
-            if !kind.enters_batch() {
-                if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == kind) {
-                    excluded_by_kind[i] += 1;
-                }
+            if !batch_gate(kind, &mut excluded_by_kind) {
                 continue;
             }
             whitelist.push(r.seq);
@@ -597,6 +621,16 @@ async fn get_preview(
                 }
             }
         }
+        // ⭐ N-2（BA 裁定 A-6）：**按档位**这条路径也必须过同一个白名单判据。
+        //
+        // 只按分数筛会把「争议」条目混进「将接受 N 条」—— 一条 `score = 0.85` 的
+        // 冲突在 `min_confidence = 0.80` 下会被自动接受，于是「冲突永不被自动接受」
+        // 就只对 `by=suggestion` 成立。两条批量路径共用一个判据：
+        // `conflict` / `review` / `reject` / `none` 一律不进（见 [`batch_gate`]）。
+        let kind = suggestion_of(r).kind;
+        if !batch_gate(kind, &mut excluded_by_kind) {
+            continue;
+        }
         whitelist.push(r.seq);
     }
 
@@ -604,8 +638,8 @@ async fn get_preview(
     excluded.insert("decided".into(), json!(decided));
     excluded.insert("below_band".into(), json!(below_band));
     excluded.insert("no_confidence".into(), json!(no_confidence));
-    // 按建议口径的四类「不参与」—— 页面要把它们**说出来**，
-    // 否则「将接受 40 条」会让人以为剩下 12 条也被接受了。
+    // 被 [`batch_gate`] 挡下的四类「不参与」—— **两种口径都会填**；
+    // 页面要把它们**说出来**，否则「将接受 40 条」会让人以为剩下 12 条也被接受了。
     for (i, k) in SuggestKind::ALL.iter().enumerate() {
         excluded.insert(k.as_str().to_string(), json!(excluded_by_kind[i]));
     }

@@ -1,3 +1,346 @@
+# REQ-112 · 审核界面接入 AI 建议 —— 验证报告（**B-1 阻断修复轮**）
+
+> **被测**：worktree `feature-REQ-112` / 分支 `feature/REQ-112` · 基线 `444080f`（QA 首轮 **FAIL**）· **未 push**
+> **本轮范围**：QA 阻断 **B-1** + 非阻断 **N-2** + 交付物 **N-3**（A-5 / A-6 / A-7 的处置）。**只改这三件**，
+> 另加一处页面文案同步（N-2 的直接后果，见 §3.4）。
+> **不碰**：`BA/`、`src/server/http.rs`（`git diff` **0 行**）、`Cargo.toml` / `Cargo.lock`（**0 行**）、四红线。
+> **日期**：2026-10-21 · Windows · rustc/cargo 1.96.0 · PG `postgresql://***@172.17.0.87:5432/anspire_real`
+
+---
+
+## ⚠️ 三条必须先读的结论
+
+1. **B-1 已修**：冲突判断搬到**档位分派之前**且**不限档位** —— `fit = 0.0` 那个案例（分数上限 `0.85` ⇒ `middle`）
+   现在**能**判成 `conflict`，并且**不进**任何批量白名单。
+2. **N-2 已修**：两条批量口径共用**一个** `batch_gate()`（唯一实现 `SuggestKind::enters_batch()`），
+   `conflict` / `none` / `review` / `reject` 一律排除。
+3. **两条如实登记（A-3 / A-7）**：
+   - ① **当前数据集无冲突样本** —— 本报告里的冲突条目**全部是构造样本**（`dev112c`），不是真实数据观测；
+   - ② 冲突分组的「排最前」**只有源码级断言，无浏览器验证**（本机无 headless browser，且真实数据无冲突条目）。
+
+---
+
+## 0 · 结论先行
+
+| 项 | 首轮（`444080f`） | 本轮 |
+| --- | --- | --- |
+| **B-1** 冲突规则不可达（AC-003） | ❌ 阻断：`lean_accept` + **进**白名单 | ✅ **关闭**：`conflict` + 两条批量路径都排除 |
+| **N-2** 第二条批量路径能绕过 | 🟡 `min_confidence=0.80` 放行 `score=0.85` 的冲突 | ✅ **关闭**：同一判据、同一函数 |
+| **N-3** 交付物 / 状态 | 🟡 报告是 REQ-111、状态是 REQ-002 | ✅ 本文件（REQ-112 段）+ `.feature/status.md` |
+| 真实数据（`dev112fix` 135 条 p1） | `accept 29 / lean 9 / review 14 / none 83 / conflict 0`；`by=suggestion` = 38 | **逐项相同**（38 / conflict 0） |
+| 测试 | lib 245 · doc 4 · 43 套件 416 | lib **245** · doc **4** · 43 套件 **422**（+6 新用例，**一条不少**） |
+| 红线 / 禁改 | 0 diff | 0 diff（`src/server/http.rs`、`mcp/tools.rs`、`property_filter.rs`、`Cargo.*`） |
+
+---
+
+## 1 · B-1 修在哪（判据在档位分派**之前**）
+
+### 1.1 位置（`path:line`，本轮实际代码）
+
+```text
+src/domain/confidence.rs:1539   fn classify(c: &Confidence, s: &SuggestionSignals)
+src/domain/confidence.rs:1559   // ── ③ 冲突：在档位分派之前判（BA 裁定 A-5 / QA B-1）
+src/domain/confidence.rs:1566   if let (Some(fit), Some(matched), Some(sampled)) = (s.semantic_fit, s.matched, s.sampled)
+src/domain/confidence.rs:1567       if sampled > 0 && matched == sampled && fit < FIT_CONFLICT
+src/domain/confidence.rs:1568-1571      return (SuggestKind::Conflict, "… 命中但 AI 判 … —— 需人工判")
+src/domain/confidence.rs:1575   match c.band {          ← 档位分派从这里开始（冲突**已在它之前**返回）
+```
+
+### 1.2 为什么必须放在 band 之前（三重理由）
+
+| 理由 | 具体 |
+| --- | --- |
+| **算术** | `fit = 0.0` 时分数上限 `0.85 = 1 − 0.15` ⇒ `Band::of(0.85) = middle`。挂在 `band = high` 上 ⇒ **永不触发**（这正是 B-1） |
+| **顺序** | 即使把它放进 `Band::Middle` 分支，它仍排在「`middle ⇒ lean_accept`」这条规则之后 → `fit < 0.30` 时照样被抢走。必须**在 `match c.band` 之前** return |
+| **语义** | 「证据全命中 + AI 否定」与分数高低是两件事。A-5 明确「**不限档位**」 |
+
+### 1.3 与旧实现的差异，以及「保留的优先级」
+
+- **旧**：冲突是 `Band::High` 分支里的一个子臂（`match (fit, matched, sampled)` 第二臂）。
+- **新**：`Band::High` 臂里删掉冲突子臂；冲突闸门提到 `match c.band` 之前。
+- **veto（规则 ①）仍在最前**：A-5 说的是「在**档位分派**之前」，veto 不是档位分派，且它是**硬反驳**。
+  既有判据 `mixed_items() #8`（`type_incompatible` + `5/5` + `fit 0.00`）实测仍是 **`reject`**，没有被冲突闸门抢走。
+- **依据文案一字未改**：`"{matched}/{sampled} 命中但 AI 判 {fit:.2} —— 需人工判"`（≤40 字判据不变）。
+
+---
+
+## 2 · B-1 的三条判据实测（含三个边界）
+
+### 2.1 判据 1 · `结构全 1.0 + 5/5 + fit=0.0` ⇒ `conflict`（**不是** `lean_accept`）
+
+**纯函数层，走生产评分函数** `score_with_semantic`（不是手写分数 —— B-1 的根因就是算术）：
+
+```text
+score_with_semantic(结构全 1.0, 采样 5/5, semantic_fit=0.0)
+  = 0.3825 + 0.17 + 0.1275 + 0.085 + 0.085 + 0.15×0.0 = 0.85
+  ⇒ band = middle
+  ⇒ kind  = conflict          ← 修复前是 lean_accept
+  ⇒ enters_batch() = false
+  ⇒ reason = "5/5 命中但 AI 判 0.00 —— 需人工判"
+```
+
+**端到端层（真 `ontok review serve` + 真 PG，项目 `dev112c`，6 条构造条目）**：
+
+```text
+== /api/review ==
+#1 score=      band=        kind=none        reason=规则抽取，无置信度可依赖
+#2 score=0.85  band=middle  kind=conflict    reason=5/5 命中但 AI 判 0.00 —— 需人工判   ← B-1 的形状
+#3 score=1     band=high    kind=accept      reason=采样 5/5 + AI fit 1.00
+#4 score=0.88  band=middle  kind=lean_accept reason=证据中等（5/5），建议看一眼再签
+#5 score=0.95  band=high    kind=review      reason=采样 5/5，AI fit 0.50 未达 0.80
+#6 score=      band=        kind=none        reason=规则抽取，无置信度可依赖
+counts={"accept":1,"conflict":1,"lean_accept":1,"none":2,"reject":0,"review":1}
+```
+
+> 修复前一模一样的形状（QA 的 `qa112d`）：`/api/review` 返回 `lean_accept`。**现在返回 `conflict`。**
+
+### 2.2 判据 2 · 该条出现在 `/api/preview?by=suggestion` 的**排除**里
+
+同一个 `dev112c` 工程、同一次 serve：
+
+```text
+GET /api/preview?track=biz&scope=unsigned&by=suggestion
+  count=2  items=[3,4]
+  excluded={"accept":0,"below_band":0,"conflict":1,"decided":0,"lean_accept":0,
+            "no_confidence":0,"none":2,"reject":0,"review":1}
+```
+
+`#2`（`score=0.85 / band=middle / conflict`）**不在** `items[]`，而出现在 `excluded.conflict = 1`。
+**修复前**：`count=1` 且 `items` 含它（QA `qa112d` 的复现）。
+
+### 2.3 判据 3 · 三个边界都**不是** conflict
+
+| 边界 | 输入（真 serve，项目 `dev112b`） | 实测 | 结论 |
+| --- | --- | --- | --- |
+| `fit = 0.50`（恰好不小于 0.5） | `score=0.925 / high / 5✓5 / fit 0.50` | `kind = review`（「AI fit 0.50 未达 0.80」） | ✅ 不是 conflict |
+| `matched = 4/5`（命中不满） | `score=0.75 / middle / 4✓5 / fit 0.00`（`partial_hit` 压顶 0.75） | `kind = lean_accept` | ✅ 不是 conflict（证据本来就不支持） |
+| `sampled = 0`（没采过样） | `score=0.20 / rejected / 0✓0 / fit 0.00` | `kind = reject` | ✅ 不是 conflict（`matched == sampled == 0` **不是**「全命中」） |
+
+```text
+== dev112b /api/review ==
+#1 score=0.925 band=high     matched=5/5 fit=0.5 kind=review
+#2 score=0.75  band=middle   matched=4/5 fit=0   kind=lean_accept
+#3 score=0.2   band=rejected matched=0/0 fit=0   kind=reject
+preview by=suggestion count=1 items=[2] excluded={...,"conflict":0,"reject":1,"review":1}
+```
+
+> `sampled = 0` 这一格是最容易写错的一格：数值上 `matched == sampled`，语义上却是「一条都没看」。
+> 判据里的 `sampled > 0` 就是为它写的；纯函数层另有 `b1_zero_samples_is_not_conflict` 把
+> 「`matched == sampled == 0`」单独钉住（防止哪天有人把 `sampled > 0` 优化掉）。
+
+### 2.4 本章的测试用例（新增，全绿）
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `b1_full_hits_with_zero_fit_on_middle_band_is_conflict_not_lean_accept` | 判据 1（含 `score == 0.85` / `band == middle` 的算术） |
+| `b1_middle_band_conflict_is_excluded_from_both_batch_paths` | 判据 2 + N-2（真路由 + 真 PG） |
+| `b1_fit_exactly_050_is_not_conflict` | 边界 `0.50` |
+| `b1_four_of_five_is_not_conflict` | 边界 `4/5` |
+| `b1_zero_samples_is_not_conflict` | 边界 `sampled = 0` |
+| `n2_both_batch_paths_share_one_gate` | 源码面：`batch_gate` 只一处实现、两处调用 |
+
+---
+
+## 3 · N-2：两条批量路径共用 `enters_batch()`
+
+### 3.1 实现（`src/review_ui/http.rs`）
+
+```text
+src/review_ui/http.rs:507-516   doc：为什么要有这个函数（N-2 的根因是「那条路径根本没调判据」）
+src/review_ui/http.rs:517-525   fn batch_gate(kind, &mut excluded_by_kind) -> bool   ← 唯一白名单入口
+        :518                        if kind.enters_batch() { return true; }          ← 唯一判据
+src/review_ui/http.rs:598       by=suggestion 路径 → if !batch_gate(kind, ...) { continue; }
+src/review_ui/http.rs:631       by=confidence 路径 → if !batch_gate(kind, ...) { continue; }   ← 新增
+```
+
+- **顺序**：`by=confidence` 先按分数筛（保留 REQ-111 的 `below_band` / `no_confidence` 口径，REQ-111 的
+  `ac006_batch_preview_shows_the_count_and_the_whitelist` 期望的 `below_band=4` / `no_confidence=4` 因此原样成立），
+  **再**过 `batch_gate` —— 于是「过线的 conflict / review / reject / none」被单独报数，而不是混进白名单。
+- 两条路径的差别只剩「还按不按分数筛」；「谁能被自动接受」永远只有一个答案。
+
+### 3.2 判据实测（`dev112c`，真 serve）
+
+```text
+GET /api/preview?track=biz&scope=unsigned&min_confidence=0.80
+  count=2  items=[3,4]              ← 只有 accept(1.00) 与 lean_accept(0.88)
+  excluded={...,"conflict":1,"review":1,"no_confidence":2,...}
+  ⇒ #2 conflict（score 0.85 ≥ 0.80）**不在**白名单        ← 修复前它在（QA N-2）
+  ⇒ #5 review（score 0.95）也不在
+GET /api/preview?track=biz&scope=unsigned&min_confidence=0.90
+  count=1  items=[3]
+```
+
+### 3.3 真实数据上的口径变化（如实登记）
+
+同一个 `dev112fix`（135 条真实 p1 副本），修复后：
+
+| 请求 | 修复后白名单 | 说明 |
+| --- | --- | --- |
+| `by=suggestion` | **38** | 与首轮一致（accept 29 + lean_accept 9） |
+| `min_confidence=0.60` / `0.30` / 不给 | **38** | 与 `by=suggestion` **完全一致**：两条路径在「不设分数门槛」时给出同一个答案 |
+| `min_confidence=0.80` | 35 | 29 accept + 6 条 ≥0.80 的 lean_accept；3 条 0.88 以下被 `below_band` |
+| `min_confidence=0.90` | **29** | 只剩 accept；14 条 `review` 被排除（**修复前是 43 条**） |
+
+> ⚠️ 这是一处**有意的行为变化**：`min_confidence=0.90` 从 43 → 29。原因是首轮那条路径把 14 条
+> `review`（高档但 AI 未确认）也算成「可批量接受」。按 A-6「两条批量路径都必须走 `enters_batch()`」，
+> 这正是要改掉的。真实数据里 `conflict` 仍是 **0**，所以「冲突被放行」在真实数据上从未发生 ——
+> 放行的是 `review`（N-2 的 QA 报告里也点了名）。
+
+### 3.4 页面同步（N-2 的直接后果，`src/review_ui/page.rs:436-442`）
+
+「按档位」弹窗原来只说「低于档位 N 条；无分数 N 条」，现在补上
+`冲突 N 条、人工核对 N 条、拒绝 N 条 —— **这些不参与**`。
+不改的话，用户会以为「将接受 29 条」之外剩下的都被一起接受了。**只改文案，没有新增判据**
+（页面仍然一个阈值都没有，AC-009 的「同源」不受影响）。
+
+---
+
+## 4 · 零模型调用 / 零写库（回归，没有放松）
+
+| 判据 | 本轮实测 |
+| --- | --- |
+| AC-004 零模型（环境层） | `ac004_suggestion_chain_works_with_all_llm_env_cleared` 仍通过；本轮起 `review serve` 时环境里**没有任何** `ONTOK_LLM_*`（`Get-ChildItem Env:ONTOK*` 为空） |
+| AC-004 零模型（源码层） | `ac004_suggestion_chain_has_no_llm_call_site` 仍通过（8 needle、剥注释后扫 4 个文件，含反向自检） |
+| AC-005 零写库 | `ac005_reading_the_review_api_writes_nothing` 仍通过（整行逐字段相等；本轮 3 次 `/api/review` + 2 轨 preview） |
+| 唯一写点 | `POST /api/decide` 未动；`no_suggestion_specific_write_endpoint_exists` 仍通过（4 条路由） |
+
+---
+
+## 5 · 不退化（基线 416 → 422，**一条不少**）
+
+### 5.1 数字（我自己跑的）
+
+```text
+lib  cargo test --lib  -> 245 passed / 0 failed        （= QA 基线）
+doc  cargo test --doc  ->   4 passed / 0 failed        （= QA 基线）
+43 个套件              -> 422 passed / 0 failed / 0 ignored
+  其中 test_req112_suggestion -> 27（首轮 21 + 本轮新增 6）
+       test_req111_review_ui   -> 14（未动一行）
+```
+
+43 个套件逐项（`passed` 与首轮逐项相等；只有 REQ-112 从 21 → 27）：
+
+```text
+req107_outlet_pipeline 12 · req107_guard_granularity 4 · req107_zero_visible_change 3 ·
+req107_pipeline_bytes 1 · req107_scope_error_gate 4 · req107_track_manifest 2 ·
+req107_static_texts 3 · req107_red_lines 2 · property_filter 10 · exit_ordering_req106 7 ·
+binary_output_guard 7 · graph_server 9 · guard_manifest_req081 6 · apply 21 ·
+review_show_e2e 11 · review_state 28 · db 11 · extracted_by_provenance 9 ·
+review_provenance 17 · concept_proposal 19 · diff 13 · no_write_path 4 ·
+provenance_source 5 · overview 17 · req108_live 5 · req108_confidence 10 ·
+req107_source_enumeration 10 · snapshot 10 · snapshot_write_paths 8 · model_view 10 ·
+view 26 · proposal 9                                              = 313（基线，逐项相等）
+req111_review_ui 14 · req112_suggestion 27 ·
+req110_ttl 15 · read_only_guard 5 · domain_print_sites_binary_req078 4 · req109_cli_gate 6 ·
+project 10 · hierarchy 16 · snapshot_freeze_gate 2 · review_show_binary_req072 7 · anchor_guard 3
+                                                                  = 109（首轮 103 + 新增 6）
+合计 43 套件 422 passed / 0 failed / 0 ignored
+```
+
+**结构面**：`git diff --stat` 只有 4 个文件（`src/domain/confidence.rs`、`src/review_ui/http.rs`、
+`src/review_ui/page.rs`、`tests/test_req112_suggestion.rs`）。**没有删除任何测试**，
+**新增 `#[ignore]` 0**，`Cargo.toml` / `Cargo.lock` diff **0 行**。
+
+### 5.2 两处既有红灯（归因不变，本轮未触碰这两个文件）
+
+| 灯 | 本轮状态 | 说明 |
+| --- | --- | --- |
+| `test_retained_names_req084` 跑不了 | 仍是「绕行挪开 preflight ⇒ `include_str!` 编不过」 | 既有问题；本轮对它 **0 改动**；不在 43 套件内（与首轮一致） |
+| `test_agent_orchestration::test_cli_end_to_end_...byte_identical` | 仍 1 红（本机无 `ONTOK_SOURCE_DATABASE_URL`） | 首轮 QA 已独立 A/B 复现（`444080f` 与 `4178a4e` 同一行同一差异）；本轮未改该链路 |
+
+### 5.3 测试绕行双证（`finally` 挪回）
+
+本轮每一次需要编译测试的命令都用同一模式：`Move-Item` 挪走 → 跑 → `finally` 挪回 → 打印 sha256 与 `Test-Path`。
+**5 次独立执行，全部 identical=True**（含最后那次 43 套件全量回归）：
+
+```text
+PREFLIGHT sha256_before = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+PREFLIGHT sha256_after  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+PREFLIGHT Test-Path=True · Hold-empty=True · identical=True
+```
+
+提交前 `git status --short` 已核对：**没有 `D` 行**（`src/bin/ontok-gate-preflight.rs` 在树内，sha256 与挪开前一致）。
+
+---
+
+## 6 · 改动清单
+
+| 文件 | 行 | 内容 |
+| --- | --- | --- |
+| `src/domain/confidence.rs` | `1328-1351` | 模块注释：冲突「不限档位、先于档位分派」+ 规则表 ③ 改写 |
+| `src/domain/confidence.rs` | `1559-1573` | **冲突闸门**（新增，位于 `match c.band` 之前） |
+| `src/domain/confidence.rs` | `1575-1585` | `Band::High` 臂删掉旧冲突子臂（其余分支原样） |
+| `src/review_ui/http.rs` | `33-48` | 模块注释：两条口径共用 `enters_batch()`（A-6 / N-2） |
+| `src/review_ui/http.rs` | `496-500` | `PreviewQuery::by` 文档：`confidence` 也过 `enters_batch()` |
+| `src/review_ui/http.rs` | `507-525` | **`batch_gate`**（唯一白名单入口：判据 + 按 kind 报数） |
+| `src/review_ui/http.rs` | `595-601` | `by=suggestion` 改调 `batch_gate`（行为不变，去掉重复代码） |
+| `src/review_ui/http.rs` | `624-635` | **`by=confidence` 也调 `batch_gate`**（N-2 的修复本体） |
+| `src/review_ui/http.rs` | `638-640` | 注释：被 `batch_gate` 挡下的四类两种口径都会填 |
+| `src/review_ui/page.rs` | `436-442` | 「按档位」弹窗补上冲突/人工核对/拒绝的条数（N-2 文案同步） |
+| `tests/test_req112_suggestion.rs` | `1004-1223` | **+6 条 B-1 / N-2 用例**（4 纯函数 + 1 HTTP + 1 源码） |
+| `.feature/verification-report.md` | 本段 | REQ-112 报告（REQ-111 原文保留在下方） |
+| `.feature/status.md` | 全文 | 从 REQ-002 旧文改为 REQ-112 本轮状态 |
+
+**未改（`git diff --numstat` 为空）**：`src/server/http.rs`、`src/mcp/tools.rs`、`src/domain/property_filter.rs`、
+`src/domain/view.rs`、`src/domain/review_view.rs`、`Cargo.toml`、`Cargo.lock`、`tests/drop_rate.rs`、`tests/test_fk_naming.rs`。
+**未碰**：`BA/`（全部裁定与报告都在 BA 自己的 worktree 里）。
+
+---
+
+## 7 · 如实登记（A-3 / A-7）
+
+| # | 事实 | 不许说成 |
+| --- | --- | --- |
+| 1 | **当前数据集无冲突样本**：`dev112fix`（135 条真实 p1 副本）`conflict = 0`；81 条口径里也没有 `(matched==sampled, fit<0.5)` 的行 | ⛔ 不许说「已用真实数据验证冲突规则」 |
+| 2 | 冲突条目**全部是构造样本**（`dev112c` 6 条 / `dev112b` 3 条，score/band/signals 与生产评分函数自洽，未伪造字段） | ⛔ 不许说「真实数据里有 1 条冲突」 |
+| 3 | 冲突分组「**排最前**」只有**源码级断言**（`conflict` 先 push、`groupHead("⚠ 冲突 …")` 在 `"其余条目"` 之前；`ac008_page_shows_suggestion_and_puts_the_conflict_group_first` 通过） | ⛔ 不许说「页面已验证/浏览器验证过」 |
+| 4 | **无浏览器验证**（本机无 headless browser，且真实数据没有冲突条目可看） | ⛔ 不许把源码断言写成页面验证 |
+| 5 | **N-1 口径**：首轮报告里「81 条」= p1 52 + `t112_low` 18 + rejected 产物 11，**三份不同数据**；本轮真 serve 的 135 条是 p1 全量，其中带 confidence 的 52 条 | ⛔ 不许把「81」当同一份待审数据 |
+| 6 | **N-4 未修**：`page.rs:313` 仍硬编码 `sc >= 0.9 / 0.75` 给**档位徽章配色**（REQ-111 既有，不在建议链路上）。按 A-7 只登记不修（改它会扩大范围） | ⛔ 不许说「阈值全仓只有一处」（只对建议链路成立） |
+| 7 | 本轮在 `anspire_real` 新建了 3 个临时项目：`dev112fix`（135 条）/ `dev112c`（6 条）/ `dev112b`（3 条）。**未清理** —— 本机没有 `psql`，`ontok` 也没有删除命令 | ⛔ 不许说「已清理干净」（QA 首轮用 DB 客户端清理过，本轮环境没有） |
+
+---
+
+## 8 · 复现命令（我实际执行过的）
+
+```powershell
+# 0) 环境
+$env:ONTOK_DATABASE_URL      = 'postgresql://***@172.17.0.87:5432/anspire_real'
+$env:ONTOK_TEST_DATABASE_URL = 'postgresql://***@172.17.0.87:5432/ontok_demo'
+$env:CARGO_TARGET_DIR        = 'D:\MyCodes\AI\an_onto_demo\feature-REQ-112\target'
+
+# 1) 判据 1/2/3（纯函数 + 真路由）
+cargo test --test test_req112_suggestion b1_
+cargo test --test test_req112_suggestion n2_
+
+# 2) 端到端（真二进制 + 真 PG）：真实数据不受影响
+ontok project new --name dev112fix ; ontok version new --project dev112fix
+#   code/out/proposal.json 的 project 改成 dev112fix 后导入（135 条）
+ontok review serve --project dev112fix --proposal p1 --bind 127.0.0.1:8795 --token '***'
+#   /api/review -> 135 条，counts={accept 29, lean_accept 9, review 14, none 83, conflict 0}
+#   /api/preview?by=suggestion -> count=38
+#   /api/preview?min_confidence=0.90 -> count=29（修复前 43）
+
+# 3) 构造冲突（dev112c：0.85 / middle / 5✓5 / fit 0.00）
+#   /api/review           -> #2 kind=conflict
+#   /api/preview?by=suggestion          -> count=2 items=[3,4] excluded.conflict=1
+#   /api/preview?min_confidence=0.80    -> count=2 items=[3,4]（冲突不在）
+
+# 4) 三个边界（dev112b）
+#   fit=0.50 -> review ; 4/5 -> lean_accept ; 0/0 -> reject   （都不是 conflict）
+
+# 5) 回归（绕行挪开预检 bin，finally 挪回并打印 sha256 + Test-Path）
+cargo test --lib ; cargo test --doc ; 43 个套件逐项
+```
+
+---
+
+<br />
+
+---
+
+# 附录 · REQ-111 交付报告（上一需求，**原文保留**，未改动）
+
 # REQ-111 · 本地审核界面（HTML 里做双轨审核）—— 交付报告
 
 > 分支 `feature/REQ-111`（worktree `feature-REQ-111/`，基线 `develop` `f624c1a`，REQ-110 已合并）· **未 push**

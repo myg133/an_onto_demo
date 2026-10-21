@@ -30,9 +30,10 @@ use ontok::db::project::PgProjectStore;
 use ontok::db::proposal::{NewItem, NewProposal, PgProposalStore, ProposalItemRow};
 use ontok::db::snapshot_store::PgStore;
 use ontok::domain::confidence::{
-    hit_rate_value, suggestion, veto_cap, AiProvenance, Band, Confidence, DataEvidence, Signal,
-    SuggestKind, Veto, BAND_HIGH, BAND_LOW, BAND_MIDDLE, FIT_ACCEPT, FIT_CONFLICT, METHOD_V2,
-    REASON_NO_CONFIDENCE, SIGNAL_SEMANTIC_FIT, WEIGHTS_V2,
+    hit_rate_value, score_with_semantic, suggestion, veto_cap, AiProvenance, Band, Confidence,
+    DataEvidence, SampleFacts, ScoreInput, Signal, SuggestKind, TargetKey, TypeFamily, Veto,
+    BAND_HIGH, BAND_LOW, BAND_MIDDLE, FIT_ACCEPT, FIT_CONFLICT, METHOD_V2, REASON_NO_CONFIDENCE,
+    SIGNAL_SEMANTIC_FIT, WEIGHTS_V2,
 };
 use ontok::domain::review::ItemKind;
 use ontok::domain::snapshot::Snapshot;
@@ -996,4 +997,227 @@ fn ac008_page_shows_suggestion_and_puts_the_conflict_group_first() {
     assert!(!html.contains("decide-bulk"), "⛔ 页面不许有批量写接口");
     // 分组计数来自后端（页面不自己数）
     assert!(html.contains("suggestion_counts"), "分组计数必须取后端那一份");
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// 六 · B-1 / N-2 回归（QA 首轮阻断项 + 非阻断，BA 裁定 A-5 / A-6）
+// ══════════════════════════════════════════════════════════════
+//
+// # B-1 到底错在哪（不是「Dev 写错」，是规格矛盾）
+//
+// `demo/AC-002` 原来的冲突行带 `band = high` 前置条件；而 `fit = 0.0` 时分数
+// **上限就是 0.85**（结构全满 0.85 + 语义项 0.15×0.0），`band` 只可能是 `middle`。
+// 于是这条规则在它自己点名的那个案例（「5/5 全命中，AI 判 0.0」）上**永远不触发**。
+// 修法（A-5）：冲突判断**先于档位分派**，且**不限档位**。
+//
+// 下面四条纯函数用例 + 一条 HTTP 用例，分别钉住「命中 / 不该命中」的每一面。
+
+/// 一条「结构信号全满」的评分输入：名字命中、非全空、类型相容、目标是主键。
+fn structural_input(sampled: u32, matched: u32) -> ScoreInput {
+    ScoreInput {
+        column: "customer_id".into(),
+        to_table: "customers".into(),
+        from_type: TypeFamily::Str,
+        to_type: Some(TypeFamily::Str),
+        target_key: TargetKey::Primary,
+        data: Some(SampleFacts { sampled, matched, digest: None, reason: None }),
+        composite_target_key: false,
+        polymorphic: false,
+        self_ref: false,
+    }
+}
+
+/// **B-1 主判据** · `结构全 1.0 + 5/5 + fit=0.0` ⇒ **`conflict`**，⛔ 不是 `lean_accept`。
+///
+/// 走**生产评分函数** `score_with_semantic`（不是我手写的分数），因为 B-1 的根因
+/// 正是「算术上给不出 high」：`0.3825+0.17+0.1275+0.085+0.085 + 0.15×0.0 = 0.85`。
+#[test]
+fn b1_full_hits_with_zero_fit_on_middle_band_is_conflict_not_lean_accept() {
+    let c = score_with_semantic(&structural_input(5, 5), Some(0.0));
+
+    // 先把 QA 的算术钉在测试里：分数 0.85、档位 middle（**不是** high）。
+    assert_eq!(c.score, 0.85, "结构全满 + fit 0.0 的分数必须是 1 − 0.15 = 0.85");
+    assert_eq!(c.band, Band::Middle, "⇒ band = middle —— 这正是「band=high 才算冲突」永不触发的原因");
+
+    let s = suggestion(Some(&c));
+    assert_eq!(
+        s.kind,
+        SuggestKind::Conflict,
+        "5/5 全命中 + AI 判 0.0 必须显式标冲突（不限档位）：{s:?}"
+    );
+    assert_ne!(
+        s.kind,
+        SuggestKind::LeanAccept,
+        "⛔ 这就是 B-1：同样形状曾被判成 lean_accept 并进了批量白名单"
+    );
+    assert_eq!(s.reason, "5/5 命中但 AI 判 0.00 —— 需人工判");
+    // AC-003 第二条判据：冲突**不进**批量白名单。
+    assert!(!s.kind.enters_batch(), "⛔ 冲突条目绝不能进「按建议接受」");
+}
+
+/// **B-1 边界** · `fit` 恰好 `0.50` ⇒ **不是** conflict（规则写的是 `< 0.50`）。
+#[test]
+fn b1_fit_exactly_050_is_not_conflict() {
+    let c = score_with_semantic(&structural_input(5, 5), Some(FIT_CONFLICT));
+
+    // 0.85 + 0.15 × 0.50 = 0.925 ⇒ high；但「恰好 0.50」不算 AI 否定。
+    assert_eq!(c.band, Band::High);
+    let s = suggestion(Some(&c));
+    assert_ne!(s.kind, SuggestKind::Conflict, "fit = 0.50 属于闭区间上界，不许标冲突");
+    assert_eq!(s.kind, SuggestKind::Review, "全命中但语义分未达 0.80 ⇒ 人工核对（规则 ⑧）");
+}
+
+/// **B-1 边界** · `matched = 4/5` ⇒ **不是** conflict（证据本来就不支持）。
+#[test]
+fn b1_four_of_five_is_not_conflict() {
+    let c = score_with_semantic(&structural_input(5, 4), Some(0.0));
+
+    assert_eq!(c.band, Band::Middle, "4/5 全结构 ⇒ 0.77，middle");
+    let s = suggestion(Some(&c));
+    assert_ne!(s.kind, SuggestKind::Conflict, "命中不满时「数据支持」这个前提不成立");
+    assert_eq!(s.kind, SuggestKind::LeanAccept, "回到档位规则（middle ⇒ 倾向接受）");
+}
+
+/// **B-1 边界** · `sampled = 0` ⇒ **不是** conflict（没采过样 ≠ 全命中）。
+///
+/// 这一格最容易被写错：`matched == sampled == 0` 在数值上「相等」，但语义是
+/// 「一条都没看」，不是「全命中」。用 `sampled > 0` 把它排除掉。
+#[test]
+fn b1_zero_samples_is_not_conflict() {
+    let c = score_with_semantic(&structural_input(0, 0), Some(0.0));
+    let s = suggestion(Some(&c));
+    assert_ne!(
+        s.kind,
+        SuggestKind::Conflict,
+        "sampled = 0 时没有「证据支持」可言，不许标冲突（实际 {:?}）",
+        s.kind
+    );
+
+    // 再钉一次极端构造：分数、档位都像冲突，但 sampled = 0。
+    let direct = suggestion(Some(&conf(0.85, 0, 0, Some(0.0))));
+    assert_ne!(direct.kind, SuggestKind::Conflict, "matched == sampled == 0 也不是冲突");
+}
+
+/// B-1 的 HTTP 夹具：六条条目，其中 #2 是 **middle 档上的真冲突**（0.85 / 5✓5 / fit 0.00）。
+///
+/// | # | 内容 | 期望 kind |
+/// | --- | --- | --- |
+/// | 1 | 实体（无置信度） | `none` |
+/// | 2 | **0.85 / 5✓5 / fit 0.00**（band = middle） | **`conflict`** |
+/// | 3 | 1.00 / 5✓5 / fit 1.00 | `accept` |
+/// | 4 | 0.88 / 5✓5 / fit 1.00 | `lean_accept` |
+/// | 5 | 0.95 / 5✓5 / fit 0.50 | `review`（规则 ⑧） |
+/// | 6 | 实体（无置信度） | `none` |
+fn b1_items() -> Vec<NewItem> {
+    vec![
+        entity("customer", "客户"),
+        relation("b1_conflict_middle", confidence_json(0.85, 5, 5, 1.0, Some(0.00), None)),
+        relation("b1_accept", confidence_json(1.00, 5, 5, 1.0, Some(1.00), None)),
+        relation("b1_lean", confidence_json(0.88, 5, 5, 1.0, Some(1.00), None)),
+        relation("b1_review", confidence_json(0.95, 5, 5, 1.0, Some(0.50), None)),
+        entity("order", "订单"),
+    ]
+}
+
+fn whitelist_of(v: &Value) -> Vec<i64> {
+    v["items"].as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect()
+}
+
+/// **B-1 判据 2 + N-2 判据** · 冲突既要被「看得到」，也要被**两条**批量路径都排除。
+#[tokio::test]
+async fn b1_middle_band_conflict_is_excluded_from_both_batch_paths() {
+    let f = fixture("req112_b1_middle", b1_items()).await;
+    let app = app(&f).await;
+
+    // ① 条目上：它必须是 conflict，不是 lean_accept。
+    let (status, body) = call(&app, "GET", "/api/review", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v = body_json(&body);
+    assert_eq!(
+        kinds_of(&v),
+        vec!["none", "conflict", "accept", "lean_accept", "review", "none"],
+        "middle 档上的 5/5 + fit 0.0 必须是 conflict：{v}"
+    );
+    let item2 = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["item"] == json!(2))
+        .expect("条目 2 必须存在");
+    assert_eq!(item2["suggestion"]["kind"], json!("conflict"));
+    assert_eq!(item2["confidence"]["band"], json!("middle"), "这条的档位**就是** middle（B-1 的形状）");
+    assert_eq!(v["suggestion_counts"]["conflict"], json!(1));
+
+    // ② 按建议的白名单：排除它。
+    let (status, body) = call(
+        &app,
+        "GET",
+        "/api/preview?track=biz&scope=unsigned&by=suggestion",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v = body_json(&body);
+    assert_eq!(whitelist_of(&v), vec![3, 4], "只有 accept / lean_accept 进白名单：{v}");
+    assert_eq!(v["excluded"]["conflict"], json!(1), "冲突要单独报数：{v}");
+
+    // ③ N-2：**按档位**的白名单（min_confidence=0.80）也不许含它 ——
+    //    它的 score = 0.85 ≥ 0.80，光看分数本来会进。
+    let (status, body) = call(
+        &app,
+        "GET",
+        "/api/preview?track=biz&scope=unsigned&min_confidence=0.80",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v = body_json(&body);
+    let wl = whitelist_of(&v);
+    assert!(
+        !wl.contains(&2),
+        "⛔ N-2：conflict（score 0.85 ≥ 0.80）被「按档位」批量放进了白名单：{v}"
+    );
+    assert!(!wl.contains(&5), "review（score 0.95）同样不许进：{v}");
+    assert_eq!(wl, vec![3, 4], "过线且能自动接受的只有 #3 #4：{v}");
+    assert_eq!(v["excluded"]["conflict"], json!(1), "按档位也要把冲突数出来：{v}");
+    assert_eq!(v["excluded"]["review"], json!(1), "按档位也要把人工核对数出来：{v}");
+
+    // ④ 不按分数筛的「按档位」默认口径同样过这个判据（两条路径共用一个函数）。
+    let (status, body) = call(&app, "GET", "/api/preview?track=biz&scope=unsigned", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v = body_json(&body);
+    assert_eq!(
+        whitelist_of(&v),
+        vec![3, 4],
+        "不给 min_confidence 也不许把冲突/存疑混进来：{v}"
+    );
+}
+
+/// **N-2 结构判据** · 两条批量路径用的是**同一个**判据函数（不是各写一遍）。
+///
+/// 源码级断言：`batch_gate` 存在、两处调用、且**没有**第二套白名单写法。
+#[test]
+fn n2_both_batch_paths_share_one_gate() {
+    let src = common::strip_comments(&common::read_source("src/review_ui/http.rs"));
+
+    assert_eq!(
+        src.matches("fn batch_gate(").count(),
+        1,
+        "白名单判据只能有一处实现"
+    );
+    assert_eq!(
+        src.matches("batch_gate(kind, &mut excluded_by_kind)").count(),
+        2,
+        "两条批量路径（by=suggestion / by=confidence）都必须调它"
+    );
+    assert!(
+        src.matches(".enters_batch()").count() == 1,
+        "判据只许出现在 `batch_gate` 里（调用点再写一遍就是两套白名单）"
+    );
+    assert_eq!(
+        src.matches("whitelist.push(").count(),
+        2,
+        "只有两条批量路径各自往白名单里放行（且都排在 `batch_gate` 之后）"
+    );
 }

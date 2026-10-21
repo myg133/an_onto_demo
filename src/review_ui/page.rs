@@ -433,8 +433,13 @@ function preview() {
           p.excluded.reject + " 条、无建议 " + p.excluded.none + " 条 —— **这些不参与**。确认后逐条提交（每条一次 POST）。";
       } else {
         $("m-title").textContent = "将接受 " + p.count + " 条（" + scope + " · 置信度 ≥ " + band + "）";
+        // N-2：按档位也有白名单（与「按建议」同一个判据）—— 冲突 / 人工核对 / 拒绝
+        // 即使分数过线也**不参与**，弹窗必须把它们数出来，否则「将接受 N 条」会让人
+        // 以为剩下的也被一起接受了。
         $("m-sub").textContent = "总条目 " + p.total + "；已签 " + p.excluded.decided + " 条；低于档位 " +
-          p.excluded.below_band + " 条；无分数 " + p.excluded.no_confidence + " 条。确认后逐条提交（每条一次 POST）。";
+          p.excluded.below_band + " 条；无分数 " + p.excluded.no_confidence + " 条；" +
+          "冲突 " + p.excluded.conflict + " 条、人工核对 " + p.excluded.review + " 条、拒绝 " +
+          p.excluded.reject + " 条 —— **这些不参与**。确认后逐条提交（每条一次 POST）。";
       }
       $("ids").textContent = p.items.length ? ("条目号：" + p.items.join(", ")) : "没有符合条件的条目。";
       $("m-go").textContent = "确认接受 " + p.count + " 条";
