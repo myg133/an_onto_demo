@@ -1,3 +1,190 @@
+# REQ-114 · 页面图交互升级 —— 验证报告（**QA 首轮 FAIL 后的修复轮**）
+
+> **被测**：worktree `feature-REQ-114` / 分支 `feature/REQ-114` · 基线 `develop` `e9755e8` · **未 push**
+> **本轮范围**：QA 阻断 **探针无牙（假绿）** 的修复（A-1 行为级探针 / B 剥注释计数 / C 三项小毛病）
+> + 四处文档（D1–D4）。**产品交互逻辑本轮没动**（唯一碰到的产品文件是 `page.rs` 内核段里的一行**注释**，
+> 因为 C3 要修它写的探针路径；它改了 `INDEX_HTML` 的字节 ⇒ golden 又重锚了一次）。
+> **不碰**：`BA/`、`src/server/http.rs`（`git diff` 0 行）、`Cargo.toml` / `Cargo.lock`（0 行）、四红线。
+> **日期**：2026-10-22 · Windows · rustc/cargo 1.96.0 · PG `postgresql://***@172.17.0.87:5432/anspire_real`
+
+---
+
+## ⚠️ 三条必须先读的结论
+
+1. **QA 的 P0 成立**：第一版探针「数原文里的 `collide(ns, GAP);`」—— 把两行**注释掉**或包进
+   `if (false) {}` 之后，文本照样被数到 2 处 ⇒ 探针 exit 0。这是**假绿**，不是「可能漏」。
+2. **本轮把探针改成行为级**：新增**无斥力场景**（把内核作用域的 `REP` 置 0），此时「不重叠」
+   **只可能**由 `collide` 兑现；再加**剥注释后恰好 2 处**的静态判据。五种变异实测**全部 exit 1**。
+3. **仍未做真浏览器手测**（本机无 headless 浏览器，也不为此加依赖）。本报告所有「✅」都指
+   源码级 / 纯函数级 / 真 HTTP 级判据成立，**不指**交互手感已验证。
+
+---
+
+## 0 · 结论先行
+
+| 项 | QA 实测（修复前） | 修复后（本轮实测） |
+| --- | --- | --- |
+| **M1a** 两行 `collide(ns, GAP);` 删**一行** | ❌ exit 0 | ✅ **exit 1**（静态 1 ≠ 2 + 场景 2 余量 `-30.94px`） |
+| **M1c** 两行改成注释 | ❌ exit 0 ALL PASS | ✅ **exit 1**（剥注释后 0 ≠ 2 + 场景 2 余量 `-32.00px`） |
+| **M1d** 两行包进 `if (false)` | ❌ exit 0 ALL PASS | ✅ **exit 1**（静态仍 2 ⇒ 由**场景 2** 抓住：`-32.00px` / 包围盒 `0 × 0`） |
+| **M2** `var min = a.r + b.r + gap;` → `0` | ✅ exit 1 | ✅ exit 1（单元 2 条 + 场景 2） |
+| **M3** 删内核 / 改 `END` 标记 | ✅ exit 1 | ✅ exit 1（`die()`） |
+| **基线** | exit 0 | exit 0（`ALL PASS（场景 1：168 帧 / 余量 15.79px；场景 2：168 帧 / 余量 5.20px）`） |
+| 每次变异后还原 | — | sha256 `9E5ABADF…` **前后一致**（逐字节） |
+
+---
+
+## 1 · 探针（`tests/fixtures/req114/layout_probe.js`）
+
+```bash
+node tests/fixtures/req114/layout_probe.js   # 全绿 exit 0；任一断言失败 exit 1
+```
+
+它**不复制**页面代码：从 `src/server/page.rs` 的 `BEGIN/END` 两条标记之间把「布局内核」段
+（`radiusOf` / `collide` / `springs` / `physicsStep` + 常量）**原样抽出**，用 `new Function` 执行同一份源码。
+标记找不到 ⇒ `die()` exit 1（不是静默通过）。
+
+### 三层判据（缺一层就会出现假绿）
+
+| 层 | 内容 | 抓什么 |
+| --- | --- | --- |
+| **静态层** | 抽内核 → **剥 `//` 与 `/* */` 注释** → 数 `collide(ns, GAP);`，要求 **=== 2** | 删一行 / 注释掉 / 多写一处 |
+| **单元层** | 直接调 `collide()`：重叠一对被推到「半径和 + GAP」；钉住的节点不动 | `collide` 变成空转 |
+| **涌现层 1** | 83 节点同坐标、`REP=400`（页面默认）、300 帧上限 ⇒ 任意两节点中心距 ≥ 半径和 | 整体退化 |
+| **涌现层 2** | **同上但 `REP=0`**（`setRep(0)` 改的是内核作用域里的 `REP` 本身）⇒ 只能靠 `collide` 分开 | **`collide` 没执行**（注释/`if(false)`/删调用） |
+
+> **为什么必须有涌现层 2**：只跑真实参数时斥力很强 —— 把 `collide` 的调用**删掉**仍能凑出
+> ~12.5px 余量（实测），涌现层 1 会绿。把 `REP` 置 0 之后，不重叠就**只可能**来自 `collide`：
+> 变异实测余量直接掉到 `-30.94 / -32.00px`。
+
+### 期望输出（本机实测，内核无 `Math.random`，数字确定）
+
+```text
+REQ-114 · 布局内核探针（从 src/server/page.rs **原样抽取**）
+内核段 = 3925 字节（radiusOf / collide / springs / physicsStep）
+剥注释后内核 = 2255 字节
+
+PASS 剥注释没有把代码剥没（自检）  2255 / 3925 字节
+PASS 静态：剥注释后 collide(ns, GAP); 恰好 2 处  实际 2 处（注释/删行/多写都会在这里红）
+PASS 页面帧上限 SIM_FRAMES === 300  实际 300
+PASS 单元：重叠的一对被推到「半径和 + GAP」  余量 6.00 ≥ GAP 6
+PASS 单元：钉住的节点不动（否则拖拽会被下一帧弹回去）  (0, 0)
+PASS 单元：让对面的节点让开整个间距  余量 6.00
+PASS 场景 1 起点：83 个节点都在 (0,0)，速度 0  83/83
+PASS 场景 1 边数 === 52  实际 52
+
+场景 1 · 真实参数（REP=400，页面默认）
+  节点数 / 边数        = 83 / 52
+  实际推进帧数         = 168（上限 300，停止原因：alpha 掉到 ALPHA_MIN 以下（收敛））
+  最紧一对（#6 / #47）中心距 = 42.79，半径和 = 26.99
+  余量（距 − 半径和）  = 15.79   ← 断言 ≥ 0
+  含 NaN 的节点数      = 0   ← 断言 = 0
+  包围盒（世界单位）   = 529 × 528
+
+场景 2 · 无斥力（REP=0 ⇒ 只能靠 collide 分开）
+  节点数 / 边数        = 83 / 52
+  实际推进帧数         = 168（停止原因：alpha 掉到 ALPHA_MIN 以下（收敛））
+  最紧一对（#31 / #74）中心距 = 24.93，半径和 = 19.73
+  余量（距 − 半径和）  = 5.20   ← 断言 ≥ 0（collide 没执行就会是 −32 量级）
+  含 NaN 的节点数      = 0   ← 断言 = 0
+  包围盒（世界单位）   = 288 × 305
+
+ALL PASS（场景 1：168 帧 / 余量 15.79px；场景 2：168 帧 / 余量 5.20px）
+exit=0
+```
+
+### 五种变异 × 每次还原（原样实测）
+
+| 变异 | 手法 | exit | 关键输出 | 还原 sha256 前 8 | 一致 |
+| --- | --- | --- | --- | --- | --- |
+| 基线 | 不动 | **0** | `ALL PASS（… 余量 15.79px；… 余量 5.20px）` | `9E5ABADF` | ✅ |
+| **M1a** | 两行删一行 | **1** | `FAIL 静态：…恰好 2 处  实际 1 处` + `FAIL 场景 2 … 余量 -30.94px` | `9E5ABADF` | ✅ |
+| **M1c** | 两行改成注释 | **1** | `FAIL 静态：…实际 0 处` + `FAIL 场景 2 … -32.00px` + `包围盒 0 × 0` | `9E5ABADF` | ✅ |
+| **M1d** | 两行包进 `if(false)` | **1** | `FAIL 场景 2 … -32.00px` + `FAIL 场景 2：节点确实被推开了 … 0 × 0` | `9E5ABADF` | ✅ |
+| M2 | `min` 改 0 | **1** | 单元 2 条（`-18.00` / `-17.00`）+ 场景 2（`-32.00px`） | `9E5ABADF` | ✅ |
+| M3 | 改 `END` 标记 | **1** | `FAIL 在 page.rs 里找不到布局内核的两条标记（BEGIN/END）` | `9E5ABADF` | ✅ |
+
+### 本轮修掉的三个小毛病（QA 点名）
+
+| # | 问题 | 修法 |
+| --- | --- | --- |
+| C1 | `pass("起点…", allAtOrigin ? "83/83" : "有节点不在原点")` —— 条件为假也 PASS | 改成 `expect(nodes1.every(…), "场景 1 起点：83 个节点都在 (0,0)，速度 0", "83/83")`；全文件不再有「带条件的 `pass()`」 |
+| C2 | 边数没断言 | 两个场景各加 `expect(edges.length === 52, "场景 N 边数 === 52", …)` |
+| C3 | 内核注释里的探针路径是 `.review-workspace/...`（不入库） | `page.rs:223` 改成 `tests/fixtures/req114/layout_probe.js`（入库） |
+
+---
+
+## 2 · 产品侧（上一轮已交付，本轮未动逻辑）
+
+| AC | 落点（`src/server/page.rs`） |
+| --- | --- |
+| 001 拖拽 / 松手固定 / 双击释放 | `505` `pointerdown`（绑在节点上）· `556-559` `d.pin = true`（松手保持）· `601-615` `tapNode` + `release` |
+| 002 碰撞消解 | `230` `collide`（位置推离，钉子权重 0）· `288-289` 每帧两遍、物理步最后一步 |
+| 003 拖拽 ≠ 点击 | `204` `DRAG_PX = 4` · `533` 位移判定 · `556`/`560` 分支 |
+| 004 视图 | `583` 背景平移 · `594` 滚轮缩放（指针锚定）· `205`/`204` 两个按钮 · `380` `VIEW = {k:1,x:0,y:0}` |
+| 005 标签避让 | `205` `LBL_K = 0.6` · `426` `showLbl` · `462-475` 重叠跳过 |
+| 006 搜索定位 | `611` 输入高亮 · `623` 回车 ⇒ `centerOn` |
+| 007 零依赖 / < 60KB | 页面 **32396 字节**；`<script src=` / `<link href=` / `http://` / `https://` / `cdn.` / `integrity=` 各 **0 处** |
+| 008 数据面不扩大 | 真 HTTP：`GET /` 200 且与 golden **逐字节相等**；11 个探针词（项目名/对象名）**0 命中**；`/api/{scope,graph,node,ontology.ttl}` 无 token 全 **401** |
+| 009 golden 重锚 | `H1_index.html` `96eb5f…`（12479 字节）→ **`d8bd4581c264a483815c0bf67636966da190b3799e8abbaa79c6f5a2a849c5c0`（32396 字节）**；其余 12 份逐字节未动；`PROVENANCE.txt` 写明原因 |
+| 010 不退化 | 禁改文件 0 diff；lib 245 / doc 4 |
+| 011 如实登记 | 本报告 §4 + `page.rs` 模块文档「已知限制」 |
+
+---
+
+## 3 · 测试（本轮复跑）
+
+```text
+lib 245 passed / 0 failed · doc 4 passed / 0 failed
+集成 72 个目标：774 passed / 4 failed —— 4 红全部与本需求无关：
+  drop_rate / test_fk_naming   → 缺脱敏 schema.json（fail-closed 输入不在版本控制内）
+  test_agent_orchestration     → 在基线 page.rs 上同样红（回退复现过）
+  test_req107_red_lines        → 跑到它的那一次，为绕行临时挪开了 test_retained_names（单跑 2 passed）
+test_retained_names_req084（6 条）→ Windows 上编译不了：它 include_str! 那个 Unix-only 的 bin
+页面/守门/golden 专项全绿：pipeline_bytes 1 · zero_visible_change 3 · graph_server 9 ·
+  static_texts 3 · red_lines 2 · req110_ttl 15
+```
+
+**绕行双证**（`finally` 自动挪回，脚本见交付物）：
+
+```text
+BEFORE  src\bin\ontok-gate-preflight.rs  sha256=C7CF95E2…71322D  Test-Path=True
+MOVED-AWAY  Test-Path(src)=False  Test-Path(bak)=True
+AFTER   sha256=C7CF95E2…71322D  Test-Path=True  bak=False  SHA-MATCH=True
+（tests\test_retained_names_req084.rs 同样 SHA-MATCH=True / Test-Path=True）
+```
+
+---
+
+## 4 · 如实登记（AC-011，⛔ 不许改写成「已验证交互流畅」）
+
+1. **未做真浏览器手测**：本机无 headless 浏览器；拖拽手感、标签避让的视觉效果、暗色配色
+   都只有源码级判据，没有任何一条来自真实浏览器。
+2. **标签宽度是估算的**：`paint` 里用 `d.label.length * 11 + 6` 当文本框宽度，没有
+   `getComputedTextLength()` 实测 ⇒ 中英混排可能估宽（该显示的被跳过）或估窄（仍可能压字）。
+3. **力导向参数是 Node 扫参得出的**：`REP=400` / `CENTER_F=0.4` 让 83 节点收在 ~529×528
+   （见探针输出），真实数据下的观感没有在浏览器里看过。
+
+---
+
+## 5 · 文档修正（QA 点名的四条）
+
+| # | 问题 | 修成什么 |
+| --- | --- | --- |
+| D1 | `PROVENANCE` 把旧 H1 说成「b714f48 那一份」 | 改成「**REQ-110 收口后在 develop 上那一份静态壳**」，并写明 **b714f48 那个基线 worktree 里没有 golden 文件**（golden 是用当时页面现跑生成器得到的） |
+| D2 | `PROVENANCE` 说已知限制「写进了交付物」 | 改成**实际落点**：`page.rs` 模块文档「已知限制」小节（核心出处）+ 探针文件头「边界」段；本报告只是照抄 |
+| D3 | `.feature/status.md` / `verification-report.md` 还是 REQ-112 | 两份都写 REQ-114 段（旧 REQ-112 原文保留在下方，标「历史」） |
+| D4 | `.feature/manifest.json` 还是 REQ-107 | 整份改成 REQ-114（`base_commit` `e9755e8` / `acceptance` `BA/demands/REQ-114/acceptance.md`） |
+
+---
+
+# 历史：REQ-112 · 审核界面接入 AI 建议 —— 验证报告（B-1 阻断修复轮）
+
+> 以下为上一需求原文，保留备查。
+
+
+# REQ-112 · 审核界面接入 AI 建议 —— 验证报告（**B-1 阻断修复轮**）
+
 # REQ-113 · 排除表：从「脚本预处理」变成产品能力 —— 验证报告
 
 > **被测**：worktree `feature-REQ-113` / 分支 `feature/REQ-113` · 基线 `develop` `e9755e8` · **未 push**
