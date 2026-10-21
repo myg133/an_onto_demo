@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已退回**（2026-10-21 · QA 判 FAIL：B-1 冲突规则在自身动机案例上不可达，修复中）
+**已完成**（2026-10-21 · 已合并 `develop` `e9755e8`）
 
 ## 为什么 v1 不调用模型
 
@@ -53,3 +53,19 @@
 | 不退化 | ✅ lib 245 / doc 4 / 32 套件 313 / 43 套件 416 |
 
 **根因是 BA 的规格矛盾**（AC-002 有 band 约束、AC-003 没有）。已裁 A-5：**冲突判断提到档位分派之前，不限档位**。
+
+## 第 2 轮修复与合并（`776f956` → `e9755e8`）
+
+| 项 | 结果 |
+| --- | --- |
+| **B-1 修复** | 冲突闸门移到 `classify` 的**档位分派之前**（`confidence.rs:1559-1573`）：`sampled>0 && matched==sampled && fit<0.50` ⇒ `conflict`，**不限档位** |
+| 判据 1 | 结构全 1.0 + 5/5 + fit=0.0 ⇒ **0.85 / middle / conflict**（不是 lean_accept） |
+| 判据 2 | 该条**不在** `by=suggestion` 白名单（`excluded.conflict=1`） |
+| 边界 | fit=0.50 ⇒ review；4/5 ⇒ lean_accept；sampled=0 ⇒ reject（0/0 不算全命中） |
+| **N-2** | 两条批量路径共用 `batch_gate`（唯一判据 `enters_batch`）；`min_confidence=0.80` 下 conflict 与 review 都被排除 |
+| 真实数据影响 | `min_confidence=0.90` 白名单 **43 → 29**（14 条 review 不再被自动接受）；`by=suggestion` 仍 38 |
+| 测试 | lib 245 / doc 4 / 43 套件 **422 passed**；基线 313 逐项不变 |
+| 合并 | `develop` **`e9755e8`**；禁改面（`server/http.rs` 等 9 个文件）**零 diff**；合并后 `cargo check --lib` ✅ |
+| 清理 | Dev 的 3 个临时项目 + QA 的 2 个（`t112`/`t112_low`）已从库里删除 |
+
+**如实登记**：当前数据集**无冲突样本**（冲突条目全为构造样本）；冲突分组「排最前」只有源码级断言、无浏览器验证。

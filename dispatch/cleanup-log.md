@@ -167,3 +167,11 @@
 - 回收：feature worktree + 本地分支
 - 演示（`review_demo` / 135 条目）：页面壳 200 无数据；`/api/review` 135；预览 `≥0.90` **39 条**、`≥0.60` **52 条**；参数越界全 **400**；`POST` 签一条 ⇒ `via=ui` + 时间戳；读回一致
 - ⚠️ 演示踩坑（已记入 status）：预览参数名是 **`min_confidence`**；拼成 `min_score` 会被**静默忽略**（变全量）。建议下一轮对未知 query 参数报 400。
+
+## 2026-10-21 — REQ-112 合并后回收
+
+- 合并：`git merge --no-ff feature/REQ-112` → `develop` `e9755e8`；合并后 `cargo check --lib` ✅
+- 禁改面（`server/http.rs` / `tools.rs` / `view.rs` / `review_view.rs` / `property_filter.rs` / 两红线 / `Cargo.*`）相对 `4178a4e` **numstat 空**
+- 回收：feature worktree + 本地分支
+- 清理 Dev 与 QA 的临时项目：`dev112fix` / `dev112c` / `dev112b` / `t112` / `t112_low`（库里只剩 `anspire_real`）
+- 本轮教训：**BA 的规格自相矛盾**（AC-002 有 `band=high` 约束、AC-003 没有）导致冲突规则不可达 —— QA 用生产评分函数算出 `fit=0.0 ⇒ 0.85/middle` 才暴露
