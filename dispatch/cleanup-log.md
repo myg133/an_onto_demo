@@ -175,3 +175,12 @@
 - 回收：feature worktree + 本地分支
 - 清理 Dev 与 QA 的临时项目：`dev112fix` / `dev112c` / `dev112b` / `t112` / `t112_low`（库里只剩 `anspire_real`）
 - 本轮教训：**BA 的规格自相矛盾**（AC-002 有 `band=high` 约束、AC-003 没有）导致冲突规则不可达 —— QA 用生产评分函数算出 `fit=0.0 ⇒ 0.85/middle` 才暴露
+
+## 2026-10-22 — REQ-113 + REQ-114 合并与回收
+
+- 合并：`feature/REQ-113` → `develop` `af45c0c`；`feature/REQ-114` → `develop` **`71ae770`**
+- 冲突：两需求都改 `.feature/verification-report.md` 与 `.feature/status.md`（Dev 报告文件），保留两段并加分隔
+- 红线/禁改面：相对 `e9755e8` numstat 空；合并后 `cargo check --lib` ✅
+- 回收：两个 feature worktree + 分支；另清掉 QA 留下的 4 个 `.review-workspace` worktree（req113/baseline、req113/qa、req114/qa-baseline、req114/qa-mut）
+- 真实库复跑（`anspire_excl`）：**勘查 96 → 排除 12 → 抽取 84（闭合 true）**；实体 84 / 关系 82；token **1140**（缓存命中 99%）；审核全签 → v2 冻结 → TTL 83 对象/52 关系
+- `proposals.inputs.exclusions.counts` 落库正确：`{seen:96, excluded:12, extracted:84, stale:0, flagged:11}`
