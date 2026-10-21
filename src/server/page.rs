@@ -34,9 +34,10 @@
 //!
 //! | AC | 落点（本文件内的函数 / 常量） |
 //! | --- | --- |
-//! | 拖拽 · 松手固定 · 双击释放 | `startDrag` / `onUp` / `release` |
+//! | 拖拽 · 松手固定 · 双击释放 | `startDrag` / `onUp` / `tapNode` / `DBL_MS` / `release` |
 //! | 碰撞消解（最小间距**位置**推离） | `collide`（物理步的**最后**一步，每帧两遍） |
 //! | 拖拽 ≠ 点击（4px） | `DRAG_PX` + `onUp` 里的 `DRAG.moved` |
+//! | 双击 ≠ 两次单击（不开两次面板） | `tapNode` + `flushTap` + `TAP.timer`（`DBL_MS`=300ms 抑制窗） |
 //! | 适应窗口 / 重置 | `fitView` / `resetView` |
 //! | 标签避让（`k < 0.6` 隐藏 + 重叠跳过） | `LBL_K` + `paint` 的避让循环 |
 //! | 搜索高亮 + 回车定位 | `#q` 的两个监听 + `centerOn` |
@@ -56,10 +57,23 @@
 //!
 //! 1. **源码级**（可持续、可复跑）：事件绑定、阈值常量、关键函数都在本文件里，
 //!    逐条列在交付物里（函数名 + 行号）；
-//! 2. **纯函数级**（真跑）：布局内核 `radiusOf` / `collide` / `physicsStep` 不碰 DOM，
-//!    被 `.review-workspace/req114/layout_probe.js` 原样抽出在 Node 里推进 300 帧，
-//!    断言 AC-002 的数据级判据「任意两节点中心距 ≥ 半径和」；
+//! 2. **纯函数级**（真跑、且**入库**）：布局内核 `radiusOf` / `collide` / `physicsStep`
+//!    不碰 DOM，被 **`tests/fixtures/req114/layout_probe.js`** 从本文件原样抽出，
+//!    在 Node 里推进 300 帧，断言 AC-002 的数据级判据
+//!    「任意两节点中心距 ≥ 半径和」。跑法：`node tests/fixtures/req114/layout_probe.js`
+//!    （失败 exit 1，可直接当判据用）；
 //! 3. **真浏览器手测：未做**（本机无 headless 浏览器，也不许为此加依赖）。
+//!
+//! ## 已知限制（三条，⛔ 不许改写成「已验证交互流畅」）
+//!
+//! 1. **标签宽度是估算的**：`paint` 里用 `d.label.length * 11 + 6` 当文本框宽度，
+//!    没有 `getComputedTextLength()` 实测 ⇒ 中英混排时可能估宽（该显示的被跳过）
+//!    或估窄（仍可能压字）。
+//! 2. **力导向参数是 Node 扫参扫出来的**：`REP=400` / `CENTER_F=0.4` 这组值让
+//!    83 节点收在 ~529×528（见 `tests/fixtures/req114/layout_probe.js` 的输出），
+//!    **真实数据下的观感没有在浏览器里看过**。
+//! 3. **未做真浏览器手测**：本机无 headless 浏览器；拖拽手感、标签避让的视觉效果、
+//!    暗色模式配色都只有源码级判据，没有任何一条来自真实浏览器。
 //!
 //! # 布局为什么手写
 //!
@@ -184,10 +198,11 @@ var $ = function (s) { return document.querySelector(s); };
 var VIEW = { k: 1, x: 0, y: 0 };
 var NS = [], ES = [], PS = [], BY = {}, TOUCHED = false;
 var world = null, parEls = [], relEls = [], relLines = [], relTxts = [], ndEls = [];
-var DRAG = null, PAN = null, raf = 0, frames = 0, alpha = 0;
+var DRAG = null, PAN = null, TAP = null, raf = 0, frames = 0, alpha = 0;
 
-// ⭐ 交互阈值（AC-003 / AC-005 的判据常量就在这两行）
+// ⭐ 交互阈值（AC-003 / AC-005 / A-2 的判据常量就在这几行）
 var DRAG_PX = 4;         // 位移 > 4px ⇒ 这一串按下-松开**不算点击**
+var DBL_MS = 300;        // 同一节点 DBL_MS 内的第二次点按 = 双击（只释放，不开面板）
 var LBL_K = 0.6;         // k < 0.6 ⇒ 隐藏节点标签（避免密集处文字压住）
 var REL_K = 0.85;        // k < 0.85 ⇒ 隐藏关系线上的字（线还在，方向还在）
 
@@ -503,12 +518,16 @@ function hideTip() { $("#tip").style.display = "none"; }
 function bindNode(d, g) {
   // AC-001：拖拽入口**绑在节点本身**（背景上的 pointerdown 只负责平移）
   g.addEventListener("pointerdown", function (ev) { startDrag(d, ev); });
-  // AC-001：双击 ⇒ 释放固定，回到力导向
-  g.addEventListener("dblclick", function (ev) { ev.preventDefault(); release(d); });
+  // ⚠️ 这里**故意不绑 dblclick 做释放**（A-2）：浏览器在 dblclick 之前已经 fire 过两次
+  //    pointerdown/up，在这里做释放就会先开两次详情面板。双击判定在 onUp → tapNode，
+  //    判据是 DBL_MS 内的同一节点二次点按。
   g.addEventListener("pointerenter", function (ev) { showTip(d, ev); });
   g.addEventListener("pointermove", moveTip);
   g.addEventListener("pointerleave", hideTip);
 }
+
+// 原生 dblclick 只做一件事：阻止连点选中文字。释放语义**不在这里**（见上）。
+$("#svg").addEventListener("dblclick", function (ev) { ev.preventDefault(); });
 
 function startDrag(d, ev) {
   ev.preventDefault();
@@ -558,15 +577,58 @@ function onUp() {
       d.pin = true;
       say("「" + d.label + "」已固定；双击它可释放回自动布局。", false);
     } else {
-      // 位移 ≤ DRAG_PX ⇒ 这是一次点击（AC-003 的另一半：拖完不弹详情）
+      // 位移 ≤ DRAG_PX ⇒ 这是一次点按（AC-003 的另一半：拖完不弹详情）。
+      // 点按**不直接开面板**：先看它是不是双击，判定在 tapNode 里。
       d.pin = DRAG.wasPin;
-      pick(d.id);
+      tapNode(d);
     }
   }
   DRAG = null;
   PAN = null;
   $("#svg").classList.remove("drag");
   paint();
+}
+
+// A-2 · 点按 / 双击的**唯一**判定点。
+//
+// 为什么不能直接绑 dblclick：浏览器触发 dblclick 之前已经 fire 过两次 click，
+// 于是「单击开面板」会先跑两次 —— 面板连开两次、还白打一次网络请求。
+//
+// 做法：单击**延后** DBL_MS 再开面板（延迟由 TAP.timer 承担 = 双击抑制标志）；
+// 若这 DBL_MS 内同一节点又被点了一次，就撤销待出发的单击、只做释放。
+// ⚠️ 代价：单击开面板最多慢 DBL_MS（300ms），这是双击语义的固有成本。
+// 触屏退化：没有 dblclick 事件，但 pointerdown/up 照样成对 ⇒ 300ms 内点两下同一节点
+// 仍然是「双击 = 释放」，不会开面板；两下点不同节点 ⇒ 第一次立刻开面板。
+function tapNode(d) {
+  var now = Date.now();
+  if (TAP && TAP.id === d.id && now - TAP.t <= DBL_MS) {
+    clearTimeout(TAP.timer);       // ← 双击抑制：把待触发的单击吃掉
+    TAP = null;
+    release(d);                    // 只释放，不开面板
+    return;
+  }
+  flushTap();                      // 上一次待发的单击（点了别的节点）立刻生效
+  TAP = {
+    id: d.id,
+    t: now,
+    timer: setTimeout(function () { TAP = null; pick(d.id); }, DBL_MS)
+  };
+}
+
+// 把「待触发的单击」立刻执行（换目标时用，别让用户等两次 300ms）。
+function flushTap() {
+  if (!TAP) return;
+  clearTimeout(TAP.timer);
+  var id = TAP.id;
+  TAP = null;
+  pick(id);
+}
+
+// 数据换了一批 ⇒ 旧 id 的待发单击必须作废（否则会对不存在的 id 发请求）。
+function resetTap() {
+  if (!TAP) return;
+  clearTimeout(TAP.timer);
+  TAP = null;
 }
 
 // AC-001：双击释放固定，回到力导向。
@@ -704,6 +766,7 @@ function esc(s) {
 // 起手放在一个圆周上（而不是全叠在圆心）：全叠在一起时斥力方向要靠抖动打破，
 // 前几十帧会明显乱窜。圆周起手 + 碰撞消解 = 更快进入可看的状态。
 function draw() {
+  resetTap();                    // 换了一批数据 ⇒ 旧 id 的待发单击作废
   NS = []; ES = []; PS = []; BY = {};
   var box = stageBox(), R = Math.min(box.w, box.h) * 0.34, i;
   DATA.nodes.forEach(function (n, idx) {

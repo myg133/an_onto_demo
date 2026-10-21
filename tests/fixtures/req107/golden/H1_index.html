@@ -98,10 +98,11 @@ var $ = function (s) { return document.querySelector(s); };
 var VIEW = { k: 1, x: 0, y: 0 };
 var NS = [], ES = [], PS = [], BY = {}, TOUCHED = false;
 var world = null, parEls = [], relEls = [], relLines = [], relTxts = [], ndEls = [];
-var DRAG = null, PAN = null, raf = 0, frames = 0, alpha = 0;
+var DRAG = null, PAN = null, TAP = null, raf = 0, frames = 0, alpha = 0;
 
-// ⭐ 交互阈值（AC-003 / AC-005 的判据常量就在这两行）
+// ⭐ 交互阈值（AC-003 / AC-005 / A-2 的判据常量就在这几行）
 var DRAG_PX = 4;         // 位移 > 4px ⇒ 这一串按下-松开**不算点击**
+var DBL_MS = 300;        // 同一节点 DBL_MS 内的第二次点按 = 双击（只释放，不开面板）
 var LBL_K = 0.6;         // k < 0.6 ⇒ 隐藏节点标签（避免密集处文字压住）
 var REL_K = 0.85;        // k < 0.85 ⇒ 隐藏关系线上的字（线还在，方向还在）
 
@@ -417,12 +418,16 @@ function hideTip() { $("#tip").style.display = "none"; }
 function bindNode(d, g) {
   // AC-001：拖拽入口**绑在节点本身**（背景上的 pointerdown 只负责平移）
   g.addEventListener("pointerdown", function (ev) { startDrag(d, ev); });
-  // AC-001：双击 ⇒ 释放固定，回到力导向
-  g.addEventListener("dblclick", function (ev) { ev.preventDefault(); release(d); });
+  // ⚠️ 这里**故意不绑 dblclick 做释放**（A-2）：浏览器在 dblclick 之前已经 fire 过两次
+  //    pointerdown/up，在这里做释放就会先开两次详情面板。双击判定在 onUp → tapNode，
+  //    判据是 DBL_MS 内的同一节点二次点按。
   g.addEventListener("pointerenter", function (ev) { showTip(d, ev); });
   g.addEventListener("pointermove", moveTip);
   g.addEventListener("pointerleave", hideTip);
 }
+
+// 原生 dblclick 只做一件事：阻止连点选中文字。释放语义**不在这里**（见上）。
+$("#svg").addEventListener("dblclick", function (ev) { ev.preventDefault(); });
 
 function startDrag(d, ev) {
   ev.preventDefault();
@@ -472,15 +477,58 @@ function onUp() {
       d.pin = true;
       say("「" + d.label + "」已固定；双击它可释放回自动布局。", false);
     } else {
-      // 位移 ≤ DRAG_PX ⇒ 这是一次点击（AC-003 的另一半：拖完不弹详情）
+      // 位移 ≤ DRAG_PX ⇒ 这是一次点按（AC-003 的另一半：拖完不弹详情）。
+      // 点按**不直接开面板**：先看它是不是双击，判定在 tapNode 里。
       d.pin = DRAG.wasPin;
-      pick(d.id);
+      tapNode(d);
     }
   }
   DRAG = null;
   PAN = null;
   $("#svg").classList.remove("drag");
   paint();
+}
+
+// A-2 · 点按 / 双击的**唯一**判定点。
+//
+// 为什么不能直接绑 dblclick：浏览器触发 dblclick 之前已经 fire 过两次 click，
+// 于是「单击开面板」会先跑两次 —— 面板连开两次、还白打一次网络请求。
+//
+// 做法：单击**延后** DBL_MS 再开面板（延迟由 TAP.timer 承担 = 双击抑制标志）；
+// 若这 DBL_MS 内同一节点又被点了一次，就撤销待出发的单击、只做释放。
+// ⚠️ 代价：单击开面板最多慢 DBL_MS（300ms），这是双击语义的固有成本。
+// 触屏退化：没有 dblclick 事件，但 pointerdown/up 照样成对 ⇒ 300ms 内点两下同一节点
+// 仍然是「双击 = 释放」，不会开面板；两下点不同节点 ⇒ 第一次立刻开面板。
+function tapNode(d) {
+  var now = Date.now();
+  if (TAP && TAP.id === d.id && now - TAP.t <= DBL_MS) {
+    clearTimeout(TAP.timer);       // ← 双击抑制：把待触发的单击吃掉
+    TAP = null;
+    release(d);                    // 只释放，不开面板
+    return;
+  }
+  flushTap();                      // 上一次待发的单击（点了别的节点）立刻生效
+  TAP = {
+    id: d.id,
+    t: now,
+    timer: setTimeout(function () { TAP = null; pick(d.id); }, DBL_MS)
+  };
+}
+
+// 把「待触发的单击」立刻执行（换目标时用，别让用户等两次 300ms）。
+function flushTap() {
+  if (!TAP) return;
+  clearTimeout(TAP.timer);
+  var id = TAP.id;
+  TAP = null;
+  pick(id);
+}
+
+// 数据换了一批 ⇒ 旧 id 的待发单击必须作废（否则会对不存在的 id 发请求）。
+function resetTap() {
+  if (!TAP) return;
+  clearTimeout(TAP.timer);
+  TAP = null;
 }
 
 // AC-001：双击释放固定，回到力导向。
@@ -618,6 +666,7 @@ function esc(s) {
 // 起手放在一个圆周上（而不是全叠在圆心）：全叠在一起时斥力方向要靠抖动打破，
 // 前几十帧会明显乱窜。圆周起手 + 碰撞消解 = 更快进入可看的状态。
 function draw() {
+  resetTap();                    // 换了一批数据 ⇒ 旧 id 的待发单击作废
   NS = []; ES = []; PS = []; BY = {};
   var box = stageBox(), R = Math.min(box.w, box.h) * 0.34, i;
   DATA.nodes.forEach(function (n, idx) {
