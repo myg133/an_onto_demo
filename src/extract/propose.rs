@@ -1550,6 +1550,81 @@ pub fn attach_confidence(
     }
 }
 
+/// 分档路由的结果（AC-009）。
+///
+/// 三份 items **互不相交**、合起来是原来的全部条目 —— 这是本结构的核心不变量，
+/// 由 [`route_items`] 的单元测试逐条钉住。少了一条 = 静默丢条目，
+/// 多了一条 = 同一条关系既在提案里又在拒绝清单里。
+#[derive(Debug, Clone, Default)]
+pub struct Routing {
+    /// 高 + 中：进主提案（`proposal.json` 的 items）
+    pub kept: Vec<serde_json::Value>,
+    /// 低 + 「有链接但没评分」：进「待查清单」，**不进主提案**
+    pub pending: Vec<serde_json::Value>,
+    /// 拒绝：**不提案**，只记理由
+    pub rejected: Vec<serde_json::Value>,
+    /// 四档条数（只统计关系条目 —— 实体条目不参与分档）
+    pub counts: crate::domain::confidence::BandCounts,
+    /// 没被评过分的关系条目数（理论上 0；非 0 说明条目缺列名，进待查）
+    pub unscored_links: usize,
+}
+
+/// **按档路由**（AC-009）：高+中进提案 · 低进待查 · 拒绝不提案。
+///
+/// | 档 | 分数 | 去向 |
+/// | --- | --- | --- |
+/// | 高 | ≥0.90 | 进提案（审核界面默认折叠） |
+/// | 中 | 0.60–0.90 | 进提案（逐条显示） |
+/// | 低 | 0.30–0.60 | 待查清单（**不进主提案**） |
+/// | 拒绝 | <0.30 | 不提案，只记理由 |
+///
+/// # 实体条目与其它条目**原样保留**
+///
+/// 分档只决定**关系**的呈现顺序，不碰实体、属性、概念组条目 ——
+/// 「置信度不改变抽取结果，只改变呈现与审核顺序」（设计概要 §一）。
+/// 所以 `kept` 里除关系外的条目顺序与输入完全一致。
+///
+/// # 没有分数的关系条目进「待查」
+///
+/// 那是「不知道」，不是「高」也不是「拒绝」。把它放进提案等于
+/// 让一条没验过的关系冒充验过的（R1 ④ 的反面）；放进拒绝清单又是在
+/// 断言它错。待查清单是唯一诚实的去向，并且计数**单独报出来**。
+pub fn route_items(
+    items: Vec<serde_json::Value>,
+    scored: &[(usize, crate::domain::confidence::Confidence)],
+) -> Routing {
+    use crate::domain::confidence::Band;
+
+    let mut by_index: std::collections::HashMap<usize, &crate::domain::confidence::Confidence> =
+        std::collections::HashMap::with_capacity(scored.len());
+    for (idx, c) in scored {
+        by_index.insert(*idx, c);
+    }
+    let mut out = Routing::default();
+    for (i, item) in items.into_iter().enumerate() {
+        let is_link = item.get("kind").and_then(|k| k.as_str()) == Some("add_link_type");
+        if !is_link {
+            out.kept.push(item);
+            continue;
+        }
+        match by_index.get(&i) {
+            Some(c) => {
+                out.counts.add(c.band);
+                match c.band {
+                    Band::High | Band::Middle => out.kept.push(item),
+                    Band::Low => out.pending.push(item),
+                    Band::Rejected => out.rejected.push(item),
+                }
+            }
+            None => {
+                out.unscored_links += 1;
+                out.pending.push(item);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2145,8 +2220,7 @@ mod tests {
 
     /// 贴分数**只加一个键**，其余字段逐字节不变（AC-005「不改抽取结果」）。
     #[test]
-    fn test_attach_confidence_adds_one_key_and_changes_nothing_else() {
-        let mut items = vec![link_item("logs", "customers", "customer_id")];
+    fn test_attach_confidence_adds_one_key_and_changes_nothing_else() {        let mut items = vec![link_item("logs", "customers", "customer_id")];
         let before = items[0].clone();
         let mut ev = std::collections::HashMap::new();
         ev.insert(
@@ -2168,5 +2242,114 @@ mod tests {
         );
         assert_eq!(after["confidence"]["method"], "evidence-scorecard-v1");
         assert_eq!(after["confidence"]["band"], "high");
+    }
+
+    /// **AC-009 的路由不变量**：三份互不相交、合起来是原来那些条目，
+    /// 且实体条目的相对顺序不变（分档只动关系）。
+    ///
+    /// 变异自证：把 `Band::Rejected => out.rejected.push(item)` 改成
+    /// `out.kept.push(item)`，第一条断言立刻红 —— 而那时的表现正是
+    /// 「被拒绝的关系照样进提案，客户会在页面上看到一条 0.20 分的关系」。
+    #[test]
+    fn test_route_items_splits_without_losing_or_duplicating() {
+        let mut items = vec![
+            serde_json::json!({"kind": "add_entity_type", "target": "客户", "payload": {"key": "customers"}}),
+            link_item("logs", "customers", "customer_id"),
+            link_item("logs", "service_apps", "app_id"),
+            link_item("logs", "nope", "x_id"),
+            serde_json::json!({"kind": "add_entity_type", "target": "应用", "payload": {"key": "service_apps"}}),
+        ];
+        // 三条关系：高 / 中 / 拒绝
+        let scored = vec![
+            (1usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "customer_id".into(),
+                to_table: "customers".into(),
+                from_type: crate::domain::confidence::TypeFamily::Str,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 5, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+            (2usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "app_id".into(),
+                to_table: "service_apps".into(),
+                from_type: crate::domain::confidence::TypeFamily::Str,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 3, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+            (3usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "x_id".into(),
+                to_table: "nope".into(),
+                from_type: crate::domain::confidence::TypeFamily::Num,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 0, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+        ];
+        items.shrink_to_fit();
+        let total = items.len();
+        let routing = route_items(items, &scored);
+
+        // ① 三份互不相交，合起来不丢不重
+        assert_eq!(
+            routing.kept.len() + routing.pending.len() + routing.rejected.len(),
+            total,
+            "路由必须覆盖全部条目（少一条 = 静默丢弃）"
+        );
+        let mut keys: Vec<String> = routing
+            .kept
+            .iter()
+            .chain(routing.pending.iter())
+            .chain(routing.rejected.iter())
+            .map(|i| i.to_string())
+            .collect();
+        let before = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), before, "同一条目出现在两份清单里");
+        assert_eq!(routing.unscored_links, 0);
+
+        // ② 档位去向
+        assert_eq!(routing.counts.high, 1);
+        assert_eq!(routing.counts.middle, 1);
+        assert_eq!(routing.counts.rejected, 1);
+        assert_eq!(routing.counts.low, 0);
+        assert_eq!(routing.kept.len(), 4, "2 实体 + 高 + 中");
+        assert_eq!(routing.rejected.len(), 1);
+        assert!(
+            routing
+                .kept
+                .iter()
+                .all(|i| i["payload"]["from_type"] != "logs" || i["confidence"]["band"] != "rejected"),
+            "拒绝档绝不能出现在 kept 里"
+        );
+        // ③ 实体条目顺序不变（客户在前、应用在后）
+        let entities: Vec<&str> = routing
+            .kept
+            .iter()
+            .filter(|i| i["kind"] == "add_entity_type")
+            .map(|i| i["payload"]["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(entities, vec!["customers", "service_apps"]);
+    }
+
+    /// 没有分数的关系条目进「待查」，**不冒充「高」**（少了一条都没验过）。
+    #[test]
+    fn test_route_items_puts_unscored_links_into_pending() {
+        let items = vec![link_item("logs", "customers", "customer_id")];
+        let routing = route_items(items, &[]);
+        assert_eq!(routing.kept.len(), 0);
+        assert_eq!(routing.pending.len(), 1);
+        assert_eq!(routing.unscored_links, 1);
+        assert_eq!(routing.counts.total(), 0);
     }
 }

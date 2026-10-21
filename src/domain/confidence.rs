@@ -1228,4 +1228,5 @@ mod tests {
         assert_eq!(c.data_evidence, DataEvidence::None);
         assert_eq!(c.band, Band::Rejected);
     }
+
 }

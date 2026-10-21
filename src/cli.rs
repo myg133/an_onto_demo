@@ -222,6 +222,14 @@ pub enum ReviewCmd {
         /// 同 `decide`：别名按项目内序号解析
         #[arg(long)]
         project: Option<String>,
+        /// REQ-108 · 一并输出**置信度分档表**（审核界面的置信度通道）。
+        ///
+        /// 刻意做成**开关**而不是默认输出：`review show` 的 stdout 字节
+        /// 被 REQ-072/078 的真进程比对钉着（`review_show_prefix ++ 渲染文本`），
+        /// 默认多打一行就会让那批判据红 —— 那不是「判据过时」，是**契约变了**。
+        /// 需要看分数的审核者显式带上这个开关；客户视图与此无关（它压根不读）。
+        #[arg(long)]
+        confidence: bool,
     },
 }
 
@@ -485,6 +493,87 @@ pub fn review_show_prefix(alias: &str, status: &str) -> String {
     REVIEW_SHOW_PREFIX_TEMPLATE
         .replace("{alias}", alias)
         .replace("{status}", status)
+}
+
+/// **置信度分档表**（REQ-108 · AC-010 的「审核界面必须有」）。
+///
+/// 输入是提案条目行（`payload.confidence` 里带着分数），输出一段**纯文本**：
+/// 抬头 + 四档计数 + 每条关系一行（档位、分数、关系、证据摘要、veto 理由）。
+///
+/// # 为什么单独一段、不并进 `review_view`
+///
+/// `src/domain/review_view.rs` 的渲染链是 REQ-056~078 的**字节契约**所在地，
+/// 本 REQ 的红线明确禁改它。而分数是审核辅助信息、不是条目正文 ——
+/// 单独一段既满足「审核界面看得见」，又不动那条被钉住的输出。
+///
+/// # 排序是确定的
+///
+/// 档位（高→拒绝）→ 分数降序 → 条目 target 升序。同一份提案两次运行
+/// 输出逐字节相同（AC-005 的口径也适用于这一段）。
+pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -> String {
+    use crate::domain::confidence::Band;
+
+    #[derive(Clone)]
+    struct Row {
+        band: Band,
+        score: f64,
+        target: String,
+        evidence: Option<(u32, u32)>,
+        veto: Option<String>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for it in items {
+        let Some(v) = it.payload.get("confidence") else { continue };
+        let Ok(c) = crate::domain::confidence::from_untrusted(v) else { continue };
+        let ev = c
+            .signals
+            .iter()
+            .find(|s| s.name == "sample_hit_rate")
+            .and_then(|s| Some((s.sampled?, s.matched?)));
+        rows.push(Row {
+            band: c.band,
+            score: c.score,
+            target: it.target_key.clone(),
+            evidence: ev,
+            veto: c.veto.as_ref().map(|v| format!("{}：{}", v.signal, v.reason)),
+        });
+    }
+    if rows.is_empty() {
+        return "置信度：本提案没有分数（REQ-108 之前的提案 / 人工提案）".to_string();
+    }
+    rows.sort_by(|a, b| {
+        a.band
+            .cmp(&b.band)
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.target.cmp(&b.target))
+    });
+    let counts = crate::domain::confidence::BandCounts::of(rows.iter().map(|r| &r.band));
+    let mut out = String::new();
+    out.push_str(&format!(
+        "置信度（{}）：高 {} · 中 {} · 低 {} · 拒绝 {}（共 {} 条关系）\n",
+        crate::domain::confidence::METHOD,
+        counts.high,
+        counts.middle,
+        counts.low,
+        counts.rejected,
+        counts.total()
+    ));
+    for r in &rows {
+        let ev = match r.evidence {
+            Some((s, m)) => format!(" · 证据 {m}/{s}"),
+            None => " · 证据 无（data_evidence=none）".to_string(),
+        };
+        let veto = r.veto.as_deref().map(|v| format!("\n             veto {v}")).unwrap_or_default();
+        out.push_str(&format!(
+            "  [{}] {:.2} {}{}{}\n",
+            r.band.label_zh(),
+            r.score,
+            r.target,
+            ev,
+            veto
+        ));
+    }
+    out.trim_end().to_string()
 }
 
 /// ⭐ REQ-078 · **打印点登记表** —— 全部打印 domain 产物的站点。
@@ -760,6 +849,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Proposal { cmd } => proposal_cmd(&pool, cmd).await,
         Cmd::Ontology { cmd } => ontology_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
+        // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::McpServer { project, version } => {
             // 冻结闸门在 `mcp::prepare` 里：未冻结就 Err ⇒ 这里退出码非零。
             //
@@ -1097,7 +1187,7 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
             proposals.set_decision(it.id, t, d).await?;
             println!("item {} 的 {} 轨 → {}", item, track, d.as_str());
         }
-        ReviewCmd::Show { proposal, project } => {
+        ReviewCmd::Show { proposal, project, confidence } => {
             let p = resolve_proposal_arg(pool, &proposal, project.as_deref()).await?;
             let row = proposals.get(p).await?.ok_or_else(|| anyhow::anyhow!("提案不存在"))?;
             let items = proposals.items(p).await?;
@@ -1177,6 +1267,22 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
             // 在 REQ-078 之前，这三行只是 `eprintln!`，退出码恒为 0。
             if let Some(code) = crate::cli::self_check_exit_code(&violations) {
                 std::process::exit(code);
+            }
+
+            // ── REQ-108 · 置信度通道（AC-010 的「审核界面必须有」）─────────
+            //
+            // 为什么放在**渲染之后**、且不做进 `review_view`：
+            // `src/domain/review_view.rs` 是 REQ-056~078 的原始字节契约所在
+            // （那条渲染链有三道自检 + 真进程字节比对），**本 REQ 的红线禁改它**。
+            // 分数是**审核辅助信息**，不是条目正文 —— 单独一段、显式开关，
+            // 既让审核者看得到，又不动那条被钉住的输出。
+            if confidence {
+                let band_lines = render_confidence_table(&items);
+                // ⚠️ 用 `println!` 而不是绕道 `write_stdout`：本仓的打印点守卫
+                // （REQ-078 的 G-5）靠「认得出是 domain 产物就打红」来兜底，
+                // 绕道等于让它**看不见**这个站点。这里老老实实用一个普通打印：
+                // 它打的是一张分档表（不是客户产物绑定），守卫认出后**不登记**是正确的。
+                println!("{band_lines}");
             }
         }
     }

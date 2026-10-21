@@ -91,6 +91,9 @@ async fn main() -> Result<()> {
     // 静默继续会让一份「没验过」的提案看起来和验过的一样。
     let mut no_sample = false;
     let mut src_url: Option<String> = None;
+    // REQ-108 · AC-009：待查清单 / 拒绝清单的落点。默认与 `--out` 同目录。
+    let mut pending_out: Option<String> = None;
+    let mut rejected_out: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -123,6 +126,9 @@ async fn main() -> Result<()> {
             "--no-sample" => no_sample = true,
             // REQ-108 · 源库连接串（**只从参数/环境变量来，绝不写进任何文件**）
             "--src" => src_url = Some(val()?),
+            // REQ-108 · AC-009：两个清单的落点（默认与 --out 同目录）
+            "--pending-out" => pending_out = Some(val()?),
+            "--rejected-out" => rejected_out = Some(val()?),
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -139,7 +145,7 @@ async fn main() -> Result<()> {
                 println!("REQ-013 agent-registry（带上才连 ONTOK_DATABASE_URL）:\n  --agent-registry <name> / --agent-registry-version <ver> / --round <n>");
                 println!("REQ-019:\n  --attempts <n>  每组抽取的尝试次数（默认 {DEFAULT_ATTEMPTS}）\n  --round ≥2 时会连库载入基版本的已有类型（规格 §7.1 阶段 1 的五个输入之一）");
                 println!("REQ-022:\n  --budget-tokens <n>  成本闸门：累计用量上限，超了**停**并上报\n                （外置 agent 的强制义务；没设闸又声明会上报用量 ⇒ 入口拒绝）");
-                println!("REQ-108 置信度:\n  --src <url>  源库连接串（只读会话；也可用环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}）\n  --no-sample  关闭采样：confidence 只由结构信号算，且全部标 data_evidence=none（缺数据证据不进主提案）");
+                println!("REQ-108 置信度:\n  --src <url>  源库连接串（只读会话；也可用环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}）\n  --no-sample  关闭采样：confidence 只由结构信号算，且全部标 data_evidence=none（缺数据证据不进主提案）\n  --pending-out / --rejected-out  待查清单 / 拒绝清单的落点（默认与 --out 同目录的 proposal-pending.json / proposal-rejected.json）");
                 return Ok(());
             }
             other => anyhow::bail!("未知参数 {other}"),
@@ -551,6 +557,78 @@ async fn main() -> Result<()> {
             std::fs::create_dir_all(parent).ok();
         }
     }
+
+    // ── REQ-108 · AC-009 分档路由 ─────────────────────────────────
+    //
+    // 三份 items **互不相交**：高+中进提案 · 低进待查 · 拒绝不提案。
+    // 「不提案」档必须**在 proposal.json 里一条都找不到**（AC-009 的原话），
+    // 所以这里不是「标记一下」，而是真的把它们从 items 里移出去。
+    let routing = ontok::extract::propose::route_items(outcome.proposal.items, &scored);
+    outcome.proposal.items = routing.kept;
+    let base_version = outcome.proposal.base_version;
+    let pending_path = pending_out.clone().unwrap_or_else(|| {
+        let p = std::path::Path::new(&out);
+        p.with_file_name("proposal-pending.json").to_string_lossy().to_string()
+    });
+    let rejected_path = rejected_out.clone().unwrap_or_else(|| {
+        let p = std::path::Path::new(&out);
+        p.with_file_name("proposal-rejected.json").to_string_lossy().to_string()
+    });
+
+    // 待查 / 拒绝清单**不是提案**：它们没有 `extracted_by`，也不该被 import。
+    // 显式写 `"importable": false`，免得有人拿它们去 `propose import`
+    // 然后在 `propose import` 里再撞一次「项目不存在」以外的怪错误。
+    let side_file = |items: &[serde_json::Value], counts_note: &str| -> serde_json::Value {
+        serde_json::json!({
+            "project": project,
+            "base_version": base_version,
+            "round": round,
+            "importable": false,
+            "method": ontok::domain::confidence::METHOD,
+            "note": counts_note,
+            "items": items,
+        })
+    };
+    let pending_doc = side_file(
+        &routing.pending,
+        "待查清单（0.30–0.60）：不进主提案；证据不足，需人工判断",
+    );
+    let rejected_doc = side_file(
+        &routing.rejected,
+        "被拒绝（<0.30）：不提案；每条都带 veto 理由",
+    );
+    for p in [&pending_path, &rejected_path] {
+        if let Some(parent) = std::path::Path::new(p).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+    }
+    std::fs::write(&pending_path, serde_json::to_string_pretty(&pending_doc)?)
+        .with_context(|| format!("写不出 {pending_path}"))?;
+    std::fs::write(&rejected_path, serde_json::to_string_pretty(&rejected_doc)?)
+        .with_context(|| format!("写不出 {rejected_path}"))?;
+
+    println!();
+    println!("分档路由（AC-009）");
+    println!(
+        "  主提案      : {} 条关系（高 {} · 中 {}）+ 非关系条目",
+        routing.counts.high + routing.counts.middle,
+        routing.counts.high,
+        routing.counts.middle
+    );
+    println!("  待查清单    : {} 条（低档，不进主提案）→ {pending_path}", routing.counts.low);
+    println!("  不提案      : {} 条（拒绝档，proposal.json 里一条都没有）→ {rejected_path}", routing.counts.rejected);
+    if routing.unscored_links > 0 {
+        println!(
+            "  ⚠ 未评分关系: {} 条（条目缺列名/两端）—— 放进待查清单，不冒充「高」",
+            routing.unscored_links
+        );
+    }
+    debug_assert_eq!(
+        routing.counts.total() + routing.unscored_links,
+        scored.len(),
+        "四档条数 + 未评分 == 评分过的关系数（口径必须对得上）"
+    );
+
     std::fs::write(&out, serde_json::to_string_pretty(&outcome.proposal)?)
         .with_context(|| format!("写不出 {out}"))?;
     std::fs::write(&stats_out, serde_json::to_string_pretty(&outcome.stats)?)?;
