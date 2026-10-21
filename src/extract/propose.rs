@@ -141,6 +141,20 @@ pub struct Proposal {
     pub base_version: u32,
     pub round: i32,
     pub extracted_by: ProposalProvenance,
+    /// **本轮输入的可查记录**（REQ-113 · AC-004）。
+    ///
+    /// 今天只有一个键：`exclusions = {file, version, sha256, declared_by, rule, tables, stale}`
+    /// （见 [`crate::extract::exclusions::Record`]）。
+    ///
+    /// # 为什么是 `skip_serializing_if` 而不是永远输出
+    ///
+    /// 不给 `--exclude` 时**一个字节都不写** —— REQ-002 的提案契约逐字节不变，
+    /// 既有下游解析与 REQ-112 之前的基线产物因此不受影响。
+    /// 「没有排除」与「有排除但记成空」在文件里必须长得**不一样**：
+    /// 前者是「这轮没做排除决定」，后者是「做了但一条都没有」（后者已被
+    /// `Exclusions::parse` 判为非法输入）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<serde_json::Value>,
     pub items: Vec<serde_json::Value>,
 }
 
@@ -219,6 +233,32 @@ pub struct ExtractionStats {
     pub links_dangling: usize,
     /// 没翻出中文名的表（会被客户视图整批过滤掉）。
     pub tables_without_cn_name: Vec<String>,
+    // ── REQ-113 · 排除表的三计数 + 逐条记录（AC-002 / AC-003 / AC-005）──
+    //
+    // 三个数必须闭合（`seen - excluded == extracted`），而**写入点只有一个**：
+    // [`crate::extract::exclusions::ExtractionStats::stamp_counts`]。
+    // 字段是 `pub` 只因为既有代码/测试要读它；写它请走那个函数 —— 那里有断言。
+    /// 被排除的表数（`excluded_tables.len()`，同源）。
+    #[serde(default)]
+    pub tables_excluded: usize,
+    /// 真的被建成本体的表数（= 提案里 `add_entity_type` 的条数，**实测**）。
+    #[serde(default)]
+    pub tables_extracted: usize,
+    /// 被排除的**逐条**记录（表名 / 类别 / 理由 / 决策人）。
+    ///
+    /// 与 [`Self::tables_excluded`] 同源：前者是它的条数。分开存两个字段不是为了
+    /// 双保险，而是因为「数」与「明细」在不同的读者手里 —— 判读器读数字，
+    /// 评审人读明细，而它们**必须是同一份**（见 `Record::count`）。
+    #[serde(default)]
+    pub excluded_tables: Vec<crate::extract::exclusions::Entry>,
+    /// 文件里点名、但这份 schema 里没有的表（R4；默认警告，`--strict-exclusions` 才失败）。
+    #[serde(default)]
+    pub stale_exclusions: Vec<String>,
+    /// **保留但存疑**的表（`keep_but_flagged`）—— 它们**没有被排除**，
+    /// 照常在 `tables_extracted` 里。这一栏是给评审人看的「待裁决」清单，
+    /// ⛔ 不许与 [`Self::excluded_tables`] 合并（前者是结论，后者是问题）。
+    #[serde(default)]
+    pub flagged_tables: Vec<crate::extract::exclusions::Flagged>,
 }
 
 /// 关系后缀 → (cardinality, semantic)。零外键下靠 `*_id` 命名约定推断。（REQ-087：这里的 `N:1` 是命名约定的复述，**不是观测结论** —— 本表主键列的覆写与全部已知限制登记见 [`crate::extract::cardinality`]）
@@ -441,6 +481,15 @@ pub(crate) fn extract_with_context(
     });
     stats.links_dangling = before - link_types.len();
     stats.total_properties = total_props;
+    // REQ-113 · 三计数在同一处落地：本函数的「抽取了哪些表」就是实体条目的条数。
+    //
+    // 为什么**库路径也要填**（而不是只让 CLI 在 `--exclude` 时填）：
+    // 三计数是 stats.json 的口径事实（AC-002 / R5），不是「排除功能」的附属品。
+    // 只在 CLI 填会让同一份报告在库路径与命令行走两条口径 —— 而 `--exclude`
+    // 缺席时更糟：`tables_extracted` 会留成 0，读的人以为「一张都没抽」。
+    // `tables_excluded` 保持 0：本路径根本不知道 exclusions 文件存在
+    // （排除在装配层做，见 `extract::exclusions`）。
+    stats.tables_extracted = entity_types.len();
 
     // 扁平化成 REQ-002 契约要求的单 items 数组
     let mut items: Vec<serde_json::Value> = Vec::new();
@@ -462,6 +511,9 @@ pub(crate) fn extract_with_context(
             base_version: DEFAULT_PROPOSAL_BASE_VERSION,
             round: DEFAULT_PROPOSAL_ROUND,
             extracted_by,
+            // REQ-113：排除记录由**装配层**（`ontok-propose`）填 —— 抽取器本身
+            // 不知道也不该知道 exclusions 文件存在（它是纯函数：报告 → 提案）。
+            inputs: None,
             items,
         },
         stats,

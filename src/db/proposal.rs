@@ -268,6 +268,39 @@ impl PgProposalStore {
         Ok(r)
     }
 
+    /// REQ-113 · 记下这份提案的**输入记录**（今天只有 `exclusions`）。
+    ///
+    /// # 为什么是单独的 UPDATE，而不是 `NewProposal` 加一个字段
+    ///
+    /// `NewProposal` 的字面量在 40+ 个测试里各写一遍（`base_version_id` / `round` /
+    /// `extracted_by` 三个字段）。为一件「装配层才有的信息」给它加第四个字段，
+    /// 会让那 40 处全部编译不过 —— 收益为零，噪声很大。
+    /// 而这条 UPDATE 紧跟 `create` 之后、在同一个装配步骤里，语义上是
+    /// 「补上一行登记」而不是「第二次写入一条提案」。
+    ///
+    /// ⚠️ **不是原子的**：`create` 与这次 UPDATE 之间进程若挂掉，提案行是
+    /// `inputs = NULL`。那种状态下审核界面显示「这份提案没有排除记录」——
+    /// 是**可见**的缺失，不是伪造的完整（把 `inputs` 塞进 `create` 的事务里
+    /// 得先改掉那 40 处字面量，代价与收益不成比例）。
+    pub async fn set_inputs(&self, proposal_id: Uuid, inputs: &Value) -> Result<(), StoreError> {
+        sqlx::query("UPDATE proposals SET inputs = $2 WHERE id = $1")
+            .bind(proposal_id)
+            .bind(inputs)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// REQ-113 · 读回输入记录。`None` = 这行没有记录（不是「空记录」）。
+    pub async fn inputs(&self, proposal_id: Uuid) -> Result<Option<Value>, StoreError> {
+        let row: Option<(Option<Value>,)> =
+            sqlx::query_as("SELECT inputs FROM proposals WHERE id = $1")
+                .bind(proposal_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(v,)| v))
+    }
+
     pub async fn items(&self, proposal_id: Uuid) -> Result<Vec<ProposalItemRow>, StoreError> {
         let rows = sqlx::query_as(&format!(
             "SELECT {ITEM_COLUMNS} FROM proposal_items WHERE proposal_id = $1 ORDER BY seq"

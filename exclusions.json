@@ -1,0 +1,237 @@
+{
+  "version": "0.1.1",
+  "declared_by": "ai-table-judge / qwen36-27B",
+  "rule": "只排除「不是客户业务世界里的事物」的表：同步残留、迁移记账、备份副本、内部管道、报表中间表、废弃表、范围外表。存疑一律保留并标注。",
+  "reviewed_by": "ba-michael（人工复核：推翻 1 条排除、接受其余 12 条）",
+  "exclude": [
+    {
+      "table": "_volc_dts_pg_ddl_18e4b12d3d9d40aa81853a72d73fcd3c",
+      "category": "cdc_residue",
+      "reason": "数据同步工具自动生成的临时 DDL 表，不对应任何客户业务",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.97,
+      "evidence": "表名为 _volc_dts_pg_ddl_ + 32 位哈希（火山 DTS 同步产物命名）；无表注释、无列注释；13 列，同族还有两张"
+    },
+    {
+      "table": "_volc_dts_pg_ddl_8f7cc0a636ac424f97b7c7b772fbdbc5",
+      "category": "cdc_residue",
+      "reason": "数据同步工具自动生成的临时 DDL 表，不对应任何客户业务",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.97,
+      "evidence": "表名为 _volc_dts_pg_ddl_ + 32 位哈希（火山 DTS 同步产物命名）；无表注释、无列注释；13 列，与另两张同族表结构一致"
+    },
+    {
+      "table": "_volc_dts_pg_ddl_9a38a0a4c4f442df8445b6af3ef73e49",
+      "category": "cdc_residue",
+      "reason": "数据同步工具自动生成的临时 DDL 表，不对应任何客户业务",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.97,
+      "evidence": "表名为 _volc_dts_pg_ddl_ + 32 位哈希（火山 DTS 同步产物命名）；无表注释、无列注释；13 列，与另两张同族表结构一致"
+    },
+    {
+      "table": "alembic_version",
+      "category": "migration_bookkeeping",
+      "reason": "数据库迁移工具的版本号记账表，客户业务里没有对应事物",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.99,
+      "evidence": "表名 alembic_version；仅 1 列 version_num 且为主键；无业务列、无注释"
+    },
+    {
+      "table": "llm_provider_back",
+      "category": "backup_snapshot",
+      "reason": "llm_provider 的整表备份副本，列结构与主表完全一致",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.95,
+      "evidence": "13 列与主表 llm_provider 逐列同构，样例列注释逐字相同（供应商名称/配置/状态）；仅表名多 _back 后缀"
+    },
+    {
+      "table": "llm_provider_back_20260630",
+      "category": "backup_snapshot",
+      "reason": "按日期命名的 llm_provider 备份副本，不是独立业务事物",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.96,
+      "evidence": "表名带 _20260630 日期后缀；13 列与主表 llm_provider 同构、注释一致；同族另有 _back 与 _back_20260701"
+    },
+    {
+      "table": "llm_provider_back_20260701",
+      "category": "backup_snapshot",
+      "reason": "按日期命名的 llm_provider 备份副本，不是独立业务事物",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.96,
+      "evidence": "表名带 _20260701 日期后缀；13 列与主表 llm_provider 同构、注释一致；同族另有 _back 与 _back_20260630"
+    },
+    {
+      "table": "llm_auth_cache_change_outbox",
+      "category": "internal_pipeline",
+      "reason": "权限缓存变更的内部发件箱，只给同步程序读写，客户不可见",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.94,
+      "evidence": "表注释自述「CDC router 写，projector 消费」；23 列全是事件 ID / 合并键 / 版本字段；注释明确不允许保存业务行镜像"
+    },
+    {
+      "table": "llm_auth_cache_kafka_event_outbox",
+      "category": "internal_pipeline",
+      "reason": "内部消息队列发件箱，记录待投递事件而非业务事实",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.94,
+      "evidence": "表注释自述「projector 提交事务后在同任务内发布到最终 topic」；28 列全为幂等键 / Kafka key / value / 版本，无客户业务字段"
+    },
+    {
+      "table": "llm_auth_cache_trigger_state",
+      "category": "internal_pipeline",
+      "reason": "权限边界判断用的内部状态快照，本身不是业务对象",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.9,
+      "evidence": "表注释自述「CDC 状态快照降噪表」；无主键；9 列均为状态维度 / 边界值 / 排障快照"
+    },
+    {
+      "table": "rpt_dim_customer",
+      "category": "report_intermediate",
+      "reason": "报表客户维度表，由客户与渠道数据派生，客户业务里无此事物",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.82,
+      "evidence": "rpt_ + dim_ 前缀；8 列仅客户 ID / 名称 / 渠道编码等维度属性；无业务流水字段"
+    },
+    {
+      "table": "rpt_dws_channel",
+      "category": "report_intermediate",
+      "reason": "渠道汇总的报表中间结果，不是某一笔业务的发生记录",
+      "decided_by": "ai-table-judge",
+      "confidence": 0.82,
+      "evidence": "rpt_ + dws_ 前缀；17 列为渠道编码 / 邀请方类型等汇总口径；与 marketing_channel 主数据重复"
+    }
+  ],
+  "keep_but_flagged": [
+    {
+      "table": "internal_staff",
+      "why": "名字像内部表，但只有 5 列且无任何列注释，从 digest 无法判断是员工名录（业务主体「员工」）还是后台登录账号",
+      "concern": "若是「员工」这一业务主体就该保留；若只是后台账号，则与 admin_users 语义重复。建议 FDE 确认列语义后再定，暂不排除"
+    },
+    {
+      "table": "licenses_archive",
+      "why": "名字是 licenses 的归档，但 10 列与主表 7 列不同构，不是逐列副本，可能保留历史 Key 供审计回溯",
+      "concern": "若代表「某时点的 Key 快照、客户/风控需要查历史」则应保留；若只是清理前的临时拷贝才应排除。列数不同构是我没有按备份排除的唯一原因"
+    },
+    {
+      "table": "trial_records",
+      "why": "只有主键、两个「请求标识」和时间共 4 列，更像试用请求去重台账，而不是客户可见的试用记录",
+      "concern": "若客户/客成会查「谁试用过什么」，它就是业务事实，绝不能排除；重复的列注释也可能是脱敏后的采样结果，不能据此下结论"
+    },
+    {
+      "table": "admin_users",
+      "why": "后台运营人员账号。属于背景里的「后台管理」域，但客户视图里看不到人",
+      "concern": "这是「视图裁剪」问题而非「是否本体事物」问题：FDE 建模需要它，客户视图应隐藏。是否纳入由签字人按本体边界拍板"
+    },
+    {
+      "table": "admin_roles",
+      "why": "后台角色权限定义，客户侧不可见，但与 admin_users 共同构成后台管理域的主体关系",
+      "concern": "若本体只对客户世界建模，可归 out_of_scope；若 FDE 需要还原运营权限模型，则应保留。两类读者诉求冲突，需人决定"
+    },
+    {
+      "table": "admin_user_roles",
+      "why": "管理员与角色的关联关系，本身不承载业务语义，客户侧不可见",
+      "concern": "单独看是连接表，删掉会让后台管理域缺一角；保留它对客户视图是噪声。取决于 admin_* 整体去留"
+    },
+    {
+      "table": "simulate_login_sessions",
+      "why": "管理员模拟登录客户的会话记录，是真实发生的安全审计事实，不是技术残留",
+      "concern": "客户可能会问「谁看过我的账号」，此时它是客户可感知的事实；若平台从不对外披露，则属内部审计，可考虑范围外"
+    },
+    {
+      "table": "simulate_login_operations",
+      "why": "模拟登录期间的操作流水，属合规审计证据，有真实发生时间与操作人",
+      "concern": "与 operate_log 语义边界不清（一个记客户自己操作，一个记代操作）；保留时需在模型里说明两者区别，否则会重复"
+    },
+    {
+      "table": "keyword_filter_config",
+      "why": "平台内容安全的关键词拦截/替换配置。若客户可自定义敏感词，它就是客户配置；若纯平台风控，则客户不可见",
+      "concern": "digest 里没有 tenant/客户 ID 列可佐证归属，无法判断是全局还是客户级，故保留待确认"
+    },
+    {
+      "table": "usage_reconciliation_log",
+      "why": "对账任务发现的不一致记录。既可能是内部程序自愈日志，也可能是财务/客成处理差异所依据的对账事实",
+      "concern": "若客户或财务会拿它核账，必须保留；若只是任务运行日志，属 internal_pipeline。倾向保留：对账差异是业务事件"
+    },
+    {
+      "table": "dim_customer_binding",
+      "why": "BA 复核推翻 AI 的排除：它有 cross_currency_enabled（是否允许跨币种消费）与账号渠道归属，是业务状态而非派生比率",
+      "concern": "AI 依据 dim_ 前缀与「统计维度账号」注释判为报表维度；但该表承载可配置业务属性，按「拿不准就保留」保留"
+    }
+  ],
+  "keep_normal": [
+    "activity",
+    "activity_keys",
+    "activity_recommendations",
+    "agent_device_version",
+    "agent_white_list",
+    "ai_search_pipelines",
+    "api_call_logs",
+    "app_billing_transactions",
+    "balance_operation_log",
+    "balance_transfer",
+    "balances",
+    "customer_account_binding",
+    "customer_feature_permissions",
+    "customer_interests",
+    "customer_provider_permission_policies",
+    "customer_provider_permissions",
+    "customer_rate_limit",
+    "customer_rebate",
+    "customer_subscriptions",
+    "customer_tpm_rate_limit",
+    "customers",
+    "deductions",
+    "enterprise_recharge_order",
+    "family_high_risk_records",
+    "file_parser_task",
+    "free_amounts",
+    "frozen_assets",
+    "gift_code_batch",
+    "gift_codes",
+    "instance_manager",
+    "instance_task_manager",
+    "instance_task_record",
+    "intance_task_plans",
+    "interest_configs",
+    "internal_messages",
+    "internal_operation_records",
+    "ip_blacklist",
+    "ip_whitelist",
+    "license_quota",
+    "licenses",
+    "llm_model",
+    "llm_model_peak_config",
+    "llm_model_sort",
+    "llm_provider",
+    "llm_provider_group_items",
+    "llm_provider_groups",
+    "llm_routing_rules",
+    "marketing_channel",
+    "marketing_channel_customer",
+    "marketing_channel_log",
+    "operate_log",
+    "order",
+    "package_benefits",
+    "package_products",
+    "package_templates",
+    "proxy_operation_auths",
+    "proxy_operation_records",
+    "recharge_products",
+    "refund_operations",
+    "seetings",
+    "service_apps",
+    "service_config",
+    "service_config_peak",
+    "service_free_amount_config",
+    "share_records",
+    "share_usage",
+    "sub_account_bind_permission",
+    "sub_account_permission",
+    "sub_account_quota",
+    "subscription_priority",
+    "usage_details",
+    "usage_quotas",
+    "website_notice_config"
+  ],
+  "notes": "覆盖核对：96 张 = exclude 13 + keep_but_flagged 10 + keep_normal 73，无沉默表；keep_normal 即「正常业务表，不特别标注」。判据只问一件事：它是不是客户业务世界里的事物，不按表名或前缀机械排除——internal_messages（站内信，平台发给客户）、internal_operation_records（余额变动原因记录）、usage_details（用量明细）、api_call_logs（调用流水）都按业务事实保留。备份族处理：llm_provider 的 _back / _back_20260630 / _back_20260701 三张与主表逐列同构，按 backup_snapshot 排除，主表保留；licenses_archive 与主表列数不同（10 vs 7）、结构不同构，因此不按备份排除，放 keep_but_flagged。三张 llm_auth_cache_* 只服务权限缓存投递（outbox / 降噪状态），注释自述是内部投递链路，按 internal_pipeline 排除。报表层只排除 dim_customer_binding、rpt_dim_customer、rpt_dws_channel 三张维度/汇总表；usage_details 虽是「看板数据源」，但每行是一次真实用量事件，属业务事实，保留。未使用 deprecated 与 out_of_scope：digest 里没有任何表能证明「已无写入路径」，后台类表（admin_*、simulate_login_*）更接近客户视图裁剪问题，也不足以判定范围外，故一律保留并标注，不硬套类别。名字有拼写错误的 seetings（汇率/分享奖励等平台设置）、intance_task_plans（任务计划）内容是业务配置，保留。分歧点集中在 keep_but_flagged 的 10 张，尤其 internal_staff、licenses_archive、trial_records 三张：我保留是因为误排除的代价更高，不是因为确信它们该进本体，建议签字人优先裁决。 | BA 复核：dim_customer_binding 由 exclude 移入 keep_but_flagged（理由见该条）；其余 12 条接受。"
+}

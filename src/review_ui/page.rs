@@ -89,6 +89,20 @@ h2.grp .cnt{font-weight:400}
 #suggbar{padding:6px 16px;border-bottom:1px solid var(--line);background:var(--card);display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--mut)}
 #suggbar b{color:var(--fg);font-variant-numeric:tabular-nums}
 #suggbar .conflict b{color:var(--bad)}
+/* REQ-113 · 被排除的表（只读区块：没有按钮、没有输入框） */
+#excluded,#flagged{margin:12px 16px 0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+#excluded .x-head,#flagged .x-head{font-size:13px;font-weight:600;color:var(--fg)}
+#excluded .x-head b,#flagged .x-head b{font-variant-numeric:tabular-nums}
+#excluded .x-note,#flagged .x-note{font-weight:400;color:var(--mut);font-size:12px}
+#excluded .x-meta{margin-top:4px;font-size:12px;color:var(--mut);word-break:break-all}
+#excluded .x-meta.bad{color:var(--bad);font-weight:600}
+#excluded table,#flagged table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
+#excluded th,#excluded td,#flagged th,#flagged td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+#excluded th,#flagged th{font-weight:600;font-size:12px;color:var(--mut)}
+#excluded td.mono,#flagged td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+#excluded .x-ev{margin-top:3px;font-size:12px;color:var(--mut)}
+#excluded .x-stale{margin-top:8px;font-size:12px;color:var(--warn)}
+#excluded[hidden],#flagged[hidden]{display:none}
 .tracks{display:flex;gap:22px;flex-wrap:wrap;margin-top:8px}
 .track{display:flex;gap:7px;align-items:center;font-size:13px}
 .track .name{color:var(--mut)}
@@ -141,6 +155,35 @@ summary{cursor:pointer;color:var(--acc);font-size:13px}
   </span>
   <span>冲突与无建议<b>永不参与</b>「按建议接受」。</span>
 </div>
+
+<!-- REQ-113 · 被排除的表 —— **只读**区块（表名 / 类别 / 理由 / 决策人 / 置信度）。
+     这里一个按钮都没有，也没有输入框：改排除要改 exclusions.json 重跑（AC-006）。
+     数据全部来自 GET /api/review 的 `exclusions` 块（服务端读提案 inputs），
+     页面**不重算**「哪些表被排除」—— 它连 schema 都没有。 -->
+<section id="excluded" hidden>
+  <div class="x-head">被排除 <b id="x-count">0</b> 张
+    <span class="x-note">（只读 · 改排除要改 exclusions.json 重跑，页面上不能编辑）</span>
+  </div>
+  <div class="x-meta" id="x-meta"></div>
+  <table>
+    <thead><tr><th style="width:24%">表</th><th style="width:15%">类别</th><th>理由</th><th style="width:15%">决策人</th><th style="width:9%">置信度</th></tr></thead>
+    <tbody id="x-body"></tbody>
+  </table>
+  <div class="x-stale" id="x-stale"></div>
+</section>
+
+<!-- REQ-113 · **保留但存疑** —— 与上面那栏**语义相反**，⛔ 不许合并：
+     上面是「已决定排除（不建实体）」，这里是「照常建、但请人看一眼」。
+     两块分开显示，是因为一个是结论、一个是问题。 -->
+<section id="flagged" hidden>
+  <div class="x-head">保留但存疑 <b id="f-count">0</b> 张
+    <span class="x-note">（**没有被排除** · 已照常进本体 · 待裁决）</span>
+  </div>
+  <table>
+    <thead><tr><th style="width:24%">表</th><th>为什么拿不准</th><th style="width:34%">担心什么 / 建议谁看</th></tr></thead>
+    <tbody id="f-body"></tbody>
+  </table>
+</section>
 
 <section id="controls">
   <label>状态
@@ -346,6 +389,67 @@ function groupHead(title, cls, n) {
   return h;
 }
 
+// REQ-113 · 「被排除的表」与「保留但存疑」—— 两块**分开**渲染。
+// 三个数（count / flagged_count / tables / flagged / stale）与 sha256 全部来自
+// 后端那一份记录，页面既不重算也不缓存：改排除的唯一办法是改文件重跑（AC-006）。
+function renderExcluded() {
+  var x = (S.data && S.data.exclusions) ? S.data.exclusions : { present: false };
+  var sec = $("excluded"), fsec = $("flagged");
+  sec.hidden = false;
+  $("x-count").textContent = x.present ? x.count : 0;
+  var body = $("x-body");
+  body.textContent = "";
+  var fbody = $("f-body");
+  fbody.textContent = "";
+  var meta = $("x-meta");
+  meta.className = "x-meta";
+  var stale = $("x-stale");
+  stale.textContent = "";
+  if (!x.present) {
+    // 三种「没有记录」都要说出来（不知道 / 没排除 / 记录坏了），
+    // 合并成一句「无」会让「被改坏的溯源」看起来像「本来就没有」。
+    meta.textContent = x.reason || "没有排除记录。";
+    if (x.broken) meta.className = "x-meta bad";
+    fsec.hidden = true;
+    return;
+  }
+  // 「谁判的」与「谁签的」分开展示：AI 先判一轮时两者不是同一个人。
+  meta.textContent = "文件 " + x.file + " · version " + x.version +
+    " · sha256 " + String(x.sha256).slice(0, 12) + "…" +
+    " · 判的人 " + x.declared_by +
+    (x.reviewed_by ? (" · 签的人 " + x.reviewed_by) : "") +
+    " · 规则：" + x.rule;
+  (x.tables || []).forEach(function (e) {
+    var tr = document.createElement("tr");
+    tr.appendChild(el("td", "mono", e.table));
+    tr.appendChild(el("td", null, e.category_label || e.category));
+    // 理由 + 判定依据（依据若给就显示在下面 —— 评审要推翻一条排除，靠的是依据）
+    var whyTd = document.createElement("td");
+    whyTd.appendChild(el("div", null, e.reason));
+    if (e.evidence) whyTd.appendChild(el("div", "x-ev", "依据：" + e.evidence));
+    tr.appendChild(whyTd);
+    tr.appendChild(el("td", null, e.decided_by));
+    // 置信度是**可选**的：`null` 显示「—」而不是 0.00 ——
+    // 「没有这个量」（人工判断）与「AI 完全不确定」是两件事。
+    tr.appendChild(el("td", null, (typeof e.confidence === "number") ? e.confidence.toFixed(2) : "—"));
+    body.appendChild(tr);
+  });
+  // ⛔ 待裁决：**另一块**，且明确写「没有被排除、已进本体」。
+  var flagged = x.flagged || [];
+  $("f-count").textContent = flagged.length;
+  fsec.hidden = flagged.length === 0;
+  flagged.forEach(function (f) {
+    var tr = document.createElement("tr");
+    tr.appendChild(el("td", "mono", f.table));
+    tr.appendChild(el("td", null, f.why));
+    tr.appendChild(el("td", null, f.concern || "—"));
+    fbody.appendChild(tr);
+  });
+  if (x.stale && x.stale.length) {
+    stale.textContent = "⚠ 陈旧排除 " + x.stale.length + " 条（文件里点名、但这份 schema 里没有）：" + x.stale.join("、");
+  }
+}
+
 function render() {
   if (!S.data) return;
   var items = S.data.items;
@@ -367,6 +471,9 @@ function render() {
 
   var list = $("list");
   list.textContent = "";
+
+  // REQ-113 · 排除区块跟着同一次 load 一起渲染（数据也来自同一个响应）。
+  renderExcluded();
 
   // ⭐ REQ-112 · **冲突单独成组、排最前、不与接受/拒绝混排**（AC-008）。
   // 其余条目按原顺序；冲突卡片不会出现在「其余」里。

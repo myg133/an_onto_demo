@@ -421,6 +421,10 @@ pub fn rebuild_outcome(
     // 「重建路径」不成为「绕开 AC-007 的第二条路」。
     let keys: HashSet<&str> = types.iter().map(|t| t.key.as_str()).collect();
     stats.links_inferred = links.len();
+    // REQ-113 · 与 `extract_with_context` **同一个口径**：这一轮抽出多少张表
+    // = 实体类型条数。两条路径都填，`stats.json` 才有一致的 `tables_extracted`
+    // （否则重建路径留下 0，读的人会以为「一张都没抽」）。
+    stats.tables_extracted = types.len();
     let before = links.len();
     links.retain(|l| keys.contains(l.from_type.as_str()) && keys.contains(l.to_type.as_str()));
     stats.links_dangling = before - links.len();
@@ -444,6 +448,8 @@ pub fn rebuild_outcome(
                 // （否则重建出来的提案在 provenance 上会说「不是这次勘查的」）。
                 source: Some(propose::introspect_provenance(report)),
             },
+            // REQ-113：排除记录由装配层填（本模块只负责「候选 → items」）。
+            inputs: None,
             items,
         },
         stats,
