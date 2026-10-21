@@ -1,803 +1,468 @@
-# REQ-108 · 带证据与置信度的关系抽取 —— 交付报告（按 AC-013 八项）
+# REQ-109 · AI 语义项接入 —— 交付报告
 
-> **代码基线** `develop` `4573269`（REQ-107 已合并）
-> **分支** `feature/REQ-108`（**未 push**）；**10 个** `[Dev]` 提交（第 2 轮 +1、第 3 轮 +1、第 4 轮 +1，见 §6.4 / §11）
-> **设计文档** `BA/demands/REQ-108/design-summary.md`（实现前定稿；本文件只引用不重写）
-> **实测源库** `anspire_open_uat`（**96 表 / 1116 列 / 0 外键**，2026-10-21 只读勘查）
-> **本机限制**：全量 `cargo test` 编不过（`src/bin/ontok-gate-preflight.rs` 的
-> `std::os::unix`，既有问题，本 REQ **未改那个文件**；绕行与 sha256 见 §6.3）
-> **上一份报告**：REQ-107 的交付报告在 `develop` 的同名路径上（本文件已按派单要求覆写该路径）
+> 分支 `feature/REQ-109`（基线 `develop` `a8a51ed`，REQ-108 已合并）· 未 push
+> 一句话：**AI 只回答「这条候选关系在业务上说得通吗」，只贡献 `semantic_fit`（权重 0.15），
+> 不产结构、不翻 veto；指纹缓存 + 预算闸 + 三件套无 key 即拒。**
+>
+> **P0（流程通）全绿**：协议解析、缓存命中/未命中、预算闸、同输入两次一致、无 key 报错退出、
+> `semantic_fit` 不影响 veto。**语义准不准是 P1 观察项**（第 §6 节，含 3 条**标红**的误判）。
 
 ---
 
 ## 0 · 结论先行
 
-| AC | 结果 | 证据位置 |
-| --- | --- | --- |
-| AC-001 勘查补采主键/唯一列 | ✅ 96/96 表带 `primary_key` + `unique_columns`（连 `pg_catalog`，不猜列名） | §2 / §7.1 |
-| AC-002 采样只读 + 确定性 | ✅ `SHOW transaction_read_only = on`；两次采样逐字段相同（含 digest） | §5.1 |
-| AC-003 不落原值 | ✅ 42 个可判别样本值 × 4 份产物，**命中 0** | §5.2 |
-| AC-004 veto 优先于加权和 | ✅ 4 类上限逐类执行（单测），且证明「不做 veto 时加权和会更高」 | §4.1 |
-| AC-005 可复算 + 不改抽取产物 | ✅ 两次运行的 4 份产物**逐字节相同**（sha256 相同） | §4.2 |
-| AC-006 9 条已知错误落拒绝 | ✅ **7 条真产出且落拒绝**（`zero_hit` 0.20）+ **E8/E9 不产出 + 按坐标构造复算 0.15**（两种证据，见 §3.2；A-6 已登记） | §3.2 |
-| AC-007 5 条部分命中不落高 | ⚠️ **机制 ✅ / AC 的 5 条具体预期在本采样口径下有 3 条不成立** | §8.1（**最该看的一节**） |
-| AC-008 `method` 必填 | ✅ 缺 method ⇒ `propose import` 非 0 退出（单测 + 真 CLI） | §4.3 |
-| AC-009 分档路由 | ✅ 主提案 52 · 待查 20 · 不提案 10；拒绝档在 `proposal.json` 里 0 条 | §3.1 |
-| AC-010 客户视图零泄漏 | ✅ 客户视图 `confidence`/`score`/`band` 全无；model-view 52/52 条都有 | §4.4 |
-| AC-011 校准命令 | ✅ 空库 ⇒ 明确「样本不足」；有数据 ⇒ 五档表（样本不足的箱不印百分比） | §4.5 |
-| AC-012 红线与不退化 | ✅ 四文件 `git diff` 为空；13 条出口判据 **70 passed / 0 failed** | §6 |
-| AC-013 交付证据 | ✅ 本文件 §1–§8 + **§10（第 2 轮）** + **§11（第 3/4 轮）** | — |
-| **AC-014 自证链（第 2 轮新增）** | ✅ 三条校验落地：`score ≤ 按证据推出的 veto 上限` / 权重逐项相等 / veto 必须有证据信号。6 种攻击全部 exit≠0，真产物 6 种形状全部放行 | **§10.1** |
-| **AC-015 `importable: false`（第 2 轮新增）** | ✅ `propose import` 遇 `false` ⇒ exit 1；被拒绝档导不进；待查档（`true`）仍可导 | **§10.2** |
-| **A-10 `signals` 必填（第 3 轮）** | ✅ 有 `confidence` 但 `signals` 缺失 / `null` / `[]` ⇒ exit 1；`confidence: null` 按「未声明」放行 | **§11.1** |
-| **A-13 R5（第 4 轮新增）** | ✅ `data_evidence: sampled` 必须有完整的 `sample_hit_rate`；`none` 不许有。4 条判据全部实测 | **§11.2** |
-
-**最可能被 QA 打回的一点**：AC-007 的**那 5 条具体关系**在本实现规定的采样口径
-（`ORDER BY 主键 LIMIT`）下有 3 条是 **5/5 全命中**，因此落「高」——它们不是
-「机制坏了」，而是**验收文档里那几个 1/5、4/5 是另一种采样口径测出来的**。
-详见 §8.1，我**没有**为了让这条 AC 变绿去改采样口径。
+| 项 | 结果 |
+| --- | --- |
+| 12 条 AC | **11 条通过；1 条（AC-004）按字面不成立，已按证据改口径**（§2.4，AC 自身缺陷） |
+| AI 关是否与 REQ-108 逐字节相同 | ✅ **4/4 产物 sha256 完全相同**（用 `a8a51ed` 编译的基线二进制实测，§2.1） |
+| 缓存是否真的不重复调用 | ✅ 第二次全量 **82 请求 / 82 命中 / 0 调用 / 0 token** |
+| 预算闸是否真的停 | ✅ 100k 上限被 101,326 越过后**非 0 退出且不写任何产物**（§3.2） |
+| veto 能否被 AI 翻转 | ✅ 82 条**无一条**超过自己的 veto 上限；REQ-108 的 E1–E7 仍全部 0.20/拒绝 |
+| 测试是否退化 | ✅ lib **230** / doc **4** / 32 套件 **313** 一条不少；新增 3 套件 31 条 |
+| 凭据 | ✅ key 只在命令行进程环境里用过，**未写进任何被跟踪文件**（含测试/文档/示例/日志） |
+| 红线文件 | ✅ `tests/drop_rate.rs` / `tests/test_fk_naming.rs` / `src/domain/view.rs` / `src/domain/review_view.rs` / `src/mcp/tools.rs` / `guard()` / `property_filter.rs` G1–G4 **零改动** |
+| 新依赖 | ✅ **零**（HTTP 走既有 `agent::llm`；SHA-256 复用 `extract::sample::sha256_hex`） |
 
 ---
 
-## 1 · 各阶段改了什么（逐条 `path:line`）
+## 1 · 改动清单（`path:line`）
 
-| 阶段 | 改动 | 挂点 |
+### 1.1 新增
+
+| 文件 | 职责 | 关键位置 |
 | --- | --- | --- |
-| 1 | `src/extract/introspect.rs:109` `TableKeys` / `:153` `KeyCatalog` / `:183` `inject_into_product` / `:217` `from_product` / `:257` `fold_keys`（纯函数）/ `:522` `key_catalog`（**独立只读会话**）/ `:579` `introspect_with_keys`；`src/bin/ontok-introspect.rs:94` 注入产物 + `:82` 当场打印主键覆盖 | AC-001 |
-| 2 | `src/extract/sample.rs`：`:44` `SAMPLE_TARGET=5` / `:52` `SAMPLE_FETCH=25` / `:55` `SAMPLE_TIMEOUT=2s` / `:63` `SampleEvidence`（**类型上没有原值字段**）/ `:110` 取样 SQL / `:129` 命中 SQL / `:141` `digest_of` / `:173` `sample_pool`（校验 `SHOW transaction_read_only`）/ `:193` `sample_one` / `:275` 自实现 SHA-256 | AC-002/003 |
-| 3 | `src/domain/confidence.rs`：`:52` `METHOD` / `:60` `WEIGHTS` / `:103` `Band` / `:396` `score`（**纯函数**）/ `:585` `from_untrusted`（AC-008 的入口判据）/ `:679` `calibration_bins` / `:717` `ECE` | AC-004/005 |
-| 4 | `src/extract/propose.rs:1392` `LinkCandidate` / `:1421` `link_candidates` / `:1461` `score_links` / `:1538` `attach_confidence`；`src/db/pg.rs:411` `ALTER_PATCHES`（3→9，六条新列）；`src/db/proposal.rs:88` `NewItem::from_json`（method 必填）/ `:198` INSERT 三栏；`src/domain/snapshot.rs:188` `LinkType::confidence`；`src/db/snapshot_store.rs:228/:403` 读/写三栏；`src/domain/apply.rs:280` apply 带出置信度；`src/bin/ontok-propose.rs:126-128` `--no-sample` / `--src` | AC-008 |
-| 5 | `src/extract/propose.rs:1559` `Routing` / `:1592` `route_items`；`src/bin/ontok-propose.rs:561-620` 三份产物（proposal / pending / rejected）；`src/domain/model_view.rs:101/:175` 建模视图 `confidence`；`src/cli.rs:540` `render_confidence_table` + `review show --confidence`（`:259`） | AC-009/010 |
-| 6 | `src/cli.rs:880` 分发 / `:946` `confidence_cmd`（`ontok confidence calibrate`） | AC-011 |
-| 7 | `tests/test_req108_live.rs`（AC-002/003/006/007 + 分档实测）；`tests/test_req108_confidence.rs`（AC-008/009/010 + 校准表）；`tests/test_req107_source_enumeration.rs` 登记表补 2 条写点 + 2 个函数 | AC-006/007 |
+| `src/extract/ai_semantic.rs`（新，~1030 行） | 指纹、协议校验、缓存抽象、编排、预算 | 提示词 `:108` · `JudgeRequest::schema_digest` `:278` · `fingerprint` `:302` · `CachedOutput` `:393` · `parse_judgement` `:499` · `AiCache` trait `:612` · `AiStats` `:672` · `AiSemanticJudge::judge` `:800` · `require_ai_budget` `:985` |
+| `src/db/ai_cache.rs`（新） | `ai_cache` 表、预加载/回写 | DDL `:43` · `PgAiCache` `:57` · `preload` `:67` · `persist` `:125` · `delete_fingerprints` `:168` · `delete_by_model` `:183` |
+| `tests/test_req109_ai_semantic.rs`（新，22 条） | scripted transport：指纹/缓存/协议/预算/veto/零泄漏 | — |
+| `tests/test_req109_cli_gate.rs`（新，6 条） | CLI 闸门：无 key / 无预算 / `--refresh` 误用 | — |
+| `tests/test_req109_e2e_fake_llm.rs`（新，3 条） | **真进程 + 本地假 LLM 端点 + 真 `ai_cache` 表** | — |
+| `fixtures/schema-req109.json`（新） | 端到端用例的最小 schema（3 表，含 `llm_model` 双键） | — |
+
+### 1.2 修改
+
+| 文件 | 改了什么 | 位置 |
+| --- | --- | --- |
+| `src/domain/confidence.rs` | 新增 `METHOD_V2` / `WEIGHTS_V2`（0.3825·0.17·0.1275·0.085·0.085·0.15）/ `weights_for()` / `AiProvenance` / `Confidence::ai` / `score_with_semantic()`；`score()` 改为薄封装（v1 算术**一个字节没动**）；`validate_self_evidence` 按 method 取权重表 + 语义信号两条新校验（S-1/S-2） | `METHOD_V2` `:66` · `WEIGHTS_V2` `:96` · `weights_for` `:110` · `AiProvenance` `:410` · `ai` 字段 `:453` · `score_with_semantic` `:556` · 统一实现 `score_with_weights` `:565` · 语义缺失分支 `:595` · 配对校验 `:891` · `ai` 解析 `:1131` |
+| `src/extract/propose.rs` | 评分接缝拆出 `score_links_with_ai`（AI 关走 v1、AI 开走 v2）+ `ai_requests()`（只给两张表的切片） | `score_links` `:1465` · `score_links_with_ai` `:1484` · `ai_requests` `:1589` |
+| `src/db/pg.rs` | `ai_cache` DDL 编进**同一条**取了咨询锁的迁移 batch | `:117` |
+| `src/db/mod.rs` | 注册 `ai_cache` / 导出 `PgAiCache` | `:31` |
+| `src/extract/mod.rs` | 注册 `ai_semantic` | `:3` |
+| `src/bin/ontok-propose.rs` | 三个开关 + 两个分阶段上线闸 + AI 阶段 + 报告 + 预算闸（越限不写产物） | 开关 `:141-155` · 入口闸 `:194` · AI 阶段 `:481-620` · 预算 bail `:589` · 接缝调用 `:627` |
+| `src/cli.rs` | `render_confidence_table` 增「AI 行」：`ai <model> · fit <v> · cache_hit <b> · tokens <n> ·「rationale」`；抬头写**实际方法**而不是写死 v1（AI 关仍逐字是 v1） | `:540`、AI 行 `:567` |
+| `tests/test_req107_source_enumeration.rs` | **只加两条模块登记**（`ai_semantic` / `ai_cache`）——不加则 t6 红，0 条断言被改 | `:1766`、`:1791` |
+
+### 1.3 行为开关（CLI）
+
+| 开关 | 默认 | 行为 |
+| --- | --- | --- |
+| `--llm` | **关** | 开 ⇒ 三件套（`ONTOK_LLM_BASE_URL` / `ONTOK_LLM_API_KEY` / `ONTOK_LLM_MODEL`）缺一即 exit≠0 并**点名缺哪个**；还需 `ONTOK_DATABASE_URL`（`ai_cache` 落库） |
+| `--budget-tokens` | 无 | `--llm` 时**必填且 >0**；越过即停，按「已用 / 上限 / 停在第几条」报告，**不写任何产物** |
+| `--refresh` | 关 | 忽略缓存并覆盖，打印「强制刷新 N 条」；AI 关时给它会报错（不许静默无操作） |
+| `--llm-only <substr>` | 无 | **分阶段上线闸**：只判关系键含该子串的那些（其余按语义缺失），不改变判据 |
+| `--llm-limit <n>` | 无 | **分阶段上线闸**：最多送 n 条（只截请求），不改变判据 |
+
+> `--llm-only` / `--llm-limit` 不在设计概要里，是**为满足「先 5 条小样本、再全量」这条运行要求**
+> 加的两个**只做截断**的运维闸；它们不参与任何判据（没送的关系语义缺失，不是 0 分）。已在此显式登记。
 
 ---
 
-## 2 · 评分卡规格与权重表（AC-013-1）
+## 2 · 12 条 AC 逐条自测
 
-`evidence-scorecard-v1`（`src/domain/confidence.rs`）：
+### 2.1 AC-001 · AI 关闭时行为完全不变 ✅（最强证据）
 
-| 信号 | 权重 | 取值 | 为什么是这个权重 |
-| --- | --- | --- | --- |
-| `sample_hit_rate` | **0.45** | 5/5→1.0 · 4/5→0.8 · 3/5→0.5 · 2/5→0.3 · 1/5→0.15 · 0/5→0.0 | 零外键库上「列名推断」实测只有 58% 准确，**数据证据是唯一能推翻列名猜测的东西** |
-| `name_match` | 0.20 | 直接展开→1.0 · 泛化名→0.3 · 其它→0.6 | 名字有用但不能主导（泛化名实测 0/5） |
-| `not_all_null` | 0.15 | 有非空→1.0 · 全空→0.0 | 空列会让命中率失去意义，但「空」不等于「关系错」（弱信号） |
-| `type_compatible` | 0.10 | 同族→1.0 · num↔str→0.2 · 其它→0.0 | 类型不相容已是**硬反驳**（veto 0.15），信号只做微调 |
-| `target_is_key` | 0.10 | 主键→1.0 · 单列唯一→0.9 · 普通/不知道→0.4 | 结构合理性，不是数据证据 |
+用 **`a8a51ed` 编出的基线二进制**（`git archive` → 独立 target 编译）与**本次二进制**，
+在**同一份真 schema（96 表）+ 真采样（59 条读到样本）**上按同一命令各跑一次：
 
-数据证据 0.60 / 结构证据 0.40。`semantic_fit` **留位不接**（不在权重表里、不参与归一化）。
+```
+ontok-propose --schema …/schema-src.json --names … --project req109off --src $SRC_URL
+                （REQ-109 侧**不加 --llm**、不设任何 ONTOK_LLM_*）
+```
 
-**算法**：`基线 = Σ(wᵢ·sᵢ)/Σ(wᵢ)`（只对可用信号归一化）→ `最终 = min(基线, 所有 veto 上限的最小值)` → 两位小数 → 分档 0.90/0.60/0.30。
+| 产物 | sha256（两份**相同**） |
+| --- | --- |
+| `proposal.json` | `DAA1FDFF29A939FBEFB2CF0C2246FE98DA50C46559FA1EC0323C7146F2359379` |
+| `stats.json` | `F1E6735511C579B8211A114CC5C8ED6D82472FBD6FFF7CC775913C5EA1D06560` |
+| `proposal-pending.json` | `F4FCDDCE52933C9496DF5F77382A10497CC3536B59B30A648A5C99314DFD74A1` |
+| `proposal-rejected.json` | `EE853D32A0CE6FAD4CFB81E043FEC62C50B60E7CDBAEBB0CA473E539B405FDCA` |
 
-**veto 表**（9 条，含 1 条本 REQ 新增，逐条登记在 §8.3）：
+> 另有进程级用例 `ai_off_is_not_affected_by_present_llm_env`：**配了 LLM 环境变量但不给 `--llm`**
+> 与「环境全空」四份产物 sha256 逐个相同 —— 开不开 AI 只由开关决定，不由环境决定。
+> 「语义缺失时的归一化与 v1 逐位相同」由 `r6_missing_semantic_is_absent_not_zero` + `ac001_*` 钉住。
 
-| 触发 | 上限 | 信号 |
+### 2.2 AC-002 · 无 key 且开 AI ⇒ 报错退出 ✅
+
+| 输入 | 结果 |
+| --- | --- |
+| `--llm`，三个变量全空 | exit **1**，文案点名 `ONTOK_LLM_BASE_URL / ONTOK_LLM_API_KEY / ONTOK_LLM_MODEL`，且**一个产物都不写** |
+| 只缺其中一个 | exit 1，**只点名那一个**（不误报配好的），三条逐个实测 |
+
+判据在 `LlmSettings::from_env`（`ai_semantic.rs:191`），且在**读 schema 之前**执行（`ontok-propose.rs:194`）。
+用例：`test_req109_cli_gate.rs` 的 `ac002_*`（2 条）。
+
+### 2.3 AC-003 · 缓存命中 ⇒ 不调用模型 ✅
+
+三层证据：
+
+| 层 | 判据 | 结果 |
 | --- | --- | --- |
-| 类型族不相容 | 0.15 | `type_incompatible` |
-| 采样 0 命中 | 0.20 | `zero_hit` |
-| 泛化列名 + 无数据证据 | 0.40 | `generic_name_no_evidence` |
-| 源列全空（`sampled = 0`） | 0.45 | `all_null` |
-| 部分命中（0<rate<1） | 0.75 | `partial_hit` |
-| 复合键（R2） | 0.50 | `composite_key_unsupported` |
-| 多态目标（R3） | 0.40 | `polymorphic_target` |
-| 自引用非唯一（R4） | 0.50 | `self_ref_non_unique` |
-| **`--no-sample`（无数据证据）** | **0.45** | **`no_data_evidence`**（新增，理由见 §8.3） |
+| 引擎（scripted） | 同输入跑两次 | 第一次 2 调用、第二次 **0 调用**且 `cache_hit=true`；清空缓存后第三次 **+1 调用** |
+| 端到端（真进程 + 假端点 + 真 `ai_cache` 表） | HTTP 请求计数器 | run1=1 → run2=**1（不增）**；删掉该模型的缓存行 → run3=2 |
+| 真实全量 | CLI 报告 | 第二次全量 **82 请求 / 82 命中 / 0 调用 / 0 token / 命中率 100%** |
 
----
+### 2.4 AC-004 · 幂等：同输入两次产物逐字节相同 ⚠️ **按字面不成立，已改口径**
 
-## 3 · 真实库实测
+**实测**：全量 run2/run3 的四份产物里，`proposal.json` / `stats.json` / `proposal-rejected.json`
+sha256 **完全相同**；`proposal-pending.json` **只差一行**：
 
-### 3.1 82 条关系的分档分布（AC-009）
+```
+line 8:  -   "cache_hit": false,
+line 8:  +   "cache_hit": true,
+```
 
-`ontok-propose --src …` 于 2026-10-21 对 `anspire_open_uat` 实测：
+**为什么这条 AC 自相矛盾**（纪律 S：「AC 自己也会是错的」）：
 
-| 档 | 条数 | 去向 |
-| --- | --- | --- |
-| 高（≥0.90） | **44** | `proposal.json` |
-| 中（0.60–0.90） | **8** | `proposal.json` |
-| 低（0.30–0.60） | **20** | `proposal-pending.json`（**不进主提案**，可导入审核） |
-| 拒绝（<0.30） | **10** | `proposal-rejected.json`（**不提案**，带 veto 理由，`importable: false`） |
-| 合计 | **82** | 82 条全部有 `method`、全部有分档 |
+- AC-003 要求「第二次 `ai.cache_hit == true`」，AC-010 要求「model-view 必须有 `cache_hit`」，
+  demand §范围 6 要求「提案条目带 `ai: {…, cache_hit}`」—— 三处都要求 `cache_hit` **落进产物**；
+- 而 `cache_hit` 记的是**这一次运行**的事实，第一次必然 `false`、第二次必然 `true`；
+- ⇒ 「两次运行的产物 sha256 逐个相同」与上述三条**不可能同时成立**。
 
-> ⚠️ **订正（QA N4）**：上一版这张表写「审核界面默认折叠 / 逐条显示」——
-> **CLI 里没有交互折叠**。`review show --confidence` 的实际行为是：表头给**四档计数**，
-> 然后**所有条目按档位排序逐条打印**（44 条高档也逐条打印）。
-> 「默认折叠」是**设计概要 §五 对人机界面的意图**，不是本实现 CLI 的行为；
-> 写成实现行为是错的，此处订正。
+**本实现的取舍**（宁可让 AC-004 改口径，也不删 `cache_hit`）：
+产物内容除这一位外逐字节相同；**判据改为**「把 `ai.cache_hit` 归一后四份产物 sha256 逐个相同，
+且两份文件的差异**只有** `cache_hit` 这一行」。用例 `ac003_ac004_cache_hit_then_reload`
+把这条同时钉成两个断言（归一后相等 + `differing_lines == [("false","true")]`）。
 
-- 主提案 = 96 实体 + **52** 条关系（44 高 + 8 中）；`stats.json` 与基线一致。
-- **「不提案」档在 `proposal.json` 里 0 条**（实测 `band == 'rejected'` → 0；`low` → 0）。
-- ⚠️ 验收文档写 **81** 条，本次实测 **82** 条 —— 差 1 条来自 REQ-028 的尾缀匹配
-  （`demand.md` 记的 81 是更早一版抽取器的数）。这是**数据事实**，没有改代码去凑 81。
-- 82 条里 **59 条真的读到了样本**（其余 23 条源列全空 ⇒ `all_null` / `sampled = 0`）。
+> ⚠️ 另一条**必须记下的实况**：模型**非确定**（同一输入两次采样，rationale 长度会变：
+> 实测同一条关系第一次 66 字被判作废、第二次 41 字通过）。所以「幂等」是**缓存**给的，
+> 不是模型给的 —— 这也解释了为什么 AC-004 的两跑必须是「第二次命中缓存」的那两跑。
 
-### 3.2 9 条已知错误逐条实测（AC-006 · 按 A-6 分成**两种证据**）
+### 2.5 AC-005 · 改 prompt ⇒ 指纹变 ⇒ 必须重新调用 ✅
 
-> ⚠️ **A-6 要求：这两种不许混写。** 「真产出且落拒绝」与「不产出 + 构造复算」
-> 是**不同强度、不同形式**的证据：前者证明「提了、被打掉」，后者证明
-> 「压根没进候选集，且如果它进了也会被打掉」。把它们并成一句「9/9 拒绝」会
-> 掩盖「本实现其实永远不会产出这两条」这个事实。
+| 证据 | 结果 |
+| --- | --- |
+| 单测 | 改 1 个字符 ⇒ `prompt_sha256` 变 ⇒ `cache_hits=0`、`calls=1` |
+| 指纹六项逐项 | relation / schema / prompt / model / agent_version / 版本前缀，**任一变即换指纹** |
+| 真实运行 | 第 1 轮提示词 `49bc2046…`（3/5 因 rationale 超长作废）→ 强化格式约束后 `4298cd82…`，**旧缓存全部失效**，5 条重新调用 |
 
-#### 3.2.1 E1–E7：**真产出、真被拒绝**（三份产物里出现在 `proposal-rejected.json`）
+### 2.6 AC-006 · 预算闸 ✅
 
-| # | 关系 | 分数 | 档 | veto | 样本/命中 |
+| 判据 | 结果 |
+| --- | --- |
+| `--llm` 缺 `--budget-tokens` | exit 1，点名 `--budget-tokens` |
+| `--budget-tokens 0` | exit 1（「0 等于一次都不许调用」） |
+| 预算 1 token（真进程 + 假端点） | 只调 1 次即停，exit 1，**四份产物一个都不存在** |
+| **真实全量 100k** | **101,326 / 100,000 停在第 82 条之后**（82 条全判完、用量越顶），exit **1**，`out/req109/full1/` 里**只有 run.log**，没有任何提案文件 |
+
+报告格式实测（`out/req109/full1/run.log`）：
+
+```
+✗ 预算超限  : 已用 101326 / 上限 100000，停在第 82 条之后（82 条已全部判完，用量越过了上限）
+```
+
+### 2.7 AC-007 · `semantic_fit` 不能翻转 veto ✅
+
+| 构造（单测） | 结果 |
+| --- | --- |
+| 0 命中 + AI 1.0 | **0.20 / 拒绝**（`zero_hit`） |
+| 类型不相容 + AI 1.0 | **0.15 / 拒绝**（`type_incompatible`） |
+| 源列全空 + AI 1.0 | ≤ 0.45 |
+| `--no-sample` + AI 1.0 | ≤ 0.45 |
+
+**真库 82 条逐条复核**：`score > cap` 的关系数 = **0**。
+REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）；E8/E9 本就不产出，
+其 0.15 上限由单测按坐标构造复算覆盖。
+
+### 2.8 AC-008 · `cites` 必须是真实坐标 ✅
+
+构造 `{"table":"nonexistent","column":"col"}` ⇒ 该条判断**整条作废**（不进 map、不污染分数）、
+`rejected_cites=1`、报告里点名假坐标；且**作废记录照样进缓存**，回放时仍然作废、但**不再付费**
+（`calls=0`、`rejected_cache_hits=1`）。
+
+### 2.9 AC-009 · `rationale` 必填且简短 ✅
+
+| 坏输入 | 结果 |
+| --- | --- |
+| 缺 `rationale` | 作废（`rejected_rationale=1`） |
+| `"   "`（空白） | 作废 |
+| 61 字 | 作废 |
+| **正好 60 字** | **通过**（边界不能写成 ≤59） |
+
+真实模型实测：82 条里 **6 条** rationale 超 60 字被作废（68/64/85/75/73/71 字）——
+这是**协议按 AC-009 正常生效**，不是流程缺陷；强化格式约束后仍有 1/82 不守（见 §6）。
+
+### 2.10 AC-010 · 客户视图零泄漏 / 建模轨必须有 ✅
+
+**端到端**（真库：`project req109ai` → import → `review decide --accept-all` → `proposal apply` → v2）：
+
+| 出口 | `semantic_fit` | `cache_hit` | `"ai"` | `prompt_sha` | 模型名 |
 | --- | --- | --- | --- | --- | --- |
-| E1 | `balance_operation_log.batch_id → gift_code_batch` | 0.20 | 拒绝 | `zero_hit` | 5/0 |
-| E2 | `instance_manager.session_id → simulate_login_sessions` | 0.20 | 拒绝 | `zero_hit` | 5/0 |
-| E3 | `internal_operation_records.batch_id → gift_code_batch` | 0.20 | 拒绝 | `zero_hit` | 3/0 |
-| E4 | `llm_model_peak_config.model_id → llm_model` | 0.20 | 拒绝 | `zero_hit` | 4/0 |
-| E5 | `llm_model_sort.model_id → llm_model` | 0.20 | 拒绝 | `zero_hit` | 5/0 |
-| E6 | `llm_provider.model_id → llm_model` | 0.20 | 拒绝 | `zero_hit` | 5/0 |
-| E7 | `llm_provider_groups.model_id → llm_model` | 0.20 | 拒绝 | `zero_hit` | 5/0 |
+| `ontology show`（客户 JSON） | **0** | **0** | **0** | **0** | **0** |
+| `ontology show --html`（客户页面） | **0** | **0** | — | **0** | **0** |
+| `ontology overview`（客户总览） | **0** | **0** | — | **0** | **0** |
+| `ontology show --model-view` | **51** | **51** | **51** | **51** | **51** |
 
-#### 3.2.2 E8/E9：**本实现不产出**（`marketing_channel` 与 `rpt_dws_channel` 双命中 ⇒ REQ-028 闸 B 歧义 ⇒ 不是候选）+ **按坐标构造复算 0.15**
+零泄漏是**结构保证**：客户视图的投影输入 `SnapshotView` / `LinkTypeView` 里**没有** confidence 栏。
+审核界面（`review show --confidence`）由 `render_confidence_table` 新增 AI 行覆盖，单测断言
+`ai <model> · fit … · cache_hit … · tokens … ·「rationale」` 全部出现。
 
-| # | 关系 | 三份产物 | 构造复算（真采样 + 真评分） | 独立类型事实 |
+### 2.11 AC-011 · 无 key 也能全绿 ✅
+
+所有自动化用例**零网络、零 key**：引擎层用 `ScriptedTransport`；端到端层用**本地
+`TcpListener` 假端点**（标准库，零新依赖，HTTP 请求计数）。清空 `ONTOK_LLM_*` 后
+全量测试 0 failed（§7）。真实端点**只**用于 §3/§5 的手工验证，**没有**进任何测试。
+
+### 2.12 AC-012 · 红线与不退化 ✅
+
+| 项 | 结果 |
+| --- | --- |
+| 四红线 + `tools.rs` + `guard()` + `property_filter.rs` G1–G4 | **零改动**（`git status` 只有 §1 那 7 个文件 + 6 个新增） |
+| 删测试 / `#[ignore]` / 放宽断言 | 无。`test_req107_source_enumeration.rs` 只加了**两条模块登记**（0 条断言改动） |
+| 新增依赖 | **零**（Cargo.toml 一个字没动） |
+| 不许退化 | lib **230**（=基线）· doc **4**（=基线）· 32 套件 **313**（=基线，逐套件见 §7） |
+
+---
+
+## 3 · 真实运行（分三阶段）
+
+环境：源库只读 `SRC_URL` · 本地库 `ONTOK_DATABASE_URL=…/ontok_demo` · 模型 `qwen36-27B`。
+`schema.json` 是 REQ-108 留下的真勘查产物（96 表 / 1024 列），**未重新勘查**（勘查与 AI 无关）。
+
+### 3.1 阶段 1 · 小样本 5 条
+
+命令要点：`--llm --budget-tokens 100000 --llm-only 'model_id -> llm_model' --llm-limit 5`
+（这 5 条正是「目标表另有业务键 `model_id`、规则只能指 `id`」的那一类已知错关系）。
+
+| 轮 | 提示词 | 调用 | token | 有效/作废 |
 | --- | --- | --- | --- | --- |
-| E8 | `dim_customer_binding.channel_code → marketing_channel` | **都不在**（不产出） | **0.15 / 拒绝 / `type_incompatible`**，`sampled=5 matched=0` | `character varying` vs `integer` |
-| E9 | `marketing_channel_customer.channel_code → marketing_channel` | **都不在**（不产出） | **0.15 / 拒绝 / `type_incompatible`**，`sampled=5 matched=0` | 同上 |
+| 小样本 #1 | `49bc2046…` | 5 | **6,754** | 2 / 3（rationale 68·64·85 字） |
+| 小样本 #2（格式约束强化后） | `4298cd82…` | 5 | **6,858** | 4 / 1（rationale 66 字） |
 
-构造复算走的是**同一条评分路径**（`candidate_for()` → 真 `sample_one()` → 真
-`score_links()`），`tests/test_req108_live.rs` 里 `produced=false` 一栏就是这条证据。
-「不产出」比「拒绝」更强，但**两者不是同一条判据** —— 所以两条都给。
+**5 条真实 AI 返回（从产物 `confidence.ai` + `semantic_fit` 信号还原，即缓存里存的那份判断）**：
 
-判据：`cargo test --test test_req108_live -- --nocapture`（需 `SRC_URL`），
-`test_req108_ac006_nine_known_errors_all_rejected` 通过。
-
----
-
-## 4 · 视图与入口的实测
-
-### 4.1 AC-004：veto 没被加权和救回来
-
-`vetoes_survive_maxed_structural_signals` 对四类上限逐条断言，并且**证明了判别力**：
-每条都算出「不做 veto 时的加权和」，断言「基线 > 上限 → 最终分 < 基线」。
-例：类型不相容那一类的基线是 **0.92**（name_match=1.0、target_is_key=1.0），
-最终分 0.15 —— 上限不是靠把结构信号调低换来的。
-
-### 4.2 AC-005：两次运行逐字节相同
-
-同一份 `schema.json` + 同一份数据跑两次 `ontok-propose`：
-
-| 产物 | sha256（前 16 位） | 两次相同 |
-| --- | --- | --- |
-| `proposal.json` | `58FA79439FD71298` | ✅ |
-| `stats.json` | `F1E6735511C579B8` | ✅ |
-| `proposal-pending.json` | `40C0AEDB7E51CEBA` | ✅ |
-| `proposal-rejected.json` | `5D039F1F939ACBEE` | ✅ |
-
-⇒ `items` 段、`confidence` 段（含 `sample_digest`）**都没有差异**。
-
-`items` 相对 REQ-107 的差异只有两类，且都是本 REQ 要求的：
-① 关系条目新增 `confidence` 键；② 拒绝/低档条目**移出**主提案（AC-009 的判据本身）。
-实体条目与关系条目的其余字段逐字节未变，由
-`test_attach_confidence_adds_one_key_and_changes_nothing_else` 钉住
-（去掉 `confidence` 后与原文逐字节相同）。
-
-### 4.3 AC-008：缺 `method` ⇒ 拒绝入库
-
-- 单测 `test_req108_ac008_import_rejects_item_without_method`：`{"score":0.9}` ⇒
-  错误信息含「没有 method 的分数不可复核」；`band` 与分数对不上也拒。
-- 真 CLI（把 `proposal.json` 里第一条关系条目的 `confidence.method` 删掉后 import）：
-
-```
-$ ontok propose import --file …\proposal-nomethod.json
-✗ item 97 的 confidence 不合法：confidence 缺 method —— 没有 method 的分数不可复核（AC-008）
-exit code = 1
-```
-
-### 4.4 AC-010：客户视图零泄漏 / 建模视图必须有
-
-- 客户视图（`ontology show`，JSON 与 HTML 同一份 `CustomerView`）：
-  `confidence` / `"score"` / `"band"` / `evidence-scorecard` / `sample_digest` **全部 false**
-  （实测 49,039 字节）。**结构性保证**：客户视图的投影输入 `domain::view::SnapshotView`
-  根本没有这个字段（`src/domain/view.rs` 是红线，本 REQ 一个字未改）。
-- 建模视图：`link_types` **52 条，52 条都有 `confidence`**，`method` 全为 `evidence-scorecard-v1`；
-  旧版本是 `null`（键在、值空），不是缺字段。
-- 审核界面：`ontok review show --proposal p1 --confidence` 输出四档计数 + 逐条
-  档位/分数/证据摘要/veto 理由。
-
-### 4.5 AC-011：校准命令
-
-```
-ontok confidence calibrate --project req108empty      # 空库
-  → 计分条目 0 条 … 结论：**样本不足**（没有任何已决的计分条目）—— 不输出命中率结论
-
-ontok confidence calibrate --project req108final      # 52 条已决
-  分箱          条数   人工接受   接受率     平均分
-  0.00–0.30        0         0         —        —
-  0.30–0.60        0         0         —        —
-  0.60–0.75        1         1     样本不足     0.70
-  0.75–0.90        7         7    100.0%     0.84
-  0.90–1.00       44        44    100.0%     0.99
-  → 结论：**样本不足** —— 以下分箱 < 5 条：…。不输出命中率结论、不算 ECE。
+```json
+[
+  {
+    "relation": "deductions.model_id -> llm_model",
+    "band": "low", "score": 0.42,
+    "ai_output": {
+      "choice": "llm_model.model_id",
+      "semantic_fit": 1.0,
+      "rationale": "deductions.model_id存模型ID，对应llm_model.model_id业务含义一致。",
+      "cites": ["deductions.model_id", "llm_model.model_id"]
+    },
+    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1595,"cache_hit":true}
+  },
+  {
+    "relation": "llm_provider_back.model_id -> llm_model",
+    "band": "low", "score": 0.42,
+    "ai_output": {
+      "choice": "llm_model.model_id",
+      "semantic_fit": 1.0,
+      "rationale": "源列注释明确指向目标列，语义完全匹配。",
+      "cites": ["llm_provider_back.model_id", "llm_model.model_id"]
+    },
+    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1336,"cache_hit":true}
+  },
+  {
+    "relation": "llm_model_peak_config.model_id -> llm_model",
+    "band": "rejected", "score": 0.20,
+    "ai_output": {
+      "choice": "llm_model.model_id",
+      "semantic_fit": 1.0,
+      "rationale": "源端model_id指向目标表同名业务主键，符合配置引用实体的惯例。",
+      "cites": ["llm_model_peak_config.model_id", "llm_model.model_id"]
+    },
+    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1258,"cache_hit":true}
+  },
+  {
+    "relation": "llm_model_sort.model_id -> llm_model",
+    "band": "rejected", "score": 0.20,
+    "ai_output": {
+      "choice": "llm_model.model_id",
+      "semantic_fit": 1.0,
+      "rationale": "两表model_id均注释为模型ID，业务上应为同一实体的标识符关联。",
+      "cites": ["llm_model_sort.model_id", "llm_model.model_id"]
+    },
+    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1306,"cache_hit":true}
+  },
+  {
+    "relation": "llm_provider.model_id -> llm_model",
+    "band": "rejected", "score": 0.20,
+    "ai_output": {
+      "choice": "llm_model.model_id",
+      "semantic_fit": 1.0,
+      "rationale": "provider.model_id注释明确指向llm_model.model_id，语义匹配。",
+      "cites": ["llm_provider.model_id", "llm_model.model_id"]
+    },
+    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1336,"cache_hit":true}
+  }
+]
 ```
 
-「样本不足」的箱**不印百分比**；空箱印 `—`。ECE 只在**每箱都 ≥5** 时才计算。
+> `cache_hit: true` 是因为这 5 条在前一轮小样本已入缓存；`tokens` 是**当初那次**的用量（不重复计费）。
 
----
+### 3.2 阶段 2 · 全量（`--budget-tokens 100000`）
 
-## 5 · 采样三件事（AC-002 / AC-003）
+| 轮 | 请求 | 缓存命中 | 实际调用 | token | 结果 |
+| --- | --- | --- | --- | --- | --- |
+| 全量 #1 | 82 | 4 | **78** | **101,326** | **越预算 ⇒ exit 1，`out/req109/full1/` 只有 run.log（0 份提案文件）** |
+| 全量 #2（预算仍 100k） | 82 | 76 | **6** | **7,780** | exit 0，四份产物写出（补上 6 条当初被截断/作废的） |
+| 全量 #3（再跑一次） | 82 | **82** | **0** | **0** | exit 0，**命中率 100%，0 次调用** |
 
-### 5.1 只读 + 确定性
+**真实 token 总消耗 ≈ 122,718**（小样本 6,754 + 6,858 · 全量 101,326 + 7,780）。
 
-| 判据 | 证据 |
-| --- | --- |
-| 只读会话 | `sample_pool()` 连上后 `SHOW transaction_read_only` 必须 = `on`，否则 `bail`（fail-closed）。`test_req108_ac002_sampling_is_read_only_and_deterministic` 实测通过 |
-| 只发 SELECT | 本模块只有两条 SQL（取样 / 命中），无 INSERT/UPDATE/DELETE/DDL |
-| 确定性 | 取样 `ORDER BY <主键> LIMIT $1`（主键来自 AC-001 的目录事实）；无主键时按值排序。**禁止** `random()` / `TABLESAMPLE`（单测对 SQL 字面量断言） |
-| 两次相同 | 同一次运行内两次 `sample_all_with` 的 **9 条 × 4 字段 = 36 个字段**逐字段相同（含 digest），且整体 `assert_eq!`；两次 CLI 运行的 `sample_digest` 使产物**逐字节相同**（§4.2） |
-
-> ⚠️ 口径：AC-002 写「`LIMIT 5`」，本实现是「**样本上限 5** + 扫描上界 25」
-> —— 前 5 行里有重复值时仍能补足 5 个**不同**的值（设计概要 §四 明文要求「去重后补足」）。
-> 排序键与上界都是常量，确定性没有被放宽。
-
-### 5.2 不落原值
-
-`test_req108_ac003_artifacts_contain_no_sampled_values`：
-**独立**把 9 条关系的前 5 个原值查出来（不复用生产 SQL），在 4 份产物里做子串回查：
-
-```
-样本值 42 个（可判别 42 · 短值不可判别 0）
-产物 4 份
-命中 0
-```
-
-> ⚠️ **订正（QA N4）**：上一版把「42」写成了 §5.1 的「42 项逐字段相同」。
-> 42 是**本节的样本值个数**，与「字段数」不是一回事：确定性判据比的是
-> 9 条关系 × 4 个字段（`sampled` / `matched` / `digest` / `reason`）= **36 个字段**，
-> 且整体 `assert_eq!`（比逐字段更强）。两处已分开写明。
-
-产物里只出现 `sampled` / `matched` / `sample_digest`。`SampleEvidence` 的**类型上**
-没有放原值的字段（`sample_signal_carries_only_aggregates` 逐键断言）。
-
-### 5.3 digest 的已知边界（如实登记）
-
-设计概要 §四 规定 `sha256(值排序后用 U+001F 连接)`。这个连接**不是单射**
-（`["a","b"]` 与 `["a␟b"]` 同串）—— `test_digest_separator_boundary_is_documented_not_claimed_fixed`
-把这条边界钉成**已知行为**而不是假装封堵。digest 只用于「两次运行是否同一批样本」。
-
----
-
-## 6 · 测试数字与口径（AC-013-7）
-
-### 6.1 能跑 / 不能跑
-
-| 目标 | 结果 |
-| --- | --- |
-| `cargo check --lib` | ✅ 0 error |
-| `cargo test --lib` | ✅ **226 passed / 0 failed**（第 1 轮 217 + 第 2 轮新增 9 条 AC-014 单测；见 §10.5） |
-| `cargo test --doc` | ✅ **4 passed / 0 failed** |
-| `cargo test --test <name>` | ✅ 需 §6.3 的绕行 |
-| **`cargo test`（全量）** | ⛔ **本机不可跑**（见下） |
-
-⛔ 全量编不过的**既有**原因（本 REQ 未引入、未修复）：
-`src/bin/ontok-gate-preflight.rs` 使用 `std::os::unix::fs::MetadataExt`
-（`dev()` / `ino()`）。**那个文件本次一个字节未改**（§6.3 的 sha256 前后一致）。
-
-### 6.2 13 条 REQ-107 出口判据（+ 本 REQ 相关套件）
-
-| 命令 | 结果 |
-| --- | --- |
-| `test_req107_outlet_pipeline` | 12 passed |
-| `test_req107_guard_granularity` | 4 passed |
-| `test_req107_zero_visible_change` | 3 passed |
-| `test_req107_pipeline_bytes` | 1 passed |
-| `test_req107_scope_error_gate` | 4 passed |
-| `test_req107_track_manifest` | 2 passed |
-| `test_req107_static_texts` | 3 passed |
-| `test_req107_red_lines` | 2 passed |
-| `test_property_filter` | 10 passed |
-| `test_exit_ordering_req106` | 7 passed |
-| `test_binary_output_guard` | 7 passed |
-| `test_graph_server` | 9 passed |
-| `test_guard_manifest_req081` | 6 passed |
-| **13 条合计** | **70 passed / 0 failed** |
-
-> 派单材料写「74 passed」。按 REQ-107 报告 §6.2 的这 13 个套件逐一实测是 **70** ——
-> 差的 4 条我**没能复现出处**（不排除当时把另 1 个套件算进去了）。
-> 结论不受影响：**这 13 个套件一个都没退化**。
-
-其余跑过且全绿的套件（0 failed）：`test_req107_source_enumeration`(10) ·
-`test_read_only_guard`(5) · `test_anchor_guard`(3) · `test_apply`(21) · `test_snapshot`(10) ·
-`test_snapshot_write_paths`(8) · `test_proposal`(9) · `test_db`(11) ·
-`test_concept_proposal`(19) · `test_model_view`(10) · `test_req108_confidence`(6) ·
-`test_review_show_e2e`(11) · `test_review_show_binary_req072`(7) ·
-`test_domain_print_sites_binary_req078`(4) · `test_no_write_path`(4) · `test_view`(26) ·
-`test_overview`(17) · `test_diff`(13) · `test_mcp_server`(31 + 1 ignored) ·
-`test_extract_cli_req019`(8) · `test_extract_cli_req020`(5) · `test_provenance_source`(5) ·
-`test_extracted_by_provenance`(9) · `test_review_provenance`(17) · `test_review_state`(28) ·
-`test_req108_live`(5)。
-
-**局部合计**：`217（lib）+ 4（doc）+ 70（13 条出口判据）+ 237（其余 24 个套件）= 528` 全绿。
-
-> 本节是**第 1 轮**的数字。第 2 轮（AC-014/015）复跑后的数字见 **§10.5**
-> （lib 226、doc 4、31 个套件 300 passed）。第 1 轮报告的 217 条 lib 测试**一条没少**。
-
-### 6.3 bin 绕行与 sha256
-
-```
-sha256(src/bin/ontok-gate-preflight.rs) before = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-  → 临时 Move-Item 到 .review-workspace/req108/
-  → 跑 cargo test --test …
-  → 立即 Move-Item 回来
-sha256 after                                    = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-identical = True
-```
-
-每一次绕行都做这个前后比对，**全部一致**（会话内共 8 次）。
-`git diff develop -- src/bin/ontok-gate-preflight.rs` 为**空**。
-
-### 6.4 提交
-
-```
-6dbea24 [Dev] 阶段1：introspect 补采 primary_key / unique_columns（产物契约，连 pg_catalog 不猜列名）
-253cc6a [Dev] 阶段2：只读确定性采样器（ORDER BY 主键 + 只落 sampled/matched/digest + 自实现 SHA-256）
-9a1c76f [Dev] 阶段3：evidence-scorecard-v1 纯函数评分卡（5 信号 + 9 条 veto 上限 + 四档）+ 单元测试
-cc629a3 [Dev] 阶段4：propose 组装 confidence（采样接线）+ 三栏落库 + method 必填拒绝入库
-1b2e166 [Dev] 阶段5：分档路由（高/中进提案·低进待查·拒绝不提案）+ 建模视图与审核界面显示置信度 + 客户视图零泄漏
-24cac8d [Dev] 阶段6：ontok confidence calibrate 分箱命中率（五档 + 样本不足拒绝给结论 + ECE）
-3f32eea [Dev] 阶段7：真实库实测判据（AC-006 9/9 拒绝 · AC-002/003 证据）+ 交付报告
-第2轮  [Dev] 第2轮：AC-014 自证链三条校验 + AC-015 importable:false 硬闸；订正报告 A-6/N4
-（第 2 轮只有**一个**提交：代码与本节、§6.4 都在里面；提交号 = `git log -1 --format=%h`，分支未 push）
-```
-
----
-
-## 7 · 关键实现取舍（为什么会看到这些「多余」的东西）
-
-1. **键信息走产物契约，不给 `SchemaReport` / `TableMeta` 加字段**：
-   这两个类型在 `tests/test_fk_naming.rs`（**红线文件**）与
-   `src/bin/ontok-gate-preflight.rs` 里有字面量构造，加字段会让它们编译不过
-   —— 而 `src/agent/group.rs:197` 早就记着这条约束。所以键事实落在
-   `schema.json` 的 `tables[i]` 上，由 `inject_into_product` / `from_product`
-   互为逆运算（单测钉住往返）。
-2. **`key_catalog` 是独立的一条只读会话**，没有塞进 `introspect()`：
-   `tests/test_read_only_guard.rs` 按 `pub async fn introspect` 切函数体找
-   `ensure_read_only(&read_only)?;`，塞进去会让 AC-101 的接线判据**静默掉出覆盖**。
-   代价是多一次只读连接（~100ms）。
-3. **`confidence` 在 `proposal.json` 里是条目顶层键**（设计概要 §2.1），
-   但落库时**搬进 `payload`**：`apply` 那条路只拿得到 `ItemView.payload`；
-   而 `NewItem` 加字段会让 10+ 个测试文件编译不过。落库的三栏与 payload 里那一份
-   **是同一次解析的同一个值**。
-4. **`review show --confidence` 是显式开关**：`review show` 的 stdout 被
-   REQ-072/078 的真进程字节比对钉着，默认多打一行就是改契约（不是判据过时）。
-5. **校准输出整段只写一次 stdout**：REQ-107 的写点登记表要求 cli.rs 里每处
-   写点都登记；十几行逐条 `println!` 会把登记面撑大，改成一次拼好一次写出。
-
----
-
-## 8 · 已知限制与「AC 自己也会是错的」
-
-### 8.1 ⚠️ AC-007：机制成立，但那 5 条具体预期在本采样口径下有 3 条不成立
-
-实测（`test_req108_live_band_distribution_report`，`--nocapture`）：
-
-| 关系 | 验收文档 | 本实现实测 | 落档 |
-| --- | --- | --- | --- |
-| `dim_customer_binding.customer_id` | 4/5 | **5/5** | 高（0.99） |
-| `enterprise_recharge_order.customer_id` | 1/5 | **5/5** | 高（0.99） |
-| `order.subscription_id` | 1/2 | 1/2 ✅ | 中（0.70） |
-| `service_apps.channel_id` | 4/5 | **未被推断出来**（闸 B 歧义） | — |
-| `usage_reconciliation_log.subscription_id` | 3/5 | **5/5** | 高（0.92） |
-
-**为什么不同**：验收文档的 1/5、4/5 是**另一种取样口径**（很可能是随机 5 行），
-而设计概要 §四 规定的是「**按主键排序取前 5 行**」。同一张表里，表头几行与整表
-的命中率可以差很远 —— 这正是设计概要 §九 **G4「采样只验存在性、不验覆盖率」**
-登记的那个缺口。本次实测把 G4 从「理论缺口」变成了**有数字的缺口**。
-
-**我没有做什么**：没有为了让 AC-007 变绿去改采样口径（比如换成 `md5(主键)` 排序
-做伪随机分布）—— 那会让 AC-002「固定排序、可复现」的理由变得暧昧，而且是
-**为一条 AC 反推实现**。机制的判据仍然成立并已被单测钉住：
-`0 < matched < sampled ⇒ score ≤ 0.75 ⇒ band ≠ high`。
-
-**如果 BA 要的是 AC 的字面结果**，可选的两条路（都需要 BA 拍板）：
-① 把采样改成「头尾各取」（`ORDER BY 主键 ASC LIMIT 3` ∪ `DESC LIMIT 2`，
-仍确定性、仍 ≤5 行）以提高覆盖率；② 把 AC-007 改写成机制判据。
-
-### 8.2 E8/E9 压根不会被推断出来
-
-见 §3.2。这是 REQ-028 的闸 B 在起作用（`channel` 命中 `marketing_channel` 与
-`rpt_dws_channel` 两张表 ⇒ 歧义 ⇒ 不产出）。**没有改抽取规则**去让它们出现
-（那会违反「不改既有抽取结果」）。
-
-### 8.3 第 9 条 veto：`no_data_evidence`（本 REQ 新增，**必须由 BA 知悉**）
-
-R1 ④ 要求「`--no-sample` 时分数只由结构信号算，且**不得因此把分数抬高**」。
-但「只算结构信号」自然会把 `customer_id → customers` 算到 **0.80**（中档）
-—— 比「采了 5 行 0 命中」（0.20）**高得多**，正是「没看反而分更高」。
-设计概要的 8 条 veto 里没有一条管这件事，所以新增第 9 条：
-`--no-sample` ⇒ 上限 **0.45**（落「低」档，只能进待查清单）。
-**这是对设计概要的扩展，不是实现偏差**；如果 BA 不认，删掉它会让 `--no-sample`
-路径重新出现「无证据 = 可信」的 fail-open。
-
-### 8.4 客户视图的守门词表**没有**加 `confidence` / `score` / `band`
-
-因为 `src/domain/view.rs` 是**红线**（禁改）。零泄漏靠的是**结构**：
-客户视图的投影输入类型里没有这个字段（`tests/test_req108_confidence.rs` 钉住）。
-代价：如果将来有人给 `SnapshotView` 加一个叫 `confidence` 的字段，
-`scan_modeling_terms` **不会**替我们拦住它（词表里没这个词）。
-登记为**已知缺口**，下一轮若允许动 `view.rs` 应当补进 `MODELING_TERMS`。
-
-### 8.5 其它
-
-- **采样窗口**：只看按主键排序的前若干行，不验覆盖率（G4）。
-- **复合键**：识别但不支持（R2，上限 0.50）；`llm_auth_cache_trigger_state` 是全库唯一
-  的复合主键表，本次实测没有关系指向它。
-- **`confidence` 列的精度**：`REAL`（float4）；读出时显式 `::float8`，避免 f32 截断。
-- **`--no-sample` 或没有源库连接串** ⇒ 全部关系落「低」档、**不进主提案**，
-  并在 stderr 大声报出来。这是 R1 ④ 的直接后果，不是 bug。
-- **采样超时**：单关系 2s，超时记 `sampled: 0`（`reason=timeout`）不阻塞整体。
-  判据侧用 20s 跑确定性检查 —— 墙钟超时不是采样结果，不能让它把「确定性」变成偶发红。
-
----
-
-## 9 · 复现命令（全部自带 `cd`）
-
-```powershell
-cd D:\MyCodes\AI\an_onto_demo\feature-REQ-108
-$env:ONTOK_DATABASE_URL='postgresql://…/ontok_demo'
-$env:ONTOK_TEST_DATABASE_URL=$env:ONTOK_DATABASE_URL
-$env:SRC_URL='postgresql://…/anspire_open_uat'      # 只读；口令不入库
-
-cargo run --bin ontok-introspect -- --out ..\.review-workspace\req108\schema-src.json
-cargo run --bin ontok-propose -- --schema ..\.review-workspace\req108\schema-src.json `
-    --names src/extract/table_names.json `
-    --out ..\.review-workspace\req108\run1\proposal.json `
-    --stats ..\.review-workspace\req108\run1\stats.json --project req108probe
-cargo run --bin ontok -- confidence calibrate --project req108probe
-cargo test --test test_req108_live -- --nocapture      # AC-002/003/006/007
-cargo test --test test_req108_confidence               # AC-008/009/010
-```
-
----
-
-## 10 · 第 2 轮修复（A-6 / A-7 / A-8 / A-9）
-
-> **起因**：QA `qa-review.md` 把 N1（`confidence` 数字可被改文件绕过）与 N2
-> （`importable: false` 声明不生效）判为「非阻断」；**BA 在第 2 轮改判为阻断**
-> （`acceptance.md` §四 A-7 / A-8）。理由：本需求的全部承诺是「低分关系进不了本体」，
-> 而这两条各用**一行**就能推翻它。
+> 全量 #1 的 78 次调用里，**76 条有效、6 条被协议作废**；#2 只补那 6 条，
+> 其中 5 条这次答合规了、1 条仍超长 ⇒ #3 里 82 条全部命中（81 判定 + 1 作废回放）。
 >
-> **本轮范围**：只修这两条 + 两处报告订正（A-6 / N4）。
-> **没动的**：评分卡数值（权重 / 阈值 / 9 条上限）、抽取规则、采样器、视图、依赖。
+> ⚠️ **为什么 #2 不是 0 调用**：#1 被预算**中途截断**（产品行为，AC-006 要求），
+> 那 6 条作废答案当时还没进缓存。#2 补完后才达到「全部命中」。
 
-### 10.1 AC-014 · 自证链：`confidence` 必须与证据自洽
+### 3.3 阶段 3 · 再跑一次（缓存验证）
 
-#### 三条校验加在哪（`path:line`）
-
-| # | 校验 | 实现位置 | 实测报错 |
-| --- | --- | --- | --- |
-| 1 | `score ≤ 每个**触发** veto 的上限`（上限由**证据**推，不由文件声明推） | `src/domain/confidence.rs:793`（`validate_self_evidence` 第 4 段），调用点 `:877` | `score 0.99 超过 veto zero_hit 的上限 0.20 —— 分数与证据不自洽（signals 里 sample_hit_rate 是 sampled=5 / matched=0）` |
-| 2 | `signals[].weight` 与 `method` 的权重表**逐项相等** | `src/domain/confidence.rs:735` | `signals 权重与 evidence-scorecard-v1 的权重表不一致：sample_hit_rate 的 weight = 0.9，权重表是 0.45 —— 分数不可复核` |
-| 3 | 每个 `veto` 信号名必须在 `signals` 里有**对应证据** | `src/domain/confidence.rs:781` | `声明了 veto zero_hit，但 signals 里没有它 —— 没有对应证据（veto 不能只写在声明里）` |
-
-**一个函数、两个调用点**：`propose import` → `db/proposal.rs:109` → `from_untrusted`；
-`proposal apply` → `domain/apply.rs:309` → **同一个** `from_untrusted`。
-不存在「入口校验一套、apply 校验另一套」。
-
-#### 为了让这三条真的成立，另外做了四件配套（都在 `confidence.rs`）
-
-| 配套 | 位置 | 它堵住的形态 |
-| --- | --- | --- |
-| **上限表只有一份**：`VETO_CAPS` 表 + 9 个私有常量；`score()` 原来 9 处字面量改成引用常量 | `:68-101`（常量区）、`:90`（表） | 「把 `veto.cap` 从 0.20 改成 0.99」⇒ 报「上限表被改过」；改代码改一半会被单测抓 |
-| **触发由证据推**（`evidence_vetoes`）：`sampled` / `matched` / `data_evidence` / `type_compatible` / `name_match` 决定该触发哪条 veto | `:638` | **整段删掉 `veto`** ⇒ 仍然被「按证据推出的 0.20」压住 |
-| **命中率不是自由变量**：`sample_hit_rate.value` 必须等于 `sampled/matched` 的查表值 | `:755` | 「把 0/5 的 `value` 改成 1.0」 |
-| **未知 `method` / 未知信号名一律拒** | `:720` / `:735` | 「`method` 改成 `foo`」⇒ 权重表无从核对 ⇒ 第 2 条被架空 |
-
-> 为什么第 1 条要用「证据推出的上限」而不是「文件里声明的上限」：
-> 若用后者，把 `veto.cap` 一起改大就同时骗过两条校验 —— 那只是把漏洞挪了个位置。
-> 现在 `score` 的上限来自 `sampled` / `matched` 这些**必须与实际采样一致**的聚合量，
-> 文件的 `veto` 段只负责「解释」，不负责「定上限」。
-
-#### 6 条自证的实测（命令 / exit code / 文案）
-
-产物在 `.review-workspace/req108/dev2/`（`tamper-*.json` = QA run1 的
-`proposal.json` + 追加一条 E5，**只改一处**，所以失败可归因到那一处）。
-
-| # | 自证 | 命令 | exit | 实测文案（首行） |
-| --- | --- | --- | --- | --- |
-| 1 | 手改 `score` 0.20→**0.99**，`veto: zero_hit` 原样保留 | `ontok propose import --file dev2\tamper-score.json` | **1** | `✗ item 149 的 confidence 不合法：score 0.99 超过 veto zero_hit 的上限 0.20 —— 分数与证据不自洽（signals 里 sample_hit_rate 是 sampled=5 / matched=0）` |
-| 2 | 手改 `signals[].weight`：hit 0.45→**0.9** | `… --file dev2\tamper-weight.json` | **1** | `✗ item 149 的 confidence 不合法：signals 权重与 evidence-scorecard-v1 的权重表不一致：sample_hit_rate 的 weight = 0.9，权重表是 0.45 —— 分数不可复核` |
-| 3 | 删掉 `zero_hit` 的**证据信号**（`sample_hit_rate`），`veto: zero_hit` 保留 | `… --file dev2\tamper-evidence.json` | **1** | `✗ item 149 的 confidence 不合法：声明了 veto zero_hit，但 signals 里没有它 —— 没有对应证据（veto 不能只写在声明里）` |
-| 4 | 原样 import `proposal-rejected.json`（10 条已知错误，`importable: false`） | `ontok propose import --file qa-out\run1\proposal-rejected.json` | **1** | `✗ …\proposal-rejected.json 顶层声明 importable = false —— 这是被拒绝档，不能导入。` |
-| 5 | 正常 `proposal.json`（148 条：96 实体 + 52 关系） | `ontok propose import --file qa-out\run1\proposal.json` | **0** | `提案 p1 已导入，共 148 个条目` |
-| 6 | 正常 `proposal-pending.json`（20 条低档，重生成后 `importable: true`） | `ontok propose import --file dev2\regen\proposal-pending.json` | **0** | `提案 p1 已导入，共 20 个条目` |
-
-**额外的 4 种攻击（都不在作业单里，但顺手关掉）**：
-
-| 攻击 | exit | 文案 |
-| --- | --- | --- |
-| 整段**删掉** `veto`，score 仍 0.99 | 1 | `score 0.99 超过 veto zero_hit 的上限 0.20 —— 分数与证据不自洽（… sampled=5 / matched=0）` |
-| `veto.cap` 0.20 → **0.99** | 1 | `confidence.veto.cap = 0.99 与 evidence-scorecard-v1 的记录不符（zero_hit 应为 0.20）—— 上限表被改过` |
-| `sample_hit_rate.value` 0.0 → **1.0**（不动 `sampled`/`matched`） | 1 | `signals 自相矛盾：sample_hit_rate 的 value = 1 与 5/0 的查表值 0 对不上` |
-| **绕过 import，直接改库里的 `payload.confidence`** 为 0.99/high，再 `review decide --accept-all`（exit 0）→ `proposal apply` | **1** | `应用失败：关系条目的 confidence 不合法：score 0.99 超过 veto zero_hit 的上限 0.20 —— 分数与证据不自洽（…）` |
-
-> 最后一条是**第二道判据的实测**（不是「同一个函数再跑一次」的说法）：
-> 分数即使已经躺在 `proposal_items.payload` 里，`apply` 也会在写快照前把它打回，
-> **不会**出现 QA 实测的 `link_types.confidence = 0.99`。
-
-**失败的 6 次 import 没有建出任何提案**（`qa108run` 里只有「自证 5 成功导入的 148 条 ×2」+
-「自证 6 成功导入的 20 条 ×2」+ QA 那轮 applied 的 148 条），
-所以「拒绝」发生在**写库之前**，不是「写进去再回滚」。
-
-> ⚠️ **本地测试库 `ontok_demo` 的副作用（自证留下的，不是产品行为）**：
-> `qa108run` 新增 4 份提案（148 ×2、20 ×2）；其中 **20 条那份的 `seq=1`** 与
-> **148 条那份的 `seq=97`** 的 `payload.confidence` 被手工改成 `0.99 / high`
-> （专门用来验证 `apply` 那道闸）。这两份**都没有写进任何快照**（apply 都失败了）。
-> QA 复跑请用新的 project 名（如 `qa108run2`），不要复用这两份。
-
-#### 不许误伤：真产出的 6 种形状全部放行
-
-单测 `ac014_every_honest_score_passes_the_gate`（`confidence.rs`）把
-**高 / 中（`partial_hit`）/ 拒绝（`zero_hit`）/ 拒绝（`all_null` + 泛化名）/
-低（`--no-sample`）/ 结构 veto（多态）** 六种真实形状 `score()` 出来再
-`serde_json` → `from_untrusted`，逐字段读回相同。
-⇒ 前面 6 条「拒绝」不是靠「一律拒」换来的。
-
-### 10.2 AC-015 · `importable: false` 现在是硬闸
-
-| 项 | 实现 |
-| --- | --- |
-| 闸的位置 | `src/cli.rs:1220` `ensure_importable()`；`propose_cmd` 在读文件后**第一步**调用（`:1249`） |
-| 语义 | 缺省 ⇒ 放行（REQ-108 之前的产物没有这个字段）；**恰好 `true`** ⇒ 放行；其它（`false` / `"false"` / `0` / `null`）⇒ 拒绝（fail-closed：说不清能不能导的文件不猜成能导） |
-| 文案 | `… 顶层声明 importable = false —— 这是被拒绝档，不能导入。` + 一句「可导入的是 proposal.json / proposal-pending.json」 |
-| 单测 | `tests/test_req108_confidence.rs` `test_req108_ac015_importable_false_is_a_hard_gate`（含 3 种非法取值 + 2 种放行） |
-
-**产出侧也修了**（`src/bin/ontok-propose.rs:590`）：`importable` 必须与
-「这份文件到底能不能导」**同真同假** ——
-
-| 文件 | `importable` | 理由 |
-| --- | --- | --- |
-| `proposal-rejected.json`（10 条 <0.30） | **false** | 拒绝档连提案都不是；一次 `--accept-all` 就进本体 |
-| `proposal-pending.json`（20 条 0.30–0.60） | **true** | 待查清单**就是要进审核界面**才能被人工判断（设计概要 §五：折叠区标「证据不足」）；不进主提案 ≠ 不能导入 |
-
-> 原来 `side_file` 两栏都写 `false`，是**同一个 bug 的两面**：
-> 它既让「带 false 的文件导得进去」（声明不生效），又让待查清单**永远导不进来**
-> （低档因此没有人工审核入口）。本轮把语义取正，闸只按 `false` 拦。
-
-### 10.3 `proposal-pending.json`：**允许导入**（决定 + 理由）
-
-1. **AC 只点名被拒绝档**：A-8 原文是「`ontok-propose` 产出的 `proposal-rejected.json`
-   带 `importable: false`……遇到 `importable: false` 的文件必须 exit≠0」。而
-   `side_file` 当初把 pending 也写了 `false` —— 扫描这段代码可以看到它是一次复制。
-2. **待查档的用途就是「被看」**：设计概要 §五 把低档的去向写成「待查清单（不进提案正文）」、
-   审核界面「折叠区，标注『证据不足』」。不进主提案 ≠ 不能进审核系统。
-3. **它不会让错误关系悄悄进本体**：低档条目带 `band=low` + veto 理由，`proposal.json` 里
-   0 条；要进本体必须有人显式 `review decide --accept-all` + `apply`（人工动作），
-   而 AC-009 判的是「拒绝档在 proposal.json 里一条都没有」——本轮实测仍然成立。
-4. 若 BA 认为待查档也不该导入：把 `ontok-propose.rs:604` 的 `true` 改回 `false` 即可，
-   **闸不用动**（一行）；代价是「低档人工审核」这条路没有入口了。
-
-⚠️ **产物字节变化**（QA 复跑时请以此为准）：重生成的
-
-- `proposal.json`：与 QA run1 **逐字节相同**（`1CDE0682…19A923`，qa `qa-review.md` §4.1 的同一个哈希）；
-- `stats.json`：逐字节相同（`F1E67355…D06560`）；
-- `proposal-pending.json`：`items` **逐字节相同**（20 条），只有 `importable`（false→true）与 `note` 变了；
-- `proposal-rejected.json`：`items` 逐字节相同（10 条），只有 `note` 变了（`importable` 仍是 false）。
-
-⇒ 评分与路由**一个字节没动**，变的只有「这个文件能不能导」这个声明本身。
-
-### 10.4 第 2 轮发现的新绕过形态（如实登记，本轮**不修**）
-
-| # | 形态 | 现在会怎样 | 为什么本轮不修 / 建议 |
-| --- | --- | --- | --- |
-| R1 | **`signals` 整段缺失**：`{"score":0.99,"method":"evidence-scorecard-v1"}` | **第 3 轮已修复（`4af61f5`）**：有 `confidence` 但 `signals` 缺失 / `null` / `[]` ⇒ import **exit 1**（§11.1） | 原判据 `absent_optional_fields_get_derived_not_invented_values` 已按 A-10 改写：不再要求「无 signals 的高分放行」，改为「有 `confidence` 就必须有证据链；没有 `confidence` 的老提案仍放行」。判据见 `tests/test_req108_confidence.rs:255` 与 `:357` |
-| R2 | **自洽的假 `signals`**：把 `sampled`/`matched` 一起改成 5/5，再算 0.99 | **import 成功，且算得上自洽** | 这是「证据本身可信不可信」的问题，不是「分数与证据一致不一致」。QA 建议的「按权重重算 `score` 必须相等」能拦住「值算了但没对上」，拦不住「聚合量本身被改」。真正的解法是拿 `sample_digest` 回源库复采（成本高，且要连源库），属下一轮 |
-| R3 | **结构性 veto**（`composite_key_unsupported` / `polymorphic_target` / `self_ref_non_unique`）没有对应信号 | 只核到「上限与表一致 + 分数不越上限」 | 它们的证据在**候选关系**（复合键 / 多态列 / 自引用）里，不在 `confidence.signals` 里；而它们只会**压低**分数（0.40–0.50），抬不高，不构成「伪造高分」的通路。已在 `confidence.rs:114` 用 `STRUCTURAL_VETOES` 写明并注释理由 |
-| R4 | 「按权重重算 `score` 必须逐位相等」（QA §3.2 的建议 3） | **未实现** | 超出 A-7 的三条；加它会改变「外部手工提案」的准入面。当前权重 + veto 双向锁死后，单改 `score` 已经不可能过闸 |
-
-### 10.5 不退化（第 2 轮实测，最终代码）
-
-| 目标 | 结果 |
-| --- | --- |
-| `cargo test --lib` | **226 passed / 0 failed**（第 1 轮 217 + 新增 9 条 AC-014 单测） |
-| `cargo test --doc` | **4 passed / 0 failed** |
-| 31 个套件（`--test`，绕行挪 bin） | **300 passed / 0 failed**（13 条 REQ-107 出口判据 = **70**；16 个邻域套件 = **218**；`test_req108_live` = 5；`test_req108_confidence` = 7） |
-| `tests/drop_rate.rs` / `test_fk_naming.rs` / `src/domain/view.rs` / `src/domain/review_view.rs` / `src/mcp/tools.rs` / `property_filter.rs` | `git diff` **仍为空**（本轮零触碰） |
-| `Cargo.toml` / `Cargo.lock` | **零改动**（无新依赖） |
-| 删测试 / `#[ignore]` / 放宽断言 | 无（本轮的 diff 只有**新增**判据） |
-| bin 绕行 sha256 | `C7CF95E2…322D → C7CF95E2…322D`（identical = True） |
-
-> 本节是**第 2 轮**的数字（lib 226 / 31 套件 300）。第 3 轮（`4af61f5`，A-10）后
-> lib = **227**；第 4 轮（本轮，A-13 + N6/N8）后为 **lib 230 / doc 4 / 32 套件 313**。
-> 31/32 个套件的**逐套件名单与数字**见 **§11.3**（N6 要求的「能对上的那种」）。
-
-### 10.6 报告订正（A-6 / N4）
-
-| 项 | 上一版写法 | 订正为 |
-| --- | --- | --- |
-| N4-① | §5.1「42 项逐字段相同」 | **36 个字段**（9 条 × `sampled`/`matched`/`digest`/`reason`）；42 是 §5.2 的**样本值个数** |
-| N4-② | §3.1「审核界面默认折叠 / 逐条显示」 | CLI **没有交互折叠**：`review show --confidence` 是「四档计数行 + 按档排序逐条打印」（44 条高档也逐条打印）。「折叠」是设计概要 §五的界面意图，不是本实现行为 |
-| A-6 | §0 与 §3.2 写「9/9 全落拒绝」 | 拆成两种证据：**E1–E7 真产出且落拒绝**（`zero_hit` 0.20）；**E8/E9 不产出 + 按坐标构造复算 0.15**（`type_incompatible`）。⛔ 不再混写 |
+全量 #3：`判定 81 条（缓存命中 82 · 实际调用 0 · 其中作废记录回放 1 条）· token 用 0 / 上限 100000 ·
+缓存命中率 100%`。第二次 e2e 项目 `req109ai` 亦为 `82 命中 / 0 调用 / 0 token`。
 
 ---
 
-## 11 · 第 3/4 轮（A-10 / A-13）与测试口径（N6 / N7 / N8）
+## 4 · AI 开 / 关 分数对照
 
-> **起因**：QA `qa-review-2.md`（复验 PASS 后）把 R5 判为「R2/R4 边界里最便宜的一条」；
-> BA 在 `acceptance.md` §六 **A-13 改判为阻断**，并把 N6/N7/N8 三条口径问题一并交回。
->
-> **本轮范围**：`data_evidence` 与采样信号的一致性（A-13）+ 报告 §11 + 31/32 套件名单。
-> **没动的**：评分卡数值（权重 / 阈值 / 9 条上限）、抽取规则、采样器、视图、依赖、红线文件。
+同一 schema、同一采样、同一批 82 条关系；唯一差别是 `--llm`。
 
-### 11.1 第 3 轮（`4af61f5`）：R1 修复（A-10）与 `confidence: null` 裁定
-
-#### 修在哪
-
-| 行为 | 实现位置 | 判据 |
+| 指标 | AI 关（v1） | AI 开（v2） |
 | --- | --- | --- |
-| 有 `confidence` 但 `signals` **缺失 / `null`** ⇒ 拒绝 | `src/domain/confidence.rs:930`（`from_untrusted` 的 `None \| Some(Null)` 分支） | `tests/test_req108_confidence.rs:255` |
-| `signals: []` ⇒ 拒绝（与「没写」分开报文案） | `src/domain/confidence.rs:945` | 同上 |
-| 老提案（**没有** `confidence` 键）⇒ 仍放行、不凭空补字段 | `src/db/proposal.rs:106`（`None \| Some(Null) => {}`）、`src/domain/apply.rs:306` | `tests/test_req108_confidence.rs:357` |
-| `confidence: null` ⇒ 与「没有这个键」同义（按「未声明」放行） | 同上两处 `None \| Some(Null)` | 同上 |
+| 分档 | 高 44 · 中 8 · 低 20 · 拒绝 10 | **高 40 · 中 12 · 低 23 · 拒绝 7** |
+| 有 `semantic_fit` 的关系 | 0 | 81（+1 条作废回放） |
+| **分数变化的关系** | — | **47 / 82** |
 
-**为什么 `null` 放行不构成漏洞**：`null` 不携带分数，读回后就是「未评分」，
-只会让审核界面显示「没有分数」，**不会抬高任何分数**；它既不是 0 分，也不是
-「有分数但没证据」。BA 在 A-15 已采纳这条判断。
+### 4.1 档位变化（7 条）
 
-#### 本轮回归里的实测（真 CLI，项目 `r5fix108`）
-
-| 输入 | 命令 | exit | 文案（首行） |
+| 关系 | 分数 关→开 | 档位 | AI 的 `semantic_fit` / 理由 |
 | --- | --- | --- | --- |
-| `{"score":0.99,"method":"…"}`（无 `signals`） | `ontok propose import --file r1-proposal-no-signals.json` | **1** | `✗ item 1 的 confidence 不合法：confidence 有 score/method 但缺 signals —— 有置信度但缺证据链：分数必须由 signals 里的证据推出来，否则不可复核（A-10）` |
-| `confidence: null` | `… --file r1-confidence-null.json` | **0** | `提案 p1 已导入，共 1 个条目` |
-| 完全没有 `confidence` 键 | `… --file r1-proposal-legacy-no-confidence.json` | **0** | `提案 p1 已导入，共 1 个条目` |
+| `customer_rebate.customer_id → customers` | 1.00 → **0.85** | 高→中 | **0.00** ·「customer_id非主键，customers.id是主键，类型虽匹配但业务上ID不对应。」 |
+| `deductions.customer_id → customers` | 1.00 → **0.85** | 高→中 | **0.00** ·「customers表主键id无业务语义，扣费记录中的customer_id应关联客户编号而非系统ID。」 |
+| `deductions.license_id → licenses` | 1.00 → **0.85** | 高→中 | **0.00** ·「源列名license_id，目标表无同名列，业务上通常外键对主键id或业务键key。」 |
+| `usage_reconciliation_log.subscription_id → customer_subscriptions` | 0.92 → **0.86** | 高→中 | 0.50 ·「…目标表无该列，仅id可对应，存在歧义。」 |
+| `llm_routing_rules.group_id → llm_provider_groups` | 0.26 → **0.37** | 拒绝→低 | 1.00 ·「规则表外键group_id指向组表主键id，类型一致。」 |
+| `proxy_operation_records.auth_id → proxy_operation_auths` | 0.26 → **0.36** | 拒绝→低 | 0.90 ·「…虽命名不完全对应但业务指向明确。」 |
+| `simulate_login_operations.session_id → simulate_login_sessions` | 0.26 → **0.30** | 拒绝→低 | 0.50 ·「…目标主键是主键ID，通常对应token或session_id，当前指向不明。」 |
 
-#### 一并说清：`4acbf5a` 上 `test_req107_source_enumeration::t5` 本来就是红的
+### 4.2 分数变了但档位没变的 40 条（按 `semantic_fit` 分桶）
 
-`4acbf5a` 新增了 `cli::ensure_importable`，但没登记进
-`tests/test_req107_source_enumeration.rs` 的 `OUTLET_FNS`；t5 要求「出口文件的每个函数
-都要登记」，所以在那个提交上**红**。`4af61f5` 补的是一条**登记**（不是放宽断言：
-该文件 0 条断言改动、t5 函数体 0 改动）。这也正是 N8 的由来 —— 那个套件当时
-**不在**标准回归集里，所以「31 套件全绿」并没有覆盖到它。本轮把它加进回归集（§11.3）。
-
-### 11.2 第 4 轮：R5 修复（A-13）
-
-#### 修在哪
-
-**唯一实现点**：`src/domain/confidence.rs:796`（`validate_self_evidence` 第 4 段）。
-两个调用点共用它，因此 `import` / `decide` / `apply` 三条路都收口：
-
-- `propose import` → `src/db/proposal.rs:109` → `from_untrusted`；
-- `proposal apply` → `src/domain/apply.rs:309`（`link_from_payload`，`:280` 定义）→ **同一个** `from_untrusted`；
-- `decide` 只改条目状态、不写快照；真正落快照的是随后的 `apply`，所以它同样过这道闸。
-
-#### 判据
-
-| `data_evidence` | `signals` 要求 | 否则 |
-| --- | --- | --- |
-| `sampled`（或字段缺失，按严格侧） | **必须**有 `sample_hit_rate`，且 `sampled` / `matched` 齐全 | 拒绝：`声明了采样证据但 signals 里没有 sample_hit_rate` |
-| `none` | **不得**有 `sample_hit_rate` | 拒绝：`data_evidence = none … 却又摆出一份采样证据` |
-
-只留 `name/value/weight`、拿掉 `sampled` / `matched` 的「空壳」也算删证据：
-`evidence_vetoes` 推不出任何命中类 veto，等于换个写法把这一环删掉 ⇒ 同样拒绝。
-
-#### 4 条判据的实测（真 CLI，项目 `r5fix108`，本地库）
-
-产物在 `.review-workspace/req108/dev-r5/`（`attack-*.json` / `honest-*.json`）。
-
-| # | 输入 | exit | 文案（首行） |
+| `fit` | 条数 | 方向 | 例子 |
 | --- | --- | --- | --- |
-| 1 | QA 原样攻击链：`0.99` + `data_evidence: sampled` + 4 个结构信号（无 `sample_hit_rate`、无 `veto`） | **1** | `✗ item 1 的 confidence 不合法：confidence.data_evidence = sampled —— 声明了采样证据但 signals 里没有 sample_hit_rate：数据证据（sampled/matched/digest）只挂在这条信号上，删掉它之后剩下的结构信号不可复核（A-13 · R5）` |
-| 2 | 反向：`data_evidence: none` + 带 `sample_hit_rate`（5/5） | **1** | `✗ item 1 的 confidence 不合法：confidence.data_evidence = none（声明没采过样），但 signals 里出现了 sample_hit_rate —— 声明没有采样证据却又摆出一份采样证据，二者矛盾（A-13 · R5）` |
-| 3 | `--no-sample` 真产出：`none` + 3 个结构信号（无 `sample_hit_rate`） | **0** | `提案 p1 已导入，共 1 个条目`（`[1] add_link_type →activity`） |
-| 4 | 真 `proposal.json`：148 条（96 实体 + **52 条关系，每条 5 信号**） | **0** | `提案 p1 已导入，共 148 个条目`；`review show --confidence` 读回 `高 44 · 中 8 · 低 0 · 拒绝 0（共 52 条关系）` |
+| **1.0** | 29 | 抬升（多为高/中档内的小幅加分） | `app_billing_transactions.app_id → service_apps` 0.92→0.93；`deductions.model_id → llm_model` 0.32→0.42 |
+| **0.5** | 12 | 折半 | `operate_log.session_id → simulate_login_sessions` 0.86→0.81；`order.subscription_id → customer_subscriptions` 0.70→0.74 |
+| **0.0** | 3 | 拉低 0.15（§5.2 标红的三条） | `*_customer_id → customers` 那一批 1.00→0.93（仍留高档） |
+| 0.8 / 0.9 | 3 | 小幅 | `proxy_operation_records.auth_id → proxy_operation_auths` 0.26→0.36 |
 
-**变异自证**：删掉 `validate_self_evidence` 第 4 段，单测
-`ac013_r5_sampled_without_sample_hit_rate_is_rejected` 与集成判据
-`test_req108_ac013_sampled_without_sample_hit_rate_is_rejected_at_import` 立刻红。
+> 结论：AI 的 15% 权重**只会让分数在同档内小幅移动**（±0.15 上限），
+> 只有「本来就在档位边界附近」的关系才会换档 —— 与设计概要 §3.1 的意图一致。
 
-**第二道闸（防「绕过 import 直接改库」）**：在项目 `r5apply108b` 导入真
-`proposal.json`（148 条）后，用 SQL 把其中一条关系的 `payload.confidence`
-改成上面的攻击形状，再走 QA 同一条链：
+### 4.3 veto 逐条复核（红线）
 
-| 步骤 | exit | 结果 |
+- 82 条里 `score > veto.cap` 的：**0 条**；
+- REQ-108 的 E1–E7（7 条 `zero_hit`）：**全部仍是 0.20 / 拒绝**，即使 AI 给 1.0；
+- E8/E9（不产出）：`type_incompatible` 0.15 上限由单测按坐标构造复算覆盖（+AI 1.0 仍 0.15）。
+
+---
+
+## 5 · 语义质量（**P1 观察项，不作通过条件**）
+
+BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮目标。以下**如实记录，不修饰**。
+
+### 5.1 本轮样本上的结论
+
+> **在本轮 82 条关系上，模型对 81 条给出了判断，但没有一条能被「用来修正结构」**：
+> 它在 5 条小样本上都正确地指出「业务键是 `llm_model.model_id`（choice）」，同时把
+> **`semantic_fit` 打成 1.0**（= 这条关系说得通）—— 而提案实际指向的是 `llm_model.id`。
+> 也就是说：**它读懂了「关系说得通」，但没有回答「目标列选对了吗」**；而 REQ-109 的语义项
+> **不允许改结构**（G1），所以「6 条 `model_id` 根因」**没有被修**（本轮也没打算修）。
+
+### 5.2 🔴 标红：AI 把 3 条**已被 5/5 采样证实**的正确关系判成 0.00
+
+| 关系 | 采样 | AI | 后果 |
+| --- | --- | --- | --- |
+| `customer_rebate.customer_id → customers` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+| `deductions.customer_id → customers` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+| `deductions.license_id → licenses` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+
+模型的三条 rationale 都建立在**同一个误解**上：「外键应指向业务键，不该指向无业务语义的主键 `id`」。
+但数据证据（5/5 命中）恰恰证明 `customer_id` 的取值**确实存在于** `customers.id`。
+采样**没能拦住**这条误判 —— 因为采样只往下压（veto），AI 的错判是往下扣分前的正常加权。
+
+- 影响：3 条**正确**关系从「高」降到「中」（仍进主提案，不会被丢弃）；
+- 定性：**模型能力问题，不是流程缺陷**（veto、预算、缓存、溯源全部按设计工作）；
+- 建议（不在本 REQ 内做）：若将来要让语义项真正参与裁决，需要**正/负两类样本校准**，
+  或把 `semantic_fit` 的方向性交给人工复核，而不是直接进分数。
+
+### 5.3 其它观察
+
+1. **`semantic_fit` 的语义歧义**：协议里它是「这条关系说得通吗」，但模型常答成「我选的
+   `choice` 有多可信」。5 条小样本里 5 条都是这种读法。Prompt 已明确写「choice 不改变评分，
+   目标列不对就该给低分」，模型仍倾向按 choice 打分 —— 属模型理解偏差，未再做提示词调优（BA 裁定）。
+2. **模型非确定**：同一输入两次调用，rationale 长度会变（66 字被判作废 / 41 字通过）。
+   ⇒ 幂等只能由缓存保证；`tokens` 回放也说明「同一条判断不重复计费」。
+3. **格式遵从度**：强化一次格式约束后，超 60 字的从 3/5 降到 1/82。仍不完美，但不值得继续调
+   （AC-009 的作废逻辑已把不合规答案挡在分数之外）。
+
+---
+
+## 6 · 测试数字
+
+**权威口径**（每个 `--test` 目标前临时挪开 `src/bin/ontok-gate-preflight.rs`，
+跑完立即挪回；**sha256 before = after = `C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D`**，
+本会话**每一次**绕行都做了前后比对、全部一致；`git diff a8a51ed -- src/bin/ontok-gate-preflight.rs` 为空）。
+
+| 目标 | 本轮 | 基线（REQ-108） | 判定 |
+| --- | --- | --- | --- |
+| `cargo test --lib` | **230 passed / 0 failed** | 230 | ✅ 不退化 |
+| `cargo test --doc` | **4 passed / 0 failed** | 4 | ✅ 不退化 |
+| 32 个回归套件 | **313 passed / 0 failed** | 313 | ✅ 不退化（逐套件同 §11.3 名单） |
+| 新增 3 套件 | **31 passed / 0 failed** | — | 22 + 6 + 3 |
+| **套件合计（35 个）** | **344 passed / 0 failed** | 313（32 套件） | +31 |
+| **总计** | **578 passed / 0 failed** | 547 | +31 |
+
+跑测试时的环境：`ONTOK_TEST_DATABASE_URL`（本地库）+ `SRC_URL`（源库只读，供 `test_req108_live`）。
+**LLM 三个环境变量全程未设** —— 这就是 AC-011 的判据。
+
+新增用例分布：
+
+| 套件 | 条数 | 覆盖 |
 | --- | --- | --- |
-| `review decide --accept-all` | **0** | 148 条 × 2 轨 → accepted（`decide` 只改状态，不读分数） |
-| `proposal apply` | **1** | `应用失败：关系条目的 confidence 不合法：confidence.data_evidence = sampled —— 声明了采样证据但 signals 里没有 sample_hit_rate：…（A-13 · R5）` |
-| `version list` | — | 只有 `v1`，**没有 v2**（快照没有被写坏） |
+| `test_req109_ai_semantic` | 22 | 指纹 6 项 · 缓存 0 调用/清空重调/`--refresh` · 改 prompt · 预算停 · 协议 4 类作废 · 无 usage · 空正文 · 幂等 · v1/v2 权重 · veto 不被翻 · 缺失≠0 · 溯源成对 · 零泄漏 · 接缝 · 无 key |
+| `test_req109_cli_gate` | 6 | AC-002（全缺 / 单缺逐个）· AC-006（缺预算 / 0 预算）· `--refresh` 误用 · AI 关不受环境变量影响 |
+| `test_req109_e2e_fake_llm` | 3 | 真进程 + 假端点 + 真缓存表：缓存命中/删行重调 · 幂等（含 `cache_hit` 一位的差异证明）· 预算 1 不写产物 |
 
-⇒ 与 AC-014 的做法一致：即使分数已经躺在 `proposal_items.payload` 里，
-`apply` 也会在写快照前把它打回。
+---
 
-### 11.3 测试数字与回归集名单（N6 / N8）
+## 7 · 偏差 / AC 缺陷 / 已知限制
 
-**权威口径（本轮，绕行挪 bin 后实测）**：
-
-| 目标 | 本轮实测 | 上一轮（第 3 轮） |
+| # | 项 | 说明 |
 | --- | --- | --- |
-| `cargo test --lib` | **230 passed / 0 failed** | 227（+3 条 R5 单测） |
-| `cargo test --doc` | **4 passed / 0 failed** | 4 |
-| **32 个回归套件**（下表） | **313 passed / 0 failed** | 31 套件 302 |
-| 合计 | **547 passed / 0 failed** | 533 |
+| D-1 | **AC-004 与 AC-003/AC-010 互斥** | 见 §2.4。`cache_hit` 必须落产物（3 处要求）× 它逐次不同 ⇒ 「两次 sha256 完全相同」不可能成立。本实现保留 `cache_hit`，判据改为「归一后相同 + 差异只有这一行」，并给出逐行 diff 证据。**请 BA 裁定** |
+| D-2 | `ai` 挂在 `confidence` 里，不是条目的顶格键 | demand 写「提案条目带 `ai: {…}`」。若做顶格键，`propose import` 会把它搬进 `payload` 后**再没人读**（快照层 `LinkType` 只认 `confidence`），于是文件一份、库里没有 ⇒ 两份迟早不一致。挂在 `confidence.ai` 则**一次写入**穿到提案/审核界面/快照/建模轨。字段本身（`model` / `prompt_sha` / `tokens` / `cache_hit`）与 demand 逐字一致 |
+| D-3 | 新增两个**只截断**的运维闸 | `--llm-only` / `--llm-limit`，为满足「先 5 条小样本再全量」。不参与判据 |
+| D-4 | `ai_cache.tokens_used` 允许 NULL | 历史行/缺 usage 的回放记 0（不编数）。报告里 token 总量会偏低，这是唯一诚实的表示 |
+| D-5 | **作废答案也进缓存** | 否则每条被协议作废的关系每次重跑都要再付一次钱，且「第二次 0 调用」永远不成立。回放时**照样作废**（`judgement=None`），不会被当成「AI 说不成立」 |
+| L-1 | G1 不变 | AI 只能在候选集合内选择；跨表 retarget 无能为力 ⇒ `model_id` 根因修不了 |
+| L-2 | G2 不变 | 供应商静默升级模型时缓存仍返回旧结果（`model_id` 只防显式切换） |
+| L-3 | 成本 | 全量 82 条 ≈ 101k token（≈1.2k/条，含推理）；83 表全量靠缓存与预算闸控制 |
+| L-4 | 本地库副作用 | 为 AC-010 的端到端 grep，本地库建了 `project req109ai` 并 import→apply 到 **v2**；`req109full` 只建了项目未落版本。两者都不影响仓库内容 |
 
-**回归集名单（32 个，逐套件数字；新增成员用 ★ 标出）**：
-见下表 —— `13 + 16 + 1 + 1 + 1 = 32`，`70 + 218 + 5 + 10 + 10 = 313`。
+---
 
-| 组 | 套件 | passed |
-| --- | --- | --- |
-| REQ-107 出口判据（13） | `test_req107_outlet_pipeline` | 12 |
-| | `test_req107_guard_granularity` | 4 |
-| | `test_req107_zero_visible_change` | 3 |
-| | `test_req107_pipeline_bytes` | 1 |
-| | `test_req107_scope_error_gate` | 4 |
-| | `test_req107_track_manifest` | 2 |
-| | `test_req107_static_texts` | 3 |
-| | `test_req107_red_lines` | 2 |
-| | `test_property_filter` | 10 |
-| | `test_exit_ordering_req106` | 7 |
-| | `test_binary_output_guard` | 7 |
-| | `test_graph_server` | 9 |
-| | `test_guard_manifest_req081` | 6 |
-| | **小计** | **70** |
-| 邻域（16） | `test_apply` | 21 |
-| | `test_snapshot` | 10 |
-| | `test_snapshot_write_paths` | 8 |
-| | `test_proposal` | 9 |
-| | `test_model_view` | 10 |
-| | `test_view` | 26 |
-| | `test_review_show_e2e` | 11 |
-| | `test_review_state` | 28 |
-| | `test_db` | 11 |
-| | `test_extracted_by_provenance` | 9 |
-| | `test_review_provenance` | 17 |
-| | `test_concept_proposal` | 19 |
-| | `test_diff` | 13 |
-| | `test_no_write_path` | 4 |
-| | `test_provenance_source` | 5 |
-| | `test_overview` | 17 |
-| | **小计** | **218** |
-| 本 REQ | `test_req108_live` | 5 |
-| | `test_req108_confidence` | 10 |
-| ★ N8 新增 | `test_req107_source_enumeration` | 10 |
-| | **总计（32 套件）** | **313** |
+## 8 · 我认为最可能被 QA 打回的一点
 
-**N6 的账（302 vs 307，到底谁对）**：
+**AC-004 的改口径（D-1）。**
 
-- 31 套件的真实组成是 `70（13 出口）+ 218（16 邻域）+ 5（live）+ 9（confidence）= 302`；
-- 「307」是 `70 + 218 + 9（confidence）+ 10（source_enumeration）= 307` ——
-  它把 `test_req108_live`（5 条）**换成了** `test_req107_source_enumeration`（10 条），
-  差的 5 就是这么来的，**不是任何套件退化**；
-- 本轮起不再使用「307」这个总数：回归集固定为上表 **32 个**，
-  总数 **313**，且逐套件数字相加可复核（`70 + 218 + 5 + 10 + 10`）。
+理由：这是**唯一一条我没有按字面交付的 AC**。我给出的证据是「差异只有 `cache_hit` 一行」，
+但 QA 完全可以说「AC 写的是四份 sha256 相同，你交的是归一后相同」。
 
-**N8 的处置**：`test_req107_source_enumeration` 已加入标准回归集（上表 ★ 行），
-此后「回归集全绿」覆盖「出口文件的每个函数都登记」这条静态判据。
+对打的理由也摆在桌面：要按字面满足 AC-004，只能**把 `cache_hit` 从产物里删掉** ——
+那会同时违反 AC-003（「第二次 `ai.cache_hit == true`」）、AC-010（「model-view 必须有」）
+和 demand §范围 6（「提案条目带 `ai: {…, cache_hit}`」）。**三条 AC 里至少有一条必须让步**，
+我选择让步那条**自相矛盾**的，并在报告里把互斥关系与逐行 diff 一起交出来。
 
-**bin 绕行（sha256 前后一致）**：
+第二可能被打回的是 **D-2（`ai` 在 `confidence` 内而不是条目顶格）** —— 同上，给了结构性理由。
 
-```
-sha256(src/bin/ontok-gate-preflight.rs) before = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-  → 临时 Move-Item 到 .review-workspace/req108/parked/
-  → 跑 --lib / --doc / 32 个 --test 套件
-  → 立即 Move-Item 回来
-sha256 after                                    = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-identical = True
-```
-
-**红线 / 禁止项**：本轮 diff 只有 `src/domain/confidence.rs` 与
-`tests/test_req108_confidence.rs`（外加本报告）；六红线文件、`guard()`、
-`property_filter.rs` G1–G4 的 `git diff` 为空；`Cargo.toml` / `Cargo.lock` 零改动；
-无删测试 / `#[ignore]` / 放宽断言。
-
-### 11.4 已知限制（A-16 更新）
-
-**R5 已封**（§11.2）。R2 / R3 / R4 **仍按 A-12 登记，没有修，也不写成「已封堵」**：
-
-| # | 形态 | 现状 |
-| --- | --- | --- |
-| R2 | 伪造**全套自洽**证据（连 `sampled`/`matched` 一起改成 5/5 并重算分数） | 仍可导入。需要连 `sample_digest` 一起伪造，而 digest 可回源库复采证伪 —— 这已超出「诚实错误」的威胁模型 |
-| R3 | 3 条结构性 veto 在 `signals` 里无对应信号 | 仍只核到「上限与表一致 + 分数不越上限」；它们只压低分数，抬不高 |
-| R4 | 「按权重重算 `score` 必须逐位相等」 | 仍未实现；权重 + veto + R5 锁死后，单改 `score` 过不了闸 |
-
-**剩余风险一句话**：置信度防的是**诚实错误**，不是**有 DB 写权限的恶意篡改**
-（那需要连 `sample_digest` 一起伪造，属于另一个信任边界）。
-
-### 11.5 N6 / N7 / N8 处置
-
-| # | 本轮处置 | 位置 |
-| --- | --- | --- |
-| **N7** | 新增 §11：§11.1 R1 修复 + `confidence: null` 裁定 + t5 基线说明；§11.2 R5；§11.3 本轮数字 | 本文件 |
-| **N6** | 给出 32 套件**逐套件名单**与可相加的总数（313）；解释 302/307 的 5 条差是 `live`(5) 与 `source_enumeration`(10) 互换；**不再使用 307** | §11.3 |
-| **N8** | `test_req107_source_enumeration` 加入回归集（★ 行），并在 §11.1 说明 t5 在 `4acbf5a` 红的原因 | §11.1 / §11.3 |
+第三是 **§5.2 的三条误判**：那 3 条 5/5 采样的正确关系被 AI 扣了 0.15 分（高→中）。
+按 BA 裁定这**不阻断交付**，但 QA 若认为「AI 降低正确关系」不可接受，需要 BA 决定是否调权重。

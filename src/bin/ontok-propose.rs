@@ -94,6 +94,14 @@ async fn main() -> Result<()> {
     // REQ-108 · AC-009：待查清单 / 拒绝清单的落点。默认与 `--out` 同目录。
     let mut pending_out: Option<String> = None;
     let mut rejected_out: Option<String> = None;
+    // REQ-109 · AI 语义项（**默认关**，设计概要 §五）
+    let mut llm = false;
+    let mut refresh = false;
+    // 分阶段上线用：只判关系键包含该子串的那些（阶段 1 的「先小样本」）。
+    // 不改变任何判据 —— 没被判的关系语义缺失（不是 0 分）。
+    let mut llm_only: Option<String> = None;
+    // 分阶段上线用：最多送前 N 条关系给 AI（**只截断请求**，不改变判据）。
+    let mut llm_limit: Option<usize> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -129,6 +137,23 @@ async fn main() -> Result<()> {
             // REQ-108 · AC-009：两个清单的落点（默认与 --out 同目录）
             "--pending-out" => pending_out = Some(val()?),
             "--rejected-out" => rejected_out = Some(val()?),
+            // REQ-109 · AI 语义项（默认关；开就必须有三件环境变量 + 预算）
+            "--llm" => llm = true,
+            "--refresh" => refresh = true,
+            "--llm-only" => {
+                let v = val()?;
+                if v.trim().is_empty() {
+                    anyhow::bail!("--llm-only 需要非空的关系键子串（例如 llm_model）");
+                }
+                llm_only = Some(v);
+            }
+            "--llm-limit" => {
+                let n: usize = val()?.parse().context("--llm-limit 要一个正整数（最多送几条关系给 AI）")?;
+                if n == 0 {
+                    anyhow::bail!("--llm-limit 必须 ≥1（0 等于「一条都不判」，那与不开 AI 混淆）");
+                }
+                llm_limit = Some(n);
+            }
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -146,11 +171,44 @@ async fn main() -> Result<()> {
                 println!("REQ-019:\n  --attempts <n>  每组抽取的尝试次数（默认 {DEFAULT_ATTEMPTS}）\n  --round ≥2 时会连库载入基版本的已有类型（规格 §7.1 阶段 1 的五个输入之一）");
                 println!("REQ-022:\n  --budget-tokens <n>  成本闸门：累计用量上限，超了**停**并上报\n                （外置 agent 的强制义务；没设闸又声明会上报用量 ⇒ 入口拒绝）");
                 println!("REQ-108 置信度:\n  --src <url>  源库连接串（只读会话；也可用环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}）\n  --no-sample  关闭采样：confidence 只由结构信号算，且全部标 data_evidence=none（缺数据证据不进主提案）\n  --pending-out / --rejected-out  待查清单 / 拒绝清单的落点（默认与 --out 同目录的 proposal-pending.json / proposal-rejected.json）");
+                println!("REQ-109 AI 语义项（**默认关**）:\n  --llm        打开 AI 语义判断（semantic_fit 权重 0.15，method 变 evidence-scorecard-v2）\n               开 ⇒ 必须有 {base} / {key} / {model}，否则 exit≠0 并点名缺哪个（R4）\n  --budget-tokens <n>  --llm 时**必填且 >0**；超预算即停并按「已用/上限/停在第几条」报告（R5）\n  --refresh    忽略已有缓存并覆盖（迭代提示词时用）；会打印「强制刷新 N 条」（R3）\n  --llm-only <substr>  只判关系键包含该子串的关系（分阶段上线的闸，其余按语义缺失处理）\n  --llm-limit <n>      最多送 n 条关系给 AI（分阶段上线的闸，**只截请求**，不改变判据）",
+                    base = ontok::extract::ai_semantic::BASE_URL_ENV,
+                    key = ontok::agent::llm::API_KEY_ENV,
+                    model = ontok::agent::llm::MODEL_ENV);
                 return Ok(());
             }
             other => anyhow::bail!("未知参数 {other}"),
         }
     }
+
+    // ── REQ-109 · AI 开关的前置校验（**在干活之前**失败）────────────
+    //
+    // 三条都必须在读 schema 之前判完。AC-002 要的不是「抽完之后才发现没 key」，
+    // 而是「开口就说清缺哪个变量、exit≠0」—— 晚失败会让一次运行白跑，
+    // 更糟的是可能已经花掉了别的钱。
+    //
+    // 顺序是有意的：**先判环境变量**（R4 的「不许静默降级」），再判预算（R5），
+    // 最后才要求产品库（缓存的落点）。这样「三件套缺一件」永远报得出来，
+    // 不会被「你还没给预算」抢先盖住。
+    let mut ai_budget: Option<u64> = None;
+    let llm_settings = if llm {
+        let settings = ontok::extract::ai_semantic::LlmSettings::from_env()?;
+        ai_budget = Some(ontok::extract::ai_semantic::require_ai_budget(budget_tokens)?);
+        ontok::config::require_env(ontok::config::DATABASE_URL_ENV).context(
+            "--llm 需要 ONTOK_DATABASE_URL：AI 判断必须落 `ai_cache` 表，\
+             否则「同指纹命中就不再调用」这条（R1/R2）无处安放 —— \
+             每次重跑都会为同一批关系再付一次钱。",
+        )?;
+        Some(settings)
+    } else {
+        if refresh {
+            anyhow::bail!(
+                "--refresh 只在 --llm 下有意义：它说的是「忽略 AI 缓存并覆盖」。\n\
+                 AI 没开时缓存压根不参与本轮，给这个开关只会让人以为发生过一次刷新。"
+            );
+        }
+        None
+    };
 
     let schema_raw = std::fs::read_to_string(&schema_path)
         .with_context(|| format!("读不到 {schema_path}（先跑 ontok-introspect）"))?;
@@ -392,17 +450,199 @@ async fn main() -> Result<()> {
             if no_sample { "给了 --no-sample" } else { "没有源库连接串" }
         );
     }
-    let scored = ontok::extract::propose::score_links(
+    // ── REQ-109 · AI 语义判断（可选、带缓存、带预算）───────────────────
+    //
+    // 位置是**结构性**的：采样已经跑完（评分需要数据证据），评分还没发生
+    // （语义分要作为评分卡的输入）。三条都在同一个循环里，顺序不能换。
+    //
+    // 缓存流程（`db::ai_cache` 模块头有完整论证）：
+    //   预加载（async）→ 内存编排（sync，命中即返回、绝不调用）→ 一次性回写（async）
+    let mut ai_judged: Option<
+        std::collections::HashMap<usize, ontok::extract::ai_semantic::Judgement>,
+    > = None;
+    if let Some(settings) = &llm_settings {
+        use ontok::extract::ai_semantic as ai;
+
+        let prompts = ai::Prompts::standard();
+        let budget = ai_budget.expect("--llm 已在入口校验过预算");
+        let mut reqs = ontok::extract::propose::ai_requests(&candidates, &report, llm_only.as_deref());
+        let skipped = candidates.len().saturating_sub(reqs.len());
+        // 分阶段上线的「只跑前 N 条」：**只截请求**，不改任何判据。
+        // 没送的关系语义缺失（不是 0 分），与「AI 判失败」同义。
+        if let Some(n) = llm_limit {
+            reqs.truncate(n);
+        }
+
+        let db_url = ontok::config::require_env(ontok::config::DATABASE_URL_ENV)?;
+        let pool = ontok::db::pool::connect(&db_url)
+            .await
+            .context("连不上产品库（ai_cache 所在库）")?;
+        ontok::db::pg::migrate(&pool)
+            .await
+            .context("迁移失败（建 ai_cache 表）")?;
+        let store = ontok::db::PgAiCache::new(pool.clone());
+        let fps: Vec<String> = reqs
+            .iter()
+            .map(|r| {
+                r.fingerprint(
+                    &prompts.sha256,
+                    &settings.config.model,
+                    ai::AGENT_VERSION,
+                )
+            })
+            .collect();
+        let mut cache = store.preload(&fps).await.context("读 ai_cache 失败")?;
+        let mut transport = settings.transport()?;
+        let (judged, stats) = ai::judge_all(
+            transport.as_mut(),
+            &mut cache,
+            &reqs,
+            &settings.config.model,
+            prompts.clone(),
+            budget,
+            refresh,
+            settings.config.max_tokens,
+        );
+        // ★ 先回写、再判预算：**已经花掉的钱对应的判断必须落盘**。
+        // 反过来的话，一次越预算的终止会让这一轮的所有调用白花（下次重跑再付一次）。
+        let written = store.persist(&cache).await.context("写 ai_cache 失败")?;
+        pool.close().await;
+
+        let judge_ok = stats.judged;
+        println!();
+        println!("AI 语义（{}）", ontok::domain::confidence::METHOD_V2);
+        println!(
+            "  模型        : {}（prompt sha256 {}…，agent {}）",
+            settings.config.model,
+            &prompts.sha256[..12.min(prompts.sha256.len())],
+            ai::AGENT_VERSION
+        );
+        let filtered_note = {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(f) = llm_only.as_deref() {
+                parts.push(format!("--llm-only {f}"));
+            }
+            if let Some(n) = llm_limit {
+                parts.push(format!("--llm-limit {n}"));
+            }
+            if parts.is_empty() {
+                "无目标键列".to_string()
+            } else {
+                format!("无目标键列 / {}", parts.join(" / "))
+            }
+        };
+        println!(
+            "  请求        : {} 条（未送 AI {} 条：{}）",
+            reqs.len(),
+            skipped,
+            filtered_note
+        );
+        println!(
+            "  判定        : {} 条（缓存命中 {} · 实际调用 {}{}）",
+            judge_ok,
+            stats.cache_hits,
+            stats.calls,
+            if stats.rejected_cache_hits > 0 {
+                format!(" · 其中作废记录回放 {} 条", stats.rejected_cache_hits)
+            } else {
+                String::new()
+            }
+        );
+        println!(
+            "  token       : 用 {}{}",
+            stats.tokens_spent,
+            match stats.cache_hit_rate() {
+                Some(r) => format!(
+                    " / 上限 {budget} · 缓存命中率 {:.0}% · 新写入缓存 {written} 条",
+                    r * 100.0
+                ),
+                None => format!(" / 上限 {budget} · 缓存命中率 —（没有判定）· 新写入缓存 {written} 条"),
+            }
+        );
+        if stats.rejected() > 0 || stats.failed_calls > 0 {
+            println!(
+                "  ⚠ 作废      : {} 条（解析 {} · choice {} · fit {} · rationale {} · cites {}）· 调用失败 {}",
+                stats.rejected(),
+                stats.rejected_parse,
+                stats.rejected_choice,
+                stats.rejected_fit,
+                stats.rejected_rationale,
+                stats.rejected_cites,
+                stats.failed_calls
+            );
+            for s in stats.rejection_samples.iter().take(3) {
+                println!("                {s}");
+            }
+        }
+        if refresh {
+            println!(
+                "  ⚠ 强制刷新  : {} 条（--refresh：忽略已有缓存并覆盖）",
+                stats.refresh_ignored
+            );
+        }
+
+        // ── 预算闸：越了 ⇒ **不出产物**（AC-006）──
+        //
+        // 为什么不写一份「importable: false」的提案就退出：主提案的契约里
+        // 没有 importable 这一栏（只有待查/拒绝清单有），写一份**看起来正常、
+        // 其实语义判断只做了一半**的提案，正是 R4 要防的「静默降级」。
+        if stats.over_budget() {
+            // 「停在第几条」两种说法都要有，且都必须是真的：
+            // · 还有关系没判 ⇒ 就停在那个位置；
+            // · 全判完了但用量越顶 ⇒ 停在「最后一条之后」，不许说成停在第 1 条。
+            let stop_where = match stats.budget_stopped {
+                Some(n) => format!("停在第 {} 条（共 {} 条关系）", n, reqs.len()),
+                None => format!(
+                    "停在第 {} 条之后（{} 条已全部判完，用量越过了上限）",
+                    reqs.len(),
+                    reqs.len()
+                ),
+            };
+            println!(
+                "  ✗ 预算超限  : 已用 {} / 上限 {}，{}",
+                stats.tokens_spent, budget, stop_where
+            );
+            eprintln!(
+                "✗ AI 预算超限：已用 {} token / 上限 {} token，{}。",
+                stats.tokens_spent, budget, stop_where
+            );
+            anyhow::bail!(
+                "AI 预算超限 —— 本轮**不产出任何提案文件**（AC-006）。\n\
+                 \n\
+                 已用 / 上限 / 停在第几条：{} / {} / {}。\n\
+                 \n\
+                 为什么不在超预算时照出产物：主提案没有 importable 栏，\
+                 一份「语义只判了一半」的提案看起来与完整的一模一样 ——\
+                 那正是 R4「不许静默降级」要防的东西。\n\
+                 已经花掉的那些判断**已经写进 ai_cache**，放宽预算重跑会直接命中，不重复计费。",
+                stats.tokens_spent,
+                budget,
+                stop_where
+            );
+        }
+
+        ai_judged = Some(judged);
+    }
+
+    let scored = ontok::extract::propose::score_links_with_ai(
         &outcome.proposal.items,
         &report,
         &keys,
         &evidence,
+        ai_judged.as_ref(),
     );
     ontok::extract::propose::attach_confidence(&mut outcome.proposal.items, &scored);
     let scored_by_band = ontok::domain::confidence::BandCounts::of(scored.iter().map(|(_, c)| &c.band));
 
+    // 本轮实际用的评分方法：AI 关 = v1（与 REQ-108 逐字节相同），开 = v2。
+    let score_method = if llm_settings.is_some() {
+        ontok::domain::confidence::METHOD_V2
+    } else {
+        ontok::domain::confidence::METHOD
+    };
+
     println!();
-    println!("置信度（evidence-scorecard-v1）");
+    println!("置信度（{score_method}）");
     println!(
         "  关系评分    : {} 条（其中 {} 条真的读到了样本）",
         scored.len(),
@@ -594,7 +834,7 @@ async fn main() -> Result<()> {
                 "base_version": base_version,
                 "round": round,
                 "importable": importable,
-                "method": ontok::domain::confidence::METHOD,
+                "method": score_method,
                 "note": counts_note,
                 "items": items,
             })

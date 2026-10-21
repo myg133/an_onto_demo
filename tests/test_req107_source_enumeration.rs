@@ -1763,6 +1763,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/agent/llm/mod.rs", "protocol"),
     ("src/agent/llm/mod.rs", "transport"),
     ("src/db/mod.rs", "agent_registry"),
+    // REQ-109 · AI 语义判断的指纹缓存（`ai_cache` 表）
+    ("src/db/mod.rs", "ai_cache"),
     ("src/db/mod.rs", "apply"),
     ("src/db/mod.rs", "pg"),
     ("src/db/mod.rs", "pool"),
@@ -1787,6 +1789,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/domain/mod.rs", "snapshot"),
     ("src/domain/mod.rs", "view"),
     ("src/extract/mod.rs", "cardinality"),
+    // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）
+    ("src/extract/mod.rs", "ai_semantic"),
     ("src/extract/mod.rs", "introspect"),
     ("src/extract/mod.rs", "names"),
     ("src/extract/mod.rs", "propose"),

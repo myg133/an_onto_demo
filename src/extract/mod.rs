@@ -1,4 +1,7 @@
 pub mod cardinality;
+// REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）。
+// **不放 domain/**：它要打 HTTP（经 `agent::llm` 的 transport）—— 与 `sample` 同一条理由。
+pub mod ai_semantic;
 pub mod introspect;
 pub mod names;
 pub mod propose;

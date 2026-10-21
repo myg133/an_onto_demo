@@ -1,0 +1,52 @@
+{
+  "server_version": "16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)",
+  "transaction_read_only": "on",
+  "schema": "public",
+  "table_count": 3,
+  "column_count": 7,
+  "commented_column_count": 7,
+  "foreign_key_count": 0,
+  "tables": [
+    {
+      "name": "llm_model",
+      "comment": "大模型（UUID 主键 + 业务键 model_id）",
+      "columns": [
+        {"name": "id", "data_type": "character varying", "nullable": false, "comment": "主键UUID", "is_primary_key": true},
+        {"name": "model_id", "data_type": "character varying", "nullable": false, "comment": "模型ID(如: GLM-5)", "is_primary_key": false},
+        {"name": "model_name", "data_type": "character varying", "nullable": true, "comment": "模型名称", "is_primary_key": false}
+      ],
+      "column_count": 3,
+      "commented_count": 3,
+      "primary_key": "id",
+      "unique_columns": ["id"],
+      "composite_primary_key": []
+    },
+    {
+      "name": "llm_model_sort",
+      "comment": "模型排序",
+      "columns": [
+        {"name": "id", "data_type": "character varying", "nullable": false, "comment": "主键UUID", "is_primary_key": true},
+        {"name": "model_id", "data_type": "character varying", "nullable": false, "comment": "模型ID", "is_primary_key": false},
+        {"name": "sort_order", "data_type": "integer", "nullable": true, "comment": "排序值", "is_primary_key": false}
+      ],
+      "column_count": 3,
+      "commented_count": 3,
+      "primary_key": "id",
+      "unique_columns": ["id"],
+      "composite_primary_key": []
+    },
+    {
+      "name": "orders",
+      "comment": "订单",
+      "columns": [
+        {"name": "id", "data_type": "bigint", "nullable": false, "comment": "主键", "is_primary_key": true}
+      ],
+      "column_count": 1,
+      "commented_count": 1,
+      "primary_key": "id",
+      "unique_columns": ["id"],
+      "composite_primary_key": []
+    }
+  ],
+  "introspected_at": "2026-10-21T00:00:00Z"
+}

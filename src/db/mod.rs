@@ -21,6 +21,9 @@
 //! 详见 `src/agent/mod.rs` 的模块头（同一处承诺，两边不许说法漂移）。
 
 pub mod agent_registry;
+// REQ-109 · AI 语义判断的指纹缓存（`ai_cache` 表）。
+// 它是**存储层**：编排（`extract::ai_semantic`）是同步的，库读写在它前后各一次。
+pub mod ai_cache;
 pub mod apply;
 pub mod pg;
 pub mod pool;
@@ -29,6 +32,7 @@ pub mod proposal;
 pub mod snapshot_store;
 
 pub use agent_registry::PgAgentRegistry;
+pub use ai_cache::PgAiCache;
 pub use pg::StoreError;
 pub use pool::DbError;
 pub use snapshot_store::PgStore;
