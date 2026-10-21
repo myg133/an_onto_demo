@@ -29,6 +29,7 @@ fn link(key: &str, f: &str, t: &str, card: &str) -> LinkType {
     LinkType {
         key: key.into(), from_type: f.into(), to_type: t.into(),
         cardinality: card.into(), semantic: "has".into(), evidence: vec![],
+        confidence: None,
     }
 }
 

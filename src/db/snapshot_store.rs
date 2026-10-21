@@ -226,8 +226,12 @@ impl PgStore {
     }
 
     async fn load_links(&self, vid: Uuid) -> Result<Vec<LinkType>, StoreError> {
-        let rows: Vec<(String, String, String, String, String, Value)> = sqlx::query_as(
-            "SELECT key, from_type, to_type, cardinality, semantic, evidence
+        // REQ-108 · 三栏 confidence 与 `LinkType::confidence` 一一对应。
+        // ⚠️ 读的是**整份评分卡**（`confidence_signals` 里存的是完整对象，
+        // 含 signals / veto / band）—— score 与 method 两栏是给 SQL 查询与
+        // 校准用的冗余列，不参与重建。
+        let rows: Vec<(String, String, String, String, String, Value, Option<Value>)> = sqlx::query_as(
+            "SELECT key, from_type, to_type, cardinality, semantic, evidence, confidence_signals
              FROM link_types WHERE version_id = $1 ORDER BY ordinal",
         )
         .bind(vid)
@@ -235,13 +239,16 @@ impl PgStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(key, f, t, c, s, ev)| LinkType {
+            .map(|(key, f, t, c, s, ev, conf)| LinkType {
                 key,
                 from_type: f,
                 to_type: t,
                 cardinality: c,
                 semantic: s,
                 evidence: serde_json::from_value(ev).unwrap_or_default(),
+                // NULL ⇒ None（REQ-108 之前的版本 / 人工修订）——
+                // **不伪造分数**：不知道就是不知道。
+                confidence: conf.and_then(|j| crate::domain::confidence::from_untrusted(&j).ok()),
             })
             .collect())
     }
@@ -388,10 +395,15 @@ pub(crate) async fn insert_snapshot_rows(
     }
 
     for (i, l) in snap.link_types.iter().enumerate() {
+        // REQ-108 · 关系行携带三栏置信度（score / method / 整份评分卡）。
+        //
+        // `confidence` 为 `None` ⇒ 三栏都落 SQL NULL（旧数据 / 人工修订），
+        // **不回填 0.0** —— 0.0 是「确定它不成立」，None 是「不知道」。
         sqlx::query(
             "INSERT INTO link_types
-               (id, version_id, key, from_type, to_type, cardinality, semantic, evidence, ordinal)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+               (id, version_id, key, from_type, to_type, cardinality, semantic, evidence, ordinal,
+                confidence, confidence_method, confidence_signals)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
         )
         .bind(Uuid::new_v4())
         .bind(snap.version_id)
@@ -402,6 +414,13 @@ pub(crate) async fn insert_snapshot_rows(
         .bind(&l.semantic)
         .bind(evidence_json(&l.evidence))
         .bind(i as i32)
+        .bind(l.confidence.as_ref().map(|c| c.score))
+        .bind(l.confidence.as_ref().map(|c| c.method.clone()))
+        .bind(
+            l.confidence
+                .as_ref()
+                .and_then(|c| serde_json::to_value(c).ok()),
+        )
         .execute(&mut **tx)
         .await
         .map_err(|source| SnapshotRowError {

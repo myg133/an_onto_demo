@@ -132,6 +132,8 @@ fn map_apply_error(e: ApplyError) -> StoreError {
         ApplyError::DanglingLink(l) => StoreError::TypeNotFound(l),
         ApplyError::RemovingMissing(t) => StoreError::TypeNotFound(t),
         ApplyError::BadConceptGroup(m) => StoreError::BadConceptGroup(m),
+        // REQ-108 · 读不懂的分数 ⇒ 拒绝 apply（fail-closed，不静默降级成无分数）
+        ApplyError::BadConfidence(m) => StoreError::BadConfidence(m),
     }
 }
 

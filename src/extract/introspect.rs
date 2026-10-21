@@ -87,6 +87,212 @@ pub struct SchemaReport {
     pub introspected_at: String,
 }
 
+// ──────────────────────────────────────────────────────────
+// REQ-108 · AC-001：主键与单列唯一索引
+//
+// 为什么**不**给 `TableMeta` 加字段（这一点反直觉，写清免得后人再踩）：
+// `TableMeta` / `SchemaReport` 的字面量构造散布在 10+ 个测试与
+// `src/bin/ontok-gate-preflight.rs`、`tests/test_fk_naming.rs` 里 ——
+// 后两者是**受保护文件**（不得改动）。给这两个类型加字段会让它们编译不过，
+// 而那正是 `src/agent/group.rs:197` 早就记下的那条约束
+//（「给 `SchemaReport` 加字段会让那个受保护文件编译不过」）。
+//
+// 所以键信息走**产物契约**：字段落在 `schema.json` 的 `tables[i]` 上
+//（AC-001 要的「每张表带 `primary_key` / `unique_columns`」），
+// 由 [`KeyCatalog::inject_into_product`] 注入、[`KeyCatalog::from_product`] 读回。
+// 两边互为逆运算，由单元测试钉住；**没有第二份真相** ——
+// 目录数据只来自 `pg_catalog` / `information_schema` 这两条只读查询。
+// ──────────────────────────────────────────────────────────
+
+/// 一张表的键事实（REQ-108 · AC-001）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TableKeys {
+    /// 单列主键的列名；**复合主键或没有主键 ⇒ `None`**。
+    ///
+    /// ⛔ 不许用「列名是不是 `id`」来猜：真实源库 96 张表里有 3 张的主键
+    /// 叫别的名字（`alembic_version.version_num` / `service_apps.app_id` /
+    /// `sub_account_bind_permission.sub_customer_id`）。猜 `id` 的实现对
+    /// `service_apps` 会指到一个**不存在**的列上，于是「目标列是不是键」
+    /// 与「采样命中」两件事同时判错 —— 那正是本需求要消灭的近似。
+    #[serde(default)]
+    pub primary_key: Option<String>,
+    /// 单列唯一索引覆盖的列名（去重、字典序，含主键自带的唯一索引）。
+    #[serde(default)]
+    pub unique_columns: Vec<String>,
+    /// 复合主键的全部列名（≥2 列时非空；R2 只对**这一种**给单独上限）。
+    ///
+    /// 与 `primary_key == None` 分开记：`None` 既可能是「复合」也可能是
+    /// 「没有主键」，而这两种在评分卡里的含义不同（R2 vs 普通列 0.4）。
+    #[serde(default)]
+    pub composite_primary_key: Vec<String>,
+}
+
+impl TableKeys {
+    /// **引用目标用哪一列验命中**：单列主键 → 第一个单列唯一列 → 无。
+    pub fn key_column(&self) -> Option<&str> {
+        if let Some(pk) = self.primary_key.as_deref() {
+            return Some(pk);
+        }
+        if !self.composite_primary_key.is_empty() {
+            return None;
+        }
+        self.unique_columns.first().map(|s| s.as_str())
+    }
+
+    pub fn has_composite_primary_key(&self) -> bool {
+        !self.composite_primary_key.is_empty()
+    }
+}
+
+/// 表名 → 键事实。产物里没有键字段的旧 `schema.json` 读回来是**空目录**。
+///
+/// ⚠️ 「目录里没有这张表」与「这张表没有主键」是**两件事**：
+/// 前者是**不知道**（旧产物），后者是**事实**。调用方必须分开处理 ——
+/// 把「不知道」当成「没有主键」会静默地把所有关系压进低分档。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct KeyCatalog {
+    tables: std::collections::BTreeMap<String, TableKeys>,
+}
+
+impl KeyCatalog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, table: &str) -> Option<&TableKeys> {
+        self.tables.get(table)
+    }
+
+    pub fn insert(&mut self, table: impl Into<String>, keys: TableKeys) {
+        self.tables.insert(table.into(), keys);
+    }
+
+    pub fn len(&self) -> usize {
+        self.tables.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tables.is_empty()
+    }
+
+    /// 把键事实**写进产物 JSON 的 `tables[i]`**（AC-001 的落地动作）。
+    ///
+    /// 只写三样：`primary_key` / `unique_columns` / `composite_primary_key`。
+    /// `primary_key` 为 `None` 时写 **JSON `null`**（不是省略键）——
+    /// 「这张表没有单列主键」是需要被读出来的事实，不是缺字段。
+    pub fn inject_into_product(&self, product: &mut serde_json::Value) {
+        let Some(tables) = product.get_mut("tables").and_then(|t| t.as_array_mut()) else {
+            return;
+        };
+        for t in tables {
+            let Some(name) = t.get("name").and_then(|n| n.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let Some(keys) = self.tables.get(&name) else { continue };
+            let Some(obj) = t.as_object_mut() else { continue };
+            obj.insert(
+                "primary_key".to_string(),
+                keys.primary_key
+                    .as_ref()
+                    .map(|s| serde_json::Value::String(s.clone()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            obj.insert(
+                "unique_columns".to_string(),
+                serde_json::to_value(&keys.unique_columns).unwrap_or(serde_json::Value::Array(vec![])),
+            );
+            obj.insert(
+                "composite_primary_key".to_string(),
+                serde_json::to_value(&keys.composite_primary_key)
+                    .unwrap_or(serde_json::Value::Array(vec![])),
+            );
+        }
+    }
+
+    /// 从产物 JSON 读回键事实 —— [`Self::inject_into_product`] 的逆运算。
+    ///
+    /// **判「字段在不在」而不是「值空不空」**：`"primary_key": null` 是
+    /// 一条事实（没有单列主键），而**没有 `primary_key` 这个键**是旧产物。
+    /// 两者混起来，旧产物会被读成「96 张表都没有主键」。
+    pub fn from_product(product: &serde_json::Value) -> Self {
+        let mut out = Self::new();
+        let Some(tables) = product.get("tables").and_then(|t| t.as_array()) else {
+            return out;
+        };
+        for t in tables {
+            let Some(name) = t.get("name").and_then(|n| n.as_str()) else { continue };
+            let Some(obj) = t.as_object() else { continue };
+            // 旧产物（REQ-108 之前）根本没有这个键 ⇒ 跳过整张表
+            if !obj.contains_key("primary_key") {
+                continue;
+            }
+            out.insert(
+                name,
+                TableKeys {
+                    primary_key: obj
+                        .get("primary_key")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    unique_columns: obj
+                        .get("unique_columns")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
+                    composite_primary_key: obj
+                        .get("composite_primary_key")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
+                },
+            );
+        }
+        out
+    }
+}
+
+/// 把主键行 / 唯一索引行折叠成 [`KeyCatalog`]（纯函数，可单测）。
+///
+/// 入参是**目录原样的行**（表名, 列名），顺序不重要 —— 输出按表名与列名排序，
+/// 同一份库跑两次必然同字节（AC-002 的确定性从这一步就开始）。
+fn fold_keys(pk_rows: &[(String, String)], uniq_rows: &[(String, String)]) -> KeyCatalog {
+    let mut by_table: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (table, column) in pk_rows {
+        let v = by_table.entry(table.clone()).or_default();
+        if !v.contains(column) {
+            v.push(column.clone());
+        }
+    }
+    let mut catalog = KeyCatalog::new();
+    for (table, cols) in by_table {
+        let keys = if cols.len() == 1 {
+            TableKeys {
+                primary_key: Some(cols[0].clone()),
+                ..Default::default()
+            }
+        } else {
+            // 复合主键：单列主键记 null，**但复合事实要留下**（R2 要用）
+            let mut sorted = cols;
+            sorted.sort();
+            TableKeys { primary_key: None, composite_primary_key: sorted, ..Default::default() }
+        };
+        catalog.insert(table, keys);
+    }
+    for (table, column) in uniq_rows {
+        let entry = catalog
+            .tables
+            .entry(table.clone())
+            .or_insert_with(TableKeys::default);
+        if !entry.unique_columns.contains(column) {
+            entry.unique_columns.push(column.clone());
+        }
+    }
+    for keys in catalog.tables.values_mut() {
+        keys.unique_columns.sort();
+        keys.unique_columns.dedup();
+    }
+    catalog
+}
+
 /// **强制只读**：把连接串改造成带 `default_transaction_read_only=on` 的形式。
 ///
 /// 已带该参数则保留；没带则追加。**不接受调用方绕过** ——
@@ -173,6 +379,15 @@ pub(crate) async fn read_only_pool(url: &str) -> Result<PgPool> {
 }
 
 /// 连源库并勘查。
+///
+/// **签名与产出逐字节不变**（REQ-003 起的既有入口，`ontok-gate-preflight`
+/// 与 `tests/test_read_only_guard.rs` 都依赖这个形状：后者的接线判据
+/// 在这条函数体里找 `ensure_read_only(&read_only)?;`）。
+///
+/// REQ-108 的键事实**不在这条路径里**：见 [`key_catalog`] / [`introspect_with_keys`]。
+/// 刻意不把键查询塞进本函数 —— 那会让上面那条接线判据的锚点失效
+///（它按 `pub async fn introspect` 切函数体），于是「勘查前必须 fail-closed
+/// 校验只读」这条 AC-101 红线会**静默掉出覆盖范围**。
 pub async fn introspect(url: &str) -> Result<SchemaReport> {
     let pool = read_only_pool(url).await?;
 
@@ -247,6 +462,7 @@ pub async fn introspect(url: &str) -> Result<SchemaReport> {
 
     pool.close().await;
 
+
     // 折叠成表级结构
     let mut tables: Vec<TableMeta> = Vec::new();
     for (tname, _tname2, cname, dtype, nullable, cmt, is_pk) in rows {
@@ -290,6 +506,82 @@ pub async fn introspect(url: &str) -> Result<SchemaReport> {
     })
 }
 
+/// **键事实目录**（REQ-108 · AC-001）：主键 + 单列唯一索引。
+///
+/// # 为什么是**独立的一条只读连接**，不再塞进 [`introspect`]
+///
+/// 1. `tests/test_read_only_guard.rs` 的接线判据按 `pub async fn introspect`
+///    切函数体，在**那具身体里**找 `ensure_read_only(&read_only)?;` ——
+///    把键查询塞进去会让它按新的切分点取到半截函数，于是 AC-101 的
+///    「勘查前必须 fail-closed 校验只读」**静默掉出覆盖范围**（判据还是绿的）。
+/// 2. 两条 SQL 都是 `pg_catalog` 的小查询（这张库 96 行量级），多一次连接
+///    约 100ms，换的是 REQ-003 那条红线一分不动 —— 值得。
+///
+/// 只读保证与勘查器同一套：走 [`read_only_pool`]，连上后立刻校验
+/// `transaction_read_only = on`（这里也判一次，不靠「反正是同一个池」这句话）。
+pub async fn key_catalog(url: &str) -> Result<KeyCatalog> {
+    let pool = read_only_pool(url).await?;
+    let read_only: String =
+        sqlx::query_scalar("SELECT current_setting('default_transaction_read_only')")
+            .fetch_one(&pool)
+            .await
+            .context("读不回 transaction_read_only，只读保证无法验证")?;
+    ensure_read_only(&read_only)?;
+
+    // 主键按**列**取、再在 Rust 里折叠成「单列 / 复合」：
+    // `information_schema` 里没有「这个主键是单列吗」这一列，
+    // 在 SQL 侧拼一个 `count(*) = 1` 会把「复合」与「无主键」压成同一个
+    // `false` —— 而 R2（复合键上限 0.50）恰恰要区分这两者。
+    let pk_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT tc.table_name, kcu.column_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON kcu.constraint_name = tc.constraint_name
+          AND kcu.table_schema = tc.table_schema
+         WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'
+         ORDER BY tc.table_name, kcu.ordinal_position",
+    )
+    .bind(TARGET_SCHEMA)
+    .fetch_all(&pool)
+    .await
+    .context("读主键失败")?;
+
+    // 单列唯一索引。判据用 `indnkeyatts = 1` 而不是 `indnatts`：
+    // `indnatts` 把 `INCLUDE` 列也算进去（PG 11+），
+    // `UNIQUE (a) INCLUDE (b)` 会被误判成复合，于是 `a` 丢掉 0.9 档。
+    let uniq_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.relname, a.attname
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = i.indkey[0]
+         WHERE n.nspname = $1
+           AND i.indisunique
+           AND i.indnkeyatts = 1
+           AND a.attnum > 0
+           AND NOT a.attisdropped
+         ORDER BY c.relname, a.attname",
+    )
+    .bind(TARGET_SCHEMA)
+    .fetch_all(&pool)
+    .await
+    .context("读单列唯一索引失败")?;
+
+    pool.close().await;
+    Ok(fold_keys(&pk_rows, &uniq_rows))
+}
+
+/// 勘查 + 键事实目录（REQ-108 · AC-001 的装配入口）。
+///
+/// 两次只读会话（理由见 [`key_catalog`]）。返回的 `SchemaReport`
+/// 与 [`introspect`] 逐字段相同 —— 键目录是**附加**输出，
+/// 由调用方（`ontok-introspect`）注入产物的 `tables[i]`。
+pub async fn introspect_with_keys(url: &str) -> Result<(SchemaReport, KeyCatalog)> {
+    let report = introspect(url).await?;
+    let keys = key_catalog(url).await?;
+    Ok((report, keys))
+}
+
 /// 勘查未注释表（真实库有 20+ 张零注释表，抽取器对它们只能靠列名猜）。
 pub fn uncommented_tables(report: &SchemaReport) -> Vec<&TableMeta> {
     report
@@ -302,7 +594,133 @@ pub fn uncommented_tables(report: &SchemaReport) -> Vec<&TableMeta> {
 /// 自检：确保连接串确实被改造成只读。仅在测试里用。
 #[cfg(test)]
 mod tests {
-    use super::{ensure_read_only, force_read_only, read_only_pool};
+    use super::{ensure_read_only, fold_keys, force_read_only, read_only_pool, KeyCatalog};
+
+    // ── REQ-108 · AC-001：主键 / 唯一列的折叠与产物往返 ──────────────
+
+    fn rows(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    /// 单列主键 ⇒ `primary_key = Some(col)`；复合 ⇒ 单列记 null、复合事实留下。
+    ///
+    /// 这条钉的是 R2 的前提：**「复合」不能被折叠成「没有主键」**。
+    #[test]
+    fn fold_keys_distinguishes_single_composite_and_absent_primary_key() {
+        let cat = fold_keys(
+            &rows(&[
+                ("service_apps", "app_id"),
+                ("llm_auth_cache_trigger_state", "subject_type"),
+                ("llm_auth_cache_trigger_state", "subject_id"),
+                ("llm_auth_cache_trigger_state", "state_scope"),
+            ]),
+            &rows(&[("service_apps", "app_id")]),
+        );
+        let sa = cat.get("service_apps").expect("service_apps 有主键事实");
+        assert_eq!(sa.primary_key.as_deref(), Some("app_id"), "主键叫 app_id，不叫 id");
+        assert_eq!(sa.key_column(), Some("app_id"));
+        assert!(!sa.has_composite_primary_key());
+
+        let com = cat.get("llm_auth_cache_trigger_state").expect("复合主键表也在目录里");
+        assert_eq!(com.primary_key, None, "复合主键没有「单列主键名」");
+        assert_eq!(
+            com.composite_primary_key,
+            vec!["state_scope", "subject_id", "subject_type"],
+            "复合事实必须留下（R2 靠它给 0.50 上限），且按列名排序 ⇒ 确定性"
+        );
+        assert_eq!(com.key_column(), None, "复合键不能当单列引用目标");
+
+        // 目录里没有这张表 ⇒ `None`（不知道），**不是**「没有主键」
+        assert!(cat.get("no_such_table").is_none());
+    }
+
+    /// 唯一列：去重 + 字典序。**含主键自带的唯一索引**（AC-001 的判据要求
+    /// `marketing_channel.id` 出现在 `unique_columns` 里）。
+    #[test]
+    fn fold_keys_sorts_and_dedupes_unique_columns() {
+        let cat = fold_keys(
+            &rows(&[("marketing_channel", "id")]),
+            &rows(&[
+                ("marketing_channel", "id"),
+                ("marketing_channel", "code"),
+                ("marketing_channel", "id"),
+            ]),
+        );
+        let mc = cat.get("marketing_channel").unwrap();
+        assert_eq!(mc.unique_columns, vec!["code", "id"], "去重 + 字典序");
+        assert!(mc.unique_columns.contains(&"id".to_string()));
+        assert_eq!(mc.primary_key.as_deref(), Some("id"));
+    }
+
+    /// 产物往返：`inject_into_product` → JSON → `from_product` **逐字段相等**。
+    ///
+    /// 变异自证：把 `inject` 里 `primary_key` 的 `None` 改成「省略这个键」，
+    /// 往返后 `service_apps` 那类表会从「有主键」变成「旧产物」⇒ 本测试红。
+    #[test]
+    fn key_catalog_survives_the_product_round_trip() {
+        let cat = fold_keys(
+            &rows(&[("llm_model", "id"), ("service_apps", "app_id")]),
+            &rows(&[("llm_model", "id"), ("llm_model", "model_id")]),
+        );
+        let mut product = serde_json::json!({
+            "schema": "public",
+            "tables": [
+                {"name": "llm_model", "column_count": 17},
+                {"name": "service_apps", "column_count": 3},
+                {"name": "un_keyed_unknown", "column_count": 1}
+            ]
+        });
+        cat.inject_into_product(&mut product);
+
+        // AC-001 的字面要求：**目录覆盖到的**每张表都带这两个字段，
+        // 且 `primary_key` 为 `None` 时写的是 JSON `null`（不是省略键）。
+        //
+        // ⚠️ 目录里**没有**的表（本 fixture 的 `un_keyed_unknown`）保持原样：
+        // 那是「这次勘查没采到它」，不是「它没有主键」—— 凭空补一个 `null`
+        // 等于替数据库做一个没查过的断言（fail-open）。
+        for name in ["llm_model", "service_apps"] {
+            let t = product["tables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == serde_json::json!(name))
+                .unwrap();
+            assert!(t.as_object().unwrap().contains_key("primary_key"), "{name} 缺 primary_key");
+            assert!(t.as_object().unwrap().contains_key("unique_columns"), "{name} 缺 unique_columns");
+        }
+        let unknown = &product["tables"][2];
+        assert!(
+            !unknown.as_object().unwrap().contains_key("primary_key"),
+            "目录里没有的表不许被补上字段（那是伪造事实）"
+        );
+        assert_eq!(product["tables"][0]["primary_key"], serde_json::json!("id"));
+        assert_eq!(
+            product["tables"][0]["unique_columns"],
+            serde_json::json!(["id", "model_id"])
+        );
+
+        let back = KeyCatalog::from_product(&product);
+        for name in ["llm_model", "service_apps"] {
+            assert_eq!(
+                back.get(name),
+                cat.get(name),
+                "{name} 的键事实在产物往返后必须逐字段相同"
+            );
+        }
+        // 目录里没有的表：产物里没有键字段 ⇒ 读回来也没有（不伪造）
+        assert!(back.get("un_keyed_unknown").is_none());
+    }
+
+    /// **旧产物**（REQ-108 之前）读回来是**空目录**，而不是「96 张表都没主键」。
+    #[test]
+    fn old_products_yield_an_empty_catalog_not_a_fake_one() {
+        let old = serde_json::json!({
+            "tables": [{"name": "llm_model", "column_count": 17}]
+        });
+        let cat = KeyCatalog::from_product(&old);
+        assert!(cat.is_empty(), "旧产物没有键字段 ⇒ 不知道，不是「没有主键」");
+        assert!(cat.get("llm_model").is_none());
+    }
 
     #[test]
     fn appends_read_only_when_absent() {

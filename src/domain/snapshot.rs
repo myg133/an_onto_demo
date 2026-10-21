@@ -195,6 +195,18 @@ pub struct LinkType {
     pub semantic: String,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+    /// **置信度**（REQ-108 · AC-010）。
+    ///
+    /// | 谁看得见 | 这一栏 |
+    /// | --- | --- |
+    /// | 客户视图（`domain::view::project`） | **看不见** —— 客户视图的投影根本不读 `LinkType`（它读 `SnapshotView`），所以「零泄漏」是**结构**保证，不是靠记得别加 |
+    /// | 建模视图（`--model-view`） | 看得见（`ModelLinkView::confidence`） |
+    /// | 审核界面 | 看得见（`review show --confidence`，从提案条目读） |
+    ///
+    /// `None` = **这个版本没有这条信息**（REQ-108 之前的旧版本 / 人工修订）。
+    /// 与 `Some(0.2)` 截然不同：前者是「不知道」，后者是「知道它很低」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<crate::domain::confidence::Confidence>,
 }
 
 /// **写回绑定（占位）** —— 规格 §5.2。

@@ -575,7 +575,6 @@ pub(crate) fn links_for_table(
 
 /// **属性名从哪儿来**（REQ-022）—— 与 [`ExtractionStats`] 的三个 `props_via_*`
 /// 计数一一对应，**互斥**。
-///
 /// # 为什么它住在 `extract` 而不是 `agent` 的契约里
 ///
 /// 名字怎么选是**抽取层**的判断（REQ-005 质量门槛 / REQ-007 值域 / REQ-008 关系推导），
@@ -988,14 +987,13 @@ fn fk_comment_is_restatement(
 /// 它带 `-ses → -s` 这条规则（`buses → bus`），于是 `licenses` 会命中 `-ses`
 /// 返回**原样**的 `licenses` —— 拿它比 `license` 永远比不相等。
 /// 这里要的是「表名单复数两种写法」，判据必须更窄。
+///
+/// ⚠️ **REQ-108 起实现搬到了 [`crate::domain::confidence::name_forms`]**：
+/// 评分卡的 `name_match` 也要判「`customer_id` 是不是 `customers` 的直接展开」，
+/// 而那必须与这里的判据**逐字相同**。两处各写一份 = 同一件事两种归一，
+/// 迟早会出现「关系是 `customer_id → customers`，评分卡却判它 0.6」这种自相矛盾。
 fn english_forms(table: &str) -> [String; 2] {
-    let t = table.to_ascii_lowercase();
-    let singular = if t.len() > 3 && t.ends_with('s') && !t.ends_with("ss") {
-        t[..t.len() - 1].to_string()
-    } else {
-        t.clone()
-    };
-    [t, singular]
+    crate::domain::confidence::name_forms(table)
 }
 
 /// 值域分隔符。`is_enum_domain` 用 ASCII 那组（REQ-005 定的），
@@ -1370,6 +1368,261 @@ fn singular_to_table(stem: &str) -> String {
         }
     }
     stem.to_string()
+}
+
+// ──────────────────────────────────────────────────────────
+// REQ-108 · 置信度接线（AC-004 / AC-008）
+//
+// 分工是刻意的，别合并：
+//   · **采集**（`sample` 模块，异步、碰客户库）只产出聚合量；
+//   · **评分**（`domain::confidence`，纯函数）只吃事实、不算 I/O；
+//   · **本段**是两者的接缝：把 `items` 里的关系条目解成坐标、组装
+//     `ScoreInput`，再把分数贴回条目。
+//
+// 为什么接缝放在这里而不是 bin 里：`ontok-propose` 与「从候选重建」两条
+// 路径都要产生同样的 confidence —— 写在 bin 里就只覆盖第一条。
+// ──────────────────────────────────────────────────────────
+
+/// 提案里一条关系条目在**源库里的坐标**。
+///
+/// `from_column` 取自条目的 `payload.evidence[0].column`（REQ-003 起就在那儿，
+/// 抽取器每写一条关系都带上），**不另抽一份**：再算一次「哪一列推出的这条关系」
+/// 就是第二份判断，迟早与 `links_for_table` 分叉。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkCandidate {
+    /// 它在 `Proposal::items` 里的下标（回填 confidence 时用）
+    pub item_index: usize,
+    pub from_table: String,
+    pub from_column: String,
+    pub to_table: String,
+    /// 源表排序键（采样 `ORDER BY`）；`None` ⇒ 采样器按值排序
+    pub from_key: Option<String>,
+    /// 目标表的键列（`KeyCatalog` 的目录事实）；`None` ⇒ 不能采样（记 no_key_column）
+    pub to_key_column: Option<String>,
+}
+
+impl LinkCandidate {
+    /// 采样坐标。目标表没有单列键 ⇒ `None`（`v1` 不支持复合键引用，R2）。
+    pub fn sample_spec(&self) -> Option<crate::extract::sample::SampleSpec> {
+        Some(crate::extract::sample::SampleSpec {
+            from_table: self.from_table.clone(),
+            from_column: self.from_column.clone(),
+            from_key: self.from_key.clone(),
+            to_table: self.to_table.clone(),
+            to_key_column: self.to_key_column.clone()?,
+        })
+    }
+}
+
+/// 从提案 `items` 里解出全部关系条目的坐标（**按 items 顺序**）。
+///
+/// 不是关系条目、或 payload 里取不到 `from_type` / 列名的条目直接跳过 ——
+/// 那些条目本来就不参与评分（实体条目、概念组条目）。
+pub fn link_candidates(
+    items: &[serde_json::Value],
+    keys: &crate::extract::introspect::KeyCatalog,
+) -> Vec<LinkCandidate> {
+    let mut out = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        if it.get("kind").and_then(|k| k.as_str()) != Some("add_link_type") {
+            continue;
+        }
+        let p = &it["payload"];
+        let (Some(from), Some(to)) = (
+            p.get("from_type").and_then(|v| v.as_str()),
+            p.get("to_type").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let column = p
+            .get("evidence")
+            .and_then(|e| e.as_array())
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("column"))
+            .and_then(|c| c.as_str())
+            .or_else(|| p.get("column").and_then(|c| c.as_str()));
+        let Some(column) = column else { continue };
+        out.push(LinkCandidate {
+            item_index: i,
+            from_table: from.to_string(),
+            from_column: column.to_string(),
+            to_table: to.to_string(),
+            from_key: keys.get(from).and_then(|k| k.key_column()).map(str::to_string),
+            to_key_column: keys.get(to).and_then(|k| k.key_column()).map(str::to_string),
+        });
+    }
+    out
+}
+
+/// 按「源表.列 → 目标表.键列」逐条评分，返回 `(item_index, confidence)`（**按 items 顺序**）。
+///
+/// `evidence` 的键是 `item_index`：**没有条目** ⇒ 该关系没采（`--no-sample` 或
+/// 没有键列），评分卡会标 `data_evidence: none`。**这不会被当成有证据**。
+pub fn score_links(
+    items: &[serde_json::Value],
+    report: &SchemaReport,
+    keys: &crate::extract::introspect::KeyCatalog,
+    evidence: &std::collections::HashMap<usize, crate::extract::sample::SampleEvidence>,
+) -> Vec<(usize, crate::domain::confidence::Confidence)> {
+    use crate::domain::confidence as cf;
+
+    let candidates = link_candidates(items, keys);
+    let mut out = Vec::with_capacity(candidates.len());
+    for cand in candidates {
+        let from_col = find_column(report, &cand.from_table, &cand.from_column);
+        let from_columns: Vec<&str> = report
+            .tables
+            .iter()
+            .find(|t| t.name == cand.from_table)
+            .map(|t| t.columns.iter().map(|c| c.name.as_str()).collect())
+            .unwrap_or_default();
+        // 目标键列：**目录说哪一列就是哪一列**（AC-001 的意义在这里兑现 ——
+        // `service_apps` 的主键是 `app_id`，猜 `id` 会让命中率恒为 0）
+        let to_col = cand
+            .to_key_column
+            .as_deref()
+            .and_then(|k| find_column(report, &cand.to_table, k));
+        let target_key = match keys.get(&cand.to_table) {
+            None => cf::TargetKey::Unknown,
+            Some(k) => match cand.to_key_column.as_deref() {
+                Some(col) if k.primary_key.as_deref() == Some(col) => cf::TargetKey::Primary,
+                Some(col) if k.unique_columns.iter().any(|u| u == col) => cf::TargetKey::Unique,
+                _ => cf::TargetKey::Plain,
+            },
+        };
+        let data = evidence.get(&cand.item_index).map(|e| cf::SampleFacts {
+            sampled: e.sampled,
+            matched: e.matched,
+            digest: e.digest.clone(),
+            reason: e.reason.map(str::to_string),
+        });
+        let input = cf::ScoreInput {
+            column: cand.from_column.clone(),
+            to_table: cand.to_table.clone(),
+            from_type: from_col
+                .map(|c| cf::type_family(&c.data_type))
+                .unwrap_or(cf::TypeFamily::Other),
+            to_type: to_col.map(|c| cf::type_family(&c.data_type)),
+            target_key,
+            data,
+            composite_target_key: keys
+                .get(&cand.to_table)
+                .map(|k| k.has_composite_primary_key())
+                .unwrap_or(false),
+            polymorphic: cf::is_polymorphic_column(&from_columns, &cand.from_column),
+            self_ref: cand.from_table == cand.to_table,
+        };
+        out.push((cand.item_index, cf::score(&input)));
+    }
+    out
+}
+
+fn find_column<'a>(
+    report: &'a SchemaReport,
+    table: &str,
+    column: &str,
+) -> Option<&'a ColumnMeta> {
+    report
+        .tables
+        .iter()
+        .find(|t| t.name == table)?
+        .columns
+        .iter()
+        .find(|c| c.name == column)
+}
+
+/// 把分数贴回条目：`item["confidence"] = { score, method, band, signals, veto, data_evidence }`。
+///
+/// ⚠️ 除了新增这一个键，**条目其余字段一个字节都不动** —— 这是
+/// 「置信度不改变抽取结果，只改变呈现与审核顺序」（设计概要 §一）在代码里的落点。
+pub fn attach_confidence(
+    items: &mut [serde_json::Value],
+    scored: &[(usize, crate::domain::confidence::Confidence)],
+) {
+    for (idx, c) in scored {
+        if let Some(item) = items.get_mut(*idx) {
+            if let Some(obj) = item.as_object_mut() {
+                if let Ok(v) = serde_json::to_value(c) {
+                    obj.insert("confidence".to_string(), v);
+                }
+            }
+        }
+    }
+}
+
+/// 分档路由的结果（AC-009）。
+///
+/// 三份 items **互不相交**、合起来是原来的全部条目 —— 这是本结构的核心不变量，
+/// 由 [`route_items`] 的单元测试逐条钉住。少了一条 = 静默丢条目，
+/// 多了一条 = 同一条关系既在提案里又在拒绝清单里。
+#[derive(Debug, Clone, Default)]
+pub struct Routing {
+    /// 高 + 中：进主提案（`proposal.json` 的 items）
+    pub kept: Vec<serde_json::Value>,
+    /// 低 + 「有链接但没评分」：进「待查清单」，**不进主提案**
+    pub pending: Vec<serde_json::Value>,
+    /// 拒绝：**不提案**，只记理由
+    pub rejected: Vec<serde_json::Value>,
+    /// 四档条数（只统计关系条目 —— 实体条目不参与分档）
+    pub counts: crate::domain::confidence::BandCounts,
+    /// 没被评过分的关系条目数（理论上 0；非 0 说明条目缺列名，进待查）
+    pub unscored_links: usize,
+}
+
+/// **按档路由**（AC-009）：高+中进提案 · 低进待查 · 拒绝不提案。
+///
+/// | 档 | 分数 | 去向 |
+/// | --- | --- | --- |
+/// | 高 | ≥0.90 | 进提案（审核界面默认折叠） |
+/// | 中 | 0.60–0.90 | 进提案（逐条显示） |
+/// | 低 | 0.30–0.60 | 待查清单（**不进主提案**） |
+/// | 拒绝 | <0.30 | 不提案，只记理由 |
+///
+/// # 实体条目与其它条目**原样保留**
+///
+/// 分档只决定**关系**的呈现顺序，不碰实体、属性、概念组条目 ——
+/// 「置信度不改变抽取结果，只改变呈现与审核顺序」（设计概要 §一）。
+/// 所以 `kept` 里除关系外的条目顺序与输入完全一致。
+///
+/// # 没有分数的关系条目进「待查」
+///
+/// 那是「不知道」，不是「高」也不是「拒绝」。把它放进提案等于
+/// 让一条没验过的关系冒充验过的（R1 ④ 的反面）；放进拒绝清单又是在
+/// 断言它错。待查清单是唯一诚实的去向，并且计数**单独报出来**。
+pub fn route_items(
+    items: Vec<serde_json::Value>,
+    scored: &[(usize, crate::domain::confidence::Confidence)],
+) -> Routing {
+    use crate::domain::confidence::Band;
+
+    let mut by_index: std::collections::HashMap<usize, &crate::domain::confidence::Confidence> =
+        std::collections::HashMap::with_capacity(scored.len());
+    for (idx, c) in scored {
+        by_index.insert(*idx, c);
+    }
+    let mut out = Routing::default();
+    for (i, item) in items.into_iter().enumerate() {
+        let is_link = item.get("kind").and_then(|k| k.as_str()) == Some("add_link_type");
+        if !is_link {
+            out.kept.push(item);
+            continue;
+        }
+        match by_index.get(&i) {
+            Some(c) => {
+                out.counts.add(c.band);
+                match c.band {
+                    Band::High | Band::Middle => out.kept.push(item),
+                    Band::Low => out.pending.push(item),
+                    Band::Rejected => out.rejected.push(item),
+                }
+            }
+            None => {
+                out.unscored_links += 1;
+                out.pending.push(item);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1809,5 +2062,294 @@ mod tests {
     fn test_link_evidence_records_the_tier() {
         assert!(LinkEvidence::Exact.claim(false).contains("直接展开"));
         assert!(LinkEvidence::TailMatch.claim(false).contains("尾缀"));
+    }
+
+    // ──────────────────────────────────────────────────────
+    // REQ-108 · 置信度接线（AC-004 / AC-008）
+    // ──────────────────────────────────────────────────────
+
+    use crate::domain::confidence::{Band, DataEvidence};
+    use crate::extract::introspect::{KeyCatalog, SchemaReport, TableKeys};
+    use crate::extract::sample::SampleEvidence;
+
+    fn meta(name: &str, cols: &[(&str, &str, bool)]) -> TableMeta {
+        let columns: Vec<ColumnMeta> = cols
+            .iter()
+            .map(|(n, t, pk)| ColumnMeta {
+                name: n.to_string(),
+                data_type: t.to_string(),
+                nullable: false,
+                comment: None,
+                is_primary_key: *pk,
+            })
+            .collect();
+        TableMeta {
+            name: name.to_string(),
+            comment: None,
+            column_count: columns.len(),
+            commented_count: 0,
+            columns,
+        }
+    }
+
+    /// 三张表的迷你 schema：`customers(id varchar PK)` /
+    /// `service_apps(app_id varchar PK)` / `logs(customer_id varchar, app_id varchar)`.
+    fn schema_108() -> SchemaReport {
+        SchemaReport {
+            server_version: "PostgreSQL 16.14".into(),
+            transaction_read_only: "on".into(),
+            schema: "public".into(),
+            table_count: 3,
+            column_count: 5,
+            commented_column_count: 0,
+            foreign_key_count: 0,
+            tables: vec![
+                meta("customers", &[("id", "character varying", true)]),
+                meta("service_apps", &[("app_id", "character varying", true)]),
+                meta(
+                    "logs",
+                    &[("id", "integer", true), ("customer_id", "character varying", false), ("app_id", "character varying", false)],
+                ),
+            ],
+            introspected_at: "2026-10-21T00:00:00Z".into(),
+        }
+    }
+
+    fn keys_108() -> KeyCatalog {
+        let mut k = KeyCatalog::new();
+        k.insert(
+            "customers",
+            TableKeys { primary_key: Some("id".into()), unique_columns: vec!["id".into()], composite_primary_key: vec![] },
+        );
+        k.insert(
+            "service_apps",
+            TableKeys {
+                primary_key: Some("app_id".into()),
+                unique_columns: vec!["app_id".into()],
+                composite_primary_key: vec![],
+            },
+        );
+        k.insert(
+            "logs",
+            TableKeys { primary_key: Some("id".into()), unique_columns: vec!["id".into()], composite_primary_key: vec![] },
+        );
+        k
+    }
+
+    fn link_item(from: &str, to: &str, column: &str) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "add_link_type",
+            "target": format!("{from}→{to}"),
+            "payload": {
+                "key": format!("{from}_{column}__{to}"),
+                "from_type": from,
+                "to_type": to,
+                "cardinality": "N:1",
+                "semantic": "belongs_to",
+                "evidence": [{"table": from, "column": column, "claim": "命名约定"}]
+            }
+        })
+    }
+
+    /// 坐标解析：只认关系条目，列名取自 `payload.evidence[0].column`，
+    /// 键列取**目录事实**（不是「大概叫 id」）。
+    #[test]
+    fn test_link_candidates_use_catalog_keys_not_name_guesses() {
+        let items = vec![
+            serde_json::json!({"kind": "add_entity_type", "target": "客户", "payload": {}}),
+            link_item("logs", "service_apps", "app_id"),
+            link_item("logs", "customers", "customer_id"),
+        ];
+        let cands = link_candidates(&items, &keys_108());
+        assert_eq!(cands.len(), 2, "实体条目不是候选");
+        assert_eq!(cands[0].item_index, 1);
+        assert_eq!(cands[0].from_column, "app_id");
+        assert_eq!(
+            cands[0].to_key_column.as_deref(),
+            Some("app_id"),
+            "service_apps 的主键是 app_id —— 猜 id 的实现会在这里指到不存在的列"
+        );
+        assert_eq!(cands[0].from_key.as_deref(), Some("id"));
+        assert_eq!(cands[1].to_key_column.as_deref(), Some("id"));
+        // 采样坐标真的用目录里的键列
+        assert_eq!(cands[0].sample_spec().unwrap().to_key_column, "app_id");
+    }
+
+    /// 满分关系 ⇒ 1.0 高档；同一份 schema 下没有数据证据 ⇒ 只由结构算且被压到低档。
+    #[test]
+    fn test_score_links_high_band_and_no_sample_band() {
+        let items = vec![link_item("logs", "customers", "customer_id")];
+        let mut ev = std::collections::HashMap::new();
+        ev.insert(
+            0usize,
+            SampleEvidence { sampled: 5, matched: 5, digest: Some("sha256:aa".into()), reason: None },
+        );
+        let scored = score_links(&items, &schema_108(), &keys_108(), &ev);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].1.score, 1.0);
+        assert_eq!(scored[0].1.band, Band::High);
+        assert_eq!(scored[0].1.data_evidence, DataEvidence::Sampled);
+        assert_eq!(
+            scored[0].1.signals.iter().find(|s| s.name == "target_is_key").unwrap().value,
+            1.0
+        );
+
+        let empty = std::collections::HashMap::new();
+        let scored = score_links(&items, &schema_108(), &keys_108(), &empty);
+        assert_eq!(scored[0].1.data_evidence, DataEvidence::None, "没采 ⇒ none");
+        assert!(!scored[0].1.band.enters_proposal(), "没采 ⇒ 不得直接进主提案");
+    }
+
+    /// 类型不相容（text → int）在接线上也生效：0.15 上限、落拒绝档。
+    #[test]
+    fn test_score_links_type_mismatch_lands_rejected() {
+        let mut report = schema_108();
+        // 把 customers.id 改成 integer，源列仍是 varchar
+        report.tables[0].columns[0].data_type = "integer".into();
+        let items = vec![link_item("logs", "customers", "customer_id")];
+        let mut ev = std::collections::HashMap::new();
+        ev.insert(
+            0usize,
+            SampleEvidence { sampled: 5, matched: 3, digest: Some("sha256:bb".into()), reason: None },
+        );
+        let scored = score_links(&items, &report, &keys_108(), &ev);
+        assert!(scored[0].1.score <= 0.15, "实际 {}", scored[0].1.score);
+        assert_eq!(scored[0].1.band, Band::Rejected);
+        assert_eq!(scored[0].1.veto.as_ref().unwrap().signal, "type_incompatible");
+    }
+
+    /// 贴分数**只加一个键**，其余字段逐字节不变（AC-005「不改抽取结果」）。
+    #[test]
+    fn test_attach_confidence_adds_one_key_and_changes_nothing_else() {        let mut items = vec![link_item("logs", "customers", "customer_id")];
+        let before = items[0].clone();
+        let mut ev = std::collections::HashMap::new();
+        ev.insert(
+            0usize,
+            SampleEvidence { sampled: 5, matched: 5, digest: Some("sha256:aa".into()), reason: None },
+        );
+        let scored = score_links(&items, &schema_108(), &keys_108(), &ev);
+        attach_confidence(&mut items, &scored);
+
+        let after = &items[0];
+        assert!(after.get("confidence").is_some(), "confidence 必须贴上");
+        // 去掉 confidence 之后与原文逐字节相同
+        let mut stripped = after.clone();
+        stripped.as_object_mut().unwrap().remove("confidence");
+        assert_eq!(
+            serde_json::to_string(&stripped).unwrap(),
+            serde_json::to_string(&before).unwrap(),
+            "除了新增 confidence 键，条目其余部分一个字节都不许动"
+        );
+        assert_eq!(after["confidence"]["method"], "evidence-scorecard-v1");
+        assert_eq!(after["confidence"]["band"], "high");
+    }
+
+    /// **AC-009 的路由不变量**：三份互不相交、合起来是原来那些条目，
+    /// 且实体条目的相对顺序不变（分档只动关系）。
+    ///
+    /// 变异自证：把 `Band::Rejected => out.rejected.push(item)` 改成
+    /// `out.kept.push(item)`，第一条断言立刻红 —— 而那时的表现正是
+    /// 「被拒绝的关系照样进提案，客户会在页面上看到一条 0.20 分的关系」。
+    #[test]
+    fn test_route_items_splits_without_losing_or_duplicating() {
+        let mut items = vec![
+            serde_json::json!({"kind": "add_entity_type", "target": "客户", "payload": {"key": "customers"}}),
+            link_item("logs", "customers", "customer_id"),
+            link_item("logs", "service_apps", "app_id"),
+            link_item("logs", "nope", "x_id"),
+            serde_json::json!({"kind": "add_entity_type", "target": "应用", "payload": {"key": "service_apps"}}),
+        ];
+        // 三条关系：高 / 中 / 拒绝
+        let scored = vec![
+            (1usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "customer_id".into(),
+                to_table: "customers".into(),
+                from_type: crate::domain::confidence::TypeFamily::Str,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 5, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+            (2usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "app_id".into(),
+                to_table: "service_apps".into(),
+                from_type: crate::domain::confidence::TypeFamily::Str,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 3, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+            (3usize, crate::domain::confidence::score(&crate::domain::confidence::ScoreInput {
+                column: "x_id".into(),
+                to_table: "nope".into(),
+                from_type: crate::domain::confidence::TypeFamily::Num,
+                to_type: Some(crate::domain::confidence::TypeFamily::Str),
+                target_key: crate::domain::confidence::TargetKey::Primary,
+                data: Some(crate::domain::confidence::SampleFacts { sampled: 5, matched: 0, digest: None, reason: None }),
+                composite_target_key: false,
+                polymorphic: false,
+                self_ref: false,
+            })),
+        ];
+        items.shrink_to_fit();
+        let total = items.len();
+        let routing = route_items(items, &scored);
+
+        // ① 三份互不相交，合起来不丢不重
+        assert_eq!(
+            routing.kept.len() + routing.pending.len() + routing.rejected.len(),
+            total,
+            "路由必须覆盖全部条目（少一条 = 静默丢弃）"
+        );
+        let mut keys: Vec<String> = routing
+            .kept
+            .iter()
+            .chain(routing.pending.iter())
+            .chain(routing.rejected.iter())
+            .map(|i| i.to_string())
+            .collect();
+        let before = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), before, "同一条目出现在两份清单里");
+        assert_eq!(routing.unscored_links, 0);
+
+        // ② 档位去向
+        assert_eq!(routing.counts.high, 1);
+        assert_eq!(routing.counts.middle, 1);
+        assert_eq!(routing.counts.rejected, 1);
+        assert_eq!(routing.counts.low, 0);
+        assert_eq!(routing.kept.len(), 4, "2 实体 + 高 + 中");
+        assert_eq!(routing.rejected.len(), 1);
+        assert!(
+            routing
+                .kept
+                .iter()
+                .all(|i| i["payload"]["from_type"] != "logs" || i["confidence"]["band"] != "rejected"),
+            "拒绝档绝不能出现在 kept 里"
+        );
+        // ③ 实体条目顺序不变（客户在前、应用在后）
+        let entities: Vec<&str> = routing
+            .kept
+            .iter()
+            .filter(|i| i["kind"] == "add_entity_type")
+            .map(|i| i["payload"]["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(entities, vec!["customers", "service_apps"]);
+    }
+
+    /// 没有分数的关系条目进「待查」，**不冒充「高」**（少了一条都没验过）。
+    #[test]
+    fn test_route_items_puts_unscored_links_into_pending() {
+        let items = vec![link_item("logs", "customers", "customer_id")];
+        let routing = route_items(items, &[]);
+        assert_eq!(routing.kept.len(), 0);
+        assert_eq!(routing.pending.len(), 1);
+        assert_eq!(routing.unscored_links, 1);
+        assert_eq!(routing.counts.total(), 0);
     }
 }

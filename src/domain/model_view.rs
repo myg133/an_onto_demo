@@ -108,6 +108,16 @@ pub struct ModelLinkView {
     /// **关系语义** —— 同样保留原记号（`has` / `belongs_to` / …）。
     pub semantic: String,
     pub evidence: Vec<Evidence>,
+    /// **置信度**（REQ-108 · AC-010）—— FDE 判断「这条关系该不该接受」的主要依据。
+    ///
+    /// 客户视图**没有**这一栏，而且不是靠「记得别加」：客户视图的投影输入
+    /// （`crate::domain::view::SnapshotView`）根本没有这个字段，
+    /// 它读的是另一份输入类型（见 `snapshot::LinkType::confidence` 的说明）。
+    ///
+    /// ⚠️ **恒有键**（旧版本是 `null`）—— 不 `skip_serializing_if`：
+    /// AC-010 要求「model-view 里每条关系都有」，而「缺字段」与
+    /// 「这一版没有分数」在判读时是两件事。
+    pub confidence: Option<crate::domain::confidence::Confidence>,
 }
 
 /// 把内部快照投影成**建模轨视图**。
@@ -161,6 +171,8 @@ pub fn project_model_track(snapshot: &Snapshot) -> ModelTrackView {
                 cardinality: l.cardinality.clone(),
                 semantic: l.semantic.clone(),
                 evidence: l.evidence.clone(),
+                // REQ-108：原样带出（`None` = 这一版没有分数，不伪造）
+                confidence: l.confidence.clone(),
             })
             .collect(),
         action_types: snapshot.action_types.clone(),

@@ -64,6 +64,27 @@ impl NewItem {
     /// 提在存储层是因为「JSON 形状 → 领域枚举」是这一层的接缝职责：
     /// `cli` 的两条入口（`propose import` 与 REQ-010 的 `concept import`）
     /// 都要过它，抄两份就会漂。
+    ///
+    /// # REQ-108 · AC-008：`method` 必填
+    ///
+    /// 条目带 `confidence` 却没有 `method` ⇒ **这里就拒绝**（`import` 因此非 0 退出）。
+    /// 报错信息直接写明「没有 method 的分数不可复核」——
+    /// 这句话是 AC 的原话，也是拒绝的**理由**，不是一句形式化的校验文案。
+    ///
+    /// # 为什么 confidence 是**搬进 payload**，而不是加一个结构体字段
+    ///
+    /// 两个原因，都不是风格问题：
+    ///
+    /// 1. `apply` 那条路只拿得到 `ItemView.payload`（`domain::review` 的条目视图
+    ///    没有独立的置信度栏），不并进 payload 的话分数就进不了快照，
+    ///    `--model-view` 也就无从显示；
+    /// 2. `NewItem` 的字面量构造散布在 10+ 个测试里（`test_apply` / `test_proposal` /
+    ///    `test_review_show_e2e` …），加字段会让它们全部编译不过 ——
+    ///    那是为一件「搬家」改十处测试，收益为零而噪声很大。
+    ///
+    /// 所以：**条目顶层**的 `confidence`（设计概要 §2.1 的形状）在**入口处**
+    /// 校验一次，然后搬进 `payload.confidence`。落库时三栏从同一个值取，
+    /// **不是两个真相**。
     pub fn from_json(it: &Value, idx: usize) -> anyhow::Result<Self> {
         let kind_s = it["kind"]
             .as_str()
@@ -81,7 +102,34 @@ impl NewItem {
             "add_concept_group" => ItemKind::AddConceptGroup,
             other => anyhow::bail!("未知 kind：{other}"),
         };
-        Ok(NewItem { kind, target_key: target.to_string(), payload: it["payload"].clone() })
+        let mut payload = it["payload"].clone();
+        match it.get("confidence") {
+            None | Some(Value::Null) => {}
+            Some(v) => {
+                let c = crate::domain::confidence::from_untrusted(v)
+                    .map_err(|e| anyhow::anyhow!("item {} 的 confidence 不合法：{e}", idx + 1))?;
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert(
+                        "confidence".to_string(),
+                        serde_json::to_value(&c).unwrap_or(Value::Null),
+                    );
+                }
+            }
+        }
+        Ok(NewItem { kind, target_key: target.to_string(), payload })
+    }
+
+    /// payload 里带的置信度（**同一份值**，不另存）。
+    ///
+    /// 出错时返回 `StoreError::BadConfidence` —— 走到这里还读不懂，
+    /// 说明 `payload` 被别的工具改过（`from_json` 已经校验过一次）。
+    fn confidence(&self) -> Result<Option<crate::domain::confidence::Confidence>, StoreError> {
+        match self.payload.get("confidence") {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => crate::domain::confidence::from_untrusted(v)
+                .map(Some)
+                .map_err(|e| StoreError::BadConfidence(format!("{}：{e}", self.target_key))),
+        }
     }
 }
 
@@ -143,10 +191,14 @@ impl PgProposalStore {
                     }
                 }
             }
+            // REQ-108 · AC-008：`method` 必填 —— 这里是**第二道**（`from_json` 是第一道），
+            // 因为直连本函数的调用方可能自己拼 `NewItem`。读不懂 ⇒ 拒绝入库。
+            let confidence = it.confidence()?;
             sqlx::query(
                 "INSERT INTO proposal_items
-                   (id, proposal_id, seq, kind, target_key, payload, biz_status, model_status)
-                 VALUES ($1,$2,$3,$4,$5,$6,'pending','pending')",
+                   (id, proposal_id, seq, kind, target_key, payload, biz_status, model_status,
+                    confidence, confidence_method, confidence_signals)
+                 VALUES ($1,$2,$3,$4,$5,$6,'pending','pending',$7,$8,$9)",
             )
             .bind(Uuid::new_v4())
             .bind(id)
@@ -154,6 +206,14 @@ impl PgProposalStore {
             .bind(it.kind.as_str())
             .bind(&it.target_key)
             .bind(&it.payload)
+            // REQ-108 · 三栏置信度；`None` ⇒ SQL NULL（实体条目没有分数，不是 0 分）
+            .bind(confidence.as_ref().map(|c| c.score))
+            .bind(confidence.as_ref().map(|c| c.method.clone()))
+            .bind(
+                confidence
+                    .as_ref()
+                    .and_then(|c| serde_json::to_value(c).ok()),
+            )
             .execute(&mut *tx)
             .await?;
         }

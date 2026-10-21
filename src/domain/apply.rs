@@ -43,6 +43,14 @@ pub enum ApplyError {
     /// REQ-010 · 概念声明不合法（悬空成员 / 嵌套 / 重叠 / 空组 / key 重复）
     #[error("概念组声明不合法：{0}")]
     BadConceptGroup(String),
+
+    /// REQ-108 · 关系条目的 `confidence` 不合法（缺 method / 分数越界 / band 与分数对不上）。
+    ///
+    /// **fail-closed**：`import` 期已经拦过一道（AC-008），这里是第二条通道
+    /// （`payload` 是 JSONB，理论上可以被别的工具改过）。宁可 apply 失败，
+    /// 也不要把一份读不懂的分数带进冻结版本。
+    #[error("关系条目的 confidence 不合法：{0}")]
+    BadConfidence(String),
 }
 
 /// 逐条应用，返回新快照。
@@ -290,6 +298,18 @@ fn link_from_payload(key: &str, p: &serde_json::Value) -> Result<LinkType, Apply
             .to_string(),
         semantic: obj.get("semantic").and_then(|v| v.as_str()).unwrap_or("has").to_string(),
         evidence: vec![],
+        // REQ-108 · 置信度随条目进快照（`--model-view` 要显示它，客户视图**不读**它）。
+        //
+        // 缺 `confidence` ⇒ `None`（人工写的提案 / 旧提案）。
+        // 有但读不懂 ⇒ 报错，**不**静默降级成 `None`：
+        // 「有一份读不懂的分数」与「没有分数」在审核界面上的含义完全不同。
+        confidence: match obj.get("confidence") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => Some(
+                crate::domain::confidence::from_untrusted(v)
+                    .map_err(ApplyError::BadConfidence)?,
+            ),
+        },
     })
 }
 

@@ -88,6 +88,7 @@ fn three_state_snapshot(vid: Uuid) -> Snapshot {
             cardinality: "1:N".into(),
             semantic: "has".into(),
             evidence: vec![],
+            confidence: None,
         }],
         action_types: vec![ActionType {
             key: "dispatch_ticket".into(),

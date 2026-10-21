@@ -140,6 +140,7 @@ fn rich_snapshot(version_id: Uuid) -> Snapshot {
             cardinality: "1:N".into(),
             semantic: "has".into(),
             evidence: vec![ev("t_order", "cust_no")],
+            confidence: None,
         }],
         action_types: vec![
             ActionType {

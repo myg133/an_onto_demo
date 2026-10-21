@@ -18,6 +18,9 @@
 pub mod apply;
 // REQ-010 · 业务概念组（§7.1 阶段 3「跨组合成」的落地）。纯逻辑，零 I/O。
 pub mod concept;
+// REQ-108 · **证据评分卡 v1**（5 信号 + 8 条 veto + 四档）。
+// 刻意是纯函数：AC-005「两次运行分数逐位相同」靠的是**结构**（这里读不到库、读不到时钟）。
+pub mod confidence;
 pub mod diff;
 pub mod hierarchy;
 // REQ-006 · 客户视图 → 单文件 HTML（纯字符串拼装，零 I/O）

@@ -53,6 +53,11 @@ pub enum Cmd {
     Ontology { #[command(subcommand)] cmd: OntologyCmd },
     /// REQ-010 · 业务概念组（§7.1 阶段 3）
     Concept { #[command(subcommand)] cmd: ConceptCmd },
+    /// REQ-108 · 置信度校准（AC-011）
+    ///
+    /// 把「分数」与「人工最终决定」对起来，输出**分箱命中率**。
+    /// 样本不足时**明确说样本不足**，不输出 0% / 100% 冒充结论。
+    Confidence { #[command(subcommand)] cmd: ConfidenceCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -184,6 +189,28 @@ pub enum ProposeCmd {
     },
 }
 
+/// REQ-108 · 置信度相关命令（AC-011）。
+#[derive(Subcommand)]
+pub enum ConfidenceCmd {
+    /// 输出**分箱命中率**（分数 vs 人工接受）
+    ///
+    /// 分箱：`0.00–0.30 / 0.30–0.60 / 0.60–0.75 / 0.75–0.90 / 0.90–1.00`。
+    /// 人工决定取**业务轨**（`biz_status`）：关系对不对是业务判断，
+    /// 建模轨判的是「建得规不规范」，不是同一件事。
+    ///
+    /// ⚠️ **任一分箱 < 5 条 ⇒ 整份报「样本不足」，不输出接受率结论、不算 ECE。**
+    /// 空库运行同样明确提示 —— 不打印 `0%`（那是「一条都没接受」，
+    /// 而事实是「一条都没判过」，两者完全不同）。
+    Calibrate {
+        /// 项目名（该项目的全部提案条目一起统计）
+        #[arg(long)]
+        project: String,
+        /// 只统计挂在某个基版本上的提案？省略 = 该项目的全部提案
+        #[arg(long)]
+        version: Option<i32>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum ReviewCmd {
     /// 记录一次单轨判定
@@ -222,6 +249,14 @@ pub enum ReviewCmd {
         /// 同 `decide`：别名按项目内序号解析
         #[arg(long)]
         project: Option<String>,
+        /// REQ-108 · 一并输出**置信度分档表**（审核界面的置信度通道）。
+        ///
+        /// 刻意做成**开关**而不是默认输出：`review show` 的 stdout 字节
+        /// 被 REQ-072/078 的真进程比对钉着（`review_show_prefix ++ 渲染文本`），
+        /// 默认多打一行就会让那批判据红 —— 那不是「判据过时」，是**契约变了**。
+        /// 需要看分数的审核者显式带上这个开关；客户视图与此无关（它压根不读）。
+        #[arg(long)]
+        confidence: bool,
     },
 }
 
@@ -485,6 +520,87 @@ pub fn review_show_prefix(alias: &str, status: &str) -> String {
     REVIEW_SHOW_PREFIX_TEMPLATE
         .replace("{alias}", alias)
         .replace("{status}", status)
+}
+
+/// **置信度分档表**（REQ-108 · AC-010 的「审核界面必须有」）。
+///
+/// 输入是提案条目行（`payload.confidence` 里带着分数），输出一段**纯文本**：
+/// 抬头 + 四档计数 + 每条关系一行（档位、分数、关系、证据摘要、veto 理由）。
+///
+/// # 为什么单独一段、不并进 `review_view`
+///
+/// `src/domain/review_view.rs` 的渲染链是 REQ-056~078 的**字节契约**所在地，
+/// 本 REQ 的红线明确禁改它。而分数是审核辅助信息、不是条目正文 ——
+/// 单独一段既满足「审核界面看得见」，又不动那条被钉住的输出。
+///
+/// # 排序是确定的
+///
+/// 档位（高→拒绝）→ 分数降序 → 条目 target 升序。同一份提案两次运行
+/// 输出逐字节相同（AC-005 的口径也适用于这一段）。
+pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -> String {
+    use crate::domain::confidence::Band;
+
+    #[derive(Clone)]
+    struct Row {
+        band: Band,
+        score: f64,
+        target: String,
+        evidence: Option<(u32, u32)>,
+        veto: Option<String>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for it in items {
+        let Some(v) = it.payload.get("confidence") else { continue };
+        let Ok(c) = crate::domain::confidence::from_untrusted(v) else { continue };
+        let ev = c
+            .signals
+            .iter()
+            .find(|s| s.name == "sample_hit_rate")
+            .and_then(|s| Some((s.sampled?, s.matched?)));
+        rows.push(Row {
+            band: c.band,
+            score: c.score,
+            target: it.target_key.clone(),
+            evidence: ev,
+            veto: c.veto.as_ref().map(|v| format!("{}：{}", v.signal, v.reason)),
+        });
+    }
+    if rows.is_empty() {
+        return "置信度：本提案没有分数（REQ-108 之前的提案 / 人工提案）".to_string();
+    }
+    rows.sort_by(|a, b| {
+        a.band
+            .cmp(&b.band)
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.target.cmp(&b.target))
+    });
+    let counts = crate::domain::confidence::BandCounts::of(rows.iter().map(|r| &r.band));
+    let mut out = String::new();
+    out.push_str(&format!(
+        "置信度（{}）：高 {} · 中 {} · 低 {} · 拒绝 {}（共 {} 条关系）\n",
+        crate::domain::confidence::METHOD,
+        counts.high,
+        counts.middle,
+        counts.low,
+        counts.rejected,
+        counts.total()
+    ));
+    for r in &rows {
+        let ev = match r.evidence {
+            Some((s, m)) => format!(" · 证据 {m}/{s}"),
+            None => " · 证据 无（data_evidence=none）".to_string(),
+        };
+        let veto = r.veto.as_deref().map(|v| format!("\n             veto {v}")).unwrap_or_default();
+        out.push_str(&format!(
+            "  [{}] {:.2} {}{}{}\n",
+            r.band.label_zh(),
+            r.score,
+            r.target,
+            ev,
+            veto
+        ));
+    }
+    out.trim_end().to_string()
 }
 
 /// ⭐ REQ-078 · **打印点登记表** —— 全部打印 domain 产物的站点。
@@ -760,6 +876,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Proposal { cmd } => proposal_cmd(&pool, cmd).await,
         Cmd::Ontology { cmd } => ontology_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
+        // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
+        Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
         Cmd::McpServer { project, version } => {
             // 冻结闸门在 `mcp::prepare` 里：未冻结就 Err ⇒ 这里退出码非零。
             //
@@ -806,6 +924,144 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 /// 说的「Agent 是提议者不是决定者」被架空。所以这里只做一件事：
 /// **把声明翻译成 `add_concept_group` 提案条目**，之后与实体类型条目
 /// 走完全相同的 `review decide` → `proposal apply`。
+/// REQ-108 · **校准命令**（AC-011）：分数 → 分箱 → 人工接受率。
+///
+/// # 数据从哪来
+///
+/// `proposal_items.confidence`（REAL）+ `biz_status`（人工决定）。两栏都在
+/// 同一条提案条目上，所以不需要跨表拼「这条关系后来被接受了吗」——
+/// 判定本来就是**条目级**的。
+///
+/// # 为什么人工决定取**业务轨**
+///
+/// 双轨的语义不同：业务轨判「这条关系对不对」，建模轨判「建得规不规范」。
+/// 校准要的是**正确率**，所以只能取业务轨。取建模轨会把「关系对、但基数标错」
+/// 的条目算成「没接受」，于是分数高低与口径无关地混在一起。
+///
+/// # 样本不足时**不给结论**
+///
+/// 设计概要 §六：任一分箱 < 5 条 ⇒ 标「样本不足」。空库同理。
+/// ⛔ 绝不输出 `0%` 或 `100%` —— 那不是「准确率 0」或「准确率 100」，
+/// 而是「没有样本」，两者的差别正是 AC-011 要守的。
+async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()> {
+    let ConfidenceCmd::Calibrate { project, version } = cmd;
+
+    let projects = PgProjectStore::new(pool.clone());
+    let p = projects
+        .get_by_name(&project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}"))?;
+
+    // 已决 = 业务轨有明确决定（`accepted` / `rejected`）。
+    // `pending` 不算「未接受」—— 那是「还没判」，进分母会把接受率稀释成噪声。
+    // 所以下面**只取** `biz_status IN ('accepted','rejected')`，
+    // 另外单独查一个总数，把「待决」报出来。
+    let mut sql = String::from(
+        // `confidence` 列是 `REAL`（float4）；这里显式转 float8 ——
+        // 评分卡用的是 f64，别在解码处留一次 f32 截断（0.15 这类值会漂）。
+        "SELECT pi.confidence::float8, pi.biz_status
+         FROM proposal_items pi
+         JOIN proposals p ON p.id = pi.proposal_id
+         WHERE p.project_id = $1
+           AND pi.confidence IS NOT NULL",
+    );
+    if version.is_some() {
+        // 只统计挂在某个基版本上的提案（`base_version_id` 对应的 seq）
+        sql.push_str(
+            " AND p.base_version_id IN (
+                 SELECT id FROM ontology_versions WHERE project_id = $1 AND seq = $2)",
+        );
+    }
+    let mut q = sqlx::query_as::<_, (f64, String)>(&sql).bind(p.id);
+    if let Some(v) = version {
+        q = q.bind(v);
+    }
+    let rows = q.fetch_all(pool).await?;
+
+    let mut samples: Vec<(f64, bool)> = Vec::new();
+    let mut pending = 0usize;
+    for (score, status) in &rows {
+        match status.as_str() {
+            "accepted" => samples.push((*score, true)),
+            "rejected" => samples.push((*score, false)),
+            _ => pending += 1,
+        }
+    }
+
+    // ⚠️ **整段只往 stdout 写一次**：REQ-107 的写点登记表（
+    // `tests/test_req107_source_enumeration.rs` 的 `t1`）要求 cli.rs 里
+    // **每一处** stdout 写点要么是出口、要么在白名单里。校准表是运维面，
+    // 但它有十几行——一次拼好、一次写出，登记面就只剩一处。
+    let mut report_lines = String::new();
+    report_lines.push_str(&format!(
+        "置信度校准 · project={project}{}\n",
+        match version {
+            Some(v) => format!(" · base_version=v{v}"),
+            None => " · 全部提案".to_string(),
+        }
+    ));
+    report_lines.push_str(&format!(
+        "  方法        : {}\n", crate::domain::confidence::METHOD
+    ));
+    report_lines.push_str(&format!(
+        "  计分条目    : {} 条（已决 {} · 待决 {} —— 待决**不进**分母）\n",
+        rows.len(),
+        samples.len(),
+        pending
+    ));
+
+    let bins = crate::domain::confidence::calibration_bins(&samples);
+    report_lines.push('\n');
+    report_lines.push_str("  分箱          条数   人工接受   接受率     平均分\n");
+    for b in &bins {
+        let rate = match (b.acceptance_rate(), b.sufficient()) {
+            (Some(r), true) => format!("{:>6.1}%", r * 100.0),
+            // ⛔ 样本不足时**不印百分比**（0% / 100% 都是冒充结论）
+            (Some(_), false) => "  样本不足".to_string(),
+            (None, _) => "      —".to_string(),
+        };
+        let mean = if b.count == 0 { "—".to_string() } else { format!("{:.2}", b.mean_score) };
+        report_lines.push_str(&format!(
+            "  {:<12} {:>5}   {:>7}   {}   {:>6}\n",
+            b.label(),
+            b.count,
+            b.accepted,
+            rate,
+            mean
+        ));
+    }
+    report_lines.push('\n');
+    if samples.is_empty() {
+        report_lines.push_str(
+            "  结论        : **样本不足**（没有任何已决的计分条目）—— 不输出命中率结论。\n\
+             \x20             先跑一轮 propose import → review decide（业务轨），再回来校准。",
+        );
+    } else if let Some(ece) = crate::domain::confidence::expected_calibration_error(&bins) {
+        report_lines.push_str(&format!(
+            "  结论        : 样本充足（每箱 ≥ {} 条）· ECE = {:.2}\n",
+            crate::domain::confidence::MIN_BIN_SAMPLES,
+            ece
+        ));
+        report_lines.push_str(
+            "  读法        : 接受率 < 平均分 = 分数偏高（该收紧）；> = 分数偏低（可以放宽），\n\
+             \x20             但**调权重必须先有覆盖率**（设计概要 §九 G4：本采样只验存在性）",
+        );
+    } else {
+        let thin: Vec<String> = bins
+            .iter()
+            .filter(|b| !b.sufficient())
+            .map(|b| format!("{}（{} 条）", b.label(), b.count))
+            .collect();
+        report_lines.push_str(&format!(
+            "  结论        : **样本不足** —— 以下分箱 < {} 条：{}。不输出命中率结论、不算 ECE。",
+            crate::domain::confidence::MIN_BIN_SAMPLES,
+            thin.join("、")
+        ));
+    }
+    println!("{report_lines}");
+    Ok(())
+}
+
 async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
     let ConceptCmd::Digest { file } = cmd else {
         let ConceptCmd::Import { file, project, base_version, round } = cmd else {
@@ -949,11 +1205,48 @@ async fn version_cmd(pool: &PgPool, cmd: VersionCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// AC-015 · 导入前的**顶层闸**：带 `importable: false` 的文件不是提案。
+///
+/// 为什么在 `cli` 里单独成一个函数而不是写在 `propose_cmd` 里：
+/// 它是**所有**导入通道都该过的一道门（今天只有 `propose import` 消费这类文件），
+/// 而「写在流程中间的一行 if」没法被单测钉住 —— 下一步有人重排 `propose_cmd`
+/// 就可能把它挪没了。判据要能单独执行。
+///
+/// 语义：
+/// - **缺省** ⇒ 可导入（REQ-108 之前的产物没有这个字段）；
+/// - **恰好 `true`** ⇒ 可导入；
+/// - 其它（`false` / `"false"` / `0` / `null`）⇒ **拒绝**（fail-closed：
+///   一个说不清自己能不能导的文件，不该被猜成能导）。
+pub fn ensure_importable(path: &std::path::Path, doc: &Value) -> anyhow::Result<()> {
+    if let Some(v) = doc.get("importable") {
+        if v.as_bool() != Some(true) {
+            anyhow::bail!(
+                "{} 顶层声明 importable = {} —— 这是被拒绝档，不能导入。\n\
+                 拒绝档（<0.30）的关系只记 veto 理由、不进本体；可导入的是主提案 \
+                 proposal.json（高/中档）与待查清单 proposal-pending.json（低档，\
+                 产出时就写 importable: true）。",
+                path.display(),
+                v
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
     let ProposeCmd::Import { file } = cmd;
     let text = std::fs::read_to_string(&file)
         .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
     let doc: Value = serde_json::from_str(&text)?;
+
+    // ★ AC-015：`importable: false` 必须是**硬闸**，不是文件里的约定。
+    //
+    // 背景（QA `qa-review.md` §7 N2）：`ontok-propose` 把「不提案」的关系写进
+    // `proposal-rejected.json`，并在顶层标 `importable: false`，但 `propose import`
+    // 完全不看这个字段 —— 原样导入 **EXIT=0**，10 条已知错误照样进提案表，
+    // 再来一次 `review decide --accept-all` + `apply` 就进了本体。
+    // **声明了却不管，比不声明更糟**：读文件的人会以为已经挡住了。
+    ensure_importable(&file, &doc)?;
 
     let projects = PgProjectStore::new(pool.clone());
     let proposals = PgProposalStore::new(pool.clone());
@@ -1097,7 +1390,7 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
             proposals.set_decision(it.id, t, d).await?;
             println!("item {} 的 {} 轨 → {}", item, track, d.as_str());
         }
-        ReviewCmd::Show { proposal, project } => {
+        ReviewCmd::Show { proposal, project, confidence } => {
             let p = resolve_proposal_arg(pool, &proposal, project.as_deref()).await?;
             let row = proposals.get(p).await?.ok_or_else(|| anyhow::anyhow!("提案不存在"))?;
             let items = proposals.items(p).await?;
@@ -1177,6 +1470,22 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
             // 在 REQ-078 之前，这三行只是 `eprintln!`，退出码恒为 0。
             if let Some(code) = crate::cli::self_check_exit_code(&violations) {
                 std::process::exit(code);
+            }
+
+            // ── REQ-108 · 置信度通道（AC-010 的「审核界面必须有」）─────────
+            //
+            // 为什么放在**渲染之后**、且不做进 `review_view`：
+            // `src/domain/review_view.rs` 是 REQ-056~078 的原始字节契约所在
+            // （那条渲染链有三道自检 + 真进程字节比对），**本 REQ 的红线禁改它**。
+            // 分数是**审核辅助信息**，不是条目正文 —— 单独一段、显式开关，
+            // 既让审核者看得到，又不动那条被钉住的输出。
+            if confidence {
+                let band_lines = render_confidence_table(&items);
+                // ⚠️ 用 `println!` 而不是绕道 `write_stdout`：本仓的打印点守卫
+                // （REQ-078 的 G-5）靠「认得出是 domain 产物就打红」来兜底，
+                // 绕道等于让它**看不见**这个站点。这里老老实实用一个普通打印：
+                // 它打的是一张分档表（不是客户产物绑定），守卫认出后**不登记**是正确的。
+                println!("{band_lines}");
             }
         }
     }
