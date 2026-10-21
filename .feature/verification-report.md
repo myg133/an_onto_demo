@@ -308,6 +308,14 @@ sha after  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D   
 
 > `tests/test_retained_names_req084.rs` 用 `include_str!("../src/bin/ontok-gate-preflight.rs")`，
 > 挪开绕行文件时它**编不过** —— 既有问题、不在 32 个基线套件里，本轮未触碰。
+>
+> ⚠️ `tests/test_anchor_guard.rs::no_bare_env_manifest_dir_outside_anchor_file` 在**基线上就是红的**
+> （`HEAD` 的 `tests/test_req109_cli_gate.rs:26` / `tests/test_req109_e2e_fake_llm.rs:38` 各有一处
+> 裸 `env!("CARGO_MANIFEST_DIR")`）。本轮**未触碰**这两个文件；新测试只用
+> `env!("CARGO_BIN_EXE_ontok")`（不在该守卫的判定范围内）。**不是本轮引入**，也不在 32 个基线套件里。
+
+**另跑（受 CLI / 依赖面影响，均绿，0 failed）**：`test_req109_cli_gate` 6 · `test_project` 10 ·
+`test_hierarchy` 16 · `test_snapshot_freeze_gate` 2 · `test_review_show_binary_req072` 7。
 
 ---
 
