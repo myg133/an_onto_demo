@@ -14,7 +14,7 @@
 
 - `stats.json` 同时有 `tables_seen` / `tables_excluded` / `tables_extracted`
 - 判据：`seen - excluded == extracted`（**结构性断言**，不是人眼核对）
-- 真实库：`96 - 13 == 83`
+- 真实库：`96 - 12 == 84`（**AI 判 13、BA 复核推翻 1 条** ⇒ 12）
 
 ### AC-003 · 每条排除都有理由，且可读
 
@@ -59,7 +59,7 @@
 
 ### AC-010 · 真实库实测
 
-- 对 `anspire_open_uat` 跑：`96 → 排除 13 → 83`
+- 对 `anspire_open_uat` 跑：`96 → 排除 12 → 84`（清单来源：AI 判断 + BA 复核，`reviewed_by` 已签）
 - 输出 13 条理由（业务可读，例如「CDC 同步残留表，由数据同步服务自动创建，不属于业务模型」）
 - 判据：贴出完整的 13 条
 

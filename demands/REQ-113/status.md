@@ -34,3 +34,17 @@ schema.json（96 表）──【python 脚本】──▶ schema.filtered.json�
 - [ ] 等 REQ-112 合并
 - [ ] Dev 实现（格式 / CLI / stats / 溯源 / 审核界面区块 / 陈旧检测）
 - [ ] 真实库实测 96 → 83 + 13 条理由
+
+## 清单来源：AI 先判一轮（2026-10-21）
+
+用户要求「让 AI 先判断一轮」⇒ 排除清单**不由 BA 手写**，改由 AI 对 96 张表逐张判断，理由落盘，BA 复核后签字。
+
+| 项 | 结果 |
+| --- | --- |
+| AI 判断 | **13 条排除**（cdc 3 · 迁移记账 1 · 备份 3 · 内部管道 3 · 报表中间表 3）+ 10 条「保留但存疑」+ 73 条正常 |
+| **BA 复核** | **推翻 1 条**：`dim_customer_binding` 被 AI 判为报表维度，但它有 `cross_currency_enabled`（跨币种开关）与账号渠道归属 ⇒ **业务状态，不是派生比率**；`dim_` 前缀误导了 AI |
+| 最终 | **排除 12 条**，`96 − 12 = 84` |
+| 签字 | `reviewed_by: ba-michael（人工复核：推翻 1 条排除、接受其余 12 条）` |
+| 文件 | `code/out/exclusions-ai.json`（`version 0.1.1`，sha256[:16] `3f77c6b8fd41bded`） |
+
+**AI 判对的地方**（值得记）：它保住了三张「名字像内部、内容是业务事实」的表——`internal_messages`（发给客户的站内信）、`internal_operation_records`（余额变动原因）、`seetings`（拼写错误但实际是平台设置）。
