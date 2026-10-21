@@ -126,3 +126,61 @@ R6 要求「同版本两次导出逐字节相同」⇒ 时间戳不能进正文�
 ### A-5 · ADR-004 已落库
 
 `BA/decisions/ADR-004-页面可达性与门禁.md`，内容取自交付报告附录 A。
+
+---
+
+## 四 · QA 首轮裁定（FAIL 1 阻断 → 已修）
+
+### A-6 · 阻断 B-1：`src/bin/ontok-gate-preflight.rs` 被误删 —— **是 BA 的提交事故**
+
+**事实**：提交 `638c0dc` 把该文件（2758 行、develop 上跟踪）当成**删除**提交了。
+原因：Dev 做测试绕行时把它挪出工作区，**没挪回**；而 BA 用 `git add -A` 提交，把 `D` 一起收了。
+Dev 本地全绿，是因为那个**未跟踪副本**还在；QA 在独立 worktree 的 fresh checkout 上才暴露（`include_str!` 找不到文件 ⇒ 编译失败）。
+
+**已修**：`git checkout develop -- src/bin/ontok-gate-preflight.rs` + 追加恢复提交（不改历史）。
+验证：`git diff develop..HEAD -- src/bin/ontok-gate-preflight.rs` **为空**；工作区干净。
+
+**规程（新增，写进 `dispatch/rules.md`）**：
+
+> 提交前**必须**看 `git status --short` 里有没有 `D ` 行；有就停下来查原因。
+> 「测试绕行挪文件」必须在同一个 `finally` 里挪回，并在命令末尾打印 `sha256` 与 `Test-Path` 双重确认。
+
+### A-7 · N-1：A-1 的措辞**是错的**，订正
+
+原文写「头部是编译期常量、不含任何项目数据」。**实测不成立**：
+
+| 头部内容 | 性质 |
+| --- | --- |
+| `@prefix : <{base}{local_model(项目名)}#>` | **由项目名生成**，不是常量 |
+| `action_type_count` | 计数（AC-008 强制） |
+
+**为什么仍然安全**：QA 实测——头部那个 IRI 与**正文本体 IRI 逐字相同**，正文扫得到，所以「只在头部出现」的形态**构造不出来**。
+（构造 `extracted-by` 项目名 → 归一化为 `extracted_by` → 同样被正文 IRI 命中，仍被拒。）
+
+**订正后的 A-1 表述**：
+
+> 闸扫**数据正文**；头部含有**由项目名派生的前缀**与**计数**，但它们**同时出现在正文**（本体 IRI），排除头部**不减少覆盖**。
+
+**新增一条断言（防将来漂移）**：头部 `@prefix` 的 IRI 必须与正文 `<…> a owl:Ontology` 的 IRI **逐字相同**。若将来有人往头部加新的数据来源，这条会红。
+
+### A-8 · N-2：A-3 的 23 条分解**也写错了**，订正
+
+QA 实测：`投影 11 + filter 11 + TTL 同名合并 1 = 23`（不是我写的 12+11）。
+
+**第 23 条的性质**：`ttl.rs::distinct_properties` 把「试用请求」的两条**同名**属性「请求标识」合并成一条（`required` 取或 ⇒ `nullable=false`）。
+
+⇒ 所以 `/api/graph` 是 **844** 属性、TTL 是 **843**，**「与 /api/graph 同一份前处理」这句话不成立**。
+
+**裁定**：
+- 订正 A-3；
+- 把 **「同名属性合并」登记为 TTL 的已知有损项**（已补进 `design-summary.md` §七 G5）；
+- ⛔ 不许把「843 = 866 − 23」写成「与 graph 同源」——那是两件事。
+
+### A-9 · N-4 / N-6 / N-8 处置
+
+| # | 项 | 处置 |
+| --- | --- | --- |
+| **N-4** | `test_anchor_guard` 在基线 `5737ecf` 上红（REQ-109 违规），hotfix `abf1c9f` 后 3 passed | **纳入「不退化」回归清单**（3 个守卫型套件：`anchor_guard` / `guard_manifest_req081` / `read_only_guard`） |
+| **N-6** | 项目名含术语时行为不对称：`/` 200、`/api/graph` 200、`/api/scope` 500、`/api/ontology.ttl` 500 | **写进 ADR-004 的「后果」一节**：这是 fail-closed 的必然——scope 与 TTL 都要回显项目名，graph 不回显；⛔ 不许为了「对称」放宽任一闸 |
+| **N-8** | H1 重锚合规（QA 独立确认：新 golden 与实测 `GET /` 逐字节一致、PROVENANCE 说明原因、其余 12 份未动） | **确认合规**，无需动作 |
+

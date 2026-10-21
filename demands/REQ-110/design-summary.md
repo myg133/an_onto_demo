@@ -100,3 +100,4 @@ CustomerView ──▶ serialize ──▶ scan_modeling_terms(ttl_text)
 | G2 | `ActionType` 不可导出 | OWL 无对应，头部声明有损 |
 | G3 | 不导 `SHACL` 形状（nullable/必填） | 后续可加，本轮不做 |
 | G4 | 页面壳免 token 后，服务存在性可被探测 | ADR 记录并接受 |
+| **G5** | **同名属性合并**：同一对象内两条同名属性（如「试用请求」的两条「请求标识」）在 TTL 里合并成一条，`required` 取或 | 客户视图 TTL **843** 属性 vs `/api/graph` **844**。**这是 TTL 特有的有损**，与投影/剔除无关（QA 实测分解为 11 + 11 + 1） |
