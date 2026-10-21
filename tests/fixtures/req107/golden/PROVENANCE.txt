@@ -45,4 +45,36 @@ b714f48
 #     · `src/server/page.rs` 模块文档的「已知限制」小节（核心出处）；
 #     · `tests/fixtures/req114/layout_probe.js` 文件头的「边界」段（同一份措辞）。
 #     本文件与 `.feature/verification-report.md` 只是照抄，不是原始出处。
+#
+# ⭐ REQ-115 重锚 H1_index.html（其余 12 份逐字节未动）：
+#   **REQ-115 给页面加了分组渲染** —— 组圈（背景虚线大圈）+ 组名、折叠/展开
+#   （折叠时一个组 = 一个「组名 + N」的聚合节点）、组面板（成员列表 / 点击定位）、
+#   组内聚拢引力，以及无组时的「未分组」。这些都内联在 `src/server/page.rs` 的
+#   `INDEX_HTML` 里 ⇒ 页面字节**必然**变。这是**需求要求的可见变化**，不是 golden 漂移。
+#   H1 的字节 = `INDEX_HTML` 常量本身（H1 出口仍是 `Product::Text`，干净模板过闸后
+#   逐字节返回，服务端不做任何拼装）。sha256 已同步进 SHA256SUMS，只记**最终态**：
+#     旧（REQ-114 最终态）d8bd4581c264a483815c0bf67636966da190b3799e8abbaa79c6f5a2a849c5c0（32396 字节）
+#     新（REQ-115 最终态）c8d5e148a647d84b81d2d1186430dfb6455979f786725a8a5bcd714548ed7c51（49936 字节）
+#   重锚方式：从 `page.rs` 抽出 `r##"…"##` 常量本体逐字节写出（不手抄、不编辑器另存），
+#   再由 `tests/test_req107_pipeline_bytes.rs`（真路由 + 管线）复核逐字节相等。
+#   ⛔ 同样别「为了让它对上」手改 H1：要改就改模板，再按同一条方式重锚并更新 sha256。
+#
+#   ⚠️ 页面的第二次变化（QA 阻断修复 · 第 2 轮 C-1/C-2/C-3）：
+#   组面板**照常显示 `scope_hint`**（客户可见的组说明，与业务总览的 `summary` 同一口径，C-3）。
+#   **新导入**的声明不会再出现「一句话打挂整份图」：导入时就过客户闸（C-1：
+#   `display_name` / `scope_hint` / 组 `key` 命中即拒），而且 `concept suggest` 不再往
+#   `scope_hint` 写内部备注（C-2）。QA 阻断的那一句（`api_entitlement.scope_hint` 里的
+#   「未持 Key」）现在会在 `concept import` 被点名拒绝。
+#
+#   ⚠️ **边界（⛔ 别写成「已封堵」）**：C-1 只挡**新导入**。**已入库的旧快照**仍按原行为拒发
+#   （`/api/graph` 500 / `ontology overview` exit 2）—— 读路径本轮没改。
+#   清理旧数据只能**重新导入**（改措辞 + 重算 digest）或**重建快照**。
+#   （本机现场：`anspire_excl_r115` v3 就是 C-1 之前入库的脏快照，仍会 500。）
+#
+#   ⚠️ 为什么 H2_graph.json 可以**不变**（REQ-115 明明加了 `groups`）：
+#   `/api/graph` 的分组落在**另一个装配入口**（`state_from_view_with_groups`），
+#   而 H2 这份 golden 钉的是 REQ-107 的旧形状（`state_from_view`：`groups` 字段缺席、
+#   节点无 `group`）。两种形状由同一个 `GraphProjection` 的三态表达
+#   （`groups: None` = 通道未接通；`Some([])` = 接通但没有组）。生产 `serve` 永远走
+#   已接通的那条 ⇒ 线上恒有 `groups`（没有组时是 `[]`），而这份 golden 的字节不动。
 

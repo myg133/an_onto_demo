@@ -69,6 +69,102 @@ use crate::domain::view::CustomerView;
 pub struct GraphProjection {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// **概念组通道**（REQ-115 · AC-001 / AC-003）。
+    ///
+    /// 三态，**刻意用 `Option<Vec<_>>` 而不是裸 `Vec`** —— 这三态在验收里
+    /// 各自是一条判据，不能被默认值吞掉：
+    ///
+    /// | 值 | 含义 | 谁产出 |
+    /// | --- | --- | --- |
+    /// | `None`（线上字段缺席） | 这份投影**没有接分组**——REQ-107 的 golden `H2_graph.json` 是这一种，必须逐字节不变（AC-008） | [`project`] |
+    /// | `Some([])`（线上 `"groups":[]`） | 接通了，但这一版**真的没有概念组**（R6 的「没有分组」） | [`project_grouped`] |
+    /// | `Some([...])` | 有组，成员是节点标识 | [`project_grouped`] |
+    ///
+    /// ⛔ **不许**为了让字段「看起来齐全」把 `None` 也写成 `[]`：
+    /// 那会让 `H2_graph.json` 这一份 golden 漂移，而 12 份 golden 是逐字节冻结的。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<Group>>,
+}
+
+/// 图里的一个**概念组**（REQ-115 · AC-001）。
+///
+/// # 这是**权威层**，不是建议
+///
+/// 来源只有一个：`concept_groups` 表（`concept import` → 双轨审核 → `apply`）。
+/// 建议层（`concept suggest`）**只产出声明文件**，不进这个结构 ——
+/// 图上看到的分组必然有人签过（R1）。
+///
+/// # ⚠️ 线上字段叫 `id`，不叫 `key` —— 与 [`Node`] 同一条纪律
+///
+/// `key` 在 `MODELING_TERMS` 词表里，而发布闸扫的是**整段序列化文本**
+/// （键名也扫）。把它写成线上键名 ⇒ **每一次**带分组的 `/api/graph` 响应
+/// 都会被闸拒发（500），而客户只会看到「读不到」。所以：
+///
+/// - Rust 字段叫 `key`（与 [`crate::domain::concept::ConceptGroup`] 对齐）；
+/// - 线上叫 `id`（与 [`Node`] 的 `id` 同一空间：节点归属的组标识）。
+///
+/// ⚠️ 因此 AC-001 里写的 `groups[].key` 在**线上**呈现为 `groups[].id`。
+/// 这不是改名，是那道闸决定的唯一可行拼写（同 [`Node::key`] 的既有裁定）。
+///
+/// # `scope_hint`：客户可见的**组说明**（C-3 口径）
+///
+/// REQ-010 的**业务总览**一直把 `scope_hint` 当 `summary` 交给客户
+/// （`ontology overview` 的 C4/C5、MCP `list_concepts` 的 M1）——
+/// 也就是说**在产品原有语义里它就是客户字段**，不是评审人备注。
+///
+/// 所以图上**带它**（与总览口径一致，C-3）。安全边界要说准确：
+///
+/// - **新导入**的声明不会把脏说明带进来 —— `concept import` 会先用客户发布闸判它
+///   （C-1：命中即拒不导入，报「组 + 字段 + 词条」）；
+/// - **已入库的旧快照仍按原行为拒发**（`/api/graph` 500、`ontology overview` exit 2）——
+///   读路径本轮没改，C-1 只挡新导入。要清理旧数据只能**重新导入**（改措辞、重算 digest）
+///   或**重建快照**；⛔ 别把这条写成「已封堵」。
+///
+/// ⚠️ **已知设计缺陷（下一轮）**：`scope_hint` 现在**一个字段两种用途** ——
+/// 既是客户可见摘要，又容易被写成内部备注（`concept suggest` 以前就往里写
+/// 「算法建议…待人审」）。`concept suggest` 现在写**空**（C-2），但正确做法是拆成
+/// `scope_hint`（客户可见，过闸）+ `review_note`（内部轨，不过闸）。
+/// 拆字段要动 REQ-010 的 schema 与快照，不在本轮。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    #[serde(rename = "id")]
+    pub key: String,
+    /// 给人看的组名（来自声明，可能是人改过的业务名）。
+    ///
+    /// ⚠️ 这是**客户可见**的字段，所以 `concept import` 会先用
+    /// `scan_modeling_terms` 判它（C-1：坏组名在**导入时**就被拒，而不是让新声明进库后
+    /// 出图时整份 500）。已入库的旧快照不受影响，仍按原行为拒发。
+    pub display_name: String,
+    /// 成员 = **图里的节点标识**（[`Node::key`]），不是快照的实体 key。
+    ///
+    /// 声明文件里写的是实体 key；[`declared_groups`] 把 key 换成展示名，
+    /// 这里再换成节点标识 —— 两级换算的原因见 [`declared_groups`] 与 L2。
+    pub members: Vec<String>,
+    /// 一句话组说明（客户可见；来自声明的 `scope_hint`）。
+    ///
+    /// 与总览的 `summary` **同一个来源**（C-3：两个出口口径一致）。
+    /// 导入时已过客户闸（C-1），所以这里不会因为词表词打挂出图。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_hint: Option<String>,
+}
+
+/// 「声明里写好了、还没换算成图标识」的概念组（成员 = **展示名**）。
+///
+/// 中间形状存在的理由：声明按**实体 key** 写成员，而客户图里只有展示名。
+/// 换算是两级且各自有据：
+/// 1. 实体 key → 展示名：`declared_groups`（快照里有 `display_name`）；
+/// 2. 展示名 → 节点标识：[`project_grouped`]（重名时落到**第一个**，见 L2）。
+///
+/// ⛔ 第二级**不是**「再猜一次分组」—— 它只查表，不判断谁属于谁。
+///
+/// ⚠️ `scope_hint` 在这里**只是搬运**（与总览同源，C-3），不是评审备注。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeclaredGroup {
+    pub key: String,
+    pub display_name: String,
+    /// 成员的**展示名**（不是实体 key、也不是节点标识）。
+    pub members: Vec<String>,
+    pub scope_hint: Option<String>,
 }
 
 /// 图里的一个对象。
@@ -99,6 +195,22 @@ pub struct Node {
     pub attribute_count: usize,
     /// 上层对象的**标识**（不是展示名）—— 与 `Edge` 的 `from`/`to` 同一空间。
     pub parent: Option<String>,
+    /// 归属的概念组（`groups[].id`）。REQ-115 · AC-001。
+    ///
+    /// # 三态（与 [`GraphProjection::groups`] 同一套「通道是否接通」的语义）
+    ///
+    /// | 值 | 线上 | 含义 |
+    /// | --- | --- | --- |
+    /// | `None` | 字段**缺席** | 这份投影没接分组通道（旧格式，golden H2 原样） |
+    /// | `Some(None)` | `"group": null` | 接了通道，但该节点**不属于任何组**（AC-001 要求写出 `null`，不是省掉） |
+    /// | `Some(Some(g))` | `"group": "g"` | 属于组 `g` |
+    ///
+    /// ⚠️ `Deserialize` 把 `null` 读成**外层 `None`**（`Option` 的默认语义），
+    /// 所以「缺席」与「null」在**反序列化后**不再可分。这不影响任何生产路径：
+    /// 本结构只被序列化出去（HTTP / golden），唯一的反序列化发生在测试与
+    /// `tests/` 的比对夹具里 —— 而那里判的是**字节**，不是结构体相等。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Option<String>>,
 }
 
 /// 图里的一条关系。
@@ -204,6 +316,9 @@ pub fn project(v: &CustomerView) -> GraphProjection {
             label: o.name.clone(),
             attribute_count: o.properties.len(),
             parent: None, // 第二趟补：那时 by_name 才建全
+            // 旧格式：分组通道**没接通**（不是「没有组」）——
+            // REQ-115 的 `project_grouped` 才会把它置成 `Some(None)`。
+            group: None,
         })
         .collect();
 
@@ -242,7 +357,124 @@ pub fn project(v: &CustomerView) -> GraphProjection {
     GraphProjection {
         nodes,
         edges,
+        // 旧格式：分组通道未接通。见 `GraphProjection::groups` 的三态表。
+        groups: None,
     }
+}
+
+/// 把快照里**已声明**的概念组换算成图能用的中间形状（成员 = 展示名）。
+///
+/// # 为什么需要这一级
+///
+/// 声明（`concept_groups`）按**实体 key** 写成员（`robot_device` 这类稳定标识），
+/// 而客户图只有**展示名**（`view::project` 刻意丢弃 key）。两级换算各自有据：
+///
+/// | 级 | 谁做 | 依据 |
+/// | --- | --- | --- |
+/// | 实体 key → 展示名 | 本函数 | 快照的 `entity_types[].display_name` |
+/// | 展示名 → 节点标识 | [`project_grouped`] | [`assign_keys`] 的 `by_name`（重名落到第一个，见 L2） |
+///
+/// # 为什么**不过滤**不可见的成员
+///
+/// 展示名到节点标识的换算在 [`project_grouped`] 里做，那里查不到就**跳过** ——
+/// 所以这里原样搬运，不预判「这个成员会不会被客户视图丢掉」。
+/// 预判一份 = 第二份过滤谓词，与 `view::project` 迟早分叉（纪律 H）。
+///
+/// ⚠️ 后果（已知限制 L4，见模块末尾）：声明了但客户视图里不可见的成员
+/// 不会出现在 `members` 里，组的成员数因此只统计**图上看得见的**。
+/// 这是「图上如实」的代价 —— 页面上数出来的 N 与图里点得到的对象永远一致。
+pub fn declared_groups(snapshot: &crate::domain::snapshot::Snapshot) -> Vec<DeclaredGroup> {
+    // 实体 key → 展示名。**不在这里判「能不能当人话用」**（见上）。
+    // 同一 key 声明两次时取第一个 —— 与 `assign_keys` 的 `or_insert` 同一条约定。
+    let mut by_key: BTreeMap<&str, &str> = BTreeMap::new();
+    for e in &snapshot.entity_types {
+        by_key.entry(e.key.as_str()).or_insert(e.display_name.as_str());
+    }
+
+    let mut out = Vec::with_capacity(snapshot.concept_groups.len());
+    for g in &snapshot.concept_groups {
+        let mut members: Vec<String> = Vec::with_capacity(g.members.len());
+        for member in &g.members {
+            let Some(shown) = by_key.get(member.as_str()) else {
+                continue;
+            };
+            if shown.trim().is_empty() {
+                continue;
+            }
+            members.push((*shown).to_string());
+        }
+        out.push(DeclaredGroup {
+            key: g.key.clone(),
+            display_name: g.display_name.clone(),
+            members,
+            // 与业务总览的 `summary` 同源（C-3）：客户可见的组说明，导入时已过闸（C-1）。
+            scope_hint: g.scope_hint.clone(),
+        });
+    }
+    out
+}
+
+/// 带概念组的图投影（REQ-115 · AC-001/AC-002/AC-003）。
+///
+/// 与 [`project`] 的差别只有两处，**都在这一个函数里**：
+///
+/// 1. 节点的 `group` 从「通道未接通」变成 **`null` 或组标识**；
+/// 2. 多出一份 `groups`（哪怕为空也写 `[]` —— R6 要能区分「没有分组」与「分组为空」）。
+///
+/// ⛔ 本函数**不判断**谁属于谁：成员名单逐字来自 [`DeclaredGroup`]，
+/// 它只做「展示名 → 节点标识」的查表（[`assign_keys`] 的 `by_name`）。
+/// 页面上看到的分组因此**只可能**是人签过的那一份（R1 / AC-006）。
+///
+/// # 单归属
+///
+/// 同一个节点被两份声明同时点名时，**先声明的赢**（`group` 只写一次）。
+/// 这不该发生 —— `concept::validate_groups` 在 `apply` 前就会以
+/// `OverlappingMembership` 拒绝重叠声明。这里的「先到先得」只是让
+/// 坏数据不 panic、且结果确定（与 `home_map` 的 `or_insert` 同一条约定）。
+pub fn project_grouped(v: &CustomerView, declared: &[DeclaredGroup]) -> GraphProjection {
+    let mut p = project(v);
+
+    // ① 通道接通：每个节点从「无此字段」变成 `null`（AC-001 的「无组则 null」）。
+    for n in &mut p.nodes {
+        n.group = Some(None);
+    }
+
+    // ② 逐组换算成员并回填归属。组按声明顺序输出（声明顺序 = 库里的 ordinal）。
+    let mut groups: Vec<Group> = Vec::with_capacity(declared.len());
+    for d in declared {
+        let mut members: Vec<String> = Vec::with_capacity(d.members.len());
+        for name in &d.members {
+            // 展示名 → 节点标识：只查表，不判断。
+            let mut found: Option<&str> = None;
+            for n in &p.nodes {
+                if n.label == *name {
+                    found = Some(n.key.as_str());
+                    break;
+                }
+            }
+            let Some(id) = found else {
+                continue;
+            };
+            if !members.iter().any(|m| m == id) {
+                members.push(id.to_string());
+            }
+        }
+        for n in &mut p.nodes {
+            if members.iter().any(|m| m == &n.key) && n.group == Some(None) {
+                n.group = Some(Some(d.key.clone()));
+            }
+        }
+        groups.push(Group {
+            key: d.key.clone(),
+            display_name: d.display_name.clone(),
+            members,
+            // 客户可见的组说明（C-3）；与总览 `summary` 同一口径。
+            scope_hint: d.scope_hint.clone(),
+        });
+    }
+
+    p.groups = Some(groups);
+    p
 }
 
 // ──────────────────────────────────────────────────────────
@@ -270,6 +502,29 @@ pub fn project(v: &CustomerView) -> GraphProjection {
 //   `RelationView.meaning` / `.how_many` 进来时**已经是中文**，
 //   本层原样取用。数量词复用 `html_view::count_phrase`（同一份函数，非副本）。
 //   唯一的新逻辑是「展示名 → 节点标识」的重名处理，本仓库内无第二份。
+//
+// **L4 · 组成员只算图里看得见的（REQ-115）。**
+//   `concept_groups.members` 写的是**实体 key**，而客户视图会挡掉「展示名退化成
+//   key」的对象。这类成员在 `declared_groups` 里能找到展示名、却在
+//   `project_grouped` 里查不到节点 ⇒ **不进 `groups[].members`**。
+//   后果边界：页面上数出来的 N 与点得到的对象永远一致；代价是「声明了但看不见」
+//   的那几个**不参与计数**（真实库现场：84 实体 → 83 节点）。
+//   要如实看见它们，得让客户视图带上 key（`view.rs` 是禁改红线）⇒ 另一条需求。
+//   **已知且未封堵。**
+//
+// **L5 · `scope_hint` 一个字段两种用途（REQ-115 · 设计缺陷，下一轮拆）。**
+//   它在产品原有语义里是**客户可见的组说明**（业务总览 C4/C5/M1 的 `summary`），
+//   却又容易被写成内部备注（`concept suggest` 以前就往里写「算法建议…待人审」）。
+//   本轮的两条缓解：
+//     ① `concept import` 把 `scope_hint` 与 `display_name`、组 `key` 一起过客户闸（C-1）
+//        ⇒ 客户可见的说明必须客户安全；
+//     ② `concept suggest` 往 `scope_hint` 写**空**（C-2）⇒ 建议层不再把内部话塞进客户字段。
+//   ⛔ 根本修法是**拆字段**：`scope_hint`（客户可见，过闸）+ `review_note`（内部轨，不过闸）。
+//   那要改 REQ-010 的 schema 与快照，**下一轮做**。别在本轮「顺手」放宽闸来兼容脏说明。
+//
+//   ⚠️ 边界（别写成「已封堵」）：C-1 只挡**新导入**。**已入库的旧快照**仍按原行为拒发
+//   （`/api/graph` 500 / `ontology overview` exit 2）—— 读路径本轮没改。
+//   清理旧数据只能**重新导入**（改措辞 + 重算 digest）或**重建快照**。
 
 #[cfg(test)]
 mod tests {

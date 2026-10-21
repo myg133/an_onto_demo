@@ -879,6 +879,21 @@ fn gate_text(spec: OutletSpec, text: &str) -> Result<(), PipelineError> {
     }
 }
 
+/// ⭐ REQ-115 · B-2：判一段**客户可见的组名**（导入期用，与客户出口同一把尺子）。
+///
+/// # 为什么这个判决放在管线里
+///
+/// 全仓的术语判据只有一个实现（`view::scan_modeling_terms`），而**调用点**
+/// 只许出现在管线/守门器 —— `tests/test_req107_outlet_pipeline.rs` 的
+/// `test_req107_no_second_judgement_outside_pipeline` 钉的就是这条。
+/// `concept import` 要判「这个组名会不会让客户图 500」时，**必须借这条**，
+/// 不能在自己的模块里再调一次判据（那就是第二份判据实现）。
+///
+/// 返回命中的词条；空 = 干净。它是纯查询，不构造任何可写出的产物。
+pub fn group_name_hits(name: &str) -> Vec<String> {
+    scan_modeling_terms(name)
+}
+
 /// 两份文本**并集**判（`ontology overview` 的既有过度拦截，原样保留）。
 fn gate_both(spec: OutletSpec, json_text: &str, text: &str) -> Result<(), PipelineError> {
     if !spec.track.gated() {

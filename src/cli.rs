@@ -146,6 +146,29 @@ pub enum ConceptCmd {
         #[arg(long)]
         file: PathBuf,
     },
+    /// REQ-115 · 从关系拓扑算**建议**分组（不写库，只产出一份声明文件）
+    ///
+    /// 产物可以直接喂给 `concept import`，之后仍需双轨审核 + `proposal apply`
+    /// 才会进本体。⛔ 本命令**不写库**：跑前跑后库里的概念组/提案/版本行不变。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok concept suggest --project demo3 --version 2 --out d.json
+    /// ontok concept import --file d.json --project demo3 --base-version 3
+    ///
+    /// ⚠️ 建议 ≠ 结论：声明文件里 `source` = `algorithm-suggest`、
+    /// `reviewed_by` / `confirmed_by` = `null`。审核界面据此显示来源。
+    Suggest {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 从哪一版的关系拓扑算（该版必须有快照）
+        #[arg(long)]
+        version: i32,
+        /// 输出路径。省略则把声明 JSON 打到标准输出（两次运行逐字节相同）
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1164,9 +1187,16 @@ async fn confidence_cmd(pool: &PgPool, cmd: ConfidenceCmd) -> anyhow::Result<()>
 }
 
 async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
+    // ⭐ REQ-115 · **建议层**先分流：它只读快照、只产出声明文件，绝不写库。
+    // 放在这里而不是塞进下面那段 import 逻辑里，是为了让「建议」与「权威」
+    // 在代码上也分得开（(R1)：算法不得冒充人签过的声明）。
+    if let ConceptCmd::Suggest { project, version, out } = &cmd {
+        return concept_suggest(pool, project, *version, out.as_deref()).await;
+    }
+
     let ConceptCmd::Digest { file } = cmd else {
         let ConceptCmd::Import { file, project, base_version, round } = cmd else {
-            unreachable!("ConceptCmd 只有两个变体")
+            unreachable!("ConceptCmd 只有三个变体；Suggest 已在上面分流")
         };
         let text = std::fs::read_to_string(&file)
             .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
@@ -1174,6 +1204,22 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
         // **fail-closed**：指纹对不上 = 有人改了内容没升版本。
         // 不静默接受，也不「顺手帮他升一级」—— 那等于替他做版本决定。
         decl.verify()?;
+
+        // ⭐ REQ-115 · C-1：组字段是**客户可见**的（`/api/graph` 的 `groups[]` 与
+        // 业务总览的 `summary`），所以在**导入时**就过客户发布闸 —— 坏声明根本进不来，
+        // 而不是流到快照/出图阶段才让整份 500。⛔ 不静默剔除、⛔ 不改写字段。
+        let bad_names = crate::domain::concept::scan_group_names(&decl.groups);
+        if !bad_names.is_empty() {
+            let listed: Vec<String> = bad_names.iter().map(|h| format!("  - {h}")).collect();
+            anyhow::bail!(
+                "概念声明被拒绝导入：有 {} 处组字段会撞上客户发布闸（这些字段会出现在 \
+                 /api/graph 的 groups[] 与业务总览的 summary 里）——\n{}\n\
+                 请改措辞后重算指纹（ontok concept digest --file …）再导入。\
+                 ⛔ 不会静默剔除，也不会替你改写。",
+                bad_names.len(),
+                listed.join("\n")
+            );
+        }
 
         let projects = PgProjectStore::new(pool.clone());
         let proposals = PgProposalStore::new(pool.clone());
@@ -1246,6 +1292,103 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
             Err(e) => format!("不一致 —— 改内容必须改版本：{e}"),
         }
     );
+    Ok(())
+}
+
+/// REQ-115 · `concept suggest` —— **建议层**：从关系拓扑算候选分组。
+///
+/// # 它**不写库**（AC-004）
+///
+/// 全程只有两条库调用：`get_by_name`（项目）与 `version_by_seq` + `get_snapshot`
+/// （读快照）。没有 `INSERT` / `UPDATE`，也没有借道 `proposals`。
+/// 这条不是靠人记得 —— `tests/test_req115_groups.rs` 会对真库前后比对
+/// `concept_groups` / `proposals` / `ontology_versions` 的行与内容。
+///
+/// # 为什么产物必须「可直接 import」
+///
+/// 建议的价值在于**省打字**，不在于绕过审核。所以产物是完整的
+/// [`crate::domain::concept::ConceptDeclaration`]（含 `history` 的内容指纹），
+/// 直接喂 `concept import` 即可 —— 但 import 之后仍然要双轨签 + `apply`，
+/// 才可能出现在图上（AC-005 的往返）。
+///
+/// # 两种输出
+///
+/// - `--out <file>`：写文件 + 打一行回执（路径 / 组数 / 对象数）；
+/// - 省略：**只**把声明 JSON 打到 stdout（管道友好，回执会把文件弄脏）。
+///
+/// 两种输出的字节都只来自 [`crate::domain::concept_suggest::render`] ——
+/// 同一份建议不会有两个序列化点（AC-004 的逐字节相同）。
+async fn concept_suggest(
+    pool: &PgPool,
+    project: &str,
+    version: i32,
+    out: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let projects = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+
+    let p = projects
+        .get_by_name(project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}"))?;
+    let v = projects.version_by_seq(p.id, &p.name, version).await?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照 —— 先从源库抽取并落库"))?;
+
+    // 摊平快照：实体（key + 展示名）与关系（两端 key）。**只搬运，不判断。**
+    let entities: Vec<(String, String)> = snap
+        .entity_types
+        .iter()
+        .map(|e| (e.key.clone(), e.display_name.clone()))
+        .collect();
+    let links: Vec<(String, String)> = snap
+        .link_types
+        .iter()
+        .map(|l| (l.from_type.clone(), l.to_type.clone()))
+        .collect();
+
+    let decl = crate::domain::concept_suggest::suggest(
+        &crate::domain::concept_suggest::SuggestInput {
+            entities: &entities,
+            links: &links,
+        },
+    );
+    // 序列化只有这一处（AC-004）。
+    let text = crate::domain::concept_suggest::render(&decl)?;
+
+    match out {
+        Some(path) => {
+            std::fs::write(path, text.as_bytes())
+                .with_context(|| format!("写不出 {path:?}"))?;
+            // 回执一次拼好、一次写出：stdout 写点因此只有一处（REQ-107 的写点登记表）。
+            let mut receipt = String::new();
+            receipt.push_str(&format!(
+                "已写出建议声明：{}（项目 {} · 基于 v{} · {} 个组 / {} 个对象 · **未写库**）\n",
+                path.display(),
+                p.name,
+                version,
+                decl.groups.len(),
+                entities.len()
+            ));
+            for g in &decl.groups {
+                receipt.push_str(&format!("  {} ← {} 个对象\n", g.display_name, g.members.len()));
+            }
+            receipt.push_str(&format!(
+                "  来源：{}（source = algorithm-suggest · reviewed_by = null，没人审过）\n",
+                decl.declared_by
+            ));
+            receipt.push_str(&format!(
+                "  下一步：ontok concept import --file {} --project {} --base-version <未冻结的版本>\n",
+                path.display(),
+                p.name
+            ));
+            println!("{receipt}");
+        }
+        // 管道友好：只打 JSON 本体（回执会混进 `> d.json`）。
+        None => print!("{text}"),
+    }
     Ok(())
 }
 

@@ -307,6 +307,84 @@ pub fn validate_groups(
     problems
 }
 
+/// 一个**客户可见的组字段**撞上了客户发布闸的词表（REQ-115 · C-1，原 B-2）。
+///
+/// # 为什么组字段要过客户闸
+///
+/// `display_name`、组 `key`（线上 `id`）与 `scope_hint` 都会出现在**客户出口**里：
+/// `/api/graph` 的 `groups[]`，以及业务总览（C4/C5/M1）的 `summary`。
+/// 这些出口的响应体**整份**过 `scan_modeling_terms`。一个字段里带 `Key`
+/// （例如「未持 Key 的试用请求」被写进 `scope_hint`）会让**每一次**出图/出总览都 500 ——
+/// 客户看到「读不到」，运维要翻 stderr 才知道是某个组字段的问题。
+/// 所以判在**导入时**：坏声明根本进不来，报错直接点名「哪个组、哪个字段、哪个词」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupNameHit {
+    /// 出问题的组 key（声明里的那个标识；报错要点得出是哪一个组）。
+    pub group: String,
+    /// 出问题的字段：`display_name` / `scope_hint` / `key`（线上 `id`）。
+    pub field: &'static str,
+    /// 命中的守门词条（原样取自 `scan_modeling_terms`）。
+    pub term: String,
+}
+
+impl std::fmt::Display for GroupNameHit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "组 `{}` 的 {} 含建模术语 `{}`",
+            self.group, self.field, self.term
+        )
+    }
+}
+
+/// **C-1 · 组字段的客户闸**：导入前扫一遍**客户可见**的组字段。
+///
+/// 空 = 可以导入。**fail-closed**：命中就拒，⛔ 不静默剔除、⛔ 不改写字段
+/// （改写等于替声明作者做措辞决定 —— 他该自己把「未持 Key」改成「未持凭证」）。
+///
+/// 扫三个字段，因为三个都**出现在客户出口**里：
+/// - `display_name` —— 客户在页面上看到的组名；
+/// - `scope_hint` —— 客户在总览里看到的组说明（也是图上的组说明，C-3 同一口径）；
+/// - `key` —— 线上是 `groups[].id`（**值**也会被闸扫，不只是键名）。
+///
+/// # ⚠️ 匹配是**词元级**的（有意为之）—— `api_key_group` **不算**命中
+///
+/// `scan_modeling_terms` 把 `_` 当词内字符：`api_key_group` 是一个词元，不等于 `key`，
+/// 所以**不拒**（N-2 裁定）。`api_key` / `license_key` / `order_key_ref` 同理。
+///
+/// 这是**有意的**：`API Key` 是正常业务词，改成「含 key 字样就拒」会把
+/// 「API 密钥与授权」这类合法组名全打死。而且导入闸与出图闸是**同一把尺子** ——
+/// 过得了这里的，出图时也不会 500（`api_key_group` 实测 200）。
+/// ⛔ 别把它改成子串匹配。
+pub fn scan_group_names(groups: &[ConceptGroup]) -> Vec<GroupNameHit> {
+    let mut hits: Vec<GroupNameHit> = Vec::new();
+    for g in groups {
+        let fields: [(&'static str, &str); 2] =
+            [("display_name", g.display_name.as_str()), ("key", g.key.as_str())];
+        for (field, value) in fields {
+            push_hits(&mut hits, g, field, value);
+        }
+        // `scope_hint` 是可选项：`None` = 没写说明，不判。
+        if let Some(hint) = g.scope_hint.as_deref() {
+            push_hits(&mut hits, g, "scope_hint", hint);
+        }
+    }
+    hits
+}
+
+/// 一个字段的命中收集（判据**只有一处实现**：借管线的 `group_name_hits`）。
+fn push_hits(out: &mut Vec<GroupNameHit>, g: &ConceptGroup, field: &'static str, value: &str) {
+    // ⚠️ 借管线的 `group_name_hits`（它转调 `scan_modeling_terms`）。
+    // ⛔ 别在这里直接再调一次判据 —— `test_req107_no_second_judgement_outside_pipeline` 会红。
+    for term in crate::domain::pipeline::group_name_hits(value) {
+        out.push(GroupNameHit {
+            group: g.key.clone(),
+            field,
+            term,
+        });
+    }
+}
+
 /// 实体 key → 概念 key 的**单归属**映射。关系重定向与总览都以它为准。
 ///
 /// # 为什么必须是**函数**而不是「一堆候选」
@@ -360,6 +438,23 @@ pub struct ConceptDeclaration {
     /// 业务确认人。`None` = **还没人确认**（过渡声明的常态）
     #[serde(default)]
     pub confirmed_by: Option<String>,
+    /// 这份声明**从哪来**（REQ-115 · AC-010）。
+    ///
+    /// - `Some("algorithm-suggest")` = `concept suggest` 从关系拓扑算出来的**建议**；
+    /// - `None` = 旧声明（那时还没有这一栏）。
+    ///
+    /// ⚠️ **它不进 [`content_digest`]**：来源记的是「谁算的」，不是「内容是什么」。
+    /// 把来源算进指纹会让「同一批分组、换了个算法版本」必须升声明版本 ——
+    /// 那两件事本来就该分别看待。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// **审核人**（REQ-115 · AC-010）。**恒有键**：`null` = 还没人审过。
+    ///
+    /// 与 `confirmed_by` 的区别：那个是「业务上认不认这组」，这个是
+    /// 「谁把这份**文件**审过」。建议层产出的文件永远是 `null` ——
+    /// 「算法算过」不等于「人审过」，把两者写成同一个字段就是冒充。
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
     /// 追加式版本历史。见 [`ConceptDeclaration::verify`]
     #[serde(default)]
     pub history: Vec<DeclarationRevision>,
@@ -597,6 +692,90 @@ mod tests {
         assert_eq!(m.get("y").map(String::as_str), Some("a"));
     }
 
+    // ──────────────────────────────────────────────────────────
+    // REQ-115 · C-1：组字段的客户闸（导入前判，不是出图时判）
+    // ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clean_group_names_pass_the_customer_gate() {
+        assert_eq!(scan_group_names(&[g("customer_account", &["customers"])]), vec![]);
+    }
+
+    /// 组名里写「未持 Key」⇒ 报「组 + 字段 + 词条」，不是一句笼统的拒绝。
+    #[test]
+    fn test_group_display_name_with_a_modeling_term_is_named_precisely() {
+        let mut bad = g("api_entitlement", &["licenses"]);
+        bad.display_name = "未持 Key 的试用请求".into();
+        let hits = scan_group_names(&[bad]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].group, "api_entitlement");
+        assert_eq!(hits[0].field, "display_name");
+        assert_eq!(hits[0].term, "key");
+        assert_eq!(
+            hits[0].to_string(),
+            "组 `api_entitlement` 的 display_name 含建模术语 `key`"
+        );
+    }
+
+    /// 组 key 会作为线上 `groups[].id` 的**值**被闸扫 ⇒ 也要判。
+    #[test]
+    fn test_group_key_itself_is_scanned_as_a_wire_value() {
+        let mut bad = g("primary_key", &["m"]);
+        bad.display_name = "干净组名".into();
+        let hits = scan_group_names(&[bad]);
+        assert!(hits.iter().any(|h| h.field == "key"), "{hits:?}");
+        assert!(
+            hits.iter().any(|h| h.term == "primary_key"),
+            "词组守门词（primary_key）也该被抓住：{hits:?}"
+        );
+    }
+
+    /// ⭐ C-1：`scope_hint` 是**客户可见**的组说明（业务总览的 `summary`），
+    /// 所以它也要过闸 —— 这正是 QA 阻断的那一句（「未持 Key」）。
+    #[test]
+    fn test_scope_hint_with_a_modeling_term_is_rejected() {
+        let mut grp = g("api_entitlement", &["licenses"]);
+        grp.display_name = "API 密钥与授权".into();
+        grp.scope_hint = Some("客户手上有什么凭证、以及未持 Key 的试用请求".into());
+        let hits = scan_group_names(&[grp]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].group, "api_entitlement");
+        assert_eq!(hits[0].field, "scope_hint");
+        assert_eq!(hits[0].term, "key");
+        assert_eq!(
+            hits[0].to_string(),
+            "组 `api_entitlement` 的 scope_hint 含建模术语 `key`"
+        );
+    }
+
+    /// 三个客户可见字段都干净 ⇒ 放行；改回业务措辞（「未持凭证」）即可导入。
+    #[test]
+    fn test_customer_safe_wording_passes() {
+        let mut grp = g("api_entitlement", &["licenses"]);
+        grp.display_name = "API 密钥与授权".into();
+        grp.scope_hint = Some("客户手上有什么凭证、以及未持凭证的试用请求".into());
+        assert_eq!(scan_group_names(&[grp]), vec![]);
+    }
+
+    /// ⭐ N-2：匹配是**词元级**的 —— `api_key_group` / `license_key` 这类复合词
+    /// **不算命中**（`_` 是词内字符）。这是**有意的**：否则「API Key」这个业务词没法用。
+    #[test]
+    fn test_compound_words_with_key_are_intentionally_not_hits() {
+        for name in ["api_key_group", "license_key", "order_key_ref", "keyring_service"] {
+            let mut grp = g(name, &["t1"]);
+            grp.display_name = "API 密钥与授权".into();
+            assert_eq!(
+                scan_group_names(&[grp]),
+                vec![],
+                "复合词 `{name}` 被误判成词元 `key` —— 那会把正常业务词全打死"
+            );
+        }
+        // 反空转：单独成词的 `key` 仍必须是命中（否则这条测试只是「什么都放行」）。
+        let mut bad = g("g1", &["t1"]);
+        bad.display_name = "未持 Key 的权益".into();
+        assert!(!scan_group_names(&[bad]).is_empty(), "词元 key 必须仍被抓住");
+    }
+
     fn decl(groups: Vec<ConceptGroup>, version: &str) -> ConceptDeclaration {
         let d = content_digest(&groups, "按表名前缀聚类", "prefix-cluster-seed");
         ConceptDeclaration {
@@ -604,6 +783,8 @@ mod tests {
             declared_by: "prefix-cluster-seed".into(),
             rule: "按表名前缀聚类".into(),
             confirmed_by: None,
+            source: None,
+            reviewed_by: None,
             history: vec![DeclarationRevision {
                 version: version.into(),
                 content_digest: d,

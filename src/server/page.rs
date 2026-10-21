@@ -30,7 +30,8 @@
 //! # ⭐ REQ-114 · 从「算完就定住」改成「能手动整理」
 //!
 //! 用户原话：「html ui 有问题，太简陋了，graph 的点也无法拖动，导致重叠遮挡。」
-//! 改法**全部**落在下面这一份内联 JS/CSS 里（仍然零依赖、页面仍 < 60KB）：
+//! 改法**全部**落在下面这一份内联 JS/CSS 里（仍然零依赖；REQ-115 加了分组渲染后
+//! 页面仍 < 80KB）：
 //!
 //! | AC | 落点（本文件内的函数 / 常量） |
 //! | --- | --- |
@@ -75,6 +76,47 @@
 //! 3. **未做真浏览器手测**：本机无 headless 浏览器；拖拽手感、标签避让的视觉效果、
 //!    暗色模式配色都只有源码级判据，没有任何一条来自真实浏览器。
 //!
+//! # ⭐ REQ-115 · 概念组：图上只画**人签过的**分组
+//!
+//! 用户问「归并没效果？」—— 查清是三层都空（数据 0 组 / 接口写死 / 页面 0 命中）。
+//! 本需求把 REQ-010 早就有的概念组接到图上，但**权威只有一处**：
+//!
+//! | 层 | 来源 | 本页怎么用 |
+//! | --- | --- | --- |
+//! | 权威 | `concept_groups`（`concept import` → 双轨签 → `apply`） | **只消费** `/api/graph` 的 `groups` |
+//! | 建议 | `concept suggest` 产出的声明文件 | **本页看不见** —— 没签过的建议不上图（R1） |
+//!
+//! | AC | 落点（本文件内的函数 / 常量） |
+//! | --- | --- |
+//! | 组圈 + 组名 | `relayout` 建 `HALOS`；`buildScene` 画 `g.gh`；`paint` 每帧算圆心/半径 |
+//! | 折叠 / 展开 | `FOLD` / `unitsOf` / `setFold` / `foldAll` / `relayout` |
+//! | 聚合节点（组名 + N） | id = `@g:<组 id>`，标签在 `relayout` 里拼；`bindNode` 里点它展开 |
+//! | 组面板（成员 / 点击定位） | `showGroups` / `showGroup` / `locateMember` / `wirePanel` |
+//! | 组内聚拢引力 | `physicsStep` 里的 `GRP_F` 组心引力 |
+//! | 无组时如实显示 | `updateGroupInfo` / `showGroups`：`GROUPS.length === 0` ⇒「未分组」 |
+//!
+//! 默认**全部折叠**（需求风险表第 3 条：先收成 N 个组节点，点开才展开）。
+//!
+//! ## ⛔ 页面**不**算分组（AC-006）
+//!
+//! `unitsOf` 只回答「一个**已经分好**的组在折叠时是一个单元还是若干单元」；
+//! 它不判「谁该和谁一组」—— 没有邻接、没有相似度、没有合并。
+//! `tests/fixtures/req115/group_probe.js` 剥掉注释后断言页面里没有任何分组算法词。
+//!
+//! ## 折叠是纯视觉（R2 / AC-009）
+//!
+//! `FOLD` 只活在这个页面的内存里：不写 `DATA`、不发请求、不碰库、不影响导出。
+//! 折叠/展开前后 `ontology show` 与 TTL 导出逐字节相同 —— 因为折叠**根本没有出口**。
+//!
+//! ## 已知限制（两条，⛔ 别改写成「已验证」）
+//!
+//! 1. **成员只画图里看得见的**：声明按实体 key 写成员，而客户视图可能丢掉某个对象
+//!    （展示名退化成 key）。这种成员不会出现在 `groups[].members` 里 ——
+//!    页面上数出来的 N 与点得到的对象因此永远一致，代价是「声明了但看不见」的那几个
+//!    不参与计数（要如实看见它们，得让客户视图带上 key，属另一条需求）。
+//! 2. **同名对象仍只能落到第一个**：分组按展示名换算节点标识，继承 REQ-093 的 L2；
+//!    `客户账号绑定#2` 这种重名节点不会被分进组。
+//!
 //! # 布局为什么手写
 //!
 //! 力导向的核心就是「斥力 + 弹簧 + 向心 + 碰撞」四段，83 个节点 / 52 条边
@@ -104,9 +146,9 @@ pub(crate) const INDEX_HTML: &str = r##"<!doctype html>
 <meta charset="utf-8">
 <title>业务关系图</title>
 <style>
-:root{--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#c7c7cc;--acc:#0a6cff;--card:#fff;--edge:#b9b9c0;--hit:#ff9500;--top:#0a6cff;--sub:#0f9d8f;--shadow:0 2px 10px rgba(0,0,0,.12)}
+:root{--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#c7c7cc;--acc:#0a6cff;--card:#fff;--edge:#b9b9c0;--hit:#ff9500;--top:#0a6cff;--sub:#0f9d8f;--grp:#0f9d8f;--shadow:0 2px 10px rgba(0,0,0,.12)}
 @media (prefers-color-scheme: dark){
-  :root{--bg:#141416;--fg:#f2f2f7;--mut:#9b9ba1;--line:#3c3c40;--acc:#4d9bff;--card:#1c1c1f;--edge:#5c5c63;--hit:#ffb340;--top:#4d9bff;--sub:#2fc4b2;--shadow:0 2px 10px rgba(0,0,0,.55)}
+  :root{--bg:#141416;--fg:#f2f2f7;--mut:#9b9ba1;--line:#3c3c40;--acc:#4d9bff;--card:#1c1c1f;--edge:#5c5c63;--hit:#ffb340;--top:#4d9bff;--sub:#2fc4b2;--grp:#2fc4b2;--shadow:0 2px 10px rgba(0,0,0,.55)}
 }
 *{box-sizing:border-box}
 body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
@@ -138,6 +180,17 @@ main{display:flex;height:calc(100vh - 51px)}
 #stage svg g.nd.hit text.lb{fill:var(--hit);font-weight:700}
 #stage svg g.nd.dim{opacity:.35}
 #stage svg g.nd.nolbl text.lb{display:none}
+/* REQ-115 · 概念组：组圈（背景虚线圈）+ 组名；折叠时那个组本身是一个聚合节点 */
+#stage svg g.gh circle{fill:rgba(15,157,143,.07);stroke:var(--grp);stroke-width:1.4;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
+#stage svg g.gh text{font:12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;fill:var(--grp);text-anchor:middle;font-weight:600;paint-order:stroke;stroke:var(--bg);stroke-width:3px}
+#stage svg g.nd.agg circle{fill:var(--card);stroke:var(--grp);stroke-width:2.4;stroke-dasharray:5 3}
+#stage svg g.nd.agg text.lb{font-weight:700;fill:var(--grp)}
+#grpinfo{font-size:12px;color:var(--mut)}
+#grpinfo b{color:var(--fg)}
+.grp{border-top:1px solid var(--line);padding:8px 0 4px}
+.grp ul{padding-left:16px}
+.grp a{color:var(--acc);text-decoration:none}
+.grp a:hover{text-decoration:underline}
 #tip{position:absolute;left:0;top:0;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 9px;box-shadow:var(--shadow);display:none;max-width:280px;font-size:12px;line-height:1.5;z-index:3}
 #legend{position:absolute;left:12px;bottom:12px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px;color:var(--mut);line-height:1.7;box-shadow:var(--shadow);max-width:340px;z-index:2}
 #legend b{color:var(--fg);font-weight:600}
@@ -146,6 +199,7 @@ main{display:flex;height:calc(100vh - 51px)}
 #legend .lg-sm{width:8px;height:8px;border-radius:50%;border:2px solid var(--sub);background:var(--card)}
 #legend .lg-line{width:18px;height:0;border-top:2px solid var(--edge)}
 #legend .lg-dash{width:18px;height:0;border-top:2px dashed var(--edge)}
+#legend .lg-grp{width:16px;height:16px;border-radius:50%;border:2px dashed var(--grp);background:rgba(15,157,143,.07)}
 #legend .kbd{margin-top:6px;color:var(--mut);font-size:11px}
 aside{width:330px;border-left:1px solid var(--line);background:var(--card);overflow:auto;padding:16px;flex:none}
 aside h2{font-size:16px;margin:0 0 4px}
@@ -163,11 +217,14 @@ li{margin:2px 0}
 <header>
   <h1>业务关系图</h1>
   <span id="who"></span>
+  <span id="grpinfo"></span>
   <input id="t" type="password" placeholder="访问口令" autocomplete="off">
   <button id="go">打开</button>
   <input id="q" placeholder="查找对象名（回车定位）" autocomplete="off">
   <button id="fit">适应窗口</button>
   <button id="reset">重置</button>
+  <button id="foldall">全部折叠</button>
+  <button id="unfoldall">全部展开</button>
   <button id="export" disabled>导出 TTL</button>
   <span id="status"></span>
 </header>
@@ -180,7 +237,8 @@ li{margin:2px 0}
       <div><i class="lg-big"></i>圆圈越大 = 属性越多（<i class="lg-sm"></i>小圈 = 属性少）</div>
       <div><i class="lg-line"></i>箭头 = 关系方向，线上的字 = 关系的说法</div>
       <div><i class="lg-dash"></i>虚线 = 所属关系（谁属于谁）</div>
-      <div class="kbd">滚轮缩放 · 拖背景平移 · 拖节点手动整理（松手即固定）· 双击节点释放 · 缩小到 0.6 倍以下自动省掉小字</div>
+      <div><i class="lg-grp"></i><span id="grpnote">分组：等数据回来才知道这一版有没有概念组</span></div>
+      <div class="kbd">滚轮缩放 · 拖背景平移 · 拖节点手动整理（松手即固定）· 双击节点释放 · 缩小到 0.6 倍以下自动省掉小字 · 点虚线大圈可展开该组</div>
     </div>
   </div>
   <aside id="panel"><p class="meta">点一个对象，看它的属性与说明。</p></aside>
@@ -191,6 +249,10 @@ li{margin:2px 0}
 var TOKEN = "";          // 只存在内存里：不写进地址栏、不写进页面、不进浏览器存储
 var SCOPE = null;        // 作用域**不在壳里**：拿到口令后问 gated API
 var DATA = null;
+// ⭐ REQ-115 · 概念组：**只从 `/api/graph` 的 groups 来**（AC-006）。
+//   本页没有任何「谁和谁一组」的判断 —— 分组只有一处权威（人签过的 concept_groups）。
+//   FOLD 只记「这一组现在折起来了没有」，它**不碰 DATA、不碰库、不碰导出**（AC-009）。
+var GROUPS = [], BYG = {}, FOLD = {}, NODE = {}, POS = {}, HALOS = [];
 var $ = function (s) { return document.querySelector(s); };
 
 // 视图：屏幕坐标 = 视口中心 + (VIEW.x, VIEW.y) + 世界坐标 × VIEW.k
@@ -218,6 +280,8 @@ $("#t").addEventListener("keydown", function (e) { if (e.code === "Enter") $("#g
 $("#export").onclick = save_ttl;
 $("#fit").onclick = fitView;
 $("#reset").onclick = resetView;
+$("#foldall").onclick = function () { foldAll(true); };
+$("#unfoldall").onclick = function () { foldAll(false); };
 
 // ─── 布局内核（纯函数、不碰 DOM）─────────────────────────────
 // 这一段被 `tests/fixtures/req114/layout_probe.js` **原样抽出**在 Node 里跑：
@@ -233,6 +297,9 @@ var VMAX = 24;           // 单帧速度上限（防爆冲）
 var CENTER_F = 0.4;      // 向心系数（把整张图收进一屏；实测这组参数 83 节点收在 ~550×550）
 var LINK_LEN = 110;      // 关系边的理想长度
 var PAR_LEN = 90;        // 所属连线的理想长度
+var GRP_F = 0.05;        // ⭐ REQ-115 · 组内聚拢系数（组心引力，见 physicsStep）
+var GRP_PAD = 26;        // ⭐ REQ-115 · 组圈比成员外沿再大一圈
+var GRP_MIN_R = 24;      // ⭐ REQ-115 · 组圈最小半径（一个成员的组也看得见）
 
 // 节点半径按属性数走（视觉升级第 1 条）：6 起步，上限 16。
 function radiusOf(c) {
@@ -292,6 +359,25 @@ function physicsStep(ns, es, ps, alpha) {
   }
   springs(es, LINK_LEN, 0.04);
   springs(ps, PAR_LEN, 0.07);
+  // ⭐ REQ-115 · 组内聚拢：同一组的节点多一个朝**组心**的引力。
+  // ⚠️ 组是**接口给的**（`a.gid` 来自 `/api/graph` 的 `group`）——
+  //    这里只做「把已经分好的组收拢」，**没有**任何「谁该和谁一组」的判断（AC-006）。
+  //    探针里的节点没有 `gid` ⇒ 这一段整段跳过（REQ-114 的布局判据不受影响）。
+  var gs = {}, gm;
+  for (i = 0; i < ns.length; i++) {
+    a = ns[i];
+    if (!a.gid || a.agg) continue;
+    gm = gs[a.gid] || (gs[a.gid] = { x: 0, y: 0, n: 0 });
+    gm.x += a.x; gm.y += a.y; gm.n++;
+  }
+  for (i = 0; i < ns.length; i++) {
+    a = ns[i];
+    if (!a.gid || a.agg) continue;
+    gm = gs[a.gid];
+    if (!gm || gm.n < 2) continue;
+    a.vx += (gm.x / gm.n - a.x) * GRP_F;
+    a.vy += (gm.y / gm.n - a.y) * GRP_F;
+  }
   for (i = 0; i < ns.length; i++) {
     a = ns[i];
     a.vx -= a.x * CENTER_F; a.vy -= a.y * CENTER_F;
@@ -305,6 +391,49 @@ function physicsStep(ns, es, ps, alpha) {
   collide(ns, GAP);
 }
 // ─── 布局内核结束 ───────────────────────────────────────────
+
+// ─── 分组内核（纯函数、不碰 DOM）─────────────────────────────
+// ⛔ REQ-115 · AC-006：**本段没有任何分组算法**。
+//    分组只有一个来源：`/api/graph` 的 `groups`（人签过的 concept_groups）。
+//    下面这几个函数只回答「已经分好的组，在折叠/展开时怎么变成一个画出来的单元」——
+//    输入里没有任何相似度、邻接、社区、合并之类的判断。
+// （组圈与引力的常量 GRP_F / GRP_PAD / GRP_MIN_R 在**布局内核**里 —— physicsStep 要用。）
+
+// 组 id → 组对象（只建索引，不改任何归属）。
+function groupIndex(groups) {
+  var m = {}, i;
+  for (i = 0; i < groups.length; i++) m[groups[i].id] = groups[i];
+  return m;
+}
+
+// 一个节点属于哪个**已知**组；不属于（或组不在清单里）⇒ null（未分组）。
+function groupOf(node, byGroup) {
+  var g = node.group;
+  if (g === null || g === undefined) return null;
+  return byGroup[g] ? g : null;
+}
+
+// 渲染单元：折叠的组 = 1 个聚合单元；展开的组 = 每个成员 1 个单元；
+// 不属于任何已知组的对象 = 各自 1 个单元（未分组，如实显示，⛔ 不许塞进默认组）。
+function unitsOf(groups, nodes, fold) {
+  var known = {}, out = [], i, j, g;
+  for (i = 0; i < groups.length; i++) known[groups[i].id] = 1;
+  for (i = 0; i < groups.length; i++) {
+    g = groups[i];
+    if (fold[g.id]) { out.push({ fold: true, id: g.id }); continue; }
+    for (j = 0; j < g.members.length; j++) out.push({ fold: false, id: g.members[j] });
+  }
+  for (i = 0; i < nodes.length; i++) {
+    if (groupOf(nodes[i], known) === null) out.push({ fold: false, id: nodes[i].id });
+  }
+  return out;
+}
+
+// AC-002 的数据级判据：折叠态渲染节点数 = **组数 + 未分组对象数**。
+function renderedCount(groups, nodes, fold) {
+  return unitsOf(groups, nodes, fold).length;
+}
+// ─── 分组内核结束 ───────────────────────────────────────────
 
 function stageBox() {
   var s = $("#svg");
@@ -414,16 +543,25 @@ function buildScene() {
   var i, out = [];
   out.push('<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>');
   out.push('<g id="world">');
+  // ⭐ REQ-115 · 组圈排最底层（背景）：展开的组才有，折叠时它本身就是那个聚合节点。
+  for (i = 0; i < HALOS.length; i++) out.push('<g class="gh"><circle r="24"/><text class="gt"></text></g>');
   for (i = 0; i < PS.length; i++) out.push('<line class="par" x1="0" y1="0" x2="0" y2="0"/>');
   for (i = 0; i < ES.length; i++) out.push('<g class="rel"><line x1="0" y1="0" x2="0" y2="0" marker-end="url(#arw)"/><text class="rl"></text></g>');
   for (i = 0; i < NS.length; i++) {
-    out.push('<g class="nd' + (NS[i].p ? " sub" : "") + '" data-id="' + esc(NS[i].id) + '">' +
+    out.push('<g class="nd' + (NS[i].p ? " sub" : "") + (NS[i].agg ? " agg" : "") + '" data-id="' + esc(NS[i].id) + '">' +
       '<circle r="' + NS[i].r.toFixed(1) + '"/>' +
       '<text class="lb" y="' + (-NS[i].r - 5).toFixed(1) + '"></text></g>');
   }
   out.push('</g>');
   $("#svg").innerHTML = out.join("");
   world = $("#world");
+  var ghEls = [].slice.call(world.querySelectorAll("g.gh"));
+  for (i = 0; i < HALOS.length; i++) {
+    HALOS[i].el = ghEls[i];
+    HALOS[i].circle = ghEls[i].querySelector("circle");
+    HALOS[i].text = ghEls[i].querySelector("text");
+    HALOS[i].text.textContent = HALOS[i].name;
+  }
   parEls = [].slice.call(world.querySelectorAll("line.par"));
   relEls = [].slice.call(world.querySelectorAll("g.rel"));
   relLines = relEls.map(function (g) { return g.querySelector("line"); });
@@ -443,6 +581,23 @@ function paint() {
   world.setAttribute("transform",
     "translate(" + (box.w / 2 + VIEW.x).toFixed(1) + "," + (box.h / 2 + VIEW.y).toFixed(1) +
     ") scale(" + k.toFixed(4) + ")");
+
+  // ⓪ 组圈 + 组名（REQ-115）：「展开的组」才画圈；折叠时组本身就是一个聚合节点。
+  //    圆心/半径按成员当前位置算 —— 只是**画**，不改任何数据（R2 / AC-009）。
+  for (i = 0; i < HALOS.length; i++) {
+    var h = HALOS[i], sx = 0, sy = 0, cnt = 0, rad = 0, mm, j2, cx, cy, rr;
+    for (j2 = 0; j2 < h.ns.length; j2++) { mm = h.ns[j2]; sx += mm.x; sy += mm.y; cnt++; }
+    cx = cnt ? sx / cnt : 0; cy = cnt ? sy / cnt : 0;
+    for (j2 = 0; j2 < h.ns.length; j2++) {
+      mm = h.ns[j2];
+      var dr = Math.sqrt((mm.x - cx) * (mm.x - cx) + (mm.y - cy) * (mm.y - cy)) + mm.r;
+      if (dr > rad) rad = dr;
+    }
+    rr = Math.max(GRP_MIN_R, rad + GRP_PAD);
+    h.el.setAttribute("transform", "translate(" + cx.toFixed(1) + "," + cy.toFixed(1) + ")");
+    h.circle.setAttribute("r", rr.toFixed(1));
+    h.text.setAttribute("y", (-rr - 8).toFixed(1));
+  }
 
   // ① 所属连线（淡、虚线、排底层）
   for (i = 0; i < PS.length; i++) {
@@ -490,15 +645,31 @@ function paint() {
     }
     d.el.classList.toggle("nolbl", !show);
   }
+  // ⑤ 记住位置（REQ-115）：折叠/展开会重建场景，节点不该因此跳到别处。
+  //    只是**视觉状态**的记忆，不写数据、不影响导出（AC-009）。
+  for (i = 0; i < NS.length; i++) {
+    d = NS[i];
+    var pp = POS[d.id];
+    if (!pp) POS[d.id] = { x: d.x, y: d.y, pin: d.pin };
+    else { pp.x = d.x; pp.y = d.y; pp.pin = d.pin; }
+  }
 }
 
 // ─── 悬停提示 ───────────────────────────────────────────────
 function showTip(d, ev) {
   if (DRAG) return;
+  if (d.agg) {
+    var gt = $("#tip");
+    gt.innerHTML = "<b>" + esc(d.label) + "</b><br>点一下展开这一组";
+    gt.style.display = "block";
+    moveTip(ev);
+    return;
+  }
   var deg = 0;
   for (var i = 0; i < ES.length; i++) if (ES[i].a === d || ES[i].b === d) deg++;
   var h = "<b>" + esc(d.label) + "</b><br>" + d.c + " 项属性 · " + deg + " 条关系";
   if (d.p && BY[d.p]) h += "<br>所属：" + esc(BY[d.p].label);
+  if (d.gid && BYG[d.gid]) h += "<br>概念组：" + esc(BYG[d.gid].display_name);
   var t = $("#tip");
   t.innerHTML = h;
   t.style.display = "block";
@@ -517,6 +688,19 @@ function hideTip() { $("#tip").style.display = "none"; }
 
 // ─── 拖拽 / 平移 / 缩放 ─────────────────────────────────────
 function bindNode(d, g) {
+  // ⭐ REQ-115 · 聚合节点不是对象：它代表一整个概念组，点它就是**展开**。
+  //    不给它绑拖拽 —— 拖一整个组没有意义，而且展开后它的位置要按成员重算。
+  if (d.agg) {
+    g.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      setFold(d.gid, false);
+      showGroup(d.gid);
+    });
+    g.addEventListener("pointerenter", function (ev) { showTip(d, ev); });
+    g.addEventListener("pointermove", moveTip);
+    g.addEventListener("pointerleave", hideTip);
+    return;
+  }
   // AC-001：拖拽入口**绑在节点本身**（背景上的 pointerdown 只负责平移）
   g.addEventListener("pointerdown", function (ev) { startDrag(d, ev); });
   // ⚠️ 这里**故意不绑 dblclick 做释放**（A-2）：浏览器在 dblclick 之前已经 fire 过两次
@@ -720,7 +904,7 @@ function load() {
       if (!res.ok) { $("#status").textContent = ""; say(res.j.error || "读不到", true); return; }
       DATA = res.j;
       $("#who").innerHTML = "项目 <b>" + esc(SCOPE.project) + "</b> · 第 <b>" + esc(SCOPE.version) + "</b> 版";
-      $("#status").textContent = DATA.nodes.length + " 个对象 · " + DATA.edges.length + " 条关系";
+      // 状态行（对象数 / 关系数 / 当前画了几个节点）由 draw → updateGroupInfo 统一写。
       draw();
     })
     .catch(function (e) { $("#status").textContent = ""; say(String(e), true); });
@@ -768,28 +952,261 @@ function esc(s) {
 // 前几十帧会明显乱窜。圆周起手 + 碰撞消解 = 更快进入可看的状态。
 function draw() {
   resetTap();                    // 换了一批数据 ⇒ 旧 id 的待发单击作废
-  NS = []; ES = []; PS = []; BY = {};
-  var box = stageBox(), R = Math.min(box.w, box.h) * 0.34, i;
-  DATA.nodes.forEach(function (n, idx) {
-    var a = 2 * Math.PI * idx / Math.max(1, DATA.nodes.length);
-    var d = {
-      id: n.id, label: n.label, c: n.attribute_count || 0, p: n.parent || null,
-      r: radiusOf(n.attribute_count),
-      x: Math.cos(a) * R, y: Math.sin(a) * R,
-      vx: 0, vy: 0, pin: false, hit: false, el: null
-    };
-    NS.push(d); BY[d.id] = d;
-  });
-  DATA.edges.forEach(function (e) {
-    var a = BY[e.from], b = BY[e.to];
-    if (a && b) ES.push({ a: a, b: b, label: e.label || "" });
-  });
-  for (i = 0; i < NS.length; i++) if (NS[i].p && BY[NS[i].p]) PS.push({ a: BY[NS[i].p], b: NS[i] });
-  buildScene();
+  NODE = {}; POS = {};           // 新数据：位置记忆与索引都重来
+  DATA.nodes.forEach(function (n) { NODE[n.id] = n; });
+
+  // ⭐ REQ-115 · 分组**只从**接口来（AC-006）：`DATA.groups` 是唯一来源。
+  //    没有这个字段（旧格式）或它是空数组 ⇒ GROUPS 为空 ⇒ 一个聚合节点都不画。
+  GROUPS = DATA.groups || [];
+  BYG = groupIndex(GROUPS);
+  // 默认折叠（需求风险表第 3 条：先收成 N 个组节点，点开才展开）。
+  // ⛔ FOLD 只是**画法**：不碰 DATA、不碰库、不影响 `ontology show` 与 TTL（AC-009）。
+  FOLD = {};
+  for (var i = 0; i < GROUPS.length; i++) FOLD[GROUPS[i].id] = true;
+
+  relayout(true);
   VIEW = { k: 1, x: 0, y: 0 };
   TOUCHED = false;
   paint();
   kick(1);
+  updateGroupInfo();
+  showGroups();
+}
+
+// ⭐ REQ-115 · 从接口数据重建「画什么」（**只换画法，不改数据**）。
+//
+// - 折叠的组 → 一个聚合节点（组名 + 成员数）；
+// - 展开的组 → 每个成员一个节点 + 一个组圈（背景）；
+// - 未分组的对象 → 各自一个节点（如实显示，⛔ 不塞进默认组）。
+//
+// 位置记忆（`POS`）让折叠/展开时节点不跳；组内重力在 `physicsStep` 里。
+function relayout(first) {
+  var old = {}, i, j, u, d, n, g, o, a, box, R, c, sx, sy, kk;
+  for (i = 0; i < NS.length; i++) old[NS[i].id] = NS[i];
+  NS = []; ES = []; PS = []; BY = {}; HALOS = [];
+  box = stageBox(); R = Math.min(box.w, box.h) * 0.34;
+
+  var units = unitsOf(GROUPS, DATA.nodes, FOLD);
+  for (i = 0; i < units.length; i++) {
+    u = units[i];
+    if (u.fold) {
+      g = BYG[u.id];
+      if (!g) continue;
+      d = {
+        id: "@g:" + g.id, agg: true, gid: g.id,
+        // AC-002：聚合节点上写「组名 + N」。
+        label: g.display_name + "（" + g.members.length + "）",
+        c: g.members.length, n: g.members.length, p: null,
+        // 成员越多，聚合节点略大一点（封顶，别让一个组吃掉整屏）。
+        r: 16 + Math.min(14, Math.sqrt(g.members.length) * 4),
+        x: 0, y: 0, vx: 0, vy: 0, pin: false, hit: false, el: null
+      };
+      // 聚合节点落在成员的组心（成员此刻可能没画出来 ⇒ 用记住的位置）。
+      sx = 0; sy = 0; c = 0;
+      for (j = 0; j < g.members.length; j++) {
+        o = POS[g.members[j]];
+        if (!o) continue;
+        sx += o.x; sy += o.y; c++;
+      }
+      if (c) { d.x = sx / c; d.y = sy / c; }
+      else { a = 2 * Math.PI * i / Math.max(1, units.length); d.x = Math.cos(a) * R; d.y = Math.sin(a) * R; }
+    } else {
+      n = NODE[u.id];
+      if (!n) continue;
+      d = {
+        id: n.id, label: n.label, c: n.attribute_count || 0, p: n.parent || null,
+        gid: groupOf(n, BYG), r: radiusOf(n.attribute_count),
+        x: 0, y: 0, vx: 0, vy: 0, pin: false, hit: false, el: null
+      };
+      o = old[d.id] || POS[d.id];
+      if (o) { d.x = o.x; d.y = o.y; d.pin = o.pin; }
+      else { a = 2 * Math.PI * i / Math.max(1, units.length); d.x = Math.cos(a) * R; d.y = Math.sin(a) * R; }
+    }
+    NS.push(d); BY[d.id] = d;
+  }
+
+  // 关系连线：两端都换成「单元标识」；落进同一个聚合节点的不画（那是组内关系）。
+  var seen = {};
+  DATA.edges.forEach(function (e) {
+    var aa = BY[unitIdOf(e.from)], bb = BY[unitIdOf(e.to)];
+    if (!aa || !bb || aa === bb) return;
+    // 只要有一端是聚合节点，同一对单元之间的多条关系就会完全重叠 ⇒ 只画一条。
+    // 两端都是普通对象时**保持原样**（REQ-114 的画面不变）。
+    if (aa.agg || bb.agg) {
+      kk = aa.id + "->" + bb.id;
+      if (seen[kk]) return;
+      seen[kk] = 1;
+    }
+    ES.push({ a: aa, b: bb, label: e.label || "" });
+  });
+  // 所属虚线同样按单元归属
+  DATA.nodes.forEach(function (n) {
+    if (!n.parent) return;
+    var aa = BY[unitIdOf(n.parent)], bb = BY[unitIdOf(n.id)];
+    if (!aa || !bb || aa === bb) return;
+    kk = "p:" + aa.id + "->" + bb.id;
+    if (seen[kk]) return;
+    seen[kk] = 1;
+    PS.push({ a: aa, b: bb });
+  });
+
+  // 组圈：只有**展开的组**才画（折叠时那个组本身就是节点，再套圈是多余的）。
+  for (i = 0; i < GROUPS.length; i++) {
+    g = GROUPS[i];
+    if (FOLD[g.id]) continue;
+    var members = [];
+    for (j = 0; j < g.members.length; j++) {
+      d = BY[g.members[j]];
+      if (d) members.push(d);
+    }
+    if (!members.length) continue;
+    HALOS.push({ id: g.id, name: g.display_name, ns: members, el: null, circle: null, text: null });
+  }
+}
+
+// 节点身份 → 当前画在哪个单元上（折叠的组是一个聚合单元的 id）。
+function unitIdOf(id) {
+  var n = NODE[id];
+  var gid = n ? groupOf(n, BYG) : null;
+  if (gid && FOLD[gid]) return "@g:" + gid;
+  return id;
+}
+
+// 折叠 / 展开一个组（**纯视觉状态**，见 AC-009）。
+function setFold(gid, folded) {
+  if (!BYG[gid]) return;
+  if (folded) FOLD[gid] = true; else delete FOLD[gid];
+  resetTap();
+  relayout(false);
+  buildScene();
+  paint();
+  kick(0.7);
+  updateGroupInfo();
+  showGroups();
+  say(folded ? "已折叠「" + BYG[gid].display_name + "」。点它可再展开。" : "已展开「" + BYG[gid].display_name + "」。", false);
+}
+
+function foldAll(folded) {
+  if (!GROUPS.length) { say("这一版没有概念组，没有可折叠的组。", false); return; }
+  for (var i = 0; i < GROUPS.length; i++) {
+    if (folded) FOLD[GROUPS[i].id] = true; else delete FOLD[GROUPS[i].id];
+  }
+  resetTap();
+  relayout(false);
+  buildScene();
+  paint();
+  kick(0.7);
+  updateGroupInfo();
+  showGroups();
+  say(folded ? "已全部折叠：图上现在是 " + NS.length + " 个节点（组 + 未分组）。" : "已全部展开。", false);
+}
+
+// 组信息条 + 图上「画了几个」—— 折叠态节点数在这里**可读**（AC-002）。
+function updateGroupInfo() {
+  if (!DATA) return;
+  var el = $("#grpinfo"), un = 0, i;
+  for (i = 0; i < DATA.nodes.length; i++) if (groupOf(DATA.nodes[i], BYG) === null) un++;
+  if (!GROUPS.length) {
+    // ⭐ AC-003：无组时**如实**说「未分组」，⛔ 不虚构默认组。
+    el.innerHTML = "未分组";
+    $("#grpnote").textContent = "未分组：这一版没有任何概念组（不是「都分好了」，是没人签过分组）";
+  } else {
+    el.innerHTML = GROUPS.length + " 个概念组 · 未分组 " + un + " 个";
+    $("#grpnote").textContent = "虚线大圈 = 概念组（" + GROUPS.length + " 个）；折叠时一组显示成一个带成员数的节点";
+  }
+  $("#status").textContent = DATA.nodes.length + " 个对象 · " + DATA.edges.length +
+    " 条关系 · 画了 " + NS.length + " 个节点";
+}
+
+// 未分组对象（不在任何**已知**组里）—— 页面对它们的唯一说法就是「未分组」。
+function ungroupedIds() {
+  var out = [], i;
+  for (i = 0; i < DATA.nodes.length; i++) {
+    if (groupOf(DATA.nodes[i], BYG) === null) out.push(DATA.nodes[i].id);
+  }
+  return out;
+}
+
+function memberList(ids) {
+  var h = "<ul>", i;
+  for (i = 0; i < ids.length; i++) {
+    h += '<li><a href="#" data-m="' + esc(ids[i]) + '">' + esc(ids[i]) + "</a></li>";
+  }
+  return h + "</ul>";
+}
+
+// 组面板（AC-002）：列出每组与其成员；点成员定位。
+function showGroups() {
+  if (!DATA) return;
+  var p = $("#panel"), h = "", i, g, ids = ungroupedIds();
+  if (!GROUPS.length) {
+    h += "<h2>未分组</h2>";
+    h += '<p class="meta">这一版没有任何概念组 —— 不是「都分好了」，是**没人签过分组**。' +
+      "分组要先有声明，再经双轨审核与 apply，才会出现在这里。</p>";
+    h += memberList(ids);
+    p.innerHTML = h;
+    wirePanel();
+    return;
+  }
+  h += "<h2>概念组（" + GROUPS.length + "）</h2>";
+  h += '<p class="meta">分组来自已签过的声明；点成员可定位，点「折叠」把整组收成一个节点。</p>';
+  for (i = 0; i < GROUPS.length; i++) {
+    g = GROUPS[i];
+    h += '<div class="grp"><div><b>' + esc(g.display_name) + '</b> <span class="meta">' +
+      g.members.length + ' 个对象</span> <button data-g="' + esc(g.id) + '" data-fold="' +
+      (FOLD[g.id] ? "0" : "1") + '">' + (FOLD[g.id] ? "展开" : "折叠") + "</button></div>";
+    // ⭐ C-3：`scope_hint` 是**客户可见的组说明**（与业务总览的 summary 同一口径），
+    //    所以这里照常显示；导入时它已过客户闸（C-1），不会打挂出图。
+    if (g.scope_hint) h += '<div class="meta">' + esc(g.scope_hint) + "</div>";
+    h += memberList(g.members) + "</div>";
+  }
+  if (ids.length) h += "<h3>未分组（" + ids.length + "）</h3>" + memberList(ids);
+  p.innerHTML = h;
+  wirePanel();
+}
+
+// 展开某个组之后，面板直接把这一组的成员摆出来。
+function showGroup(gid) {
+  var g = BYG[gid], p = $("#panel"), h = "";
+  if (!g) { showGroups(); return; }
+  h += "<h2>" + esc(g.display_name) + "</h2>";
+  h += '<p class="meta">' + g.members.length + " 个对象" +
+    (g.scope_hint ? " · " + esc(g.scope_hint) : "") + "</p>";
+  h += memberList(g.members);
+  h += '<p class="meta">已展开这一组（背景虚线圈）。<a href="#" id="backgroups">返回组列表</a></p>';
+  p.innerHTML = h;
+  var back = $("#backgroups");
+  if (back) back.onclick = function (ev) { ev.preventDefault(); showGroups(); };
+  wirePanel();
+}
+
+// 点击定位（AC-002）：折叠的组先展开，再把这个对象移到视口中心并打开详情。
+function locateMember(id) {
+  var n = NODE[id];
+  if (!n) return;
+  var gid = groupOf(n, BYG);
+  if (gid && FOLD[gid]) setFold(gid, false);
+  var d = BY[id];
+  if (!d) { say("「" + id + "」现在不在图上，先点「全部展开」。", true); return; }
+  centerOn(d);
+  pick(id);
+}
+
+// 面板里两类可点元素：成员链接、每组的折叠按钮。
+function wirePanel() {
+  var i, links = $("#panel").querySelectorAll("a[data-m]");
+  for (i = 0; i < links.length; i++) {
+    links[i].onclick = function (ev) {
+      ev.preventDefault();
+      locateMember(this.getAttribute("data-m"));
+    };
+  }
+  var btns = $("#panel").querySelectorAll("button[data-g]");
+  for (i = 0; i < btns.length; i++) {
+    btns[i].onclick = function () {
+      setFold(this.getAttribute("data-g"), this.getAttribute("data-fold") === "1");
+    };
+  }
 }
 
 // 点节点 → 看它的属性与说明（接口返回的 note / 属性）
@@ -811,7 +1228,11 @@ function pick(id) {
         });
         h += "</ul>";
       }
+      // REQ-115：看完一个对象能回到组列表（否则组面板就再也点不回来了）。
+      if (GROUPS.length) h += '<p class="meta"><a href="#" id="backgroups">返回组列表</a></p>';
       p.innerHTML = h;
+      var back = $("#backgroups");
+      if (back) back.onclick = function (ev) { ev.preventDefault(); showGroups(); };
     });
 }
 

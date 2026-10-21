@@ -1,390 +1,414 @@
-# REQ-114 · 页面图交互升级 —— 验证报告（**QA 首轮 FAIL 后的修复轮**）
+# REQ-115 · 概念分组与图上的归并 —— 验证报告（**第 2 轮 · QA 阻断修复：BA 裁定 C**）
 
-> **被测**：worktree `feature-REQ-114` / 分支 `feature/REQ-114` · 基线 `develop` `e9755e8` · **未 push**
-> **本轮范围**：QA 阻断 **探针无牙（假绿）** 的修复（A-1 行为级探针 / B 剥注释计数 / C 三项小毛病）
-> + 四处文档（D1–D4）。**产品交互逻辑本轮没动**（唯一碰到的产品文件是 `page.rs` 内核段里的一行**注释**，
-> 因为 C3 要修它写的探针路径；它改了 `INDEX_HTML` 的字节 ⇒ golden 又重锚了一次）。
-> **不碰**：`BA/`、`src/server/http.rs`（`git diff` 0 行）、`Cargo.toml` / `Cargo.lock`（0 行）、四红线。
-> **日期**：2026-10-22 · Windows · rustc/cargo 1.96.0 · PG `postgresql://***@172.17.0.87:5432/anspire_real`
+> **被测**：worktree `feature-REQ-115` / 分支 `feature/REQ-115` · 基线 `develop` `71ae770` · **未 push**
+> **本轮范围**：QA 判 FAIL（1 阻断）后的修复。BA 纠正了「`scope_hint` 是评审注解」这个前提 ——
+> 它在 REQ-010 里就是**客户可见的组说明**（业务总览的 `summary`），病灶是**一个字段两种用途**。
+> 按裁定 (C)：**C-1** 组字段纳入导入闸、**C-2** `suggest` 不写客户字段、**C-3** 图与总览同口径。
+> **不碰**：`BA/` / `code/` / `Deploy/`；四红线 + `tools.rs` + `guard()` + `property_filter.rs` G1–G4；
+> `/api` 的鉴权与路由语义。
+> **日期**：2026-10-22 · Windows · PG `postgresql://***@172.17.0.87:5432/anspire_real`
+> **历史报告**：第 1 轮（实现）与 B 轮（被 C 取代）见 `git log -p -- .feature/verification-report.md`。
 
 ---
 
 ## ⚠️ 三条必须先读的结论
 
-1. **QA 的 P0 成立**：第一版探针「数原文里的 `collide(ns, GAP);`」—— 把两行**注释掉**或包进
-   `if (false) {}` 之后，文本照样被数到 2 处 ⇒ 探针 exit 0。这是**假绿**，不是「可能漏」。
-2. **本轮把探针改成行为级**：新增**无斥力场景**（把内核作用域的 `REP` 置 0），此时「不重叠」
-   **只可能**由 `collide` 兑现；再加**剥注释后恰好 2 处**的静态判据。五种变异实测**全部 exit 1**。
-3. **仍未做真浏览器手测**（本机无 headless 浏览器，也不为此加依赖）。本报告所有「✅」都指
-   源码级 / 纯函数级 / 真 HTTP 级判据成立，**不指**交互手感已验证。
+1. **QA 阻断的根因是「一个字段两种用途」**，不是某个出口漏了：
+   `scope_hint` 在 REQ-010 的**业务总览**里是客户可见的 `summary`（C4/C5/M1），
+   却又被 `concept suggest` 当成内部备注写（「算法建议…待人审」）。
+   ⇒ 本轮按 (C) 把**客户可见的组字段全部纳入导入闸**（C-1），并让建议层**不再写客户字段**（C-2）。
+2. **AI 那份声明现在会被 import 拒绝一次**（这是**正确行为**）：
+   `api_entitlement.scope_hint` 里的「未持 **Key**」命中闸 ⇒ 报
+   「组 `api_entitlement` 的 scope_hint 含建模术语 `key`」。
+   把该句改成「未持**凭证**」、重算 digest ⇒ **全链路通过**（200 / 8 组 / 83 成员）。
+   **我们不替作者猜业务措辞**：报错点名到「组 + 字段 + 词条」，改不改、怎么改由声明作者定。
+3. **C-3 我选了「图带 `scope_hint`」**（与总览同口径）。因此 QA 第 1 轮的 B-1（从图上删掉）
+   **被回滚**；安全边界改由 C-1 在**导入时**兜住 —— 出图时不可能再遇到脏字段。
 
 ---
 
-## 0 · 结论先行
+## 0 · 结论先行（对应 BA 的 6 项交付）
 
-| 项 | QA 实测（修复前） | 修复后（本轮实测） |
-| --- | --- | --- |
-| **M1a** 两行 `collide(ns, GAP);` 删**一行** | ❌ exit 0 | ✅ **exit 1**（静态 1 ≠ 2 + 场景 2 余量 `-30.94px`） |
-| **M1c** 两行改成注释 | ❌ exit 0 ALL PASS | ✅ **exit 1**（剥注释后 0 ≠ 2 + 场景 2 余量 `-32.00px`） |
-| **M1d** 两行包进 `if (false)` | ❌ exit 0 ALL PASS | ✅ **exit 1**（静态仍 2 ⇒ 由**场景 2** 抓住：`-32.00px` / 包围盒 `0 × 0`） |
-| **M2** `var min = a.r + b.r + gap;` → `0` | ✅ exit 1 | ✅ exit 1（单元 2 条 + 场景 2） |
-| **M3** 删内核 / 改 `END` 标记 | ✅ exit 1 | ✅ exit 1（`die()`） |
-| **基线** | exit 0 | exit 0（`ALL PASS（场景 1：168 帧 / 余量 15.79px；场景 2：168 帧 / 余量 5.20px）`） |
-| 每次变异后还原 | — | sha256 `9E5ABADF…` **前后一致**（逐字节） |
-
----
-
-## 1 · 探针（`tests/fixtures/req114/layout_probe.js`）
-
-```bash
-node tests/fixtures/req114/layout_probe.js   # 全绿 exit 0；任一断言失败 exit 1
-```
-
-它**不复制**页面代码：从 `src/server/page.rs` 的 `BEGIN/END` 两条标记之间把「布局内核」段
-（`radiusOf` / `collide` / `springs` / `physicsStep` + 常量）**原样抽出**，用 `new Function` 执行同一份源码。
-标记找不到 ⇒ `die()` exit 1（不是静默通过）。
-
-### 三层判据（缺一层就会出现假绿）
-
-| 层 | 内容 | 抓什么 |
-| --- | --- | --- |
-| **静态层** | 抽内核 → **剥 `//` 与 `/* */` 注释** → 数 `collide(ns, GAP);`，要求 **=== 2** | 删一行 / 注释掉 / 多写一处 |
-| **单元层** | 直接调 `collide()`：重叠一对被推到「半径和 + GAP」；钉住的节点不动 | `collide` 变成空转 |
-| **涌现层 1** | 83 节点同坐标、`REP=400`（页面默认）、300 帧上限 ⇒ 任意两节点中心距 ≥ 半径和 | 整体退化 |
-| **涌现层 2** | **同上但 `REP=0`**（`setRep(0)` 改的是内核作用域里的 `REP` 本身）⇒ 只能靠 `collide` 分开 | **`collide` 没执行**（注释/`if(false)`/删调用） |
-
-> **为什么必须有涌现层 2**：只跑真实参数时斥力很强 —— 把 `collide` 的调用**删掉**仍能凑出
-> ~12.5px 余量（实测），涌现层 1 会绿。把 `REP` 置 0 之后，不重叠就**只可能**来自 `collide`：
-> 变异实测余量直接掉到 `-30.94 / -32.00px`。
-
-### 期望输出（本机实测，内核无 `Math.random`，数字确定）
-
-```text
-REQ-114 · 布局内核探针（从 src/server/page.rs **原样抽取**）
-内核段 = 3925 字节（radiusOf / collide / springs / physicsStep）
-剥注释后内核 = 2255 字节
-
-PASS 剥注释没有把代码剥没（自检）  2255 / 3925 字节
-PASS 静态：剥注释后 collide(ns, GAP); 恰好 2 处  实际 2 处（注释/删行/多写都会在这里红）
-PASS 页面帧上限 SIM_FRAMES === 300  实际 300
-PASS 单元：重叠的一对被推到「半径和 + GAP」  余量 6.00 ≥ GAP 6
-PASS 单元：钉住的节点不动（否则拖拽会被下一帧弹回去）  (0, 0)
-PASS 单元：让对面的节点让开整个间距  余量 6.00
-PASS 场景 1 起点：83 个节点都在 (0,0)，速度 0  83/83
-PASS 场景 1 边数 === 52  实际 52
-
-场景 1 · 真实参数（REP=400，页面默认）
-  节点数 / 边数        = 83 / 52
-  实际推进帧数         = 168（上限 300，停止原因：alpha 掉到 ALPHA_MIN 以下（收敛））
-  最紧一对（#6 / #47）中心距 = 42.79，半径和 = 26.99
-  余量（距 − 半径和）  = 15.79   ← 断言 ≥ 0
-  含 NaN 的节点数      = 0   ← 断言 = 0
-  包围盒（世界单位）   = 529 × 528
-
-场景 2 · 无斥力（REP=0 ⇒ 只能靠 collide 分开）
-  节点数 / 边数        = 83 / 52
-  实际推进帧数         = 168（停止原因：alpha 掉到 ALPHA_MIN 以下（收敛））
-  最紧一对（#31 / #74）中心距 = 24.93，半径和 = 19.73
-  余量（距 − 半径和）  = 5.20   ← 断言 ≥ 0（collide 没执行就会是 −32 量级）
-  含 NaN 的节点数      = 0   ← 断言 = 0
-  包围盒（世界单位）   = 288 × 305
-
-ALL PASS（场景 1：168 帧 / 余量 15.79px；场景 2：168 帧 / 余量 5.20px）
-exit=0
-```
-
-### 五种变异 × 每次还原（原样实测）
-
-| 变异 | 手法 | exit | 关键输出 | 还原 sha256 前 8 | 一致 |
-| --- | --- | --- | --- | --- | --- |
-| 基线 | 不动 | **0** | `ALL PASS（… 余量 15.79px；… 余量 5.20px）` | `9E5ABADF` | ✅ |
-| **M1a** | 两行删一行 | **1** | `FAIL 静态：…恰好 2 处  实际 1 处` + `FAIL 场景 2 … 余量 -30.94px` | `9E5ABADF` | ✅ |
-| **M1c** | 两行改成注释 | **1** | `FAIL 静态：…实际 0 处` + `FAIL 场景 2 … -32.00px` + `包围盒 0 × 0` | `9E5ABADF` | ✅ |
-| **M1d** | 两行包进 `if(false)` | **1** | `FAIL 场景 2 … -32.00px` + `FAIL 场景 2：节点确实被推开了 … 0 × 0` | `9E5ABADF` | ✅ |
-| M2 | `min` 改 0 | **1** | 单元 2 条（`-18.00` / `-17.00`）+ 场景 2（`-32.00px`） | `9E5ABADF` | ✅ |
-| M3 | 改 `END` 标记 | **1** | `FAIL 在 page.rs 里找不到布局内核的两条标记（BEGIN/END）` | `9E5ABADF` | ✅ |
-
-### 本轮修掉的三个小毛病（QA 点名）
-
-| # | 问题 | 修法 |
-| --- | --- | --- |
-| C1 | `pass("起点…", allAtOrigin ? "83/83" : "有节点不在原点")` —— 条件为假也 PASS | 改成 `expect(nodes1.every(…), "场景 1 起点：83 个节点都在 (0,0)，速度 0", "83/83")`；全文件不再有「带条件的 `pass()`」 |
-| C2 | 边数没断言 | 两个场景各加 `expect(edges.length === 52, "场景 N 边数 === 52", …)` |
-| C3 | 内核注释里的探针路径是 `.review-workspace/...`（不入库） | `page.rs:223` 改成 `tests/fixtures/req114/layout_probe.js`（入库） |
-
----
-
-## 2 · 产品侧（上一轮已交付，本轮未动逻辑）
-
-| AC | 落点（`src/server/page.rs`） |
+| BA 交付项 | 实测 |
 | --- | --- |
-| 001 拖拽 / 松手固定 / 双击释放 | `505` `pointerdown`（绑在节点上）· `556-559` `d.pin = true`（松手保持）· `601-615` `tapNode` + `release` |
-| 002 碰撞消解 | `230` `collide`（位置推离，钉子权重 0）· `288-289` 每帧两遍、物理步最后一步 |
-| 003 拖拽 ≠ 点击 | `204` `DRAG_PX = 4` · `533` 位移判定 · `556`/`560` 分支 |
-| 004 视图 | `583` 背景平移 · `594` 滚轮缩放（指针锚定）· `205`/`204` 两个按钮 · `380` `VIEW = {k:1,x:0,y:0}` |
-| 005 标签避让 | `205` `LBL_K = 0.6` · `426` `showLbl` · `462-475` 重叠跳过 |
-| 006 搜索定位 | `611` 输入高亮 · `623` 回车 ⇒ `centerOn` |
-| 007 零依赖 / < 60KB | 页面 **32396 字节**；`<script src=` / `<link href=` / `http://` / `https://` / `cdn.` / `integrity=` 各 **0 处** |
-| 008 数据面不扩大 | 真 HTTP：`GET /` 200 且与 golden **逐字节相等**；11 个探针词（项目名/对象名）**0 命中**；`/api/{scope,graph,node,ontology.ttl}` 无 token 全 **401** |
-| 009 golden 重锚 | `H1_index.html` `96eb5f…`（12479 字节）→ **`d8bd4581c264a483815c0bf67636966da190b3799e8abbaa79c6f5a2a849c5c0`（32396 字节）**；其余 12 份逐字节未动；`PROVENANCE.txt` 写明原因 |
-| 010 不退化 | 禁改文件 0 diff；lib 245 / doc 4 |
-| 011 如实登记 | 本报告 §4 + `page.rs` 模块文档「已知限制」 |
+| ① C-1 实现位置 + 三种拒绝实测 | ✅ `concept.rs:349` / `cli.rs:1211`；三种见 §2（scope_hint 拒 / display_name 拒 / 两者干净通过） |
+| ② C-2 改完 `suggest` 的 `scope_hint` 长什么样 | ✅ 9 个组**全部是 `"scope_hint": null`**（§3）；来源写在 `declared_by` / `rule` |
+| ③ C-3 选哪个口径 + 总览是否恢复 200 | ✅ 选「图带、总览也带」（同口径）；`ontology overview` 在 v4 上 **exit 0**（§4） |
+| ④ AI 原样 import 被拒（报组/字段/词条）→ 改一句 → 全链路 200 + 8 组 | ✅ 见 §2.4 / §4.2 |
+| ⑤ `ontology overview`（新发现的 C4/C5 出口） | ✅ C4 `exit 0`、C5 `--json` `exit 0`（§4.3） |
+| ⑥ 测试数字 + 绕行双证 | ✅ 见 §7 |
+
+| AC | 判据 | 实测 |
+| --- | --- | --- |
+| 001 | `/api/graph` 返回 `groups`，节点 `group` 等于某组 `id` 或 `null` | ✅ 8 组 / 83 节点 / `bad=0`；无组项目 `groups:[]` + 83 个 `null` |
+| 002 | 组圈 + 折叠（组名 + N）+ 组面板（成员 / 点击定位） | ✅ 源码落点 + Node 探针 7 = 3 + 4 |
+| 003 | 无组时如实显示「未分组」，⛔ 无默认组 | ✅ 探针：`groups=[]` ⇒ 零聚合单元 |
+| 004 | `concept suggest` 两次逐字节相同 + 不写库 | ✅ C-2 后两次同 sha256 `abc9068a…`；库指纹前后相同 |
+| 005 | suggest → import → 签 → apply → 图上出现 | ✅ 9 组与 AI 8 组（改一句后）各跑一遍（§4.2） |
+| 006 | 页面不许自己算分组 | ✅ 只读 `DATA.groups`；剥注释后 7 个算法词全 0 |
+| 007 | 零外部依赖 / `GET /` 零数据壳 / `/api/*` 401 | ✅ 页面 49936 字节 < 80KB；无 token → 401 |
+| 008 | H1 重锚；其余 12 份不动 | ✅ `pipeline_bytes` 1 + `zero_visible_change` 3 全绿 |
+| 009 | 折叠前后导出逐字节相同 | ✅ TTL / `ontology show` sha256 两两相同 |
+| 010 | `source: "algorithm-suggest"` / `reviewed_by: null` | ✅ 文件字段 + 单测 |
+| 011 | 不退化 | ✅ 见 §7 |
 
 ---
 
-## 3 · 测试（本轮复跑）
+## 1 · 本轮改动（C-1 / C-2 / C-3）
+
+| 文件 | 落点 | 改了什么 |
+| --- | --- | --- |
+| `src/domain/concept.rs:321` | `pub struct GroupNameHit` | 「组 + 字段 + 词条」的结构化命中；`Display` 就是报错原文 |
+| `src/domain/concept.rs:349` | `pub fn scan_group_names` | **C-1**：扫 `display_name` / `scope_hint` / 组 `key` 三个**客户可见**字段 |
+| `src/domain/concept.rs:366` | `fn push_hits` | 判据**借用管线**（`pipeline::group_name_hits`），不新增第二份判据 |
+| `src/domain/pipeline.rs:893` | `pub fn group_name_hits` | 术语判据的唯一实现（`scan_modeling_terms`）在管线／守门器侧的入口 |
+| `src/cli.rs:1211` | `concept import` | 校验指纹之后、碰库之前：命中即 `bail!`，逐条列出「组 + 字段 + 词条」 |
+| `src/domain/concept_suggest.rs:201` | `suggest` 的组构造 | **C-2**：`scope_hint: None`（内部来源在 `declared_by` / `rule`） |
+| `src/domain/graph.rs:125` | `Group` | **C-3**：恢复 `scope_hint`（与总览 `summary` 同源、同口径） |
+| `src/domain/graph.rs:157` | `DeclaredGroup` | 同步恢复；`declared_groups` / `project_grouped` 照搬 |
+| `src/server/page.rs:1160` / `:1174` | `showGroups` / `showGroup` | 组面板照常显示**客户可见**的组说明（C-3） |
+| `tests/test_req115_groups.rs` | 13 条 | C-1 三种实测（scope_hint 拒 / display_name 拒 / 干净通过）+ 页面同口径断言 |
+| `src/domain/concept.rs` / `concept_suggest.rs` 测试 | +4 条 | scope_hint 拒 / 业务措辞通过 / 组 key 也判 / suggest 不写客户字段 |
+| H1 golden | `d8bd4581…`(32396) → **`c8d5e148…`(49936)** | 页面第二次变化（组说明回到面板），其余 12 份逐字节未动 |
+
+> 第 1 轮实现（`/api/graph` 的 `groups`、页面组圈/折叠/面板/引力、`concept suggest`）见 `git log`；
+> 本轮**没有**动 `overview.rs`、没有动任何 golden 的内容（只重锚 H1 的页面字节）。
+
+---
+
+## 2 · C-1：导入闸的三种实测（真库）
+
+判据在 `concept import` 的**碰库之前**（`decl.verify()` 之后、`get_or_create` / `proposals.create` 之前）
+⇒ 被拒的声明**一条提案都不会留下**。
+
+### 2.1 ① `scope_hint` 命中（AI 声明**原样**）
 
 ```text
-lib 245 passed / 0 failed · doc 4 passed / 0 failed
-集成 72 个目标：774 passed / 4 failed —— 4 红全部与本需求无关：
-  drop_rate / test_fk_naming   → 缺脱敏 schema.json（fail-closed 输入不在版本控制内）
-  test_agent_orchestration     → 在基线 page.rs 上同样红（回退复现过）
-  test_req107_red_lines        → 跑到它的那一次，为绕行临时挪开了 test_retained_names（单跑 2 passed）
-test_retained_names_req084（6 条）→ Windows 上编译不了：它 include_str! 那个 Unix-only 的 bin
-页面/守门/golden 专项全绿：pipeline_bytes 1 · zero_visible_change 3 · graph_server 9 ·
-  static_texts 3 · red_lines 2 · req110_ttl 15
+ontok concept import --file code/out/concept-declaration-ai.json \
+                     --project anspire_excl_r115 --base-version 1
+exit 1
+✗ 概念声明被拒绝导入：有 1 处组字段会撞上客户发布闸（这些字段会出现在 /api/graph 的 groups[] 与业务总览的 summary 里）——
+  - 组 `api_entitlement` 的 scope_hint 含建模术语 `key`
+请改措辞后重算指纹（ontok concept digest --file …）再导入。⛔ 不会静默剔除，也不会替你改写。
 ```
 
-**绕行双证**（`finally` 自动挪回，脚本见交付物）：
+### 2.2 ② `display_name` 命中（干净 `scope_hint` + 坏组名）
 
 ```text
-BEFORE  src\bin\ontok-gate-preflight.rs  sha256=C7CF95E2…71322D  Test-Path=True
-MOVED-AWAY  Test-Path(src)=False  Test-Path(bak)=True
-AFTER   sha256=C7CF95E2…71322D  Test-Path=True  bak=False  SHA-MATCH=True
-（tests\test_retained_names_req084.rs 同样 SHA-MATCH=True / Test-Path=True）
+（把 customer_account.display_name 改成「客户与 Key 子账号」，重算 digest）
+exit 1
+✗ 概念声明被拒绝导入：有 1 处组字段会撞上客户发布闸（…）——
+  - 组 `customer_account` 的 display_name 含建模术语 `key`
 ```
 
----
+### 2.3 ③ 两者都干净 ⇒ **导入成功**
 
-## 4 · 如实登记（AC-011，⛔ 不许改写成「已验证交互流畅」）
-
-1. **未做真浏览器手测**：本机无 headless 浏览器；拖拽手感、标签避让的视觉效果、暗色配色
-   都只有源码级判据，没有任何一条来自真实浏览器。
-2. **标签宽度是估算的**：`paint` 里用 `d.label.length * 11 + 6` 当文本框宽度，没有
-   `getComputedTextLength()` 实测 ⇒ 中英混排可能估宽（该显示的被跳过）或估窄（仍可能压字）。
-3. **力导向参数是 Node 扫参得出的**：`REP=400` / `CENTER_F=0.4` 让 83 节点收在 ~529×528
-   （见探针输出），真实数据下的观感没有在浏览器里看过。
-
----
-
-## 5 · 文档修正（QA 点名的四条）
-
-| # | 问题 | 修成什么 |
-| --- | --- | --- |
-| D1 | `PROVENANCE` 把旧 H1 说成「b714f48 那一份」 | 改成「**REQ-110 收口后在 develop 上那一份静态壳**」，并写明 **b714f48 那个基线 worktree 里没有 golden 文件**（golden 是用当时页面现跑生成器得到的） |
-| D2 | `PROVENANCE` 说已知限制「写进了交付物」 | 改成**实际落点**：`page.rs` 模块文档「已知限制」小节（核心出处）+ 探针文件头「边界」段；本报告只是照抄 |
-| D3 | `.feature/status.md` / `verification-report.md` 还是 REQ-112 | 两份都写 REQ-114 段（旧 REQ-112 原文保留在下方，标「历史」） |
-| D4 | `.feature/manifest.json` 还是 REQ-107 | 整份改成 REQ-114（`base_commit` `e9755e8` / `acceptance` `BA/demands/REQ-114/acceptance.md`） |
-
----
-
-# 历史：REQ-112 · 审核界面接入 AI 建议 —— 验证报告（B-1 阻断修复轮）
-
-> 以下为上一需求原文，保留备查。
-
-
-# REQ-112 · 审核界面接入 AI 建议 —— 验证报告（**B-1 阻断修复轮**）
-
-# REQ-113 · 排除表：从「脚本预处理」变成产品能力 —— 验证报告
-
-> **被测**：worktree `feature-REQ-113` / 分支 `feature/REQ-113` · 基线 `develop` `e9755e8` · **未 push**
-> **日期**：2026-10-22 · Windows · rustc/cargo 1.96.0
-> **源库**：`anspire_open_uat`（只读，96 表）· **本地库**：`anspire_real`（新项目 `req113_demo`）
-> **清单来源**：`exclusions.json` = BA 的 `code/out/exclusions-ai.json`（`version 0.1.1`，AI 判 13 条 → BA 复核后 12 条）
->
-> ⚠️ REQ-112 的验证报告见 `git show 776f956:.feature/verification-report.md`（本文件本轮覆盖为 REQ-113）。
-
----
-
-## 0 · 结论先行
-
-| AC | 判据 | 结果 |
-| --- | --- | --- |
-| AC-001 | **①** `items` 段里 grep 表名 = 0；**②** 删掉 `inputs.exclusions` 整段后 grep = 0；实体数 = `tables_extracted` | ✅ ① **0** 次；② **0** 次；实体 **84** = `tables_extracted` |
-| AC-002 | `seen − excluded == extracted`（结构性断言） | ✅ 96 − 12 = 84；断言在 `exclusions.rs:887`，不闭合 ⇒ **不写 stats**、exit≠0 |
-| AC-003 | 每条有理由/类别/决策人；空理由/非法类别/缺决策人 ⇒ 拒绝文件 | ✅ 三种坏文件各跑一次：exit≠0 且**不产出**任何文件 |
-| AC-004 | `inputs.exclusions` = **完整审计段**（`{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`）；改一字节 sha 变 | ✅ 逐项实测；改一个字符 ⇒ sha256 变；`counts` 与明细自查 |
-| AC-005 | 陈旧排除：默认警告 / `--strict-exclusions` exit≠0 | ✅ 两种模式各跑一次（真实库 + 1 条不存在的表） |
-| AC-006 | 审核界面只读区块，条数 = `tables_excluded` | ✅ `GET /api/review` → `count=12`、`readonly=true`（真服务、真数据） |
-| AC-007 | 排除与「无中文名」分开记，排除优先 | ✅ `excluded_tables ∩ tables_without_cn_name = ∅` |
-| AC-008 | 两次运行提案与 stats 逐字节相同 | ✅ proposal `852281ec…` / stats `9c568845…` 两次相同，`git diff --no-index` 无输出 |
-| AC-009 | 不退化（红线 0 diff / 不删测试 / 不加依赖） | ✅ 见 §5 |
-| AC-010 | 真实库 96 → 排除 12 → 84，12 条理由可读 | ✅ 见 §1.3 |
-
----
-
-## 1 · 真实库实测（AC-001 / 002 / 007 / 010）
-
-### 1.1 命令
-
-```powershell
-$env:SRC_URL = "postgresql://***@172.16.120.20:30432/anspire_open_uat"   # 只读
-.\target\debug\ontok-propose.exe --schema ..\code\out\schema.json `
-    --names src\extract\table_names.json `
-    --out out\proposal.json --stats out\stats.json `
-    --project req113_demo --exclude exclusions.json --src $env:SRC_URL
+```text
+（把 api_entitlement.scope_hint 的「未持 Key」改成「未持凭证」，重算 digest）
+概念声明 v1.0.0 已导入提案 p1（项目 anspire_excl_r115 · 基于 v1）—— 共 8 个概念组，待双轨审核
+  [1] add_concept_group 客户与子账号 … [8] add_concept_group 后台与运营支撑
 ```
 
-### 1.2 三个计数（`stats.json`）
+> 字段名**点名到列**（`display_name` / `scope_hint` / `key`），因为三者都可能成为
+> 客户出口里的文本：图上 `groups[]` 三个都在，总览 `summary` 来自 `scope_hint`。
+
+---
+
+## 3 · C-2：`suggest` 不写客户字段
+
+`concept suggest` 的组现在是：
 
 ```json
-"tables_seen": 96, "tables_excluded": 12, "tables_extracted": 84,
-"excluded_tables": [ …12 条，逐条 table/category/reason/decided_by/confidence/evidence… ],
-"stale_exclusions": [],
-"flagged_tables": [ …11 条 keep_but_flagged（**未被排除**）… ],
-"tables_without_cn_name": [ …62 张… ]
-```
-
-| 检查 | 值 |
-| --- | --- |
-| `seen − excluded` | 96 − 12 = **84** = `tables_extracted` = 提案里 `add_entity_type` 条数 |
-| **AC-001 ①** `items` 段里 grep 12 个被排除表名 | **0 次** |
-| **AC-001 ②** 删掉 `inputs.exclusions` 整段后 grep | **0 次**（表名只允许出现在审计段内；逐名合计 15 次命中都在该段，`llm_provider_back` 是另两张备份表名的前缀） |
-| `inputs.exclusions.counts` | `{seen:96, excluded:12, extracted:84, stale:0, flagged:11}`，闭合 |
-| `excluded_tables` 与 `tables_without_cn_name` 交集 | **0**（被排除的表根本没进抽取作用域） |
-
-### 1.3 12 条排除（AI 判定 + BA 复核；此处为 `stats.json` 原文摘要）
-
-| 表 | 类别 | 理由 | 决策人 | 置信度 |
-| --- | --- | --- | --- | --- |
-| `_volc_dts_pg_ddl_18e4b12d…` | cdc_residue | 数据同步工具自动生成的临时 DDL 表，不对应任何客户业务 | ai-table-judge | 0.97 |
-| `_volc_dts_pg_ddl_8f7cc0a6…` | cdc_residue | 同上 | ai-table-judge | 0.97 |
-| `_volc_dts_pg_ddl_9a38a0a4…` | cdc_residue | 同上 | ai-table-judge | 0.97 |
-| `alembic_version` | migration_bookkeeping | 数据库迁移工具的版本号记账表，客户业务里没有对应事物 | ai-table-judge | 0.99 |
-| `llm_provider_back` | backup_snapshot | llm_provider 的整表备份副本，列结构与主表完全一致 | ai-table-judge | 0.95 |
-| `llm_provider_back_20260630` | backup_snapshot | 按日期命名的 llm_provider 备份副本，不是独立业务事物 | ai-table-judge | 0.96 |
-| `llm_provider_back_20260701` | backup_snapshot | 同上 | ai-table-judge | 0.96 |
-| `llm_auth_cache_change_outbox` | internal_pipeline | 权限缓存变更的内部发件箱，只给同步程序读写，客户不可见 | ai-table-judge | 0.94 |
-| `llm_auth_cache_kafka_event_outbox` | internal_pipeline | 内部消息队列发件箱，记录待投递事件而非业务事实 | ai-table-judge | 0.94 |
-| `llm_auth_cache_trigger_state` | internal_pipeline | 权限边界判断用的内部状态快照，本身不是业务对象 | ai-table-judge | 0.90 |
-| `rpt_dim_customer` | report_intermediate | 报表客户维度表，由客户与渠道数据派生，客户业务里无此事物 | ai-table-judge | 0.82 |
-| `rpt_dws_channel` | report_intermediate | 渠道汇总的报表中间结果，不是某一笔业务的发生记录 | ai-table-judge | 0.82 |
-
-> `dim_customer_binding` 被 BA 从排除里**推翻**（有 `cross_currency_enabled` 与渠道归属，是业务状态），
-> 现列在 `keep_but_flagged`，**照常进本体**（84 张里有它）。
-
----
-
-## 2 · 测试与绕行（AC-009）
-
-### 2.1 结果
-
-| 项 | 基线（REQ-112 交付） | 本轮 |
-| --- | --- | --- |
-| lib | 245 | **272**（+27：`extract::exclusions` 的 27 条单元测试） |
-| doc | 4 | **4** |
-| 集成套件 | 43 套件 422 | **73 套件**（另有 1 个套件绕行，见 §2.2）；全部用例 **1063 通过** |
-| 新增套件 | — | `tests/test_req113_exclusions.rs`（12 条，全绿） |
-| 未通过 | 2 处既有红灯 | **3 处，且三处都在基线上逐字复现**（见 §2.3） |
-
-### 2.2 Windows 绕行（`ontok-gate-preflight.rs` 是 Unix-only）
-
-```
-sha256(before) = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-sha256(after)  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
-sha256(equal)  = True
-Test-Path      = True          # finally 里挪回，字节级相同
-```
-
-绕行的代价：`tests/test_retained_names_req084.rs` 用 `include_str!` 引那份源文件 ⇒ **该套件编不过**
-（REQ-112 已登记的既有红灯，不是本轮引入）。`git status --short` 里**没有 `D` 行**。
-
-### 2.3 三处红灯：**在基线上逐字复现**（用 `git archive e9755e8` 导出基线到临时目录，同样绕行后跑）
-
-| 用例 | 基线 | 本分支 | 归因 |
-| --- | --- | --- | --- |
-| `drop_rate.rs::real_schema_drop_rate_report` | ❌ 69.8% > 上限 10.0%（表 96 / 属性 1024 / 存活 309） | ❌ 同样 69.8% | **输入 schema**：本机只有 96 张真实表名的 schema，翻译表覆盖 0 ⇒ 属性被丢弃；与 REQ-113 无关（只调 `extract()`/`project()`，本轮未改） |
-| `test_fk_naming.rs::test_real_schema_customer_id_has_exactly_one_display_name` | ❌ `agent_white_list/customer_id 仍显示成「客户标识」` | ❌ 同一句 | 同一份 schema 的注释差异，与排除功能无关 |
-| `test_agent_orchestration.rs::test_cli_end_to_end_output_is_byte_identical_to_legacy_extract` | ❌ `items` 与库路径不一致 | ❌ 同一处 | REQ-108 分档路由带来的既有差异（REQ-112 已登记为「CLI 端到端」红灯） |
-
-> 另外两条在本轮全量运行里红过、**已修**：`test_anchor_guard`（我的测试用了裸 `env!("CARGO_MANIFEST_DIR")` ⇒ 改走 `common::crate_root()`）、
-> `test_req107_source_enumeration`（新模块 / 新 `println!` 未登记 ⇒ 登记 `extract::exclusions` 与那条回执）。
-
----
-
-## 3 · 确定性（AC-008）
-
-```
-proposal.json  run1 = 852281ec94f7acb47c429829d44c93cb41b065c7927bc67c1b8ee55f9485ab66
-               run2 = 852281ec94f7acb47c429829d44c93cb41b065c7927bc67c1b8ee55f9485ab66
-stats.json     run1 = 9c5688451d61f72e9f2c2dec4c684e966466f5a03470f7fc0f0b77d174dcf829
-               run2 = 9c5688451d61f72e9f2c2dec4c684e966466f5a03470f7fc0f0b77d174dcf829
-git diff --no-index out\proposal.json out2\proposal.json  → exit 0
-git diff --no-index out\stats.json    out2\stats.json     → exit 0
-```
-
-（两次运行各自独立连源库采样；`sample` 的 digest 是确定性 sha256，且本模块内无 HashMap 迭代、无时间戳。
-proposal 变大后 sha 与上一轮不同 —— 上一轮是「元信息 + 侧车」，本轮是「完整审计段」。）
-
----
-
-## 4 · 陈旧排除（AC-005，真实库）
-
-往 `exclusions.json` 里加一条不存在的表 ⇒ `exclusions-stale.json`：
-
-| 模式 | 退出码 | 输出 |
-| --- | --- | --- |
-| 默认 | **0** | stderr：`⚠ 陈旧排除 1 条（… 但这份 schema 里没有）：_volc_dts_pg_ddl_0000…`；`stats.stale_exclusions` 记 1 条；`tables_excluded` 仍是 12（陈旧的**不算**排除） |
-| `--strict-exclusions` | **1** | `Error: 陈旧排除 1 条（--strict-exclusions ⇒ 失败）：_volc…` + 两种可能；**不产出** proposal / stats |
-
----
-
-## 5 · 红线 / 禁改（AC-009）
-
-```
-git diff --stat develop -- src/server/http.rs src/mcp/tools.rs src/domain/property_filter.rs Cargo.toml Cargo.lock
-（空）
-```
-
-- `guard()` 实现、`property_filter.rs` G1–G4：**0 行**；
-- `Cargo.toml` / `Cargo.lock`：**0 行**（sha256 复用同仓 `extract::sample::sha256_hex`，**未加依赖**）；
-- 未删测试、未 `#[ignore]`、未放宽断言；唯一的既有断言变更是
-  `src/agent/rule_based.rs` 的 `ExtractionStats` **字段集清单**，从 11 个加到 16 个（AC-002 / 003 / 005 要求的那五个），
-  断言仍是**逐字段全等**（不是放宽）。
-
----
-
-## 6 · 审核界面（AC-006）
-
-真服务真数据（`ontok review serve` + `GET /api/review`，Bearer 口令）：
-
-```json
-"exclusions": {
-  "present": true, "readonly": true,
-  "count": 12, "flagged_count": 11,
-  "counts": {"seen":96,"excluded":12,"extracted":84,"stale":0,"flagged":11},
-  "file": "exclusions.json", "version": "0.1.1",
-  "sha256": "3f77c6b8fd41bded7e5fbe74b507c74a2a385cfc67cccef2b90cada5dacc2c08",
-  "declared_by": "ai-table-judge / qwen36-27B",
-  "reviewed_by": "ba-michael（人工复核：推翻 1 条排除、接受其余 12 条）",
-  "rule": "只排除「不是客户业务世界里的事物」的表：…",
-  "tables": [
-    {"table":"_volc_dts_pg_ddl_18e4…","category":"cdc_residue","category_label":"CDC / 数据同步残留",
-     "reason":"数据同步工具自动生成的临时 DDL 表，不对应任何客户业务",
-     "decided_by":"ai-table-judge","confidence":0.97,
-     "evidence":"表名为 _volc_dts_pg_ddl_ + 32 位哈希（火山 DTS 同步产物命名）；…"}
-  ],
-  "flagged": [
-    {"table":"internal_staff","why":"名字像内部表，但只有 5 列且无任何列注释…","concern":"若只是后台账号…"}
-  ]
+{
+  "key": "concept_01",
+  "display_name": "后台管理员",
+  "members": ["admin_user_roles", "admin_users"],
+  "scope_hint": null,
+  "low_confidence": true,
+  "extracted_by": null,
+  "evidence": []
 }
 ```
 
-页面两个 **只读** section（`page.rs:163` / `:178`）：`#excluded`「被排除 12 张」+ `#flagged`「保留但存疑 11 张
-（**没有被排除** · 已照常进本体 · 待裁决）」。⛔ 无按钮、无输入框、无写接口。
+真库实测（`anspire_excl` v2）：
 
-> 数据来源：`proposals.inputs`（`propose import` **只读 proposal.json 这一个文件**，校验审计段后落库；无侧车）。
-> 界面**不解析** `exclusions.json`、也没有 schema —— 「哪些表被排除」只有一处实现。
+```text
+groups = 9
+groups with scope_hint = 0          （9 个组全部 null）
+sha256(a) = abc9068ac018b93add267d17543489a753c8c72b2a0175e8cf31723f9654e953
+sha256(b) = abc9068ac018b93add267d17543489a753c8c72b2a0175e8cf31723f9654e953  （两次相同）
+```
+
+内部来源仍在 `declared_by = concept-suggest/greedy-modularity-v1` 与 `rule` 里
+（它们**不进客户视图**）；客户字段不再出现「算法建议…」这种内部话。
 
 ---
 
-## 7 · 已知限制
+## 4 · C-3 口径 + 两个出口的实测
 
-1. **审计段里含表名**（`inputs.exclusions.excluded[]`）：BA 裁定「单一文件」—— `items` 段 grep = 0，
-   且整份文件里表名只允许出现在审计段内。提案因此大 ~4 KB，换「一个文件 = 一条完整审计链」。
-2. **`keep_but_flagged` 只展示**，不参与判定（表照常进本体）。
-3. **表级**排除（R1）；列级仍是 `property_filter`。
-4. **`tables_extracted` 实测自实体条目数**：重建路径若少抽表，闭合断言会让这一轮失败（R5 的本意，
-   但相对旧行为是**行为变更**）。
-5. **Windows 绕行**导致 `test_retained_names_req084` 编不过（既有红灯）。
-6. `drop_rate` / `test_fk_naming` 在本机为红，**基线同样红**（§2.3）。
+### 4.1 选择
+
+**图带 `scope_hint`，总览也带** —— 两个出口**同一口径**。理由：
+它在产品原有语义里就是客户可见的组说明（总览 `summary`）；删除它等于改 REQ-010 的产品语义，
+而那不是本需求的授权范围。安全性由 C-1 在**导入时**保证。
+
+### 4.2 AI 声明：原样被拒 → 改一句 → 全链路 200
+
+```text
+review decide --proposal p1 --accept-all --project anspire_excl_r115
+  提案 p1 的 8 个条目 × 2 轨 → accepted
+proposal apply → 提案已应用 → v4
+version freeze --version 4 → 已冻结 v4
+```
+
+```text
+GET /api/graph?project=anspire_excl_r115&version=4   (Bearer)
+  status = 200 · nodes=83 · edges=52 · groups=8 · covered=83 · bad node.group = 0
+  raw contains literal "key" = False
+  raw contains scope_hint    = True   ← C-3（与总览同口径）
+```
+
+```json
+"groups":[
+ {"display_name":"客户与子账号","id":"customer_account",
+  "members":["客户","客户账号绑定","账号渠道归属","客户功能权限","子账号权限","绑定权限快照","子账号额度"],
+  "scope_hint":"客户主档、账号绑定关系、客户内部员工与子账号权限、客户功能开关。…"},
+ {"display_name":"API 密钥与授权","id":"api_entitlement","members":["授权", …],
+  "scope_hint":"客户手上有什么凭证、能调到什么、能调多快：API-Key（…）、以及未持凭证的试用请求。…"},
+ …
+]
+"nodes":[{"attribute_count":10,"group":"marketing_growth","id":"活动","label":"活动","parent":null},
+         {"attribute_count":7,"group":"admin_ops","id":"后台角色","label":"后台角色","parent":null}]
+```
+
+### 4.3 新发现的出口（C4/C5）已验掉
+
+```text
+ontok ontology overview --project anspire_excl_r115 --version 4
+  业务总览
+  83 个对象 → 8 个业务概念（+ 0 个未归组对象）
+  …「管什么：客户主档、账号绑定关系、…」
+overview exit = 0
+ontok ontology overview --project anspire_excl_r115 --version 4 --json
+overview --json exit = 0
+```
+
+（C 轮之前这一条是 `⚠ 客户视图泄露了建模术语（出口 C4）：["key"]`、exit 2。）
+同一条 `scope_hint` 同时喂饱图与总览，而**导入闸**保证它客户安全。
+
+### 4.4 审核界面仍能看到 `scope_hint`
+
+`GET /api/review` 是内部轨（不过客户闸），条目 `payload` 原样给出：
+
+```text
+item kind=add_concept_group target=API 密钥与授权
+payload.scope_hint = 「…以及未持 Key 的试用请求。…」（导入前的原文）
+payload keys = display_name,evidence,extracted_by,key,members,scope_hint
+```
+
+---
+
+## 5 · 页面 / 折叠（第 1 轮交付，本轮只恢复组说明一行）
+
+| 功能 | 位置 |
+| --- | --- |
+| 组圈 + 组名 | `buildScene` 的 `g.gh` + `paint` 每帧算圆心/半径 |
+| 折叠 / 展开 | `FOLD` + `unitsOf`（`:418`）+ `setFold`（`:1076`）+ `foldAll`（`:1089`）+ `relayout`（`:983`） |
+| 聚合节点「组名 + N」 | `relayout` 拼 label，id `@g:<组 id>`；点它展开 |
+| 组面板 | `showGroups`（`:1139`）/ `showGroup` / `locateMember`（`:1184`）/ `scope_hint`（`:1160`） |
+| 组内聚拢 | `physicsStep` 里 `GRP_F`（`:300` / `:362`） |
+| 无组如实 | `updateGroupInfo`：`GROUPS.length === 0` ⇒ 「未分组」，零聚合节点 |
+
+折叠态节点数（`node tests/fixtures/req115/group_probe.js`，exit 0）：
+
+```text
+ALL PASS（折叠态 7 = 组 3 + 未分组 4）
+```
+
+REQ-114 布局探针复跑：`ALL PASS（168 帧 / 余量 15.79px / 5.20px）`。
+
+---
+
+## 6 · 折叠不改数据（AC-009）
+
+折叠是纯前端内存状态（`FOLD`），`setFold` / `foldAll` / `relayout` 函数体里没有
+`fetch(` / `ask(` / `api/`（探针断言）。同一版前后各导出一次：
+
+```text
+ttl1 = ttl2  = ACA259D906FA3819E847F313A8C0427DA3D3D6C7182BB6D287B67BBC2EDA6CB9
+show1 = show2 = FD2A916A568960B3E5A834CE28A98A172BFA7DE5CC74D55B98AE0F504E09FDF7
+```
+
+---
+
+## 7 · 测试与绕行
+
+### 7.1 数字
+
+```text
+lib   291 passed / 0 failed   （272 → 288 → 290 → 本轮 291：N-2 的复合词正反两面）
+doc     4 passed / 0 failed
+集成   75 个目标跑完 · 802 passed / 3 failed（3 条既有红灯见 §7.3）
+       另 1 个目标 tests/test_retained_names_req084.rs 因 Windows 绕行未编译（§7.2）
+       新增 tests/test_req115_groups.rs —— 13 passed / 0 failed
+       新增 tests/test_req115_import_gate.rs —— 2 passed / 0 failed（真进程 · N-1）
+```
+
+| 套件 | 结果 |
+| --- | --- |
+| `test_req115_groups`（13 条） | 13 passed |
+| `test_req115_import_gate`（**新增 2 条 · 真进程**） | 2 passed（§9.1） |
+| `test_req107_pipeline_bytes`（H1 重锚 + 其余 12 份） | 1 passed |
+| `test_req107_zero_visible_change`（SHA256SUMS 互校） | 3 passed |
+| `test_req107_source_enumeration`（写点/函数/模块登记） | 10 passed |
+| `test_req107_outlet_pipeline`（判据直调只许在管线/守门器） | 12 passed |
+| `test_graph_server`（页面守门 / 零外链 / 域层零 I/O） | 9 passed |
+| `test_req114` / `test_req115` Node 探针 | `ALL PASS` |
+
+> 口径：`lib 272 → 291` 只增不减；`doc 4` 不变；集成 76 个文件 = 75 跑 + 1 绕行。
+> 没有任何既有用例被删 / 被 `#[ignore]` / 被放宽。
+
+### 7.2 Windows 绕行双证
+
+`src/bin/ontok-gate-preflight.rs` 是 unix-only（`std::os::unix::fs::MetadataExt`），
+Windows 上编不过。按验收方式挪开，**finally 挪回**：
+
+```text
+sha256(before) = c7cf95e2a73b8c75bb44b1970396aca40f9146992d0c7dccb3636b3ba571322d
+src/bin/ontok-gate-preflight.rs  Test-Path = False   （测试期间）
+…
+src/bin/ontok-gate-preflight.rs  Test-Path = True    （跑完挪回，134877 字节）
+sha256(after)  = c7cf95e2a73b8c75bb44b1970396aca40f9146992d0c7dccb3636b3ba571322d
+```
+
+`git status --short` 无 `D` 行。代价：`test_retained_names_req084.rs` 用 `include_str!`
+引那份源文件 ⇒ **该套件编不过**（与 REQ-113/114 同一口径，既有红灯）。
+
+### 7.3 既有红灯（与本需求无关）
+
+```text
+drop_rate            → 缺 .review-workspace/fix-props/schema.json（fail-closed 输入不在版本控制内）
+test_fk_naming       → 同一份脱敏 schema 缺失
+test_agent_orchestration::test_cli_end_to_end_output_is_byte_identical_to_legacy_extract
+                     → REQ-108 分档路由带来的既有 CLI 端到端差异（REQ-112/113 已登记）
+test_retained_names_req084 → Windows 绕行导致编不过（同上，既有）
+```
+
+---
+
+## 8 · 已知限制 / 下一轮 / 仍需裁定
+
+### 8.1 设计缺陷（**已登记，下一轮拆字段**）
+
+> **一个字段两种用途**：`scope_hint` 既是**客户可见的组说明**（总览 `summary`、图上组说明），
+> 又被当成**内部备注**写（`suggest` 原来的「算法建议…待人审」）。
+
+- 本轮缓解：C-1（导入时过客户闸）+ C-2（`suggest` 不写客户字段）；
+- 根本修法：拆成 `scope_hint`（客户可见，过闸）+ **`review_note`**（内部轨，不过闸）。
+  要动 REQ-010 的 schema 与快照，**不在本轮**；
+- ⛔ 下一轮别再靠「某个出口删字段」来止血 —— 那只是把同一个病搬到另一个出口。
+
+### 8.2 仍需裁定：`groups[].key` → 线上 `id`
+
+AC-001 字面写 `groups: [{key, display_name, members[], reason?}]`，交付的是 `id`。
+`key` 是发布闸词表里的词，写成线上键名会让每次带分组的 `/api/graph` 被拒（500）。
+可选只有：改词表（红线禁）、叫 key 并接受 500、叫 id（`Node` 已有先例）。
+本轮维持第三条，并留了正反判据。**若 QA 要求逐字，请裁定改 AC 或放开 guard()。**
+
+### 8.3 AI 声明的处理方式（需用户执行一步）
+
+AI 那份声明的 `api_entitlement.scope_hint` 需要人把「未持 Key 的试用请求」改成
+「未持凭证的试用请求」（或任何客户安全的措辞），然后：
+
+```text
+ontok concept digest --file <file>     # 拿到新指纹
+# 把 history[-1].content_digest 改成新指纹
+ontok concept import --file <file> --project … --base-version …
+```
+
+**我们不替作者猜业务措辞**：报错已经点名到「组 + 字段 + 词条」；
+静默改写等于替声明作者做命名决定（也是本项目一直禁止的 fail-open）。
+
+### 8.4 其余已知限制（都已写进模块文档）
+
+1. **组成员只算图里看得见的**：真库现场 84 实体 → 83 节点；同名对象只顾第一个（REQ-093 L2）。
+2. **未做真浏览器手测**：组圈观感、折叠动画、组内引力手感只有源码级 + Node 探针。
+3. **`scope_hint` 不做 AI 命名**（需求「不做」列表）；它由声明作者写。
+
+---
+
+## 9 · 第 3 轮 · QA 复审补项（N-1 / P1-1 / N-2）
+
+### 9.1 N-1（**阻断**）：导入闸的接线用**真进程**钉住
+
+QA 实测：把 `src/cli.rs` 的 `scan_group_names` 调用点删掉（函数留着），
+`lib 290` 与 `test_req115_groups 13` **全绿** —— 与 REQ-114「探针数文本不看行为」同一类病。
+
+**新测试**：`tests/test_req115_import_gate.rs`（2 条，spawn 真 `ontok concept import`）：
+
+```text
+① dirty_scope_hint_is_rejected_by_the_real_import_process
+   声明：scope_hint = "…未持 Key 的试用请求"
+   → exit 1
+   → stderr: 组 `g1` 的 scope_hint 含建模术语 `key`
+   → proposals(project) 仍 = 0（校验在碰库之前）
+
+② clean_declaration_is_imported_by_the_real_import_process
+   声明：scope_hint = "…未持凭证的试用请求"
+   → exit 0 · stdout "共 1 个概念组"
+   → proposals(project) = 1（真的落库，防「通过」假绿）
+```
+
+**变异实测（有牙）**：把 `src/cli.rs` 的闸调用整段注释掉，再跑 ①：
+
+```text
+test dirty_scope_hint_is_rejected_by_the_real_import_process ... FAILED
+assertion `left == right` failed: 脏 scope_hint 必须 exit 1（否则闸根本没接线）
+stdout=概念声明 v1.0.0 已导入提案 p1（项目 t_req115gate_dirty_… · 基于 v1）—— 共 1 个概念组，待双轨审核
+  left: Some(0)
+ right: Some(1)
+test result: FAILED. 1 passed; 1 failed
+```
+
+恢复调用点后 `2 passed; 0 failed`（`src/cli.rs` 用 `git checkout` 还原，无残留标记）。
+
+### 9.2 P1-1：边界写准确（**不是回归，但旧数据仍 500**）
+
+现场：`anspire_excl_r115` **v3** 是 C-1 之前入库的脏快照（`scope_hint` 含「未持 Key」），
+它仍然 `GET /api/graph → 500` / `ontology overview → exit 2`（本轮实测 v3 = **500**，v4 = 200）。
+C-1 只挡**新导入**，读路径没改。
+
+**改前**（`src/domain/graph.rs` `Group` 文档）：
+
+```text
+/// 所以图上带它（与总览口径一致，C-3）。它之所以安全，是因为
+/// `concept import` 会先用客户发布闸判它（C-1：命中即拒不导入）——
+/// 不会出现「快照里有脏说明、出图时整份 500」。
+```
+
+**改后**：
+
+```text
+/// - **新导入**的声明不会把脏说明带进来 —— `concept import` 会先用客户发布闸判它
+///   （C-1：命中即拒不导入，报「组 + 字段 + 词条」）；
+/// - **已入库的旧快照仍按原行为拒发**（`/api/graph` 500、`ontology overview` exit 2）——
+///   读路径本轮没改，C-1 只挡新导入。要清理旧数据只能**重新导入**（改措辞、重算 digest）
+///   或**重建快照**；⛔ 别把这条写成「已封堵」。
+```
+
+同步改：`Group::display_name` 的注释（「坏组名在导入时被拒」→ 只对新声明成立）、
+`graph.rs` 的 L5 边界段、`tests/fixtures/req107/golden/PROVENANCE.txt`（同样写明
+「新导入」与「旧快照仍拒发 + 清理方式」）。
+
+### 9.3 N-2：词元级匹配（**保持现状，不改**）
+
+`scan_modeling_terms` 按「非字母数字/下划线」切词元、且 `_` 是词内字符 ⇒
+`api_key_group` 是一个词元 ≠ `key`，**不拒**；实测它也不会打挂图（200）。
+
+**裁定：保持现状**（导入闸与出图闸是同一把尺子 ⇒ 过得了 import 就不会 500）。
+⛔ 不改「含 key 字样就拒」——那会误伤 `api_key` / `license_key` 这些正常业务词。
+
+文档已写进 `src/domain/concept.rs::scan_group_names` 的「⚠️ 匹配是**词元级**的」一节，
+并加了单测 `test_compound_words_with_key_are_intentionally_not_hits`（正反两面：
+`api_key_group` / `license_key` / `order_key_ref` / `keyring_service` 放行；
+单独成词的 `Key` 仍必须被抓）。
