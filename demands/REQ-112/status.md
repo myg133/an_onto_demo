@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**进行中**（2026-10-21 开工）
+**待验证**（2026-10-21 · Dev 已交付 `444080f`，QA 审核中）
 
 ## 为什么 v1 不调用模型
 
@@ -27,3 +27,16 @@
 
 - [ ] Dev 实现（纯函数 + `/api/review` 带 suggestion + 页面）
 - [ ] QA
+
+## Dev 交付摘要
+
+| 项 | 结果 |
+| --- | --- |
+| 7 条规则 + 1 条空格兜底 | 全部实现，21 个测试 |
+| 真实数据建议分布（135 条） | **accept 29 · lean_accept 9 · review 14 · conflict 0 · reject 0 · none 83** |
+| 52 条关系 | accept 29 · lean 9 · review 14 |
+| 零模型调用 | `ONTOK_LLM_*` 清空后正常；源码 8 个 LLM needle **0 命中**（反向自检：同一套 needle 在 `ai_semantic.rs` 命中） |
+| 零写库 | `review show` 前后 sha256 逐字相同；`proposal_items` 全列 md5 相同 |
+| 测试 | lib 245 / doc 4 / 新增 21；32 基线套件 313 一条不少 |
+
+**BA 订正**：demand 原写「REQ-109 实测 3 条 5/5 却被判 0.0」——**当前数据 0 条**（fit=0.0 的三条全是 0/5）。已订正并登记 G1。
