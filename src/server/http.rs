@@ -27,6 +27,27 @@
 //! - ⛔ **没有开发模式开关**。缺环境变量 ⇒ 拒绝启动；令牌不符 ⇒ 401。
 //! - ⛔ 令牌**不出现在**任何响应体、页面源码、日志、错误信息里。
 //!
+//! # ⭐ REQ-110 · 门只挂在 `/api/*` 上（页面可达性）
+//!
+//! 收口前 `require_token` 是**全局 layer**，连 `GET /` 这个**静态页面壳**也拦。
+//! 后果是一个死循环：要看到页面得先有口令，要有口令得先看到页面
+//! （浏览器导航**不可能**带 `Authorization` 头）。
+//!
+//! 现在：
+//!
+//! | 路由 | token | 内容 |
+//! | --- | --- | --- |
+//! | `GET /` | **免** | **静态壳，不含任何本体数据**（项目名 / 版本 / 图都不是服务端渲染进去的） |
+//! | `GET /api/scope` | 必须 | 页面壳拿口令后问「看哪个项目、哪一版」 |
+//! | `GET /api/graph` / `/api/node` / `/api/ontology.ttl` | 必须 | 全部数据 |
+//!
+//! 代价：「未登录连有哪些路径都探测不到」变成「能探测到有个服务，但拿不到任何数据」。
+//! 判据**改写、没删**（`unauthenticated_probes_learn_nothing_but_the_shell_exists`），
+//! 取舍写进 `BA/decisions/ADR-004-页面可达性与门禁.md`。
+//!
+//! ⚠️ `/api/*` 下**未注册**的路径也走 401（`api` 子路由自带 fallback，
+//! 身份门排在它前面）—— `/api/` 这一层的路径探测仍然探测不到。
+//!
 //! # 只读的三层
 //!
 //! 1. 路由层：只注册 GET；
@@ -56,9 +77,20 @@ pub struct AppState {
     /// 节点标识 → 该对象的客户视图（`/api/node` 用）。
     nodes: Arc<BTreeMap<String, EntityView>>,
     graph: Arc<crate::domain::graph::GraphProjection>,
+    /// ⭐ REQ-110 · **已过前处理**（`pipeline::prepare_view`）的客户视图。
+    ///
+    /// `/api/ontology.ttl` 用它序列化 —— 与 `/api/graph` / `/api/node`
+    /// 取自**同一份**视图（不多不少），所以「页面看到的」与「导出的」一致。
+    view: Arc<CustomerView>,
     project: Arc<str>,
     version: i32,
     token: Arc<str>,
+    /// ⭐ REQ-110 · 快照里动作层（`ActionType`）的条数。
+    ///
+    /// **只**用于 TTL 文件头的有损声明（`ActionType 未导出：N 个`）——
+    /// 动作内容一个字节都不导出（OWL 无对应）。与 `--version` 一起冻结，
+    /// 所以 CLI 与 HTTP 的声明数字必然相同（AC-007 的逐字节比较依赖它）。
+    action_type_count: usize,
 }
 
 /// 起服务所需的参数。
@@ -73,11 +105,13 @@ pub struct ServeArgs {
 ///
 /// 冻结闸门与 `mcp::prepare` 同一条（fail-closed）：**未冻结不是降级服务，
 /// 是拒绝**。规格要求客户看的必须是定稿之后的东西。
+///
+/// 返回值第二项是快照里**动作层条数**（只供 TTL 文件头声明有损，不导出内容）。
 async fn load_frozen_view(
     pool: &sqlx::PgPool,
     project: &str,
     version: i32,
-) -> Result<CustomerView, ApiError> {
+) -> Result<(CustomerView, usize), ApiError> {
     let ps = PgProjectStore::new(pool.clone());
     let store = PgStore::new(pool.clone());
 
@@ -102,9 +136,11 @@ async fn load_frozen_view(
         .map_err(|e| ApiError::Store(e.to_string()))?
         .ok_or_else(|| ApiError::NoSnapshot(project.to_string(), version))?;
 
-    Ok(crate::domain::view::project(&crate::cli::snapshot_to_view(
-        &snap,
-    )))
+    let action_type_count = snap.action_types.len();
+    Ok((
+        crate::domain::view::project(&crate::cli::snapshot_to_view(&snap)),
+        action_type_count,
+    ))
 }
 
 /// 对外能给出的四种「拿不到」。
@@ -308,46 +344,125 @@ async fn get_node(
     )
 }
 
-/// 首页。
+/// 首页（**静态壳**，REQ-110）。
 ///
-/// # ⚠️ REQ-106 · 项目名过闸在**渲染之前**（AC-003）
+/// # ⛔ 壳里**没有**任何本体数据（R4 / AC-005）
 ///
-/// REQ-106 之前这里是 `Html(index_html(&state.project, state.version))`，
-/// 一条**零闸**的路：项目名原样进 JS 字面量，既不过 `mcp::tools::guard`，
-/// 也不转义。同一个出口家族里，`/api/graph` `/api/node` 走 [`guarded`]，
-/// MCP 侧走 `mcp::tools::guard` —— **只有首页没有**。
+/// 收口前这里是 `page::index_html(&state.project, state.version)`：项目名与版本
+/// **服务端渲染进 JS 字面量**。那等于「谁也拿不到页面」—— `require_token` 挂在
+/// 全局，浏览器导航又不可能带 `Authorization` 头。
 ///
-/// 现在判据在 [`crate::server::page::index_html`] 里，与其它出口**同一道**
-/// （`mcp::tools::guard` 本身，不是抄一份），且**转义**也在那里。
-/// 本函数只负责把 `Err` 变成**非 200**，⛔ 不自己再判一次。
+/// 现在 `/` 免 token，但壳里**零数据**：项目名 / 版本在拿口径之后走
+/// `GET /api/scope`（仍要 token）。于是「能探测到有个服务在」是唯一代价。
 ///
-/// 状态码取 [`StatusCode::INTERNAL_SERVER_ERROR`]：与 [`guarded`] 命中时同款 ——
+/// # 为什么仍然走管线 H1
 ///
-/// 项目名是**服务端绑定时的启动参数**（`--project`），不是请求方能传的参数，
-/// 所以它不合格**不是客户端的错**。返回 4xx 会把运维的错说成访客的错。
-///
-/// ⛔ 错误正文用 `guard` 的 `Err` 文案，**不要再拼词条**：`guard` 的 `Err`
-/// 按设计就不含任何建模术语（命中词只进 stderr）。
-async fn index(State(state): State<AppState>) -> Result<Html<String>, Response> {
-    match crate::server::page::index_html(&state.project, state.version) {
-        Ok(html) => {
-            // ⭐ REQ-107 · 出口 H1：整页在管线里过闸。
-            //
-            // 扫的是**渲染之后的整页**：模板本体（Z4）+ 已转义的项目名 + 静态文案
-            // 一次覆盖 —— 这是 AC-008 里 Z4「要不要运行时过闸」的答案：
-            // 不单独给模板来一遍（那会变成第二份判据遍历），而是让首页这条出口
-            // 把**最终字节**交给同一道闸。
-            match crate::domain::pipeline::render(
-                crate::domain::pipeline::OutletId::H1,
-                crate::domain::pipeline::Product::Text(html),
-            ) {
-                Ok(rendered) => Ok(Html(rendered.into_text())),
-                Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message())),
-            }
-        }
-        // 项目名的闸在 `page.rs` 里（与 MCP 侧 `instructions` 同一道）。
-        Err(msg) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, &msg)),
+/// 模板是常量，但它**是被渲染函数读取的静态素材**（Z4）。H1 把**最终字节**
+/// 交给同一道闸：将来谁往模板里写进一个建模术语，首页会当场拒发，
+/// 而不是「模板没人管」。这条与 REQ-107 的 AC-008 一致。
+async fn index() -> Result<Html<String>, Response> {
+    match crate::domain::pipeline::render(
+        crate::domain::pipeline::OutletId::H1,
+        crate::domain::pipeline::Product::Text(crate::server::page::index_html()),
+    ) {
+        Ok(rendered) => Ok(Html(rendered.into_text())),
+        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message())),
     }
+}
+
+/// ⭐ REQ-110 · `GET /api/scope` —— 页面壳拿口令后问「看哪个项目、哪一版」。
+///
+/// 为什么要这条：`/` 是静态壳（壳内零数据），而 `/api/graph` 要求
+/// `project` / `version` 查询参数。页面必须在**拿到口令之后**才知道作用域。
+///
+/// 仍受门禁：无 token ⇒ 401（身份门）；项目名含建模术语 ⇒ 500（发布闸 H5，
+/// 与首页从前那条「项目名过闸」是**同一道**判据，只是换了个出口）。
+async fn get_scope(State(state): State<AppState>) -> Result<Json<serde_json::Value>, Response> {
+    // ⭐ REQ-107 · 出口 H5：声明「客户 / JSON / **整份**」。
+    publish_json(
+        crate::domain::pipeline::OutletId::H5,
+        Ok(json!({
+            "project": state.project.as_ref(),
+            "version": state.version,
+        })),
+    )
+}
+
+/// ⭐ REQ-110 · `GET /api/ontology.ttl` —— 页面上的「导出 TTL」按钮打的就是这里。
+///
+/// # 与 CLI 是**同一条**序列化路径（纪律 H）
+///
+/// 这里与 `ontok ontology export` 调的是**同一个** `Product::CustomerTurtle`
+/// （→ `pipeline::render` → `ttl::serialize_customer`）。本函数只负责：
+/// ① 把管线的 `Err` 映射成 500；② 补 `Content-Type` / `Content-Disposition`。
+/// ⛔ 这里**没有**第二份 TTL 生成逻辑，也不碰 `state.view` 之外的任何数据。
+///
+/// # 为什么返回 `(HeaderMap, String)` 而不是手搓 `Response`
+///
+/// `Response::builder` / `.into_response()` / `Body::from(` 在出口层是**禁调**
+/// （`tests/test_req107_source_enumeration.rs` 的 F3/F4/B1）：响应体必须来自
+/// 管线产物。`(HeaderMap, String)` 由 axum 自己变成响应 —— 2xx 只可能来自
+/// `Ok(<管线产物>)` 这条分支。
+async fn get_ttl(State(state): State<AppState>) -> Result<impl IntoResponse, Response> {
+    let opts = crate::domain::ttl::TtlOptions {
+        project: state.project.as_ref(),
+        version: state.version,
+        base: crate::domain::ttl::DEFAULT_BASE,
+        action_type_count: state.action_type_count,
+    };
+    let rendered = match crate::domain::pipeline::render(
+        crate::domain::pipeline::OutletId::H4,
+        crate::domain::pipeline::Product::CustomerTurtle { view: &state.view, opts },
+    ) {
+        Ok(r) => r,
+        Err(e) if e.is_leak() => {
+            // `guard` 已经把命中的词条打到 stderr 了；这里只说「拒绝」。
+            eprintln!("✗ 只读图服务：TTL 导出命中发布闸，已拒绝导出。");
+            return Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message()));
+        }
+        Err(e) => {
+            eprintln!("✗ 只读图服务：TTL 导出生成失败：{}", e.message());
+            return Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.message()));
+        }
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/turtle; charset=utf-8"),
+    );
+    let name = ttl_file_name(state.project.as_ref(), state.version);
+    // `HeaderValue::from_str` 只在含非法字节时失败；文件名已经过白名单化，
+    // 这里仍然给出**可用的**兜底，而不是 `unwrap`（一个文件名不该让服务 panic）。
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("attachment")),
+    );
+    Ok((headers, rendered.into_text()))
+}
+
+/// 导出文件名：`<project>-v<n>.ttl`（R5）。
+///
+/// 项目名是**启动参数**，可能含引号 / 斜杠 / 非 ASCII —— `Content-Disposition`
+/// 里放原文就能改写响应头。这里只留 `[A-Za-z0-9._-]`，其余换 `_`。
+/// ⚠️ 代价：中文项目名会变成一串下划线；文件名只为「下载下来认得出」，
+/// 不承担标识职责（正文里的 `ontok:sourceProject` 才是原文）。
+fn ttl_file_name(project: &str, version: i32) -> String {
+    let mut s: String = project
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() {
+        s = "ontology".to_string();
+    }
+    format!("{s}-v{version}.ttl")
 }
 
 /// 只读服务对「你想改点什么」的**唯一**回答。
@@ -446,13 +561,31 @@ fn token_matches(presented: &str, expected: &str) -> bool {
 /// `.layer(map_response(normalize_405))` 是 P1 修复的另一半：已注册路径的
 /// 405 由 axum 自动产生（正文空），未注册路径的由 [`fallback`] 产生 ——
 /// 响应映射把两者**收口成同一句人话**（见 [`normalize_405`]）。
+///
+/// # ⭐ REQ-110 · 身份门只挂在 `/api` 子路由上
+///
+/// `GET /` 是**静态壳**（零数据），必须免 token —— 否则浏览器永远打不开页面
+/// （导航请求带不了 `Authorization` 头）。`/api/*` 全部仍 gated。
+///
+/// ⚠️ **身份门排在 `api` 的 fallback 之前**（`.layer` 加在已建好的子 Router 上）：
+/// 未注册的 `/api/xxx` 无口令同样是 401，不泄露「这个接口存不存在」。
+/// 带口令的未注册 `/api/xxx` 才是 404（那是**已授权的人**在问路，该说实话）。
 pub fn build_router(state: AppState) -> Router {
+    let api = Router::new()
+        .route("/graph", get(get_graph))
+        .route("/node", get(get_node))
+        // ⭐ REQ-110 · 页面壳取作用域（要 token；项目名在这里过发布闸）。
+        .route("/scope", get(get_scope))
+        // ⭐ REQ-110 · TTL 导出（要 token；与 `ontology export` 同一条序列化路径）。
+        .route("/ontology.ttl", get(get_ttl))
+        // 未注册的 `/api/*`：带口令 ⇒ 404 / 变更动词 ⇒ 405（正文由 `normalize_405` 补）。
+        .fallback(fallback)
+        .layer(middleware::from_fn_with_state(state.clone(), require_token));
+
     Router::new()
         .route("/", get(index))
-        .route("/api/graph", get(get_graph))
-        .route("/api/node", get(get_node))
+        .nest("/api", api)
         .fallback(fallback)
-        .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(middleware::map_response(normalize_405))
         .with_state(state)
 }
@@ -475,6 +608,7 @@ pub fn state_from_view(
     project: &str,
     version: i32,
     token: &str,
+    action_type_count: usize,
 ) -> AppState {
     // ── REQ-104 · 出口层属性级剔除 ──
     //
@@ -523,9 +657,14 @@ pub fn state_from_view(
     AppState {
         nodes: Arc::new(nodes),
         graph: Arc::new(graph),
+        // ⭐ REQ-110：TTL 导出与页面/图共用**这份已过前处理的视图**。
+        // 存的是 `filtered.view` 本身（不是再投影一次），所以「导出的属性」
+        // 与「`/api/node` 给的属性」不可能分叉。
+        view: Arc::new(filtered.view),
         project: Arc::from(project),
         version,
         token: Arc::from(token),
+        action_type_count,
     }
 }
 
@@ -549,20 +688,31 @@ pub async fn serve(pool: &sqlx::PgPool, args: ServeArgs) -> anyhow::Result<()> {
         );
     }
 
-    let view = load_frozen_view(pool, &args.project, args.version)
+    let (view, action_type_count) = load_frozen_view(pool, &args.project, args.version)
         .await
         .map_err(|e| anyhow::anyhow!("只读图服务拒绝启动：{}", e.message()))?;
 
     // ⚠️ 接线**只有这一处**：`state_from_view` 同时被 `serve()`（这里）
     // 与 `server::http::tests` 调用。测试**不得**自己另搭一份 AppState ——
     // 上一轮就是这么写的，结果测试完全不守护生产（纪律 H，见该函数文档）。
-    let state = state_from_view(&view, &args.project, args.version, &token);
+    let state = state_from_view(
+        &view,
+        &args.project,
+        args.version,
+        &token,
+        action_type_count,
+    );
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     eprintln!(
-        "· 只读图服务就绪：项目 {} 第 {} 版（只读 · 需访问口令）",
+        "· 只读图服务就绪：项目 {} 第 {} 版（只读 · 页面壳免口令，/api/* 需访问口令）",
         args.project, args.version
+    );
+    // REQ-110：页面壳不再内嵌作用域，故这里把「打开哪个地址」直接打出来。
+    eprintln!(
+        "· 浏览器打开 http://{}/ ，在页面顶部填口令；页面壳本身不含任何本体数据。",
+        args.bind
     );
     axum::serve(listener, app)
         .await
@@ -584,9 +734,12 @@ mod tests {
                 nodes: vec![],
                 edges: vec![],
             }),
+            // REQ-110：TTL 导出的数据面与图/节点共用同一份（这里是一份空视图）。
+            view: Arc::new(CustomerView { objects: vec![], relations: vec![] }),
             project: Arc::from("demo3"),
             version: 2,
             token: Arc::from(TOKEN),
+            action_type_count: 0,
         }
     }
 
@@ -605,6 +758,32 @@ mod tests {
             }),
             ..st()
         }
+    }
+
+    /// 一份**客户视图里的说明带建模术语**的状态 —— TTL 导出必须拒发（AC-002）。
+    ///
+    /// ⚠️ 说明的措辞**刻意不含 ASCII 标识符**（`order_no` 那类）：那会被
+    /// `property_filter` 当成「技术串」把整段说明隐去（REQ-104），
+    /// 于是发布闸根本看不到它 —— 测得的就是**前处理**而不是**闸**。
+    /// `主键服务中心` 是 REQ-104 文档里点名的「剔不掉、会到达闸门」的形态。
+    fn st_with_poisoned_note() -> AppState {
+        use crate::domain::view::{EntityView, PropertyView};
+        let view = CustomerView {
+            objects: vec![EntityView {
+                name: "订单".into(),
+                note: Some("本表的主键服务中心，按业务口径解读".into()),
+                belongs_to: None,
+                aliases: vec![],
+                properties: vec![PropertyView {
+                    name: "订单号".into(),
+                    note: None,
+                    required: true,
+                    sample: None,
+                }],
+            }],
+            relations: vec![],
+        };
+        state_from_view(&view, "demo3", 2, TOKEN, 0)
     }
 
     /// 打一发请求。`oneshot` 的错误类型是 `Infallible`，所以这里 `expect`
@@ -639,12 +818,25 @@ mod tests {
 
     // ── AC-004 · 无身份拿不到数据 ─────────────────────────
 
+    /// ⭐ REQ-110：页面壳免 token（否则浏览器永远打不开），**其它全部 401**。
+    ///
+    /// 这是 REQ-093 原判据「无 token 一律 401」的**收窄版**：
+    /// `/` 从 401 变 200 是**需求要求的**（AC-005），不是判据放宽 ——
+    /// 每一条 `/api/*` 仍然逐条断言 401。
     #[tokio::test]
-    async fn without_token_every_endpoint_is_401() {
+    async fn without_token_the_shell_is_public_but_every_api_is_401() {
+        // ① 壳：200（且不含数据 —— 见 AC-005 的独立判据）。
+        assert_eq!(
+            call_status(st(), "GET", "/", None).await,
+            StatusCode::OK,
+            "页面壳必须免 token 可打开（ADR-004）"
+        );
+        // ② 数据面：一条都不许漏。
         for uri in [
-            "/",
             "/api/graph?project=demo3&version=2",
             "/api/node?project=demo3&version=2&id=订单",
+            "/api/scope",
+            "/api/ontology.ttl",
         ] {
             let s = call_status(st(), "GET", uri, None).await;
             assert_eq!(s, StatusCode::UNAUTHORIZED, "{uri} 应当 401");
@@ -776,76 +968,72 @@ mod tests {
         assert_eq!(s, StatusCode::NOT_FOUND);
     }
 
-    /// ⛔ **身份门必须排在路由前面**。
+    /// ⛔ **身份门必须排在 `/api` 的 fallback 前面**。
     ///
-    /// 否则没口令的人可以用「405 还是 404」把**哪些路径存在**一个个试出来 ——
-    /// 这本身是一条信息泄露。正确顺序：无口令一律 401，
-    /// 连「这个接口存不存在」都不告诉它。
+    /// # ⭐ REQ-110 · AC-010：这条判据**改写、没删**（原判据「未登录探测不到任何路径」）
+    ///
+    /// 原判据要求 `/` 也无口令 401 —— 那正是「浏览器打不开页面」这个障碍的成因。
+    /// 改写后的判据：
+    ///
+    /// | 请求 | 期望 | 理由 |
+    /// | --- | --- | --- |
+    /// | `GET /` | **200** | 静态壳，**不含任何数据**（ADR-004 的取舍） |
+    /// | `GET /api/…`（含**未注册**的） | **401** | `/api` 这一层的路径探测仍然探测不到 |
+    /// | `POST /api/…` | **401**（不是 405） | 变更动词也不许泄露「这个 API 存不存在」 |
+    ///
+    /// ⇒ 代价被**精确**记录：能探测到「有个服务在」，探测不到「它有哪些接口、里面是什么」。
     #[tokio::test]
-    async fn unauthenticated_probes_cannot_discover_which_paths_exist() {
+    async fn unauthenticated_probes_learn_nothing_but_the_shell_exists() {
+        // 壳：公开，但只是一张空壳。
+        let r = call(st(), "GET", "/", None).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let body = body_of(r).await;
+        assert!(
+            body.contains("业务关系图") && !body.contains("demo3"),
+            "壳必须能打开、且不含项目名：{body}"
+        );
+
         for (m, uri) in [
             ("GET", "/api/graph"),
             ("GET", "/api/definitely-not-a-route"),
             ("POST", "/api/apply"),
-            ("DELETE", "/"),
+            ("DELETE", "/api/node"),
         ] {
             let s = call_status(st(), m, uri, None).await;
             assert_eq!(
                 s,
                 StatusCode::UNAUTHORIZED,
-                "{m} {uri} 无口令时应当 401（不该泄露该路径是否存在）"
+                "{m} {uri} 无口令时应当 401（不该泄露该 API 是否存在）"
             );
         }
     }
 
-    // ── REQ-106 · AC-003 / AC-004：首页的项目名注入面 ─────────────
+    // ── REQ-106 · AC-003 / AC-004：项目名的转义面与闸门面 ─────────
+    //
+    // ⭐ REQ-110 改道（**判据保留、断言改写**）：
+    //
+    // 项目名不再进页面（`/` 是静态壳，AC-005 要求壳里零数据），于是
+    // 「注入面」与「闸门面」从**首页**搬到了 `/api/scope` —— 那是今天**唯一**
+    // 把项目名送回客户端的出口（H5，gated）。
     //
     // ⚠️ 这一组**刻意不碰数据库**：项目名是 `serve()` 绑定的启动参数，
-    // 闸门与转义都发生在**渲染之前**，所以用 `state_from_view`（生产接线）
-    // 造一个空视图就够判据用 —— 与共享集群的连接占用完全解耦。
+    // 所以用 `state_from_view`（生产接线）造一个空视图就够判据用。
 
-    /// 项目名**故意带注入串**时的服务端状态。走**生产接线**
+    /// 项目名（及动作层条数）**故意带注入串**时的服务端状态。走**生产接线**
     /// [`state_from_view`]，⛔ 不手搓 `AppState`（REQ-093 P1 防护的同一条：
     /// 生产接线与测试接线不可能分叉）。
     fn st_named(project: &str) -> AppState {
-        crate::server::http::state_from_view(
-            &CustomerView {
-                objects: vec![],
-                relations: vec![],
-            },
-            project,
-            2,
-            TOKEN,
-        )
+        state_from_view(&CustomerView { objects: vec![], relations: vec![] }, project, 2, TOKEN, 0)
     }
 
-    /// 页面里 `project: <字面量>, version:` 那一段的字面量原文。
+    /// ⛔ **注入面**（REQ-106 AC-003 的改写版）：项目名含 `"` / `\` / `</script>`
+    /// 时，页面壳**一个字节都不受影响** —— 因为壳里压根没有它；
+    /// 而 `/api/scope` 返回的 JSON 必须能被原样解析回**完全一样的**项目名。
     ///
-    /// 断言它**能被 `serde_json` 原样解析回项目名** —— 这是「JS 结构没被破坏」
-    /// 最强的一条：解析失败就是字面量坏了；解析回来不等于原名就是转义错了。
-    fn project_literal(html: &str) -> &str {
-        const HEAD: &str = "var who = { project: ";
-        const TAIL: &str = ", version: ";
-        let start = html
-            .find(HEAD)
-            .unwrap_or_else(|| panic!("页面里没有 who 的定义"))
-            + HEAD.len();
-        let end = start
-            + html[start..]
-                .find(TAIL)
-                .unwrap_or_else(|| panic!("who 的定义被截断了 —— 字面量没闭合"));
-        &html[start..end]
-    }
-
-    /// ⛔ **注入面**：项目名含 `"` / `\` / `</script>` 时，
-    /// 页面必须仍是**合法 HTML**，JS 结构不被破坏。
-    ///
-    /// 覆盖两种坏法：
-    /// - **JS 层**（`"` `\` `;`）⇒ 改写 `var who = {...}` 的结构；
-    /// - **HTML 层**（`</script>` `<!--`）⇒ HTML 解析器先于 JS 解析器
-    ///   结束脚本块，`serde_json` 转义救不了它（正斜杠 JSON 不转义）。
+    /// 断言从「页面结构标记数量不变」换成更强的版本：
+    /// **壳的字节与项目名逐字节无关**（任意项目名下 `GET /` 的响应体完全相同）。
     #[tokio::test]
-    async fn a_hostile_project_name_cannot_break_the_page() {
+    async fn a_hostile_project_name_cannot_break_the_shell_or_the_scope_json() {
         let hostiles = [
             r#"has"quote"#,
             r"has\backslash",
@@ -855,92 +1043,78 @@ mod tests {
             "换行\n与\r回车",
             " 控制符",
         ];
-        // 对照组：干净页面，用来比「结构标记的数量」。
-        // ⛔ 没有它，上面的断言可能只是「页面变短了」也照样绿（纪律 E）。
-        let clean_status = call_status(st_named("demo3"), "GET", "/", Some(TOKEN)).await;
-        assert_eq!(
-            clean_status,
-            StatusCode::OK,
-            "对照组本身必须是 200，否则下面全是空转"
-        );
-        let clean = body_of(call(st_named("demo3"), "GET", "/", Some(TOKEN)).await).await;
+        // 对照组：干净项目名。⛔ 没有它，下面的「字节相同」可能只是「都空」。
+        let clean_status = call_status(st_named("demo3"), "GET", "/", None).await;
+        assert_eq!(clean_status, StatusCode::OK, "对照组本身必须是 200，否则下面全是空转");
+        let clean = body_of(call(st_named("demo3"), "GET", "/", None).await).await;
+        assert!(clean.len() > 1000, "壳短得不像页面：{} 字节", clean.len());
 
         for hostile in hostiles {
-            let r = call(st_named(hostile), "GET", "/", Some(TOKEN)).await;
-            assert_eq!(
-                r.status(),
-                StatusCode::OK,
-                "项目名 {hostile:?} 不含建模术语，页面应当照常出"
-            );
+            // ① 壳：**免 token**、200、且与项目名逐字节无关。
+            let r = call(st_named(hostile), "GET", "/", None).await;
+            assert_eq!(r.status(), StatusCode::OK, "页面壳不该受项目名影响");
             let html = body_of(r).await;
-
-            // ① 字面量能原样解析回项目名 ⇒ JS 结构完好。
             assert_eq!(
-                serde_json::from_str::<String>(project_literal(&html)).unwrap_or_else(|e| {
-                    panic!("项目名 {hostile:?} 的字面量解析失败：{e}\n字面量：{}", project_literal(&html))
-                }),
-                hostile,
-                "项目名 {hostile:?} 应当被正确转义后原样还原"
+                html, clean,
+                "项目名 {hostile:?} 改变了页面壳的字节 —— 壳里不该有项目名"
             );
+            assert!(!html.contains(hostile), "项目名 {hostile:?} 原样落进了壳里");
 
-            // ② HTML 层结构标记的数量**逐个不变** ⇒ 没有多出/少掉脚本块。
-            //    注意 `<script>` 在页面上本来就出现多次，所以比的是**数量**。
-            for mark in ["<script>", "</script>", "<style>", "</html>", "<body"] {
-                assert_eq!(
-                    html.matches(mark).count(),
-                    clean.matches(mark).count(),
-                    "项目名 {hostile:?} 改变了结构标记 `{mark}` 的数量 —— 脚本块被改坏了"
-                );
-            }
-
-            // ③ 注入的原串**没有**原样出现在页面里。
-            assert!(
-                !html.contains("</script><script>") && !html.contains("fetch(\"//evil"),
-                "项目名 {hostile:?} 有一部分原样落进了页面"
+            // ② `/api/scope`：JSON 里的项目名必须能原样还原（serde 转义面）。
+            let r = call(st_named(hostile), "GET", "/api/scope", Some(TOKEN)).await;
+            assert_eq!(r.status(), StatusCode::OK, "干净（不含守门词）的项目名应当出 /api/scope");
+            let body = body_of(r).await;
+            let v: serde_json::Value = serde_json::from_str(&body)
+                .unwrap_or_else(|e| panic!("{hostile:?} 的 /api/scope 不是合法 JSON：{e}\n{body}"));
+            assert_eq!(
+                v["project"].as_str(),
+                Some(hostile),
+                "项目名 {hostile:?} 必须被正确转义后原样还原"
             );
         }
     }
 
-    /// ⛔ **闸门面**：项目名含建模术语 ⇒ 首页**拒绝出页面**（非 200）。
+    /// ⛔ **闸门面**（REQ-106 AC-004 的改写版）：项目名含建模术语 ⇒
+    /// `/api/scope` **拒绝出内容**（非 200），且守门词不回声。
     ///
-    /// 与 `instructions()` / `guarded()` 同一口径：同一份项目名在 MCP 侧
-    /// 本来就过闸，只有首页没有 —— 这条测试钉住的是「现在有了」。
+    /// 与 `instructions()` / `guarded()` 同一口径：项目名不受快照投影约束，
+    /// 所以每条把它送出去的出口都要过闸 —— 今天就是 H5。
     #[tokio::test]
-    async fn a_project_name_with_modeling_terms_is_refused_on_the_homepage() {
+    async fn a_project_name_with_modeling_terms_is_refused_on_the_scope_endpoint() {
         for bad in ["外键", "基数", "主键", "证据"] {
             let name = format!("demo{bad}demo");
-            let r = call(st_named(&name), "GET", "/", Some(TOKEN)).await;
+            let r = call(st_named(&name), "GET", "/api/scope", Some(TOKEN)).await;
             assert!(
                 !r.status().is_success(),
-                "项目名含 {bad:?} 应当被首页拒绝，实际 {:?}",
+                "项目名含 {bad:?} 应当被 /api/scope 拒绝，实际 {:?}",
                 r.status()
             );
             let b = body_of(r).await;
-            assert!(
-                !b.contains(bad),
-                "守门词 {bad:?} 本身不许从错误响应里漏出去：{b}"
-            );
+            assert!(!b.contains(bad), "守门词 {bad:?} 本身不许从错误响应里漏出去：{b}");
+            assert!(!b.contains(&name), "整个项目名也不许从错误响应里漏出去：{b}");
         }
     }
 
     /// 对照组（纪律 E）：**干净的项目名必须过得去**。
-    /// 没有这条，上一条全绿也可能只是「所有首页都被拒了」。
+    /// 没有这条，上一条全绿也可能只是「所有 scope 请求都被拒了」。
     #[tokio::test]
-    async fn a_clean_project_name_still_serves_the_homepage() {
-        let r = call(st_named("demo3"), "GET", "/", Some(TOKEN)).await;
+    async fn a_clean_project_name_still_serves_the_scope() {
+        let r = call(st_named("demo3"), "GET", "/api/scope", Some(TOKEN)).await;
         assert_eq!(r.status(), StatusCode::OK);
         let b = body_of(r).await;
-        assert!(b.contains("demo3"), "页面应带上项目名");
+        assert!(b.contains("demo3"), "/api/scope 应带上项目名：{b}");
+        assert!(b.contains("\"version\":2"), "/api/scope 应带上版本号：{b}");
     }
 
-    /// 对照组（纪律 E）：没有访问口令时，首页**同样**是 401 ——
-    /// 闸门不能变成一条绕过身份门的路。
+    /// 对照组（纪律 E）：**免 token 的壳不许成为绕过身份门的路**。
+    ///
+    /// 壳公开 ≠ 数据公开：唯一携带项目名的 `/api/scope` 仍然必须 401。
     #[tokio::test]
-    async fn the_homepage_gate_does_not_bypass_the_token_gate() {
+    async fn the_public_shell_does_not_open_the_scope_endpoint() {
         assert_eq!(
-            call_status(st_named("demo外键demo"), "GET", "/", None).await,
+            call_status(st_named("demo外键demo"), "GET", "/api/scope", None).await,
             StatusCode::UNAUTHORIZED,
-            "无口令应当先被身份门拦下"
+            "无口令时 /api/scope 应当被身份门拦下（壳公开不改变这一点）"
         );
     }
 
@@ -1083,7 +1257,7 @@ mod tests {
     #[tokio::test]
     async fn every_node_including_duplicates_opens_with_a_matching_attribute_count() {
         // ⛔ 生产接线，不是复刻品
-        let state = state_from_view(&view_with_duplicate_names(), "demo3", 2, TOKEN);
+        let state = state_from_view(&view_with_duplicate_names(), "demo3", 2, TOKEN, 0);
         assert_eq!(
             state.graph.nodes.len(),
             3,
@@ -1123,7 +1297,7 @@ mod tests {
     /// 现在直接比对**同一份 `state`** 的两端。
     #[tokio::test]
     async fn the_graph_endpoint_and_the_node_endpoint_agree_on_every_id() {
-        let state = state_from_view(&view_with_duplicate_names(), "demo3", 2, TOKEN);
+        let state = state_from_view(&view_with_duplicate_names(), "demo3", 2, TOKEN, 0);
         let app = build_router(state.clone());
 
         // ① 走真实路由，取回 /api/graph 序列化出去的 id
@@ -1194,6 +1368,199 @@ mod tests {
         }
         out
     }
+
+    // ── ⭐ REQ-110 · TTL 导出与页面可达性（AC-002/004/005/006/007）──
+
+    /// 一份**小而真**的客户视图（含父子关系、必填/可选、说明）。
+    fn ttl_sample_view() -> CustomerView {
+        use crate::domain::view::{EntityView, PropertyView, RelationView};
+        CustomerView {
+            objects: vec![
+                EntityView {
+                    name: "订单".into(),
+                    note: Some("一张订单".into()),
+                    belongs_to: None,
+                    aliases: vec![],
+                    properties: vec![
+                        PropertyView {
+                            name: "下单时间".into(),
+                            note: None,
+                            required: true,
+                            sample: Some("2026-01-01".into()),
+                        },
+                        PropertyView { name: "金额".into(), note: Some("含税".into()), required: false, sample: None },
+                    ],
+                },
+                EntityView {
+                    name: "客户".into(),
+                    note: None,
+                    belongs_to: None,
+                    aliases: vec!["主顾".into()],
+                    properties: vec![],
+                },
+            ],
+            relations: vec![RelationView {
+                from: "订单".into(),
+                to: "客户".into(),
+                how_many: "多对一".into(),
+                meaning: "归属于".into(),
+            }],
+        }
+    }
+
+    /// AC-004：三种请求的状态码与响应头**逐项**断言。
+    #[tokio::test]
+    async fn ac004_ttl_endpoint_is_gated_and_sets_turtle_headers() {
+        let state = state_from_view(&ttl_sample_view(), "demo3", 2, TOKEN, 0);
+
+        // ① 无 token ⇒ 401。
+        assert_eq!(
+            call_status(state.clone(), "GET", "/api/ontology.ttl", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+        // ② 错 token ⇒ 401。
+        assert_eq!(
+            call_status(state.clone(), "GET", "/api/ontology.ttl", Some("nope")).await,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // ③ 正确 token ⇒ 200 + 两个头。
+        let r = call(state, "GET", "/api/ontology.ttl", Some(TOKEN)).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(
+            r.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+            Some("text/turtle; charset=utf-8"),
+            "Content-Type 必须是 text/turtle"
+        );
+        assert_eq!(
+            r.headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok()),
+            Some(r#"attachment; filename="demo3-v2.ttl""#),
+            "文件名口径见 R5"
+        );
+        let body = body_of(r).await;
+        assert!(body.starts_with("@prefix : <https://ontok.local/demo3#> ."), "{body}");
+        assert!(body.contains("a owl:Class"), "{body}");
+    }
+
+    /// AC-005：用 `secretproj` / 第 7 版起状态，`GET /` **免 token** 且
+    /// 响应体里**没有任何本体数据**（项目名 / 版本 / 对象名）。
+    #[tokio::test]
+    async fn ac005_the_shell_carries_no_data_for_secretproj() {
+        use crate::domain::view::EntityView;
+        let view = CustomerView {
+            objects: vec![EntityView {
+                name: "绝密对象".into(),
+                note: Some("绝密说明".into()),
+                belongs_to: None,
+                aliases: vec![],
+                properties: vec![],
+            }],
+            relations: vec![],
+        };
+        let state = state_from_view(&view, "secretproj", 7, TOKEN, 0);
+
+        let r = call(state, "GET", "/", None).await;
+        assert_eq!(r.status(), StatusCode::OK, "`/` 必须免 token 可打开");
+        let body = body_of(r).await;
+        // 交付证据（`cargo test -- --nocapture` 可见）：这次检查的**实际结果**。
+        eprintln!(
+            "AC-005 现场：project=secretproj version=7 · GET / 无 token = 200 · \
+             shell={} 字节 · grep「secretproj」={} 「绝密对象」={} 「第 <b>7</b> 版」={} · \
+             body==INDEX_HTML：{}",
+            body.len(),
+            body.contains("secretproj"),
+            body.contains("绝密对象"),
+            body.contains("第 <b>7</b> 版"),
+            body == crate::server::page::index_html(),
+        );
+        for bad in ["secretproj", "绝密对象", "绝密说明"] {
+            assert!(!body.contains(bad), "页面壳里出现了 `{bad}` —— 壳必须零数据：{body}");
+        }
+        // 版本号也不能以作用域的形式出现（壳里没有 `who`/`SCOPE` 的字面量）。
+        assert!(!body.contains("secretproj"), "{body}");
+        assert!(!body.contains("第 <b>7</b> 版"), "{body}");
+        // 反向：壳**就是**那一份静态模板（逐字节），没有服务端拼装的数据。
+        assert_eq!(body, crate::server::page::index_html(), "壳的字节必须与模板完全一致");
+    }
+
+    /// AC-002：客户视图的说明里带「主键」⇒ TTL 导出**拒绝**（HTTP 500 + 不含词条）。
+    #[tokio::test]
+    async fn ac002_a_poisoned_note_is_refused_on_the_ttl_endpoint() {
+        let r = call(st_with_poisoned_note(), "GET", "/api/ontology.ttl", Some(TOKEN)).await;
+        assert_eq!(
+            r.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "客户视图导出必须过守门器（AC-002）"
+        );
+        let b = body_of(r).await;
+        assert!(!b.contains("主键"), "守门词不许从错误响应漏出：{b}");
+        assert!(!b.contains("订单"), "拒绝时不许顺带把视图数据发出去：{b}");
+        assert!(!b.contains("@prefix"), "拒绝时必须一个正文字节都不给：{b}");
+    }
+
+    /// AC-006：其它 API 仍全部 gated —— 逐个断言。
+    #[tokio::test]
+    async fn ac006_every_data_api_is_still_gated() {
+        let state = state_from_view(&ttl_sample_view(), "demo3", 2, TOKEN, 0);
+        for uri in [
+            "/api/graph?project=demo3&version=2",
+            "/api/node?project=demo3&version=2&id=订单",
+            "/api/ontology.ttl",
+            "/api/scope",
+        ] {
+            assert_eq!(
+                call_status(state.clone(), "GET", uri, None).await,
+                StatusCode::UNAUTHORIZED,
+                "{uri} 无 token 必须 401"
+            );
+        }
+    }
+
+    /// AC-007：页面上「导出 TTL」下载到的字节 == CLI 导出的字节（**逐字节**）。
+    ///
+    /// CLI 那条路的出口是 `publish_customer(OutletId::C6, …)` + `emit_domain_text`
+    /// （`emit_domain_text` 写的就是 `OutletRender::as_str()`，不补换行）；
+    /// HTTP 那条路是 `OutletId::H4` 的响应体。两条都走 `Product::CustomerTurtle`。
+    /// 这里直接比**字节**（比 sha256 更强），并顺手钉住 `filter_view` 的幂等性
+    /// （HTTP 的 `state.view` 已剔过一次，管线里又剔一次）。
+    #[tokio::test]
+    async fn ac007_http_and_cli_ttl_bytes_are_identical() {
+        let view = ttl_sample_view();
+        let state = state_from_view(&view, "demo3", 2, TOKEN, 0);
+
+        let opts = crate::domain::ttl::TtlOptions {
+            project: "demo3",
+            version: 2,
+            base: crate::domain::ttl::DEFAULT_BASE,
+            action_type_count: 0,
+        };
+        let cli_bytes = crate::domain::pipeline::render(
+            crate::domain::pipeline::OutletId::C6,
+            crate::domain::pipeline::Product::CustomerTurtle { view: &view, opts },
+        )
+        .expect("干净视图必须过闸")
+        .into_text();
+
+        let r = call(state, "GET", "/api/ontology.ttl", Some(TOKEN)).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let http_bytes = body_of(r).await;
+        assert_eq!(http_bytes, cli_bytes, "HTTP 下载的字节必须与 CLI 导出逐字节相同");
+        assert!(!http_bytes.is_empty());
+    }
+
+    /// ⛔ 壳里**不许**出现本体数据这件事本身要有反空转：
+    /// 上面 AC-005 的 `body == index_html()` 若模板恰好是空串也会绿。
+    #[test]
+    fn the_shell_template_is_not_vacuous() {
+        let html = crate::server::page::index_html();
+        assert!(html.len() > 1000, "壳只有 {} 字节 —— 多半读错了", html.len());
+        assert!(html.contains("<svg"), "壳里没有画布");
+        assert!(html.contains("api/ontology.ttl"), "壳里没有导出按钮的落点");
+    }
+
+
 
     // ── 令牌比较 ──────────────────────────────────────────
 

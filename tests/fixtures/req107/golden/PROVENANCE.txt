@@ -12,3 +12,10 @@ b714f48
 # C2 复用 C1_html.txt：ontology show --html --out 与 stdout 分支写的是**同一份** page.html。
 # Z1（GET /api/graph?project=wrong&version=2）**不在**本 golden 集：AC-006 要求它的 400 正文变化，
 # 而 AC §七 A2 裁定那是**唯一**允许的可见变化。
+#
+# ⭐ REQ-110 重锚 H1_index.html（其余 12 份仍是 b714f48 的产物，逐字节未动）：
+#   R4/AC-005 要求 `GET /` 是**静态壳、壳内零数据**（项目名/版本不再服务端渲染），
+#   于是 H1 的字节**必然**变化 —— 这是需求要求的可见变化，不是 golden 漂移。
+#   新 H1 的字节 = `src/server/page.rs` 的 `INDEX_HTML` 常量本身
+#   （H1 走管线 `Product::Text`，干净模板过闸后逐字节返回），sha256 已同步进 SHA256SUMS。
+#   ⛔ 别「为了让它对上」手改 H1：要改就改模板，再按同一条生成方式重锚并更新 sha256。

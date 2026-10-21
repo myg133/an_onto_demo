@@ -293,14 +293,45 @@ pub enum OntologyCmd {
         #[arg(long)]
         sampling: Option<PathBuf>,
     },
+    /// ⭐ REQ-110 · **导出 TTL（OWL Turtle）** —— 产品自己就能导出，不再靠外部脚本。
+    ///
+    /// 默认导出**客户视图**（页面看到什么就导出什么，R1）；
+    /// 带 `--model-view` 导出**建模视图**（含 key / 列名 / 基数 / 语义，供 FDE 用）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok ontology export --project demo3 --version 2 --out demo3-v2.ttl
+    ///
+    /// 同一版本连续导出两次**逐字节相同**（不写生成时间）；客户视图导出**过守门器**，
+    /// 命中建模术语时以退出码 2 拒绝（词条只进 stderr）。文件头显式声明有损项
+    /// （ActionType 未导出 / semantic 降级为注释 / cardinality 只映射两种特征）。
+    Export {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 第几版
+        #[arg(long)]
+        version: i32,
+        /// 导出**建模视图**（默认是客户视图）
+        #[arg(long)]
+        model_view: bool,
+        /// 输出路径。省略则打到标准输出
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// IRI 基（本体 IRI = `<base><project>`，前缀 = `<base><project>#`）
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
+        /// 导出格式。今天只有 `ttl`（Turtle）；写别的值**直接报错**，不静默回退
+        #[arg(long, default_value = "ttl")]
+        format: String,
+    },
     /// 比较两个版本
     Diff {
         #[arg(long)]
         project: String,
         a: i32,
         b: i32,
-    },
-    /// REQ-010 · **业务总览**（按概念出总览；一个组都没有时退化成对象清单）
+    },    /// REQ-010 · **业务总览**（按概念出总览；一个组都没有时退化成对象清单）
     Overview {
         #[arg(long)]
         project: String,
@@ -1733,6 +1764,82 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                     "⚠ 总览有 {} 处降级已写进输出（未静默略过），详见末尾说明",
                     ov.notes.len()
                 );
+            }
+        }
+        // ⭐ REQ-110 · TTL 导出。
+        //
+        // # 唯一的一条序列化路径（纪律 H）
+        //
+        // 两条分支（stdout / `--out`）都只消费 `publish_customer` 的返回值 ——
+        // 序列化、前处理、发布闸**全在管线里**，本函数体里没有第二份 TTL 生成逻辑。
+        // HTTP 的 `/api/ontology.ttl` 走的是**同一个** `Product::CustomerTurtle`，
+        // 所以「页面下载的」与「CLI 导出的」是同一批字节（AC-007）。
+        OntologyCmd::Export { project, version, model_view, out, base, format } => {
+            // 格式是**显式**参数：认不出就报错，不静默回退成 ttl（fail-closed）。
+            if format != "ttl" {
+                anyhow::bail!(
+                    "只支持 --format ttl（Turtle）。收到 {format:?} —— 本轮不做 RDF 导入，也没有别的导出格式。"
+                );
+            }
+            let p = s.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;
+            let v = s.version_by_seq(p.id, &p.name, version).await?;
+            let snap = store
+                .get_snapshot(v.id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照"))?;
+
+            // 动作层条数：**只**用于文件头的有损声明（内容一个字节都不导出）。
+            let action_type_count = snap.action_types.len();
+            let opts = crate::domain::ttl::TtlOptions {
+                project: project.as_str(),
+                version,
+                base: base.as_str(),
+                action_type_count,
+            };
+
+            if model_view {
+                // 建模视图：`Track::Modeling` ⇒ 显式豁免发布闸（`spec_of(D9)` 查表）。
+                let model = crate::domain::model_view::project_model_track(&snap);
+                let model_ttl = publish_customer(
+                    crate::domain::pipeline::OutletId::D9,
+                    crate::domain::pipeline::Product::ModelTurtle { view: &model, opts },
+                );
+                match &out {
+                    Some(p) => {
+                        std::fs::write(p, model_ttl.as_str())
+                            .with_context(|| format!("写不出 {p:?}"))?;
+                        // 回执走 stderr：`--out` 的 stdout 必须留空，脚本才好接。
+                        eprintln!(
+                            "· 已写出建模视图 TTL：{}（{} 类 / {} 关系 · 有损项见文件头）",
+                            p.display(),
+                            model.entity_types.len(),
+                            model.link_types.len()
+                        );
+                    }
+                    None => crate::cli::emit_domain_text(model_ttl),
+                }
+                return Ok(());
+            }
+
+            // 客户视图（默认）：与页面看到的是**同一份**客户视图。
+            let sv = snapshot_to_view(&snap);
+            let cv = crate::domain::view::project(&sv);
+            let customer_ttl = publish_customer(
+                crate::domain::pipeline::OutletId::C6,
+                crate::domain::pipeline::Product::CustomerTurtle { view: &cv, opts },
+            );
+            match &out {
+                Some(p) => {
+                    std::fs::write(p, customer_ttl.as_str())
+                        .with_context(|| format!("写不出 {p:?}"))?;
+                    eprintln!(
+                        "· 已写出客户视图 TTL：{}（{} 个对象 / {} 条关系 · 有损项见文件头）",
+                        p.display(),
+                        cv.objects.len(),
+                        cv.relations.len()
+                    );
+                }
+                None => crate::cli::emit_domain_text(customer_ttl),
             }
         }
         OntologyCmd::Diff { project, a, b } => {

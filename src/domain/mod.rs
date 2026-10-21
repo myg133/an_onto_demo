@@ -49,4 +49,9 @@ pub mod review;
 // 提案条目**（apply 之前），两者不是同一个对象。
 pub mod review_view;
 pub mod snapshot;
+// REQ-110 · **Turtle（OWL）序列化** —— 纯函数、零依赖、确定性。
+// 两种投影（客户视图 / 建模视图）各一个入口，共用同一套文本原语；
+// 为什么不写进 `view.rs`：那是客户视图真身，这里是它的**第三个消费者**
+// （与 `graph` / `model_view` 同一条理由）。
+pub mod ttl;
 pub mod view;

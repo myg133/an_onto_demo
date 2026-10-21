@@ -10,6 +10,22 @@
 //! 3. **关系按人的说法显示**：边上的字直接来自客户视图，
 //!    不退回 `belongs_to` / `N:1` 这类建模记号。
 //!
+//! # ⭐ REQ-110 · 本页是**静态壳**，壳里零数据（R4 / AC-005）
+//!
+//! 收口前 `index_html(project, version)` 把项目名与版本渲染进 JS 字面量，
+//! 于是「页面壳」本身就是一条数据出口 —— 而 `/` 又被身份门拦着，浏览器永远
+//! 打不开它。REQ-110 把两件事一起改掉：
+//!
+//! | | 收口前 | 现在 |
+//! | --- | --- | --- |
+//! | `/` 的 token | 必须 | **免** |
+//! | 壳里的数据 | 项目名 + 版本 | **零**（连数字都不渲染） |
+//! | 作用域从哪来 | 服务端注入 | 拿到口令后 `GET /api/scope`（gated） |
+//! | TTL 导出 | 没有 | 「导出 TTL」按钮 → `GET /api/ontology.ttl`（gated） |
+//!
+//! ⇒ 判据「`GET /` 的响应体里不得出现项目名 / 版本号 / 任何对象名」
+//! 由 `tests/test_req110_http.rs` 在**真路由**上钉住。
+//!
 //! # 布局为什么手写
 //!
 //! 力导向的核心就是「斥力 + 弹簧 + 向心」三段，91 个节点 / 79 条边
@@ -27,6 +43,9 @@
 //! 钉住这条（它当时确实红过一次，不是假想）。
 
 /// 页面本体。**注意**：这里出现的每一个词都会被守门器扫过。
+///
+/// ⛔ **本常量里不许出现任何项目名 / 版本号 / 对象名** —— `/` 是免 token 的
+/// 静态壳（REQ-110 · AC-005）。要数据，页面自己去 gated API 拿。
 pub(crate) const INDEX_HTML: &str = r##"<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -74,6 +93,7 @@ li{margin:2px 0}
   <span id="who"></span>
   <input id="t" type="password" placeholder="访问口令" autocomplete="off">
   <button id="go">打开</button>
+  <button id="export" disabled>导出 TTL</button>
   <span id="status"></span>
 </header>
 <main>
@@ -87,38 +107,80 @@ li{margin:2px 0}
 <script>
 "use strict";
 var TOKEN = "";          // 只存在内存里：不写进地址栏、不写进页面、不进浏览器存储
+var SCOPE = null;        // 作用域**不在壳里**：拿到口令后问 gated API
 var DATA = null;
 var $ = function (s) { return document.querySelector(s); };
 
 function say(t, bad) { var e = $("#msg"); e.textContent = t; e.className = bad ? "err" : ""; }
+function ask(path) { return fetch(path, { headers: { Authorization: "Bearer " + TOKEN } }); }
 
 $("#go").onclick = function () {
   TOKEN = $("#t").value.trim();
   $("#t").value = "";            // 用完就从输入框抹掉
-  load();
+  open();
 };
 $("#t").addEventListener("keydown", function (e) { if (e.code === "Enter") $("#go").click(); });
+$("#export").onclick = save_ttl;
+
+// 第一步：问清「看哪个项目、哪一版」。这是**唯一**把作用域带进页面的路，
+// 而且它要口令 —— 壳里永远没有这两个值。
+function open() {
+  $("#status").textContent = "读取中…";
+  ask("api/scope")
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { $("#status").textContent = ""; say(res.j.error || "读不到", true); return; }
+      SCOPE = res.j;
+      $("#export").disabled = false;
+      load();
+    })
+    .catch(function (e) { $("#status").textContent = ""; say(String(e), true); });
+}
 
 function load() {
   $("#status").textContent = "读取中…";
-  var u = "api/graph?project=" + encodeURIComponent(who.project) + "&version=" + who.version;
-  fetch(u, { headers: { Authorization: "Bearer " + TOKEN } })
+  var u = "api/graph?project=" + encodeURIComponent(SCOPE.project) + "&version=" + SCOPE.version;
+  ask(u)
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
       if (!res.ok) { $("#status").textContent = ""; say(res.j.error || "读不到", true); return; }
       DATA = res.j;
-      $("#who").innerHTML = "项目 <b>" + esc(who.project) + "</b> · 第 <b>" + who.version + "</b> 版";
+      $("#who").innerHTML = "项目 <b>" + esc(SCOPE.project) + "</b> · 第 <b>" + esc(SCOPE.version) + "</b> 版";
       $("#status").textContent = DATA.nodes.length + " 个对象 · " + DATA.edges.length + " 条关系";
       draw();
     })
     .catch(function (e) { $("#status").textContent = ""; say(String(e), true); });
 }
 
-// ⚠️ REQ-106 · `%%PROJECT%%` 两侧的引号**去掉了** —— 现在它占的是一个
-// **完整的 JS 字面量**，不是一个裸字符串内容。理由是转义只能整体替换
-// 一个字面量（首尾引号是字面量的一部分）；若保留模板里的引号，
-// 替换进去的转义结果就会被夹在两个真引号中间，`\"` 直接把结构改坏。
-var who = { project: %%PROJECT%%, version: %%VERSION%% };
+// 导出 TTL：带口令拉 gated 端点，用 blob 触发下载。
+// 文件名从 Content-Disposition 里取（缺了才退回一个固定名）。
+function save_ttl() {
+  if (!SCOPE) { say("先填口令点「打开」。", true); return; }
+  $("#status").textContent = "导出中…";
+  fetch("api/ontology.ttl", { headers: { Authorization: "Bearer " + TOKEN } })
+    .then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) { throw new Error(j.error || "导出失败"); });
+      }
+      return grab_name(r).then(function (name) {
+        return r.blob().then(function (b) {
+          var url = URL.createObjectURL(b);
+          var a = document.createElement("a");
+          a.href = url; a.download = name;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+          $("#status").textContent = "已导出 " + name;
+        });
+      });
+    })
+    .catch(function (e) { $("#status").textContent = ""; say("导出失败：" + e.message, true); });
+}
+
+function grab_name(r) {
+  var cd = r.headers.get("Content-Disposition") || "";
+  var m = /filename="([^"]+)"/.exec(cd);
+  return Promise.resolve(m ? m[1] : "ontology.ttl");
+}
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -173,11 +235,6 @@ function layout(ns, es, W, H) {
 // 之所以缩放而不是设 viewBox：viewBox 会连**字号**一起缩放，
 // 而布局是正方形的、视口是横的 —— `meet` 会按高度缩（0.42 倍），
 // 14px 的标签只剩 6px。改成缩放坐标、按像素直接画，字号才可控可预期。
-//
-// ⚠️ 这条注释自己也踩了两次：原先写「按 CSS 像素一对一画」，
-// 其中的「一对一」被第三档的**形态**守门判成未翻译的记号、整页被拒发；
-// 改成「未翻译的关系记号」时又把那个词本身写进了注释，再被拒一次。
-// 措辞改掉就是了 —— 守门器不看上下文，只看形状。
 function fit(ns, W, H) {
   var pad = 44;
   var xs = ns.map(function (d) { return d.x; }), ys = ns.map(function (d) { return d.y; });
@@ -229,10 +286,10 @@ function draw() {
   });
 }
 
-// 点节点 → 看它的属性与说明（客户视图里已有的 note / 属性）
+// 点节点 → 看它的属性与说明（接口返回的 note / 属性）
 function pick(id) {
-  var u = "api/node?project=" + encodeURIComponent(who.project) + "&version=" + who.version + "&id=" + encodeURIComponent(id);
-  fetch(u, { headers: { Authorization: "Bearer " + TOKEN } })
+  var u = "api/node?project=" + encodeURIComponent(SCOPE.project) + "&version=" + SCOPE.version + "&id=" + encodeURIComponent(id);
+  ask(u)
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
       var p = $("#panel");
@@ -252,115 +309,26 @@ function pick(id) {
     });
 }
 
-say("填入口令后点「打开」。");
+say("填入口令后点「打开」；页面壳本身不含任何数据。");
 </script>
 </body>
 </html>
 "##;
 
-/// 把页面里的项目名与版本号填进去。
+/// 返回页面本体。
 ///
-/// 用**一次性替换**而不是 `format!`：`format!` 要把整段 HTML 当格式串，
-/// 而 JS 里的 `{}`（对象字面量、函数体）会让它当场炸掉。
-/// 替换用的占位符也刻意选成 CSS/JS 里不可能出现的 `%%…%%`。
+/// # ⭐ REQ-110：**没有参数、也不返回 `Result`**
 ///
-/// # ⚠️ REQ-106 · 项目名要**过闸门**且**安全转义**（AC-003 / AC-004）
+/// 收口前签名是 `index_html(project, version) -> Result<String, String>`：
+/// 它把项目名渲染进 JS 字面量、并且要过一遍 `mcp::tools::guard`。
+/// 现在 `/` 是**静态壳**（壳内零数据），所以：
 ///
-/// REQ-106 之前这里是 `INDEX_HTML.replace("%%PROJECT%%", project)` ——
-/// 原样注入 JS 字面量，**不过任何闸**。两个洞：
+/// - 没有项目名可注入 ⇒ 没有第二个转义点（`js_string_literal` 一并删掉）；
+/// - 没有数据要判 ⇒ 不需要 `Result`。模板本体仍然**运行时过闸**：
+///   `index()` 把整页交给管线 H1（`Product::Text`），命中建模术语照样拒发。
 ///
-/// 1. **泄漏**：项目名含建模术语时不拦；
-/// 2. **注入**：项目名含 `"` / `\` / `</script>` 时**能改写页面脚本结构**。
-///
-/// 洞 1 之所以是**口径不一致**而不是「本项目特例」，是因为同一份项目名在
-/// MCP 侧 [`crate::mcp::tools::instructions`] **已经**过了闸门
-/// （那里记着「项目名不受快照投影约束」）。⇒ 这里必须与它同口径。
-///
-/// **⛔ 判据不重写**：直接调 [`crate::mcp::tools::guard`] 本身。
-/// 抄一份就会漂 —— MCP 那条路放过的东西，这条路可能挡住（或反过来），
-/// 那正是 REQ-078 之前守门器漂移的形态。
-///
-/// # 为什么返回 `Result`
-///
-/// ⛔ 不是为了「失败也能返回页面」—— 命中就是**拒绝出页面**，绝不降级。
-/// 改成 `Result` 是为了让「判据必须被处理」**落在类型上**而不是靠人记得
-/// （与本 crate `server/http.rs` 模块头第 3 条「只读落在类型上」同一思路）：
-/// 漏掉 `?` 是**编译不过**，不是运行时悄悄放行。
-pub fn index_html(project: &str, version: i32) -> Result<String, String> {
-    // ── 顺序：先转义、再过闸 —— ⛔ 与 H1 的 AC-001 同一条纪律 ──
-    //
-    // 「先判后发」在这里等价于「先转义后判」：判定通过 ⇒ 写出的字面量
-    // 一定过了闸；判定不通过 ⇒ 一个字节都没进页面。
-    //
-    // ⚠️ 为什么闸门判的是**转义前**的项目名（而不是转义后的字面量）：
-    // 转义第 2 层只在 `<` `>` `&` 处插入 `\uXXXX`。这三个字符**都不是**
-    // 基数记号的合法端点字符，也**永远不是**分隔符（`:` / `..`），
-    // 所以该层**只可能破坏**相邻字符的「独立」条件，**不可能凭空造出**一次命中。
-    // ⇒ 原名干净 ⇒ 字面量必干净。放行方向永远是安全的（最坏是多挡一次）。
-    match crate::mcp::tools::guard(&serde_json::json!(project)) {
-        Ok(_) => Ok(INDEX_HTML
-            .replace("%%PROJECT%%", &js_string_literal(project)?)
-            .replace("%%VERSION%%", &version.to_string())),
-        Err(msg) => {
-            // `guard` 命中时**已经把具体词条写到 stderr** 了（那是运维看的）；
-            // 这里只补一句「哪个出口」，⛔ 不要把词条拼进任何回给浏览器的东西。
-            eprintln!(
-                "✗ 只读图服务首页：项目名未通过发布闸门，已拒绝出页面 \
-                 （项目名不受快照投影约束，与 mcp-server 同一道判据）"
-            );
-            Err(msg)
-        }
-    }
-}
-
-/// 把项目名转义成一个**可以安全放进 `<script>` 的 JS 字符串字面量**（含首尾引号）。
-///
-/// 两层，少一层都不够：
-///
-/// 1. [`serde_json::to_string`] —— 转义 `"`、`\`，以及**全部 ASCII 控制字符**
-///    （`< 0x20`：`\b` `\f` `\n` `\r` `\t`，或六位十六进制的 `\u00XX` 形式）。
-///    JSON 字符串字面量是 JS 字符串字面量的真子集，所以这一层的产物直接可用。
-///    ⛔ 刻意**不自己手写**一套转义表：手写的必然漏项；而这一行拿到的是
-///    一份**边界明确**的转义 —— 边界逐条列在下面，⛔ **不叫「完备」**。
-/// 2. **HTML 上下文加固** —— `<` `>` `&` 改成 `\u003C` / `\u003E` / `\u0026`。
-///
-/// ⛔ 第 2 层**不是可选项**，这是本函数存在的主要理由：
-/// `serde_json` **不转义正斜杠**，所以第 1 层单独挡不住 `</script>`。
-/// 而 HTML 解析器**先于** JS 解析器看到它 —— 脚本块在 `</script>` 处就结束了，
-/// 后面那个 `\"` 救不了**已经**被截断的结构。
-/// 这三个字符替换成 `\uXXXX` 之后，`</script>` 与 `<!--` 都无法在 HTML 层
-/// 提前闭合脚本块；而 `\u003C` 本身是合法的 JSON / JS 转义，值不变。
-///
-/// # ⚠️ `serde_json` **不**转义的东西 —— 据其 `CharEscape` 枚举逐条核实
-///
-/// ⛔ **REQ-106 初版注释在这里写过一句假话**：它声称 `serde_json` 会转义
-/// `U+2028` / `U+2029`，并称这份转义「完备」。**两处都不成立** ——
-/// QA 实测，查 `serde_json` 的 `CharEscape` 也一致：其变体只有 Quote /
-/// ReverseSolidus / Solidus / Backspace / FormFeed / LineFeed / CarriageReturn /
-/// Tab / `AsciiControl(u8)`，而 `AsciiControl` 只覆盖 `< 0x20`
-/// ⇒ 这两个码位**原样吐出**，既没被转义，也谈不上「完备」。
-///
-/// | `serde_json` 不转义 | 实际后果 | 是不是漏洞 |
-/// | --- | --- | --- |
-/// | `/` | `</script>` 在 HTML 层提前闭合脚本块 | **是** ⇒ 第 2 层就是为它存在的 |
-/// | `U+2028` / `U+2029` | ES2019 之前：裸行分隔符落在字符串字面量里 = **语法错误**，整个脚本块不执行。ES2019 起（`JSON.stringify` 修订）**合法** | **不是** —— 语法错误只让脚本**跑不起来**，不给攻击者任何执行能力 |
-///
-/// ⇒ `U+2028/U+2029` **刻意不补转义**：补它治不了任何可利用的缺口，
-/// 只是把一份「`serde_json` 没做、而我们并不需要」的清单变成要长期维护的负担。
-/// ⚠️ 代价如实说清：若判读人用 **ES2019 之前的引擎**（IE11 / 老 Safari）
-/// 打开页面、且项目名含 `U+2028/U+2029`，则**整个页面脚本不执行**（图出不来）。
-/// 那是**可用性**问题，**不是**泄漏、**不是**注入。
-///
-/// ⚠️ 本函数**不主张**「完备」。它主张的只有一条：写进页面的那个串，
-/// 既不含能提前闭合 HTML 脚本块的字符，也不含能改写 JS 字面量结构的字符。
-fn js_string_literal(project: &str) -> Result<String, String> {
-    // `serde_json::to_string(&String)` 实际不可失败（String 序列化没有失败分支），
-    // 但 ⛔ 不用 `unwrap_or_default()` 把失败悄悄变成「空项目名」——
-    // 那正是 fail-open：页面照出，作用域却空了。
-    let lit = serde_json::to_string(project)
-        .map_err(|e| format!("项目名转义失败（这本身就是个 bug）：{e}"))?;
-    Ok(lit
-        .replace('<', "\\u003C")
-        .replace('>', "\\u003E")
-        .replace('&', "\\u0026"))
+/// ⛔ 别把项目名/版本“顺手”加回来：`GET /` 是免 token 的（ADR-004），
+/// 壳里出现任何数据就等于把 `require_token` 的收窄变成一次泄露。
+pub fn index_html() -> String {
+    INDEX_HTML.to_string()
 }

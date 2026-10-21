@@ -85,18 +85,24 @@
 //! - ② 双粒度，但由 [`Granularity`] **声明**，不由出口自决；
 //! - ③ stderr 报告形状唯一（[`DropReport::stderr_line`]），客户正文只报数量。
 //!
-//! # 33 条出口登记表（AC-002 / AC-007）
+//! # 39 条出口登记表（AC-002 / AC-007）
 //!
 //! [`OUTLETS`] 是**机读**的：每条带 `path` + `call_site`（该出口调用管线的源码片段
 //! 唯一子串）+ 轨道 + 格式。判据在 `tests/test_req107_*` 里做**双向对账**
 //! （条数 / 分组 / ID 集合 / needle 命中）。
 //!
+//! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
+//! 所以口径变成 39（客户 17 / 建模 10 / 内部 9 / 静态 2 / 错误路径 1）。
+//! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
+//!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
 //! **抓不住**「语义等价改写」。补强在类型层（本模块 §类型层不变量）与源码否定式。
 
 use crate::domain::html_view::{render_html, RenderedPage};
+use crate::domain::model_view::ModelTrackView;
 use crate::domain::overview::{render_overview_text, Overview};
 use crate::domain::property_filter::{filter_view, FilteredView};
+use crate::domain::ttl::{serialize_customer, serialize_model, TtlOptions};
 use crate::domain::view::{scan_modeling_terms, CustomerView};
 use serde_json::Value;
 
@@ -241,15 +247,23 @@ impl OutletSpec {
 /// `src/` 里出现的 `OutletId::` 记号，未登记的组合立刻红。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutletId {
-    // ── 客户类 13 条 ──
+    // ── 客户类 15 条（REQ-110 加了 C6/C7/H4/H5）──
     C1,
     C2,
     C3,
     C4,
     C5,
+    /// REQ-110 · `ontology export`：客户视图 TTL → stdout。
+    C6,
+    /// REQ-110 · `ontology export --out`：客户视图 TTL → 文件（与 C6 同一份字节）。
+    C7,
     H1,
     H2,
     H3,
+    /// REQ-110 · `GET /api/ontology.ttl`（**仍要 token**）。
+    H4,
+    /// REQ-110 · `GET /api/scope`（供静态页面壳取「看哪个项目 / 哪一版」，**要 token**）。
+    H5,
     /// M1–M5 共用**同一个**调用点（`serve.rs` 的 `tools/call` 分支）。
     McpTools,
     // ── 零闸位点 ──
@@ -258,6 +272,10 @@ pub enum OutletId {
     Z3,
     // ── 建模轨 ──
     D1,
+    /// REQ-110 · `ontology export --model-view`：建模视图 TTL → stdout（显式豁免闸）。
+    D9,
+    /// REQ-110 · `ontology export --model-view --out`：建模视图 TTL → 文件（同 D9）。
+    D10,
 }
 
 impl OutletId {
@@ -269,14 +287,20 @@ impl OutletId {
             OutletId::C3 => "C3",
             OutletId::C4 => "C4",
             OutletId::C5 => "C5",
+            OutletId::C6 => "C6",
+            OutletId::C7 => "C7",
             OutletId::H1 => "H1",
             OutletId::H2 => "H2",
             OutletId::H3 => "H3",
+            OutletId::H4 => "H4",
+            OutletId::H5 => "H5",
             OutletId::McpTools => "M1-M5",
             OutletId::Z1 => "Z1",
             OutletId::Z2 => "Z2",
             OutletId::Z3 => "Z3",
             OutletId::D1 => "D1",
+            OutletId::D9 => "D9",
+            OutletId::D10 => "D10",
         }
     }
 }
@@ -295,8 +319,17 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::C3 => OutletSpec::of("C3", Track::Customer, Format::Json, Granularity::Whole),
         OutletId::C4 => OutletSpec::of("C4", Track::Customer, Format::Text, Granularity::Whole),
         OutletId::C5 => OutletSpec::of("C5", Track::Customer, Format::Json, Granularity::Whole),
+        // REQ-110 · TTL 导出：客户轨 / 文本 / 整份。
+        //
+        // ⚠️ 门禁在**序列化之后**（`ttl::TtlDocument::body`）—— 见 `render` 的
+        // `CustomerTurtle` 分支与 `ttl.rs` 模块头（AC-002 与 AC-008 的冲突取舍）。
+        OutletId::C6 => OutletSpec::of("C6", Track::Customer, Format::Text, Granularity::Whole),
+        // C7 与 C6 写**同一份字节**（`--out` 文件 vs stdout），只是落点不同。
+        OutletId::C7 => OutletSpec::of("C7", Track::Customer, Format::Text, Granularity::Whole),
         OutletId::H1 => OutletSpec::of("H1", Track::Customer, Format::Html, Granularity::Whole),
         OutletId::H2 => OutletSpec::of("H2", Track::Customer, Format::Json, Granularity::Whole),
+        OutletId::H4 => OutletSpec::of("H4", Track::Customer, Format::Text, Granularity::Whole),
+        OutletId::H5 => OutletSpec::of("H5", Track::Customer, Format::Json, Granularity::Whole),
         // ⚠️ **逐节点**：一个坏节点只拒发那一个节点（卡点②的裁定）。
         OutletId::H3 => OutletSpec::of("H3", Track::Customer, Format::Json, Granularity::PerNode),
         OutletId::McpTools => {
@@ -310,6 +343,10 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::Z3 => OutletSpec::of("Z3", Track::Static, Format::Json, Granularity::Whole),
         // D1 `ontology show --model-view`：**唯一**真走管线的建模出口。
         OutletId::D1 => OutletSpec::of("D1", Track::Modeling, Format::Json, Granularity::Whole),
+        // REQ-110 · 建模视图 TTL：同属建模轨（显式豁免，理由见 OUTLETS 的
+        // `exemption_reason`），产物是文本而不是 JSON。
+        OutletId::D9 => OutletSpec::of("D9", Track::Modeling, Format::Text, Granularity::Whole),
+        OutletId::D10 => OutletSpec::of("D10", Track::Modeling, Format::Text, Granularity::Whole),
     }
 }
 
@@ -336,6 +373,23 @@ pub enum Product<'a> {
     Text(String),
     /// 错误文案 → `safe_error`（Z1）。
     ErrorText(String),
+    /// ⭐ REQ-110 · 客户视图 → **Turtle**（CLI `ontology export` / HTTP `/api/ontology.ttl`）。
+    ///
+    /// 前处理（属性级剔除）与发布闸都在**本管线**里，出口拿不到「序列化好但没过闸」
+    /// 的字节。闸扫的是 `TtlDocument::body`（数据正文），理由见 `ttl.rs` 模块头。
+    ///
+    /// ⛔ C6 / C7 / H4 三条出口共用**这一个**产物：TTL 只有一份序列化实现
+    /// （纪律 H），`--out` 与 stdout / HTTP 写的是同一批字节。
+    CustomerTurtle {
+        view: &'a CustomerView,
+        opts: TtlOptions<'a>,
+    },
+    /// ⭐ REQ-110 · 建模视图 → **Turtle**（`ontology export --model-view`）。
+    /// 建模轨显式豁免发布闸（建模术语在这一轨是要被裁决的内容）。
+    ModelTurtle {
+        view: &'a ModelTrackView,
+        opts: TtlOptions<'a>,
+    },
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -693,6 +747,33 @@ pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, Pipeli
             Ok(OutletRender::build(spec, text, DropReport::default()))
         }
 
+        // ⭐ REQ-110 · 客户视图 TTL。
+        //
+        // 顺序与前处理/闸的既有纪律一致：**先剔、再序列化、再判、最后才产出可写出的字节**。
+        // 闸扫的是**序列化之后的正文**（不是结构字段）—— 例如属性名/说明里的
+        // 「主键」会原样变成 `rdfs:comment` 字面量，扫结构字段会漏掉序列化过程
+        // 自己引入的文本（IRI 本地名、标签、注释都算）。
+        //
+        // ⚠️ 与 `CustomerJson` 同一份前处理（`filter_view`），所以 CLI 导出的
+        // 「客户视图 TTL」与 `/api/graph` 看到的是同一批属性（不多不少）。
+        Product::CustomerTurtle { view, opts } => {
+            let filtered = filter_view(view);
+            let mut report = DropReport::default();
+            report.from_filtered(&filtered);
+            report.emit();
+            let doc = serialize_customer(&filtered.view, &opts);
+            gate_text(spec, doc.body())?;
+            Ok(OutletRender::build(spec, doc.into_doc(), report))
+        }
+
+        // ⭐ REQ-110 · 建模视图 TTL。轨道是 `Track::Modeling` ⇒ `gate_text` 直接放行
+        // （**显式豁免**，不是「忘了调闸」：`spec_of(OutletId::D9)` 查表决定）。
+        Product::ModelTurtle { view, opts } => {
+            let doc = serialize_model(view, &opts);
+            gate_text(spec, doc.body())?;
+            Ok(OutletRender::build(spec, doc.into_doc(), DropReport::default()))
+        }
+
         Product::ErrorText(raw) => {
             // 比闸更保守：命中就是**整句换掉**（`safe_error` 的既有语义）。
             //
@@ -712,10 +793,12 @@ pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, Pipeli
 /// | `ErrorText` | **只能** `ErrorPath` | 只有 Z1 走 `safe_error` 改写语义 |
 fn pairing_ok(spec: OutletSpec, product: &Product<'_>) -> bool {
     match product {
-        Product::CustomerHtml { .. } | Product::CustomerJson(_) | Product::Overview(_) => {
-            spec.track == Track::Customer
-        }
+        Product::CustomerHtml { .. }
+        | Product::CustomerJson(_)
+        | Product::Overview(_)
+        | Product::CustomerTurtle { .. } => spec.track == Track::Customer,
         Product::Text(_) => spec.track == Track::Customer || spec.id == "D1",
+        Product::ModelTurtle { .. } => spec.track == Track::Modeling,
         Product::ErrorText(_) => spec.track == Track::ErrorPath,
     }
 }
@@ -847,10 +930,10 @@ impl Outlet {
 
 const CUSTOMER: &str = "";
 
-/// ⭐ **33 条出口的机读登记表**（口径 D：CLI 22 + HTTP 4 + MCP 7）。
+/// ⭐ **39 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口）。
 ///
-/// 分组：客户 13（C1–C5 / H1–H3 / M1–M5）+ 建模 8（D1–D8）+ 内部 9 + 静态 2（Z2,Z3）
-/// + 错误路径 1（Z1）= **33**。
+/// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 9 +
+/// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **39**。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
 /// 只是被渲染函数读取的静态素材 ⇒ 单列在 [`STATIC_TEMPLATES`]。
@@ -897,6 +980,24 @@ pub const OUTLETS: &[Outlet] = &[
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
+    // ── REQ-110 · C6 / C7 · `ontology export` 的两条客户出口 ──
+    Outlet {
+        id: "C6",
+        path: "src/cli.rs",
+        call_site: "crate::cli::emit_domain_text(customer_ttl)",
+        spec: spec_of(OutletId::C6),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: CUSTOMER,
+    },
+    Outlet {
+        id: "C7",
+        path: "src/cli.rs",
+        // C7 与 C6 写**同一份产物**（`customer_ttl`），只是写到文件而不是 stdout。
+        call_site: "std::fs::write(p, customer_ttl.as_str())",
+        spec: spec_of(OutletId::C7),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: CUSTOMER,
+    },
     // ── H1–H3 · HTTP 3 条数据路由 ───────────────────────────
     Outlet {
         id: "H1",
@@ -919,6 +1020,28 @@ pub const OUTLETS: &[Outlet] = &[
         path: "src/server/http.rs",
         call_site: "Ok(Json(rendered.into_value()))",
         spec: spec_of(OutletId::H3),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: CUSTOMER,
+    },
+    // ── REQ-110 · H4 / H5 · 两条新 HTTP 出口（**都要 token**）──
+    //
+    // H4 的响应体不是 `Json(`/`Html(`（是 `text/turtle` + `Content-Disposition`），
+    // 所以它的写点在 `get_ttl` 里以 `Ok((headers, …))` 的形状出现 ——
+    // `tests/test_req107_source_enumeration.rs` 的 `WRITE_CONSTRUCTS` 已同步收口该形状。
+    Outlet {
+        id: "H4",
+        path: "src/server/http.rs",
+        call_site: "Ok((headers, rendered.into_text()))",
+        spec: spec_of(OutletId::H4),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: CUSTOMER,
+    },
+    // H5 与 H2/H3 **共用** `publish_json` 那个写点（同一个 `Json(` 构造）。
+    Outlet {
+        id: "H5",
+        path: "src/server/http.rs",
+        call_site: "Ok(Json(rendered.into_value()))",
+        spec: spec_of(OutletId::H5),
         enforcement: Enforcement::Pipeline,
         exemption_reason: CUSTOMER,
     },
@@ -971,6 +1094,26 @@ pub const OUTLETS: &[Outlet] = &[
         spec: spec_of(OutletId::D1),
         enforcement: Enforcement::Pipeline,
         exemption_reason: "建模术语在建模轨是**要被裁决的内容**，不是泄露（cli.rs 的 `--model-view` 分支原话 + `model_view.rs` 顶部）；轨道由 `spec_of(OutletId::D1)` 查表声明，闸按查表结果不执行。",
+    },
+    // ── REQ-110 · D9 / D10 · `ontology export --model-view` 的两条建模出口 ──
+    //
+    // 为什么与 D1 分开登记：写点不同（TTL 序列化 vs JSON 投影），而且 `--out`
+    // 与 stdout 也各算一条出口（与 C1/C2、C6/C7 同一条口径）。
+    Outlet {
+        id: "D9",
+        path: "src/cli.rs",
+        call_site: "crate::cli::emit_domain_text(model_ttl)",
+        spec: spec_of(OutletId::D9),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: "建模轨 TTL：`--model-view` 显式选择，建模术语（key / 列名 / 基数 / semantic）在这一轨是**要被裁决的内容**；轨道由 `spec_of(OutletId::D9)` 查表声明（`Track::Modeling`），闸按查表结果不执行，⛔ 不是「没调闸所以豁免」。",
+    },
+    Outlet {
+        id: "D10",
+        path: "src/cli.rs",
+        call_site: "std::fs::write(p, model_ttl.as_str())",
+        spec: spec_of(OutletId::D10),
+        enforcement: Enforcement::Pipeline,
+        exemption_reason: "同 D9：`--out` 写的是**同一份**建模视图 TTL 字节（`model_ttl`），只是落到文件而不是 stdout。",
     },
     Outlet {
         id: "D2",
@@ -1163,12 +1306,16 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 33，分组 13/8/9/2/1。
+    /// 登记表的口径必须**恰好**是 39，分组 17/10/9/2/1。
+    ///
+    /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
+    /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）。
+    /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
-    fn registry_is_the_33_baseline() {
-        assert_eq!(OUTLETS.len(), 33, "口径 D 是 33（见 acceptance.md §零）");
-        assert_eq!(outlet_count(Track::Customer), 13);
-        assert_eq!(outlet_count(Track::Modeling), 8);
+    fn registry_is_the_declared_baseline() {
+        assert_eq!(OUTLETS.len(), 39, "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）");
+        assert_eq!(outlet_count(Track::Customer), 17);
+        assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(outlet_count(Track::Internal), 9);
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

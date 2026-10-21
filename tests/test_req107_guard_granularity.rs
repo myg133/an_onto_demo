@@ -139,7 +139,7 @@ async fn test_req107_cardpoint2_whole_document_vs_per_node_granularity() {
     let dirty_key = keys.iter().find(|k| k.contains("主键")).unwrap().clone();
     let clean_key = keys.iter().find(|k| !k.contains("主键")).unwrap().clone();
 
-    let st = ontok::server::http::state_from_view(&cv, "样例项目", 2, "correct-horse-battery");
+    let st = ontok::server::http::state_from_view(&cv, "样例项目", 2, "correct-horse-battery", 0);
     let app = ontok::server::http::build_router(st);
     let get = |uri: String| {
         let app = app.clone();

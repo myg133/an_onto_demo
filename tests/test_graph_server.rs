@@ -234,8 +234,7 @@ fn graph_projection_does_not_filter() {
 /// ⛔ 页面不许引任何外部资源（离线可看是硬要求）。
 #[test]
 fn the_page_pulls_in_nothing_from_outside() {
-    let html = ontok::server::page::index_html("demo3", 2)
-        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
+    let html = ontok::server::page::index_html();
     for bad in ["http://", "https://", "//cdn", "cdn.", "integrity="] {
         assert!(
             !html.contains(bad),
@@ -250,20 +249,38 @@ fn the_page_pulls_in_nothing_from_outside() {
 /// 这条测试会抓住任何人不小心把建模黑话写进 UI 文案。
 #[test]
 fn the_page_itself_has_no_modeling_terms() {
-    let html = ontok::server::page::index_html("demo3", 2)
-        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
+    let html = ontok::server::page::index_html();
     let hits = ontok::domain::view::scan_modeling_terms(&html);
     assert!(hits.is_empty(), "页面泄露了建模术语：{hits:?}");
 }
 
-/// 项目名要出现在页面上（否则前端拿不到作用域），且替换**只发生一次**。
+/// ⭐ REQ-110 · **壳里不许有作用域**（AC-005 的模板层那一半）。
+///
+/// 收口前这条叫 `the_page_carries_its_scope`，断言「项目名要出现在页面上」——
+/// 那正是 `/` 不能免 token 的原因之一（页面壳本身是一条数据出口）。
+/// 现在作用域改走 gated API，所以判据**反过来**：
+///
+/// 1. 模板里没有任何项目名 / 版本号（没有占位符、也没有人再往里填）；
+/// 2. 模板确实从 `api/scope` 取作用域（否则「零数据」就变成「没数据可用」，
+///    页面永远画不出图 —— 那是另一种坏法，必须一起钉住）。
 #[test]
-fn the_page_carries_its_scope() {
-    let html = ontok::server::page::index_html("demo3", 2)
-        .expect("干净项目名应当过闸（REQ-106 改了签名，断言本身一条没动）");
-    assert!(html.contains("demo3"), "页面应带上项目名");
+fn the_shell_carries_no_scope_and_fetches_it_from_a_gated_api() {
+    let html = ontok::server::page::index_html();
+    assert!(!html.contains("demo3"), "页面壳里出现了项目名 —— 它必须走 gated API");
     assert!(!html.contains("%%PROJECT%%"), "占位符没被替换干净");
     assert!(!html.contains("%%VERSION%%"), "占位符没被替换干净");
+    assert!(
+        html.contains("api/scope"),
+        "壳必须从 gated API 取作用域，否则页面永远画不出图"
+    );
+    assert!(
+        html.contains("Authorization"),
+        "取作用域的请求必须带口令"
+    );
+    assert!(
+        html.contains("api/ontology.ttl"),
+        "REQ-110：页面必须有「导出 TTL」的落点"
+    );
 }
 
 // ── 红线文件：不得被本需求改动 ──────────────────────────

@@ -219,19 +219,51 @@ fn the_leak_listing_never_goes_to_stdout() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// AC-003 · 首页与 MCP 侧**同一道**判据（纪律 H）
+// AC-003 · 项目名闸门与 MCP 侧**同一道**判据（纪律 H）
 // ══════════════════════════════════════════════════════════════
 
-/// ⛔ 首页的项目名闸门必须是 `mcp::tools::guard` **本身**，不是抄一份。
+/// ⛔ 项目名的闸门必须是 `mcp::tools::guard` **本身**，不是抄一份。
 ///
-/// 抄一份就会漂：MCP 那条路放过的东西，这条路可能挡住（或反过来）。
-/// 这正是本 REQ 修的那个不一致的形状。
+/// # ⭐ REQ-110 改道（判据保留、断言改写）
+///
+/// 项目名**不再进页面**：`/` 是免 token 的静态壳（AC-005 要求壳里零数据）。
+/// 今天唯一把项目名送回客户端的出口是 `GET /api/scope`（H5，gated）。
+///
+/// 所以这条判据从「page.rs 里调了 guard」改成**两半**：
+///
+/// 1. **page.rs 里没有任何判据、也没有项目名** —— 把闸门从页面挪走，
+///    不是把它删掉；
+/// 2. `/api/scope` 必须经管线（`publish_json` → `publish_value` → `guard`），
+///    也就是**仍然是全仓唯一那一份** `mcp::tools::guard`。
 #[test]
-fn the_homepage_gate_calls_the_mcp_guard_itself() {
-    let body = production_code("src/server/page.rs");
+fn the_project_name_gate_is_the_mcp_guard_itself_on_its_new_outlet() {
+    let page = production_code("src/server/page.rs");
     assert!(
-        body.contains("mcp::tools::guard"),
-        "首页项目名必须过 `mcp::tools::guard` 本身 —— 那是全仓唯一一份判据"
+        !page.contains("mcp::tools::guard"),
+        "REQ-110：页面壳里不该再有项目名闸门（壳里根本没有项目名）；\
+         闸门挪到了 /api/scope，别在 page.rs 里留一份「顺手判一下」"
+    );
+    assert!(!page.contains("%%PROJECT%%"), "壳里不许再有项目名占位符");
+
+    let http = production_code("src/server/http.rs");
+    assert!(
+        http.contains("OutletId::H5"),
+        "/api/scope 必须声明自己是出口 H5（经管线发布）"
+    );
+    let at = http.find("OutletId::H5").expect("找不到 H5");
+    let fn_start = http[..at]
+        .rfind("async fn get_scope(")
+        .unwrap_or_else(|| panic!("/api/scope 的 H5 管线调用不在 get_scope 里"));
+    let scope_fn = &http[fn_start..at];
+    assert!(
+        scope_fn.contains("publish_json("),
+        "/api/scope 必须经 `publish_json` 发布（那是 guard 的唯一入口）"
+    );
+    // 判据本体仍然只有一份：管线的 `publish_value` 直接调 `mcp::tools::guard`。
+    let pipeline = production_code("src/domain/pipeline.rs");
+    assert!(
+        pipeline.contains("crate::mcp::tools::guard(&value)"),
+        "管线必须直接调 `mcp::tools::guard` 本身（唯一一份判据），不是抄一份"
     );
 }
 
@@ -250,22 +282,27 @@ fn the_homepage_does_not_carry_its_own_criterion() {
     );
 }
 
-/// AC-003 的**另一半**：项目名必须**安全转义**进 JS 字面量。
+/// ⛔ **页面壳不许有注入点**（REQ-106 AC-003 的改写版）。
 ///
-/// ⛔ 判据认的是「占位符两侧没有裸引号」这件事：
-/// REQ-106 之前模板是 `project: "%%PROJECT%%"` —— 引号在**模板**里，
-/// 于是替换进去的只能是「裸内容」，转义无处安放：项目名里的 `"`
-/// 必然与模板那对引号配对错位，把 `var who = {…}` 的结构改坏。
-/// 现在占位符占的是**整个字面量**，转义才有地方落。
+/// 收口前模板里有 `var who = { project: %%PROJECT%%, version: %%VERSION%% };`，
+/// 于是「占位符占整个字面量」「转义只有一处」是需要钉的判据。
+/// REQ-110 把项目名/版本从壳里**整段拿掉**（AC-005：壳内零数据），
+/// 注入点与转义函数（`js_string_literal`）一起消失 —— 这条判据改成钉**没有**它们：
+///
+/// - 模板里不许再有 `%%PROJECT%%` / `%%VERSION%%`（有 = 有人把数据塞回壳里）；
+/// - 不许再有 `js_string_literal`（没有注入点，转义函数留着只会被误用）；
+/// - `index_html` 必须是**无参**的（有参数 = 壳又开始接受数据）。
 #[test]
-fn the_project_placeholder_occupies_a_whole_js_literal() {
+fn the_shell_has_no_injection_point_at_all() {
     let body = production_code("src/server/page.rs");
+    assert!(!body.contains("%%PROJECT%%"), "模板里还有项目名占位符");
+    assert!(!body.contains("%%VERSION%%"), "模板里还有版本号占位符");
     assert!(
-        body.contains(r#"var who = { project: %%PROJECT%%, version: %%VERSION%% };"#),
-        "模板里的 `%%PROJECT%%` 必须占**整个** JS 字面量（两侧不该再有裸引号）"
+        !body.contains("js_string_literal"),
+        "转义函数还在 —— 说明壳里还有「把外部串拼进 HTML」的位置"
     );
     assert!(
-        !body.contains(r#"{ project: "%%PROJECT%%""#),
-        "模板里还留着裸引号 —— 项目名里的 `\"` 会与它配对错位、改坏脚本结构"
+        body.contains("pub fn index_html() -> String"),
+        "`index_html` 必须无参（无参 = 壳不可能内嵌任何数据）"
     );
 }

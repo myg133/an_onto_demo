@@ -45,6 +45,7 @@ li{margin:2px 0}
   <span id="who"></span>
   <input id="t" type="password" placeholder="访问口令" autocomplete="off">
   <button id="go">打开</button>
+  <button id="export" disabled>导出 TTL</button>
   <span id="status"></span>
 </header>
 <main>
@@ -58,38 +59,80 @@ li{margin:2px 0}
 <script>
 "use strict";
 var TOKEN = "";          // 只存在内存里：不写进地址栏、不写进页面、不进浏览器存储
+var SCOPE = null;        // 作用域**不在壳里**：拿到口令后问 gated API
 var DATA = null;
 var $ = function (s) { return document.querySelector(s); };
 
 function say(t, bad) { var e = $("#msg"); e.textContent = t; e.className = bad ? "err" : ""; }
+function ask(path) { return fetch(path, { headers: { Authorization: "Bearer " + TOKEN } }); }
 
 $("#go").onclick = function () {
   TOKEN = $("#t").value.trim();
   $("#t").value = "";            // 用完就从输入框抹掉
-  load();
+  open();
 };
 $("#t").addEventListener("keydown", function (e) { if (e.code === "Enter") $("#go").click(); });
+$("#export").onclick = save_ttl;
+
+// 第一步：问清「看哪个项目、哪一版」。这是**唯一**把作用域带进页面的路，
+// 而且它要口令 —— 壳里永远没有这两个值。
+function open() {
+  $("#status").textContent = "读取中…";
+  ask("api/scope")
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { $("#status").textContent = ""; say(res.j.error || "读不到", true); return; }
+      SCOPE = res.j;
+      $("#export").disabled = false;
+      load();
+    })
+    .catch(function (e) { $("#status").textContent = ""; say(String(e), true); });
+}
 
 function load() {
   $("#status").textContent = "读取中…";
-  var u = "api/graph?project=" + encodeURIComponent(who.project) + "&version=" + who.version;
-  fetch(u, { headers: { Authorization: "Bearer " + TOKEN } })
+  var u = "api/graph?project=" + encodeURIComponent(SCOPE.project) + "&version=" + SCOPE.version;
+  ask(u)
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
       if (!res.ok) { $("#status").textContent = ""; say(res.j.error || "读不到", true); return; }
       DATA = res.j;
-      $("#who").innerHTML = "项目 <b>" + esc(who.project) + "</b> · 第 <b>" + who.version + "</b> 版";
+      $("#who").innerHTML = "项目 <b>" + esc(SCOPE.project) + "</b> · 第 <b>" + esc(SCOPE.version) + "</b> 版";
       $("#status").textContent = DATA.nodes.length + " 个对象 · " + DATA.edges.length + " 条关系";
       draw();
     })
     .catch(function (e) { $("#status").textContent = ""; say(String(e), true); });
 }
 
-// ⚠️ REQ-106 · `"样例项目"` 两侧的引号**去掉了** —— 现在它占的是一个
-// **完整的 JS 字面量**，不是一个裸字符串内容。理由是转义只能整体替换
-// 一个字面量（首尾引号是字面量的一部分）；若保留模板里的引号，
-// 替换进去的转义结果就会被夹在两个真引号中间，`\"` 直接把结构改坏。
-var who = { project: "样例项目", version: 2 };
+// 导出 TTL：带口令拉 gated 端点，用 blob 触发下载。
+// 文件名从 Content-Disposition 里取（缺了才退回一个固定名）。
+function save_ttl() {
+  if (!SCOPE) { say("先填口令点「打开」。", true); return; }
+  $("#status").textContent = "导出中…";
+  fetch("api/ontology.ttl", { headers: { Authorization: "Bearer " + TOKEN } })
+    .then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) { throw new Error(j.error || "导出失败"); });
+      }
+      return grab_name(r).then(function (name) {
+        return r.blob().then(function (b) {
+          var url = URL.createObjectURL(b);
+          var a = document.createElement("a");
+          a.href = url; a.download = name;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+          $("#status").textContent = "已导出 " + name;
+        });
+      });
+    })
+    .catch(function (e) { $("#status").textContent = ""; say("导出失败：" + e.message, true); });
+}
+
+function grab_name(r) {
+  var cd = r.headers.get("Content-Disposition") || "";
+  var m = /filename="([^"]+)"/.exec(cd);
+  return Promise.resolve(m ? m[1] : "ontology.ttl");
+}
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -144,11 +187,6 @@ function layout(ns, es, W, H) {
 // 之所以缩放而不是设 viewBox：viewBox 会连**字号**一起缩放，
 // 而布局是正方形的、视口是横的 —— `meet` 会按高度缩（0.42 倍），
 // 14px 的标签只剩 6px。改成缩放坐标、按像素直接画，字号才可控可预期。
-//
-// ⚠️ 这条注释自己也踩了两次：原先写「按 CSS 像素一对一画」，
-// 其中的「一对一」被第三档的**形态**守门判成未翻译的记号、整页被拒发；
-// 改成「未翻译的关系记号」时又把那个词本身写进了注释，再被拒一次。
-// 措辞改掉就是了 —— 守门器不看上下文，只看形状。
 function fit(ns, W, H) {
   var pad = 44;
   var xs = ns.map(function (d) { return d.x; }), ys = ns.map(function (d) { return d.y; });
@@ -200,10 +238,10 @@ function draw() {
   });
 }
 
-// 点节点 → 看它的属性与说明（客户视图里已有的 note / 属性）
+// 点节点 → 看它的属性与说明（接口返回的 note / 属性）
 function pick(id) {
-  var u = "api/node?project=" + encodeURIComponent(who.project) + "&version=" + who.version + "&id=" + encodeURIComponent(id);
-  fetch(u, { headers: { Authorization: "Bearer " + TOKEN } })
+  var u = "api/node?project=" + encodeURIComponent(SCOPE.project) + "&version=" + SCOPE.version + "&id=" + encodeURIComponent(id);
+  ask(u)
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
       var p = $("#panel");
@@ -223,7 +261,7 @@ function pick(id) {
     });
 }
 
-say("填入口令后点「打开」。");
+say("填入口令后点「打开」；页面壳本身不含任何数据。");
 </script>
 </body>
 </html>

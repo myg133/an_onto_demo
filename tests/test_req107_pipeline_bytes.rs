@@ -98,7 +98,7 @@ async fn test_req107_pipeline_bytes_equal_golden() {
     );
 
     // ── H1 / H2 / H3：走**真实路由**（响应体就是出口字节）──
-    let st = ontok::server::http::state_from_view(&cv, PROJECT, 2, TOKEN);
+    let st = ontok::server::http::state_from_view(&cv, PROJECT, 2, TOKEN, 0);
     let app = ontok::server::http::build_router(st.clone());
     let get = |uri: String| {
         let app = app.clone();

@@ -29,6 +29,8 @@ fn state(project: &str) -> ontok::server::http::AppState {
         project,
         2,
         TOKEN,
+        // REQ-110：动作层条数（只影响 TTL 文件头的有损声明，这里用 0）。
+        0,
     )
 }
 

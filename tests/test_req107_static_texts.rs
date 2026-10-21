@@ -229,7 +229,7 @@ fn test_req107_initialize_instructions_template_body_is_guarded() {
 fn test_req107_z4_index_template_is_covered_by_tests_and_the_homepage_gate() {
     // ① 模板本体（渲染后）零守门词 —— 既有 `test_graph_server.rs` 也钉这一条，
     //    这里再钉一次是为了让「Z4 由测试守卫覆盖」这句话在本文件里可核对。
-    let html = ontok::server::page::index_html("样例项目", 2).expect("干净项目名必须出页面");
+    let html = ontok::server::page::index_html();
     let hits = ontok::domain::view::scan_modeling_terms(&html);
     assert!(hits.is_empty(), "INDEX_HTML 模板带建模术语 {hits:?}");
 

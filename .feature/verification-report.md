@@ -1,11 +1,14 @@
-# REQ-109 · AI 语义项接入 —— 交付报告
+# REQ-110 · 内置 TTL 导出 + 页面查看与下载 —— 交付报告
 
-> 分支 `feature/REQ-109`（基线 `develop` `a8a51ed`，REQ-108 已合并）· 未 push
-> 一句话：**AI 只回答「这条候选关系在业务上说得通吗」，只贡献 `semantic_fit`（权重 0.15），
-> 不产结构、不翻 veto；指纹缓存 + 预算闸 + 三件套无 key 即拒。**
+> 分支 `feature/REQ-110`（worktree `feature-REQ-110/`，基线 `develop` `5737ecf`）· **未 push**
+> 一句话：**把「手写脚本转 TTL + 拖文件」收成产品的一个命令 + 页面上的一个按钮**，
+> 同时把「浏览器打不开页面」这个死循环解开（`/` 免 token 的**无数据壳**）。
 >
-> **P0（流程通）全绿**：协议解析、缓存命中/未命中、预算闸、同输入两次一致、无 key 报错退出、
-> `semantic_fit` 不影响 veto。**语义准不准是 P1 观察项**（第 §5.2 节，含 3 条**标红**的误判）。
+> ⚠️ 两条**必须一起看**的结论：
+> 1. **AC-002 与 AC-008 按字面互斥**（见 §10.1）——本实现把闸放在**全部由数据产生的字节**上，
+>    把 AC-008 强行要求写进文件头的那个守门词（`cardinality`）排除在扫描外。
+> 2. **REQ-107 的 H1 golden 被有意重锚**（见 §10.2）——`/` 从「内嵌项目名的页面」变成
+>    「零数据静态壳」是 R4/AC-005 的要求，字节**必然**变；判据本身（逐字节比 golden）没放宽。
 
 ---
 
@@ -13,35 +16,17 @@
 
 | 项 | 结果 |
 | --- | --- |
-| 12 条 AC | **11 条通过；1 条（AC-004）按字面不成立，已按证据改口径**（§2.4，AC 自身缺陷） |
-| AI 关是否与 REQ-108 逐字节相同 | ✅ **4/4 产物 sha256 完全相同**（用 `a8a51ed` 编译的基线二进制实测，§2.1） |
-| 缓存是否真的不重复调用 | ✅ 第二次全量 **82 请求 / 82 命中 / 0 调用 / 0 token** |
-| 预算闸是否真的停 | ✅ 100k 上限被 101,326 越过后**非 0 退出且不写任何产物**（§3.2） |
-| veto 能否被 AI 翻转 | ✅ 82 条**无一条**超过自己的 veto 上限；REQ-108 的 E1–E7 仍全部 0.20/拒绝 |
-| 测试是否退化 | ✅ lib **230** / doc **4** / 32 套件 **313** 一条不少；新增 3 套件 31 条 |
-| 凭据 | ✅ key 只在命令行进程环境里用过，**未写进任何被跟踪文件**（含测试/文档/示例/日志） |
-| 红线文件 | ✅ `tests/drop_rate.rs` / `tests/test_fk_naming.rs` / `src/domain/view.rs` / `src/domain/review_view.rs` / `src/mcp/tools.rs` / `guard()` / `property_filter.rs` G1–G4 **零改动** |
-| 新依赖 | ✅ **零**（HTTP 走既有 `agent::llm`；SHA-256 复用 `extract::sample::sha256_hex`） |
-
----
-
-## 0.1 · 本轮文档订正（QA N-2 / N-3 / N-4 / N-5 ⇒ acceptance A-9 / A-10）
-
-> 纯文档轮：**不改代码**（`src/` / `tests/` / `Cargo.toml` 零改动）。下表是「原写法 → 订正后」的索引，
-> 正文对应处已就地改好，后面每处都有 §号可查。
-
-| # | 原写法（不实） | 订正后 | 落点 |
-| --- | --- | --- | --- |
-| **N-2①** | 「逐套件同 **§11.3** 名单」—— 本报告只有 §0–§8，**没有 §11.3**（那是 REQ-108 报告的章节号） | 改为「见 **§6.1**」，并把 32 个回归套件的**逐套件名单就地补齐**（数据源 `out/req109/suites-final.log`，合计 313） | §6 表 · §6.1 |
-| **N-2②** | 引用了**不存在**的测试文件 `tests/test_req109_ai_cache_pg.rs` | 该字符串**不在本报告正文**，而在 `tests/test_req109_ai_semantic.rs:23` 的模块头注释；**真实文件是** `tests/test_req109_e2e_fake_llm.rs`（真进程 + 假端点 + 真 `ai_cache` 表）。本轮不改 `tests/`，登记为待下一轮改一行注释 | §7 · D-7 |
-| **N-2③** | `src/extract/ai_semantic.rs`「~1030 行」 | **1002 行**（实测：`(Get-Content src/extract/ai_semantic.rs).Count`） | §1.1 |
-| **N-2④** | 用 `out/req109/full1/run.log` 当预算闸证据，但它是**旧构建**产物（写缓存 72 条，现行构建会把作废答案也写缓存） | 日志**保留但显式降级**为「旧构建，只作文案样例，不作为证据」，预算闸证据改用「full1 目录 0 份提案文件」＋ QA 独立复验；本轮**未重跑** | §2.6 |
-| **N-3** | 「3 条都是采样 **5/5**」 | 三者的共同点是 **`matched == sampled`（全部命中）**，样本数分别是 **5/5、1/1、1/1**；判据是命中率 = 1.0，不是「必须采到 5 条」 | §5.2 |
-| **N-4** | 开关表漏写 `--llm` 还要求 `ONTOK_DATABASE_URL` | 补丁文本见 §7 · D-6，**由 BA 落库**（`design-summary.md` 在 `BA/`，不在 Dev 的改动范围） | §7 · D-6 |
-| **N-5** | model-view 的 AI 条数写死 **51** | **≥51**（运行相关：Dev 真实模型 51 / QA 端到端 52） | §2.10 |
-
-> 顺手修正 4 处**同类失效交叉引用**（同一类问题，不一并修就是留坑）：开篇「第 §6 节」⇒ **§5.2**、
-> §2.9「见 §6」⇒ **§5.3**、§2.11「全量测试 0 failed（§7）」⇒ **§6**、§2.12「逐套件见 §7」⇒ **§6.1**。
+| 11 条 AC | **11 条通过**（AC-002 的「扫整份文件」按 §10.1 的冲突裁定收窄为「扫数据正文」，已如实登记） |
+| 导出计数（`--model-view`） | **83 类 / 866 数据属性 / 52 对象属性 / 5953 三元组**（参照物 5954，差的正是 `dcterms:created` 那一条） |
+| 与参照物等价 | ✅ **同构**：`isomorphic(参照物 − dcterms:created, 本实现) = True`（逐条差异见 §3） |
+| CLI 与 HTTP 逐字节相同 | ✅ sha256 **`47C2F166…539D98`**（两条都实测，§6） |
+| `/` 壳内零数据 | ✅ `GET /` 无 token = 200；与模板**逐字节相同**；`secretproj` / 版本 / 对象名 **0 命中**（§5） |
+| `/api/*` 仍 gated | ✅ graph / node / ontology.ttl / scope **全部 401**（含未注册的 `/api/*`） |
+| 客户视图导出过守门器 | ✅ 命中「主键」⇒ CLI `exit=2`、stdout **0 字节**、stderr 报词条；HTTP **500**（§4） |
+| 确定性 | ✅ 同一版本两次导出逐字节相同（进程级 + 进程内都测；不写生成时间） |
+| 新依赖 | ✅ **零**（Turtle 手写；测试也钉住 Cargo.toml 里没有 RDF 库） |
+| 红线文件 | ✅ 六个红线文件 + `guard()` + `property_filter` G1–G4 **零改动**（`git diff --numstat` 为空） |
+| 测试 | lib **245**（=230+15）· doc **4**（=基线）· 32 个基线回归套件 **313**（**=基线，一条不少**）· 新增套件 **14** |
 
 ---
 
@@ -51,432 +36,251 @@
 
 | 文件 | 职责 | 关键位置 |
 | --- | --- | --- |
-| `src/extract/ai_semantic.rs`（新，**1002 行**） | 指纹、协议校验、缓存抽象、编排、预算 | 提示词 `:108` · `JudgeRequest::schema_digest` `:278` · `fingerprint` `:302` · `CachedOutput` `:393` · `parse_judgement` `:499` · `AiCache` trait `:612` · `AiStats` `:672` · `AiSemanticJudge::judge` `:800` · `require_ai_budget` `:985` |
-| `src/db/ai_cache.rs`（新） | `ai_cache` 表、预加载/回写 | DDL `:43` · `PgAiCache` `:57` · `preload` `:67` · `persist` `:125` · `delete_fingerprints` `:168` · `delete_by_model` `:183` |
-| `tests/test_req109_ai_semantic.rs`（新，22 条） | scripted transport：指纹/缓存/协议/预算/veto/零泄漏 | — |
-| `tests/test_req109_cli_gate.rs`（新，6 条） | CLI 闸门：无 key / 无预算 / `--refresh` 误用 | — |
-| `tests/test_req109_e2e_fake_llm.rs`（新，3 条） | **真进程 + 本地假 LLM 端点 + 真 `ai_cache` 表** | — |
-| `fixtures/schema-req109.json`（新） | 端到端用例的最小 schema（3 表，含 `llm_model` 双键） | — |
+| `src/domain/ttl.rs`（新，1002 行） | 纯函数 Turtle 序列化（两种投影 → Turtle），零 I/O、零依赖 | `DEFAULT_BASE:82` · `TtlOptions:86` · `TtlDocument`（`doc`/`body` 分离）`:120/:127/:132` · `serialize_customer:156` · `serialize_model:203` · `lossy_header:385` · `local_model:738` · `local_customer:763` · 单测 9 条 |
+| `tests/test_req110_ttl.rs`（新，14 条） | AC-001/002/003/008/009 + 真库 + 真进程（CLI 退出码 / 逐字节） | `ac001:84` · `ac002:115/:143` · `ac003:157/:178` · `ac008:198/:220` · 纪律 H `:283` · 零依赖 `:303` · 纯函数 `:315` · 真库 `:336` · 真进程 `:497/:536` |
 
-### 1.2 修改
+### 1.2 改动
 
-| 文件 | 改了什么 | 位置 |
+| 文件 | 改了什么 | 关键位置 |
 | --- | --- | --- |
-| `src/domain/confidence.rs` | 新增 `METHOD_V2` / `WEIGHTS_V2`（0.3825·0.17·0.1275·0.085·0.085·0.15）/ `weights_for()` / `AiProvenance` / `Confidence::ai` / `score_with_semantic()`；`score()` 改为薄封装（v1 算术**一个字节没动**）；`validate_self_evidence` 按 method 取权重表 + 语义信号两条新校验（S-1/S-2） | `METHOD_V2` `:66` · `WEIGHTS_V2` `:96` · `weights_for` `:110` · `AiProvenance` `:410` · `ai` 字段 `:453` · `score_with_semantic` `:556` · 统一实现 `score_with_weights` `:565` · 语义缺失分支 `:595` · 配对校验 `:891` · `ai` 解析 `:1131` |
-| `src/extract/propose.rs` | 评分接缝拆出 `score_links_with_ai`（AI 关走 v1、AI 开走 v2）+ `ai_requests()`（只给两张表的切片） | `score_links` `:1465` · `score_links_with_ai` `:1484` · `ai_requests` `:1589` |
-| `src/db/pg.rs` | `ai_cache` DDL 编进**同一条**取了咨询锁的迁移 batch | `:117` |
-| `src/db/mod.rs` | 注册 `ai_cache` / 导出 `PgAiCache` | `:31` |
-| `src/extract/mod.rs` | 注册 `ai_semantic` | `:3` |
-| `src/bin/ontok-propose.rs` | 三个开关 + 两个分阶段上线闸 + AI 阶段 + 报告 + 预算闸（越限不写产物） | 开关 `:141-155` · 入口闸 `:194` · AI 阶段 `:481-620` · 预算 bail `:589` · 接缝调用 `:627` |
-| `src/cli.rs` | `render_confidence_table` 增「AI 行」：`ai <model> · fit <v> · cache_hit <b> · tokens <n> ·「rationale」`；抬头写**实际方法**而不是写死 v1（AI 关仍逐字是 v1） | `:540`、AI 行 `:567` |
-| `tests/test_req107_source_enumeration.rs` | **只加两条模块登记**（`ai_semantic` / `ai_cache`）——不加则 t6 红，0 条断言被改 | `:1766`、`:1791` |
+| `src/domain/mod.rs` | 注册 `pub mod ttl;` | `:56` |
+| `src/domain/pipeline.rs` | 新增 6 条出口 `C6/C7/H4/H5/D9/D10`；新增两个产物 `Product::CustomerTurtle` / `ModelTurtle`；客户 TTL 在管线里**先剔 → 序列化 → 扫正文 → 才产出可写出的字节** | `OutletId:257-278` · `spec_of:325+` · `Product:383/:389` · `render:759/:771` · `pairing_ok:799-801` · `OUTLETS:985/993/1032/1041/1103/1111` · 登记口径 39 |
+| `src/cli.rs` | `ontok ontology export --project --version [--model-view] [--out] [--base] [--format]`；两条分支只消费 `publish_customer` 的返回值 | `OntologyCmd::Export:308` · 处理:1777-1845 · `customer_ttl:1827` · `model_ttl:1803` |
+| `src/server/http.rs` | `GET /api/ontology.ttl`（要 token）· `GET /api/scope`（要 token，页面壳取作用域）· `require_token` 收窄到 `/api/*` 子路由 · `/` 改静态壳 · `AppState` 保存已过前处理的 `view` 与动作层条数 | `AppState.view:84` · `action_type_count:93` · `load_frozen_view:110` · `index:363` · `get_scope:380` · `get_ttl:406` · `ttl_file_name:451` · `build_router:573` · `state_from_view:606` |
+| `src/server/page.rs` | 模板改成**零数据静态壳**：无项目名/版本占位符、无 `js_string_literal`；「导出 TTL」按钮（带 token 拉取 + blob 下载 + 从 `Content-Disposition` 取文件名）；作用域改由 `api/scope` 取 | `INDEX_HTML:49` · `index_html():332` |
+| `tests/test_req110_ttl.rs` 外的 9 个测试文件 | REQ-107 登记表口径 33→39、H1 golden 重锚、REQ-106/REQ-093 判据改写（逐条见 §7） | 见 §7 |
+| `tests/fixtures/req107/golden/{H1_index.html,SHA256SUMS,PROVENANCE.txt}` | H1 重锚（其余 12 份逐字节未动） | PROVENANCE 追加 REQ-110 说明 |
 
-### 1.3 行为开关（CLI）
-
-| 开关 | 默认 | 行为 |
-| --- | --- | --- |
-| `--llm` | **关** | 开 ⇒ 三件套（`ONTOK_LLM_BASE_URL` / `ONTOK_LLM_API_KEY` / `ONTOK_LLM_MODEL`）缺一即 exit≠0 并**点名缺哪个**；还需 `ONTOK_DATABASE_URL`（`ai_cache` 落库） |
-| `--budget-tokens` | 无 | `--llm` 时**必填且 >0**；越过即停，按「已用 / 上限 / 停在第几条」报告，**不写任何产物** |
-| `--refresh` | 关 | 忽略缓存并覆盖，打印「强制刷新 N 条」；AI 关时给它会报错（不许静默无操作） |
-| `--llm-only <substr>` | 无 | **分阶段上线闸**：只判关系键含该子串的那些（其余按语义缺失），不改变判据 |
-| `--llm-limit <n>` | 无 | **分阶段上线闸**：最多送 n 条（只截请求），不改变判据 |
-
-> `--llm-only` / `--llm-limit` 不在设计概要里，是**为满足「先 5 条小样本、再全量」这条运行要求**
-> 加的两个**只做截断**的运维闸；它们不参与任何判据（没送的关系语义缺失，不是 0 分）。已在此显式登记。
+**⛔ 零改动（`git diff --numstat` 实测为空）**：`tests/drop_rate.rs`、`tests/test_fk_naming.rs`、
+`src/domain/view.rs`、`src/domain/review_view.rs`、`src/mcp/tools.rs`（含 `guard()`）、
+`src/domain/property_filter.rs`（G1–G4）。
 
 ---
 
-## 2 · 12 条 AC 逐条自测
+## 2 · 导出计数（实测）
 
-### 2.1 AC-001 · AI 关闭时行为完全不变 ✅（最强证据）
+命令（真库 `anspire_ai` v2，冻结版）：
 
-用 **`a8a51ed` 编出的基线二进制**（`git archive` → 独立 target 编译）与**本次二进制**，
-在**同一份真 schema（96 表）+ 真采样（59 条读到样本）**上按同一命令各跑一次：
-
-```
-ontok-propose --schema …/schema-src.json --names … --project req109off --src $SRC_URL
-                （REQ-109 侧**不加 --llm**、不设任何 ONTOK_LLM_*）
+```powershell
+$env:ONTOK_DATABASE_URL='postgresql://…@172.17.0.87:5432/ontok_demo'
+.\target\debug\ontok.exe ontology export --project anspire_ai --version 2 --model-view --out model.ttl
+.\target\debug\ontok.exe ontology export --project anspire_ai --version 2 --out customer.ttl
 ```
 
-| 产物 | sha256（两份**相同**） |
-| --- | --- |
-| `proposal.json` | `DAA1FDFF29A939FBEFB2CF0C2246FE98DA50C46559FA1EC0323C7146F2359379` |
-| `stats.json` | `F1E6735511C579B8211A114CC5C8ED6D82472FBD6FFF7CC775913C5EA1D06560` |
-| `proposal-pending.json` | `F4FCDDCE52933C9496DF5F77382A10497CC3536B59B30A648A5C99314DFD74A1` |
-| `proposal-rejected.json` | `EE853D32A0CE6FAD4CFB81E043FEC62C50B60E7CDBAEBB0CA473E539B405FDCA` |
-
-> 另有进程级用例 `ai_off_is_not_affected_by_present_llm_env`：**配了 LLM 环境变量但不给 `--llm`**
-> 与「环境全空」四份产物 sha256 逐个相同 —— 开不开 AI 只由开关决定，不由环境决定。
-> 「语义缺失时的归一化与 v1 逐位相同」由 `r6_missing_semantic_is_absent_not_zero` + `ac001_*` 钉住。
-
-### 2.2 AC-002 · 无 key 且开 AI ⇒ 报错退出 ✅
-
-| 输入 | 结果 |
-| --- | --- |
-| `--llm`，三个变量全空 | exit **1**，文案点名 `ONTOK_LLM_BASE_URL / ONTOK_LLM_API_KEY / ONTOK_LLM_MODEL`，且**一个产物都不写** |
-| 只缺其中一个 | exit 1，**只点名那一个**（不误报配好的），三条逐个实测 |
-
-判据在 `LlmSettings::from_env`（`ai_semantic.rs:191`），且在**读 schema 之前**执行（`ontok-propose.rs:194`）。
-用例：`test_req109_cli_gate.rs` 的 `ac002_*`（2 条）。
-
-### 2.3 AC-003 · 缓存命中 ⇒ 不调用模型 ✅
-
-三层证据：
-
-| 层 | 判据 | 结果 |
-| --- | --- | --- |
-| 引擎（scripted） | 同输入跑两次 | 第一次 2 调用、第二次 **0 调用**且 `cache_hit=true`；清空缓存后第三次 **+1 调用** |
-| 端到端（真进程 + 假端点 + 真 `ai_cache` 表） | HTTP 请求计数器 | run1=1 → run2=**1（不增）**；删掉该模型的缓存行 → run3=2 |
-| 真实全量 | CLI 报告 | 第二次全量 **82 请求 / 82 命中 / 0 调用 / 0 token / 命中率 100%** |
-
-### 2.4 AC-004 · 幂等：同输入两次产物逐字节相同 ⚠️ **按字面不成立，已改口径**
-
-**实测**：全量 run2/run3 的四份产物里，`proposal.json` / `stats.json` / `proposal-rejected.json`
-sha256 **完全相同**；`proposal-pending.json` **只差一行**：
-
-```
-line 8:  -   "cache_hit": false,
-line 8:  +   "cache_hit": true,
-```
-
-**为什么这条 AC 自相矛盾**（纪律 S：「AC 自己也会是错的」）：
-
-- AC-003 要求「第二次 `ai.cache_hit == true`」，AC-010 要求「model-view 必须有 `cache_hit`」，
-  demand §范围 6 要求「提案条目带 `ai: {…, cache_hit}`」—— 三处都要求 `cache_hit` **落进产物**；
-- 而 `cache_hit` 记的是**这一次运行**的事实，第一次必然 `false`、第二次必然 `true`；
-- ⇒ 「两次运行的产物 sha256 逐个相同」与上述三条**不可能同时成立**。
-
-**本实现的取舍**（宁可让 AC-004 改口径，也不删 `cache_hit`）：
-产物内容除这一位外逐字节相同；**判据改为**「把 `ai.cache_hit` 归一后四份产物 sha256 逐个相同，
-且两份文件的差异**只有** `cache_hit` 这一行」。用例 `ac003_ac004_cache_hit_then_reload`
-把这条同时钉成两个断言（归一后相等 + `differing_lines == [("false","true")]`）。
-
-> ⚠️ 另一条**必须记下的实况**：模型**非确定**（同一输入两次采样，rationale 长度会变：
-> 实测同一条关系第一次 66 字被判作废、第二次 41 字通过）。所以「幂等」是**缓存**给的，
-> 不是模型给的 —— 这也解释了为什么 AC-004 的两跑必须是「第二次命中缓存」的那两跑。
-
-### 2.5 AC-005 · 改 prompt ⇒ 指纹变 ⇒ 必须重新调用 ✅
-
-| 证据 | 结果 |
-| --- | --- |
-| 单测 | 改 1 个字符 ⇒ `prompt_sha256` 变 ⇒ `cache_hits=0`、`calls=1` |
-| 指纹六项逐项 | relation / schema / prompt / model / agent_version / 版本前缀，**任一变即换指纹** |
-| 真实运行 | 第 1 轮提示词 `49bc2046…`（3/5 因 rationale 超长作废）→ 强化格式约束后 `4298cd82…`，**旧缓存全部失效**，5 条重新调用 |
-
-### 2.6 AC-006 · 预算闸 ✅
-
-| 判据 | 结果 |
-| --- | --- |
-| `--llm` 缺 `--budget-tokens` | exit 1，点名 `--budget-tokens` |
-| `--budget-tokens 0` | exit 1（「0 等于一次都不许调用」） |
-| 预算 1 token（真进程 + 假端点） | 只调 1 次即停，exit 1，**四份产物一个都不存在** |
-| **真实全量 100k** | **101,326 / 100,000 停在第 82 条之后**（82 条全判完、用量越顶），exit **1**，`out/req109/full1/` 里**只有 run.log**，没有任何提案文件（此为目录级事实，与日志新旧无关） |
-
-报告格式实测（`out/req109/full1/run.log`）：
-
-```
-✗ 预算超限  : 已用 101326 / 上限 100000，停在第 82 条之后（82 条已全部判完，用量越过了上限）
-```
-
-> ⚠️ **该日志来自旧构建，只作文案样例，不作为证据**（A-9 · N-2④）。
-> 判据：日志写「新写入缓存 **72** 条」＝ 78 次调用 − 6 条协议作废 ⇒ 那份构建**还不把作废答案写缓存**；
-> 现行构建按 **D-5** 把作废答案也入缓存（否则「第二次 0 调用」永远不成立），写入条数与之不同。
-> 本轮是文档轮、**未重跑**（不改代码，也不重复烧真实 token）。预算闸的证据改用两条与日志新旧无关的事实：
-> ① `out/req109/full1/` **只有 run.log、0 份提案文件**；② QA 独立复验 budget=1 / 500 均 **exit 1、目录 0 文件**（acceptance A-11）。
-> （`out/` 是本机未跟踪目录，该日志不随仓库走；要复现预算闸请按 QA 的 budget=1/500 做法自己跑。）
-
-### 2.7 AC-007 · `semantic_fit` 不能翻转 veto ✅
-
-| 构造（单测） | 结果 |
-| --- | --- |
-| 0 命中 + AI 1.0 | **0.20 / 拒绝**（`zero_hit`） |
-| 类型不相容 + AI 1.0 | **0.15 / 拒绝**（`type_incompatible`） |
-| 源列全空 + AI 1.0 | ≤ 0.45 |
-| `--no-sample` + AI 1.0 | ≤ 0.45 |
-
-**真库 82 条逐条复核**：`score > cap` 的关系数 = **0**。
-REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）；E8/E9 本就不产出，
-其 0.15 上限由单测按坐标构造复算覆盖。
-
-### 2.8 AC-008 · `cites` 必须是真实坐标 ✅
-
-构造 `{"table":"nonexistent","column":"col"}` ⇒ 该条判断**整条作废**（不进 map、不污染分数）、
-`rejected_cites=1`、报告里点名假坐标；且**作废记录照样进缓存**，回放时仍然作废、但**不再付费**
-（`calls=0`、`rejected_cache_hits=1`）。
-
-### 2.9 AC-009 · `rationale` 必填且简短 ✅
-
-| 坏输入 | 结果 |
-| --- | --- |
-| 缺 `rationale` | 作废（`rejected_rationale=1`） |
-| `"   "`（空白） | 作废 |
-| 61 字 | 作废 |
-| **正好 60 字** | **通过**（边界不能写成 ≤59） |
-
-真实模型实测：82 条里 **6 条** rationale 超 60 字被作废（68/64/85/75/73/71 字）——
-这是**协议按 AC-009 正常生效**，不是流程缺陷；强化格式约束后仍有 1/82 不守（见 §5.3）。
-
-### 2.10 AC-010 · 客户视图零泄漏 / 建模轨必须有 ✅
-
-**端到端**（真库：`project req109ai` → import → `review decide --accept-all` → `proposal apply` → v2）：
-
-| 出口 | `semantic_fit` | `cache_hit` | `"ai"` | `prompt_sha` | 模型名 |
-| --- | --- | --- | --- | --- | --- |
-| `ontology show`（客户 JSON） | **0** | **0** | **0** | **0** | **0** |
-| `ontology show --html`（客户页面） | **0** | **0** | — | **0** | **0** |
-| `ontology overview`（客户总览） | **0** | **0** | — | **0** | **0** |
-| `ontology show --model-view` | **≥51** | **≥51** | **≥51** | **≥51** | **≥51** |
-
-> **为什么是 `≥51` 而不是一个写死的数**（A-10 · N-5）：AI 条数**随运行浮动** ——
-> Dev 的真实模型跑（`out/req109/e2e/model.json`：52 条关系、**51** 条带 `confidence.ai`，缺的 1 条是
-> `usage_details.license_id → licenses`）是 51；QA 的端到端 v2 跑是 52。差的那 1 条来自「AI 给 1.0
-> 把某条关系抬进了 v2 主提案」，属运行相关，不是缺陷。判据是「**每条被 AI 判过、且进了 v2 的关系都有**」，
-> 故本报告统一记为 **≥51**。
-
-零泄漏是**结构保证**：客户视图的投影输入 `SnapshotView` / `LinkTypeView` 里**没有** confidence 栏。
-审核界面（`review show --confidence`）由 `render_confidence_table` 新增 AI 行覆盖，单测断言
-`ai <model> · fit … · cache_hit … · tokens … ·「rationale」` 全部出现。
-
-### 2.11 AC-011 · 无 key 也能全绿 ✅
-
-所有自动化用例**零网络、零 key**：引擎层用 `ScriptedTransport`；端到端层用**本地
-`TcpListener` 假端点**（标准库，零新依赖，HTTP 请求计数）。清空 `ONTOK_LLM_*` 后
-全量测试 0 failed（§6）。真实端点**只**用于 §3/§5 的手工验证，**没有**进任何测试。
-
-### 2.12 AC-012 · 红线与不退化 ✅
-
-| 项 | 结果 |
-| --- | --- |
-| 四红线 + `tools.rs` + `guard()` + `property_filter.rs` G1–G4 | **零改动**（`git status` 只有 §1 那 7 个文件 + 6 个新增） |
-| 删测试 / `#[ignore]` / 放宽断言 | 无。`test_req107_source_enumeration.rs` 只加了**两条模块登记**（0 条断言改动） |
-| 新增依赖 | **零**（Cargo.toml 一个字没动） |
-| 不许退化 | lib **230**（=基线）· doc **4**（=基线）· 32 套件 **313**（=基线，逐套件见 §6.1） |
-
----
-
-## 3 · 真实运行（分三阶段）
-
-环境：源库只读 `SRC_URL` · 本地库 `ONTOK_DATABASE_URL=…/ontok_demo` · 模型 `qwen36-27B`。
-`schema.json` 是 REQ-108 留下的真勘查产物（96 表 / 1024 列），**未重新勘查**（勘查与 AI 无关）。
-
-### 3.1 阶段 1 · 小样本 5 条
-
-命令要点：`--llm --budget-tokens 100000 --llm-only 'model_id -> llm_model' --llm-limit 5`
-（这 5 条正是「目标表另有业务键 `model_id`、规则只能指 `id`」的那一类已知错关系）。
-
-| 轮 | 提示词 | 调用 | token | 有效/作废 |
-| --- | --- | --- | --- | --- |
-| 小样本 #1 | `49bc2046…` | 5 | **6,754** | 2 / 3（rationale 68·64·85 字） |
-| 小样本 #2（格式约束强化后） | `4298cd82…` | 5 | **6,858** | 4 / 1（rationale 66 字） |
-
-**5 条真实 AI 返回（从产物 `confidence.ai` + `semantic_fit` 信号还原，即缓存里存的那份判断）**：
-
-```json
-[
-  {
-    "relation": "deductions.model_id -> llm_model",
-    "band": "low", "score": 0.42,
-    "ai_output": {
-      "choice": "llm_model.model_id",
-      "semantic_fit": 1.0,
-      "rationale": "deductions.model_id存模型ID，对应llm_model.model_id业务含义一致。",
-      "cites": ["deductions.model_id", "llm_model.model_id"]
-    },
-    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1595,"cache_hit":true}
-  },
-  {
-    "relation": "llm_provider_back.model_id -> llm_model",
-    "band": "low", "score": 0.42,
-    "ai_output": {
-      "choice": "llm_model.model_id",
-      "semantic_fit": 1.0,
-      "rationale": "源列注释明确指向目标列，语义完全匹配。",
-      "cites": ["llm_provider_back.model_id", "llm_model.model_id"]
-    },
-    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1336,"cache_hit":true}
-  },
-  {
-    "relation": "llm_model_peak_config.model_id -> llm_model",
-    "band": "rejected", "score": 0.20,
-    "ai_output": {
-      "choice": "llm_model.model_id",
-      "semantic_fit": 1.0,
-      "rationale": "源端model_id指向目标表同名业务主键，符合配置引用实体的惯例。",
-      "cites": ["llm_model_peak_config.model_id", "llm_model.model_id"]
-    },
-    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1258,"cache_hit":true}
-  },
-  {
-    "relation": "llm_model_sort.model_id -> llm_model",
-    "band": "rejected", "score": 0.20,
-    "ai_output": {
-      "choice": "llm_model.model_id",
-      "semantic_fit": 1.0,
-      "rationale": "两表model_id均注释为模型ID，业务上应为同一实体的标识符关联。",
-      "cites": ["llm_model_sort.model_id", "llm_model.model_id"]
-    },
-    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1306,"cache_hit":true}
-  },
-  {
-    "relation": "llm_provider.model_id -> llm_model",
-    "band": "rejected", "score": 0.20,
-    "ai_output": {
-      "choice": "llm_model.model_id",
-      "semantic_fit": 1.0,
-      "rationale": "provider.model_id注释明确指向llm_model.model_id，语义匹配。",
-      "cites": ["llm_provider.model_id", "llm_model.model_id"]
-    },
-    "provenance": {"model":"qwen36-27B","prompt_sha":"4298cd825b10…18a6c9","tokens":1336,"cache_hit":true}
-  }
-]
-```
-
-> `cache_hit: true` 是因为这 5 条在前一轮小样本已入缓存；`tokens` 是**当初那次**的用量（不重复计费）。
-
-### 3.2 阶段 2 · 全量（`--budget-tokens 100000`）
-
-| 轮 | 请求 | 缓存命中 | 实际调用 | token | 结果 |
-| --- | --- | --- | --- | --- | --- |
-| 全量 #1 | 82 | 4 | **78** | **101,326** | **越预算 ⇒ exit 1，`out/req109/full1/` 只有 run.log（0 份提案文件）** |
-| 全量 #2（预算仍 100k） | 82 | 76 | **6** | **7,780** | exit 0，四份产物写出（补上 6 条当初被截断/作废的） |
-| 全量 #3（再跑一次） | 82 | **82** | **0** | **0** | exit 0，**命中率 100%，0 次调用** |
-
-**真实 token 总消耗 ≈ 122,718**（小样本 6,754 + 6,858 · 全量 101,326 + 7,780）。
-
-> 全量 #1 的 78 次调用里，**76 条有效、6 条被协议作废**；#2 只补那 6 条，
-> 其中 5 条这次答合规了、1 条仍超长 ⇒ #3 里 82 条全部命中（81 判定 + 1 作废回放）。
->
-> ⚠️ **为什么 #2 不是 0 调用**：#1 被预算**中途截断**（产品行为，AC-006 要求），
-> 那 6 条作废答案当时还没进缓存。#2 补完后才达到「全部命中」。
-
-### 3.3 阶段 3 · 再跑一次（缓存验证）
-
-全量 #3：`判定 81 条（缓存命中 82 · 实际调用 0 · 其中作废记录回放 1 条）· token 用 0 / 上限 100000 ·
-缓存命中率 100%`。第二次 e2e 项目 `req109ai` 亦为 `82 命中 / 0 调用 / 0 token`。
-
----
-
-## 4 · AI 开 / 关 分数对照
-
-同一 schema、同一采样、同一批 82 条关系；唯一差别是 `--llm`。
-
-| 指标 | AI 关（v1） | AI 开（v2） |
-| --- | --- | --- |
-| 分档 | 高 44 · 中 8 · 低 20 · 拒绝 10 | **高 40 · 中 12 · 低 23 · 拒绝 7** |
-| 有 `semantic_fit` 的关系 | 0 | 81（+1 条作废回放） |
-| **分数变化的关系** | — | **47 / 82** |
-
-### 4.1 档位变化（7 条）
-
-| 关系 | 分数 关→开 | 档位 | AI 的 `semantic_fit` / 理由 |
+| | 参照物 `code/out/ai-ontology.ttl` | 本实现 `--model-view` | 本实现**默认**（客户视图） |
 | --- | --- | --- | --- |
-| `customer_rebate.customer_id → customers` | 1.00 → **0.85** | 高→中 | **0.00** ·「customer_id非主键，customers.id是主键，类型虽匹配但业务上ID不对应。」 |
-| `deductions.customer_id → customers` | 1.00 → **0.85** | 高→中 | **0.00** ·「customers表主键id无业务语义，扣费记录中的customer_id应关联客户编号而非系统ID。」 |
-| `deductions.license_id → licenses` | 1.00 → **0.85** | 高→中 | **0.00** ·「源列名license_id，目标表无同名列，业务上通常外键对主键id或业务键key。」 |
-| `usage_reconciliation_log.subscription_id → customer_subscriptions` | 0.92 → **0.86** | 高→中 | 0.50 ·「…目标表无该列，仅id可对应，存在歧义。」 |
-| `llm_routing_rules.group_id → llm_provider_groups` | 0.26 → **0.37** | 拒绝→低 | 1.00 ·「规则表外键group_id指向组表主键id，类型一致。」 |
-| `proxy_operation_records.auth_id → proxy_operation_auths` | 0.26 → **0.36** | 拒绝→低 | 0.90 ·「…虽命名不完全对应但业务指向明确。」 |
-| `simulate_login_operations.session_id → simulate_login_sessions` | 0.26 → **0.30** | 拒绝→低 | 0.50 ·「…目标主键是主键ID，通常对应token或session_id，当前指向不明。」 |
+| `owl:Class` | 83 | **83** | **83** |
+| `owl:DatatypeProperty` | 866 | **866** | **843** |
+| `owl:ObjectProperty` | 52 | **52** | **52** |
+| 三元组总数（rdflib 解析） | 5954 | **5953** | **5472** |
+| `owl:InverseFunctionalProperty` | 52 | 52 | 52 |
+| 文件大小 | 231,948 B | 231,973 B | 220,676 B |
 
-### 4.2 分数变了但档位没变的 40 条（按 `semantic_fit` 分桶）
+**客户视图为什么是 843 而不是 866**（这是**既定行为**，不是导出漏了）：
 
-| `fit` | 条数 | 方向 | 例子 |
-| --- | --- | --- | --- |
-| **1.0** | 29 | 抬升（多为高/中档内的小幅加分） | `app_billing_transactions.app_id → service_apps` 0.92→0.93；`deductions.model_id → llm_model` 0.32→0.42 |
-| **0.5** | 12 | 折半 | `operate_log.session_id → simulate_login_sessions` 0.86→0.81；`order.subscription_id → customer_subscriptions` 0.70→0.74 |
-| **0.0** | 3 | 拉低 0.15（§5.2 标红的三条） | `*_customer_id → customers` 那一批 1.00→0.93（仍留高档） |
-| 0.8 / 0.9 | 3 | 小幅 | `proxy_operation_records.auth_id → proxy_operation_auths` 0.26→0.36 |
-
-> 结论：AI 的 15% 权重**只会让分数在同档内小幅移动**（±0.15 上限），
-> 只有「本来就在档位边界附近」的关系才会换档 —— 与设计概要 §3.1 的意图一致。
-
-### 4.3 veto 逐条复核（红线）
-
-- 82 条里 `score > veto.cap` 的：**0 条**；
-- REQ-108 的 E1–E7（7 条 `zero_hit`）：**全部仍是 0.20 / 拒绝**，即使 AI 给 1.0；
-- E8/E9（不产出）：`type_incompatible` 0.15 上限由单测按坐标构造复算覆盖（+AI 1.0 仍 0.15）。
-
----
-
-## 5 · 语义质量（**P1 观察项，不作通过条件**）
-
-BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮目标。以下**如实记录，不修饰**。
-
-### 5.1 本轮样本上的结论
-
-> **在本轮 82 条关系上，模型对 81 条给出了判断，但没有一条能被「用来修正结构」**：
-> 它在 5 条小样本上都正确地指出「业务键是 `llm_model.model_id`（choice）」，同时把
-> **`semantic_fit` 打成 1.0**（= 这条关系说得通）—— 而提案实际指向的是 `llm_model.id`。
-> 也就是说：**它读懂了「关系说得通」，但没有回答「目标列选对了吗」**；而 REQ-109 的语义项
-> **不允许改结构**（G1），所以「6 条 `model_id` 根因」**没有被修**（本轮也没打算修）。
-
-### 5.2 🔴 标红：AI 把 3 条**采样全部命中（`matched == sampled`）**的正确关系判成 0.00
-
-| 关系 | 采样（`matched / sampled`） | AI | 后果 |
-| --- | --- | --- | --- |
-| `customer_rebate.customer_id → customers` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
-| `deductions.customer_id → customers` | **1/1 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
-| `deductions.license_id → licenses` | **1/1 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
-
-> **订正（A-10 · N-3）**：原文写「3 条都是采样 **5/5**」，不准确。三者的**共同点是 `matched == sampled`**
-> （采样全部命中、命中率 1.0），**样本数分别是 5/5、1/1、1/1** —— 判据是「全部命中」，不是「必须采到 5 条」，
-> 结论方向不变。（实测来源：`out/req109/full3/proposal.json` 三条关系的 `sample_hit_rate` 信号，
-> `sampled`/`matched` 逐个为 5/5、1/1、1/1。）
-
-模型的三条 rationale 都建立在**同一个误解**上：「外键应指向业务键，不该指向无业务语义的主键 `id`」。
-但数据证据（各自 `matched == sampled`：5/5、1/1、1/1）恰恰证明 `customer_id` / `license_id` 的取值
-**确实存在于**目标的 `id` 里。
-采样**没能拦住**这条误判 —— 因为采样只往下压（veto），AI 的错判是往下扣分前的正常加权。
-
-- 影响：3 条**正确**关系从「高」降到「中」（仍进主提案，不会被丢弃）；
-- 定性：**模型能力问题，不是流程缺陷**（veto、预算、缓存、溯源全部按设计工作）；
-- 建议（不在本 REQ 内做）：若将来要让语义项真正参与裁决，需要**正/负两类样本校准**，
-  或把 `semantic_fit` 的方向性交给人工复核，而不是直接进分数。
-
-### 5.3 其它观察
-
-1. **`semantic_fit` 的语义歧义**：协议里它是「这条关系说得通吗」，但模型常答成「我选的
-   `choice` 有多可信」。5 条小样本里 5 条都是这种读法。Prompt 已明确写「choice 不改变评分，
-   目标列不对就该给低分」，模型仍倾向按 choice 打分 —— 属模型理解偏差，未再做提示词调优（BA 裁定）。
-2. **模型非确定**：同一输入两次调用，rationale 长度会变（66 字被判作废 / 41 字通过）。
-   ⇒ 幂等只能由缓存保证；`tokens` 回放也说明「同一条判断不重复计费」。
-3. **格式遵从度**：强化一次格式约束后，超 60 字的从 3/5 降到 1/82。仍不完美，但不值得继续调
-   （AC-009 的作废逻辑已把不合规答案挡在分数之外）。
-
----
-
-## 6 · 测试数字
-
-**权威口径**（每个 `--test` 目标前临时挪开 `src/bin/ontok-gate-preflight.rs`，
-跑完立即挪回；**sha256 before = after = `C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D`**，
-本会话**每一次**绕行都做了前后比对、全部一致；`git diff a8a51ed -- src/bin/ontok-gate-preflight.rs` 为空）。
-
-| 目标 | 本轮 | 基线（REQ-108） | 判定 |
-| --- | --- | --- | --- |
-| `cargo test --lib` | **230 passed / 0 failed** | 230 | ✅ 不退化 |
-| `cargo test --doc` | **4 passed / 0 failed** | 4 | ✅ 不退化 |
-| 32 个回归套件 | **313 passed / 0 failed** | 313 | ✅ 不退化（32 个套件逐套件名单见 **§6.1**） |
-| 新增 3 套件 | **31 passed / 0 failed** | — | 22 + 6 + 3 |
-| **套件合计（35 个）** | **344 passed / 0 failed** | 313（32 套件） | +31 |
-| **总计** | **578 passed / 0 failed** | 547 | +31 |
-
-跑测试时的环境：`ONTOK_TEST_DATABASE_URL`（本地库）+ `SRC_URL`（源库只读，供 `test_req108_live`）。
-**LLM 三个环境变量全程未设** —— 这就是 AC-011 的判据。
-
-新增用例分布：
-
-| 套件 | 条数 | 覆盖 |
+| 丢失点 | 条数 | 原因 |
 | --- | --- | --- |
-| `test_req109_ai_semantic` | 22 | 指纹 6 项 · 缓存 0 调用/清空重调/`--refresh` · 改 prompt · 预算停 · 协议 4 类作废 · 无 usage · 空正文 · 幂等 · v1/v2 权重 · veto 不被翻 · 缺失≠0 · 溯源成对 · 零泄漏 · 接缝 · 无 key |
-| `test_req109_cli_gate` | 6 | AC-002（全缺 / 单缺逐个）· AC-006（缺预算 / 0 预算）· `--refresh` 误用 · AI 关不受环境变量影响 |
-| `test_req109_e2e_fake_llm` | 3 | 真进程 + 假端点 + 真缓存表：缓存命中/删行重调 · 幂等（含 `cache_hit` 一位的差异证明）· 预算 1 不写产物 |
+| `view::project` 投影 | 12 | 属性名不可当人话用 / 是内部 key（客户视图本来就不发） |
+| `property_filter::filter_view` | 11 | 属性名是源库标识符形态（`customer_id` 那类），与 `/api/graph` / `/api/node` **同一份前处理** |
+| 合计 | 23 | 866 − 23 = **843** |
 
-### 6.1 · 32 个回归套件逐套件名单（合计 **313**）
+> 这 23 条在 stderr 有报告：`⚠ 发布闸前处理：共剔除 13 项（对象名 0 · 整条属性 11 · 只隐去说明 0 · 对象说明 2）…`
+> （13 = 11 条属性 + 2 个对象说明；另外 12 条在投影阶段就没进客户视图。）
 
-> **订正（A-9 · N-2①）**：原文此处写「逐套件同 **§11.3** 名单」——**本报告没有 §11.3**（那是 REQ-108 报告的
-> 章节号）。引用不存在的东西比不引用更坏，故把名单就地落地，别人不必去别处找。
-> 数据源：本次运行的 `out/req109/suites-final.log`（`out/` 是**本机未跟踪**目录，名单已就地落表，
-> 别人不必去别处找；绕行文件的 sha256 前后比对见 §6 抬头）。
+---
+
+## 3 · 与参照物是否等价（逐条差异，不是「一致」）
+
+判据（rdflib 7.6.0）：
+
+```python
+ref2 = 参照物 去掉 dcterms:created 那 1 条三元组
+isomorphic(ref2, 本实现的 --model-view)          # → True
+```
+
+**⚠️ `isomorphic` 必须对「参照物 − `dcterms:created`」做**：参照物里有 1 条带**生成时间**的
+`dcterms:created "2026-10-21T11:40:32.831145+00:00"^^xsd:dateTime`，而 R6 要求两次导出逐字节相同
+⇒ 本实现**刻意不写时间**。这是**唯一**的三元组差异（5954 → 5953）。
+
+逐条差异清单：
+
+| # | 差异 | 性质 | 是否三元组差 |
+| --- | --- | --- | --- |
+| 1 | 缺 `dcterms:created`（1 条） | **刻意**（R6 确定性；设计 §2.2 裁定「省略生成时间」） | **是**（唯一一条） |
+| 2 | 类块顺序：参照脚本按 `entity_types` 数组序（`agent_device_version` 开头），本实现按 **key 字典序**（`activity` 开头） | 确定性要求（R6）；**同构** | 否 |
+| 3 | 对象属性 `rdf:type` 多值：参照物 rdflib 折行成 `a owl:InverseFunctionalProperty,\n owl:ObjectProperty`，本实现写成一行 `a owl:InverseFunctionalProperty, owl:ObjectProperty` | 排版；**同构** | 否 |
+| 4 | 前缀声明：参照物 7 个（无 `skos`，rdflib 省了未用前缀），本实现固定 8 个（含 `dcterms`/`skos`） | 前缀不产生三元组；**同构** | 否 |
+| 5 | 文件头多了 `#` 有损声明块（AC-008：`ActionType` / `semantic` / `cardinality`） | 注释，非三元组 | 否 |
+| 6 | `prov:Activity` 的 blank node 标签不同（`n80ba…` vs `n88be…`） | bnode 标签无意义；**同构** | 否 |
+| 7 | 字面量集合：22 条类注释、8 条属性注释（`note != name` 才写）、52 条关系语义注释，逐条与参照物**相同** | — | 否 |
+
+⇒ **结论：去掉 `dcterms:created` 后 5953 条三元组逐条对应，图同构。**
+
+---
+
+## 4 · AC-002（守门器）怎么验的
+
+### 4.1 机制（为什么能守住）
+
+管线顺序（`pipeline::render` 的 `CustomerTurtle` 分支，`pipeline.rs:759`）：
+
+```
+CustomerView ──▶ filter_view（前处理，REQ-104 同一份）──▶ ttl::serialize_customer
+             ──▶ gate_text(spec, doc.body())   ← 扫的是**序列化之后的 TTL 正文**
+                    │
+              命中 ─┴──▶ Err(Leaked{hits}) ⇒ CLI: exit 2 / HTTP: 500
+```
+
+**扫的是最终字节，不是结构字段**：属性名/说明里的「主键」会变成 `rdfs:label` / `rdfs:comment`
+字面量，IRI 本地名也是从名字生成的 —— 只扫结构字段会漏掉「序列化过程自己引入的文本」。
+
+### 4.2 构造的命中样例 + 拒绝输出（真进程）
+
+构造（测试 `tests/test_req110_ttl.rs:415` `live_frozen_version(..., poisoned=true)`）：
+项目 → 第 1 版 → 写快照 → 冻结，实体 `订单` 的 `description = "本表的主键服务中心，按业务口径解读"`。
+
+```
+AC-002 现场：project=t_req110bad_15704_0 version=1 · exit=Some(2) · stdout=0 字节
+stderr: ⚠ 客户视图泄露了建模术语（出口 C6）：["主键"]
+```
+
+- `exit=2` = `EXIT_LEAKED_MODELING_TERMS`；**stdout 0 字节**（拒绝时不写半个字）；
+- 词条**只进 stderr**，错误正文不含「主键」（`ac002_a_poisoned_note_is_refused_by_the_customer_export` 断言）；
+- 清掉说明后同一套流程 `exit=0` 且产物有内容（对照组，防「恒拒绝」）。
+
+### 4.3 ⚠️ 构造用例时必须避开的一个陷阱（实测踩到过）
+
+第一版用的是 **`"这张表的主键是 order_no"`** —— 结果 **200 / exit 0**，闸根本没命中。
+原因：`property_filter` 判定「说明里带源库标识符（`order_no`）」⇒ 整段说明被**前处理隐去**
+（REQ-104 行为），发布闸看到的是已经干净的正文。
+⇒ 命中样例必须用**不含 ASCII 标识符**的形态（`主键服务中心`）；这条已写进测试注释，
+免得下一个人以为闸坏了。
+
+### 4.4 HTTP 侧
+
+`ac002_a_poisoned_note_is_refused_on_the_ttl_endpoint`：同一份脏视图 ⇒
+`GET /api/ontology.ttl`（带正确 token）= **500**，响应体不含「主键」、不含对象名、不含 `@prefix`（一个正文字节都不给）。
+
+---
+
+## 5 · AC-005（`/` 壳内零数据）实测
+
+### 5.1 `secretproj` / 第 7 版（真路由，进程内）
+
+`src/server/http.rs:1450`，`state_from_view(&view, "secretproj", 7, TOKEN, 0)`，视图里放一个
+名为 `绝密对象` 的对象；**`GET /` 不带 token**：
+
+```
+AC-005 现场：project=secretproj version=7 · GET / 无 token = 200 · shell=12479 字节 ·
+grep「secretproj」=false 「绝密对象」=false 「第 <b>7</b> 版」=false · body==INDEX_HTML：true
+```
+
+⇒ 200、响应体与 `page::index_html()` **逐字节相同**（等于证明「服务端没往里拼任何东西」）。
+
+### 5.2 真 socket + 真库复核（`anspire_ai` v2，83 个对象）
+
+```
+GET /                                     -> 200
+GET /api/ontology.ttl   (无 token)        -> 401
+GET /api/scope          (无 token)        -> 401
+GET /api/graph          (无 token)        -> 401
+GET /api/ontology.ttl   (带 token)        -> 200
+GET /api/scope          (带 token)        -> 200 {"project":"anspire_ai","version":2}
+```
+
+`GET /` 响应体（**12479 字节 / 11267 字符**，sha256 与 golden `H1_index.html` **相同**）里逐词 grep：
+
+| 词 | 命中 |
+| --- | --- |
+| `anspire_ai`（项目名） | **0** |
+| `第 2 版`（版本号） | **0** |
+| `订单` / `客户` / `API_调用明细`（对象名） | **0 / 0 / 0** |
+| `"version"` / `83` | **0 / 0** |
+
+（模板里唯一一个「项目」出现在 `$("#who").innerHTML = "项目 <b>"…` —— 那是**取到 scope 之后**
+由 JS 拼的 UI 文案，不在壳的静态字节里；对象名 `客户` 已从模板注释里删掉，golden 里 0 命中。）
+
+---
+
+## 6 · AC-007（CLI 与 HTTP 逐字节相同）的 sha256
+
+```
+CLI :  ontok ontology export --project anspire_ai --version 2 --out customer.ttl
+HTTP:  GET /api/ontology.ttl  (Authorization: Bearer …)
+
+47C2F166689E0A0017F742CA41815BA4BA8525EE347D28D24FA9834BBB539D98  customer.ttl
+47C2F166689E0A0017F742CA41815BA4BA8525EE347D28D24FA9834BBB539D98  http.ttl
+```
+
+响应头（实测）：
+
+```
+content-type: text/turtle; charset=utf-8
+content-disposition: attachment; filename="anspire_ai-v2.ttl"
+content-length: 220676
+```
+
+**为什么必然相同**：两条路都只调 `pipeline::render(id, Product::CustomerTurtle{…})`
+（`publish_customer(C6)` / `get_ttl(H4)`），HTTP 侧的 `state.view` 就是同一份已过前处理的视图；
+`filter_view` 幂等（`property_filter.rs` 已钉），所以「剔一次再剔一次」不改变字节。
+`ac007_http_and_cli_ttl_bytes_are_identical` 在进程内直接比**字节**（比 sha256 更强）。
+纪律 H 另有否定式判据：`cli.rs` / `http.rs` 里直调 `serialize_customer(` 的处数 = **0**（`test_req110_ttl.rs:283`）。
+
+---
+
+## 7 · AC-010：改写了哪条测试（改前 / 改后）
+
+**主判据**（`src/server/http.rs`，原 `unauthenticated_probes_cannot_discover_which_paths_exist`）：
+
+| | 改前 | 改后 |
+| --- | --- | --- |
+| 测试名 | `unauthenticated_probes_cannot_discover_which_paths_exist` | `unauthenticated_probes_learn_nothing_but_the_shell_exists`（`:986`） |
+| `GET /` 无 token | 断言 **401** | 断言 **200**，且响应体含「业务关系图」、**不含项目名** |
+| `/api/*` 无 token | 401（含未注册路径、`POST /api/apply`） | **不变**：401（含未注册路径、变更动词） |
+| 代价 | 「连有哪些路径都探测不到」 | 「能探测到有个服务在（`/` 200），但**探测不到任何接口、拿不到任何数据**」 |
+
+**配套改写（都是为了 R4/AC-005 的新形态，断言没有放宽）**：
+
+| 文件 | 原测试 | 改后 | 理由 |
+| --- | --- | --- | --- |
+| `tests/test_graph_server.rs` | `the_page_carries_its_scope`（断言页面**含** `demo3`） | `the_shell_carries_no_scope_and_fetches_it_from_a_gated_api`（断言页面**不含**项目名，且确实从 `api/scope` 取） | 壳内零数据 |
+| `tests/test_exit_ordering_req106.rs` | `the_homepage_gate_calls_the_mcp_guard_itself`（page.rs 里出现 `mcp::tools::guard`） | `the_project_name_gate_is_the_mcp_guard_itself_on_its_new_outlet`（page.rs **没有**判据；`/api/scope` 经 `publish_json`；管线仍直调 `guard`） | 项目名出口从首页搬到 H5 |
+| 同上 | `the_project_placeholder_occupies_a_whole_js_literal`（模板里有 `%%PROJECT%%`） | `the_shell_has_no_injection_point_at_all`（模板**不许**有占位符 / `js_string_literal`；`index_html()` 必须无参） | 注入点整段删掉 |
+| `src/server/http.rs` | `a_hostile_project_name_cannot_break_the_page`（JS 字面量转义面） | `a_hostile_project_name_cannot_break_the_shell_or_the_scope_json`（任意项目名下 `/` 字节**完全相同**；`/api/scope` 的 JSON 能原样还原） | 转义面从页面搬到 JSON 出口 |
+| 同上 | `a_project_name_with_modeling_terms_is_refused_on_the_homepage` | `…_on_the_scope_endpoint` | 闸门出口改名 |
+| 同上 | `a_clean_project_name_still_serves_the_homepage` | `a_clean_project_name_still_serves_the_scope` | 对照组跟着搬 |
+| 同上 | `the_homepage_gate_does_not_bypass_the_token_gate` | `the_public_shell_does_not_open_the_scope_endpoint`（壳公开 ≠ 数据公开） | 语义更强：公开的壳不许顺带打开 scope |
+| 同上 | `without_token_every_endpoint_is_401` | `without_token_the_shell_is_public_but_every_api_is_401` | 逐条列 4 个 API 断言 401 |
+
+**没有任何测试被删除、`#[ignore]` 或放宽**（`OUTLETS` 条数 33→39 是**新增 6 条出口**，
+分组 13/8/9/2/1 → 17/10/9/2/1 逐项精确相等；每个新出口都带自己的 write-point needle + 证据调用）。
+
+---
+
+## 8 · 测试数字
+
+```powershell
+# 全量 cargo test 在 Windows 编不过（既有问题：src/bin/ontok-gate-preflight.rs 是 unix-only）
+# 绕行：临时挪开该文件 → 逐套件跑 → 挪回 → sha256 前后一致
+sha before = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+sha after  = C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D   ← 一致
+```
+
+| 项 | 本轮 | 基线 | 判 |
+| --- | --- | --- | --- |
+| lib（`cargo test --lib`） | **245** | 230 | ✅ +15（ttl 9 + http 6） |
+| doc（`cargo test --doc`） | **4** | 4 | ✅ 一条不少 |
+| 32 个基线回归套件 | **313** | 313 | ✅ **一条不少**（逐套件见下表） |
+| 新增套件 `test_req110_ttl` | **14** | — | 新增 |
+| 另跑（受本次改动影响）`test_read_only_guard` / `test_domain_print_sites_binary_req078` | 5 / 4 | — | 均绿 |
+| **套件合计（35 个）** | **336** | （REQ-109 口径 344） | 见下注 |
+
+> 注：基线「35 套件 344」= 32 个回归套件 + REQ-109 的 3 个新套件（31 条）。
+> 本轮 32 个回归套件仍是 **313**；本轮新增 1 个套件 14 条；另加两个受影响套件 9 条 ⇒ 35 套件 **336**。
+> 口径不同（基线那 3 个 REQ-109 套件不在本轮 35 个里），比的是**回归套件 313 一条不少**这条。
+
+<details>
+<summary>逐套件（本轮实测，全部 0 failed）</summary>
 
 | 套件 | passed | 套件 | passed |
 | --- | --- | --- | --- |
@@ -493,46 +297,223 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 | `test_binary_output_guard` | 7 | `test_no_write_path` | 4 |
 | `test_graph_server` | 9 | `test_provenance_source` | 5 |
 | `test_guard_manifest_req081` | 6 | `test_overview` | 17 |
-| `test_apply` | 21 | `test_req108_live`（需 `SRC_URL`） | 5 |
+| `test_apply` | 21 | `test_req108_live` | 5 |
 | `test_snapshot` | 10 | `test_req108_confidence` | 10 |
 | `test_snapshot_write_paths` | 8 | `test_req107_source_enumeration` | 10 |
-| **合计** | **313**（= 基线，未退化） | | |
+| **小计（32 套件 = 基线）** | **313** | | |
+| `test_req110_ttl`（新） | 14 | `test_read_only_guard` | 5 |
+| `test_domain_print_sites_binary_req078` | 4 | **合计** | **336** |
 
-> 另：新增 3 套件 22 + 6 + 3 = **31**；lib **230** + doc **4**；合计 **35 套件 344 + 230 + 4 = 578**（与 §0 一致）。
+</details>
+
+> `tests/test_retained_names_req084.rs` 用 `include_str!("../src/bin/ontok-gate-preflight.rs")`，
+> 挪开绕行文件时它**编不过** —— 既有问题、不在 32 个基线套件里，本轮未触碰。
 
 ---
 
-## 7 · 偏差 / AC 缺陷 / 已知限制
+## 9 · 与设计/需求的偏差（如实登记）
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| D-1 | **AC-004 与 AC-003/AC-010 互斥** | 见 §2.4。`cache_hit` 必须落产物（3 处要求）× 它逐次不同 ⇒ 「两次 sha256 完全相同」不可能成立。本实现保留 `cache_hit`，判据改为「归一后相同 + 差异只有这一行」，并给出逐行 diff 证据。**请 BA 裁定** |
-| D-2 | `ai` 挂在 `confidence` 里，不是条目的顶格键 | demand 写「提案条目带 `ai: {…}`」。若做顶格键，`propose import` 会把它搬进 `payload` 后**再没人读**（快照层 `LinkType` 只认 `confidence`），于是文件一份、库里没有 ⇒ 两份迟早不一致。挂在 `confidence.ai` 则**一次写入**穿到提案/审核界面/快照/建模轨。字段本身（`model` / `prompt_sha` / `tokens` / `cache_hit`）与 demand 逐字一致 |
-| D-3 | 新增两个**只截断**的运维闸 | `--llm-only` / `--llm-limit`，为满足「先 5 条小样本再全量」。不参与判据 |
-| D-4 | `ai_cache.tokens_used` 允许 NULL | 历史行/缺 usage 的回放记 0（不编数）。报告里 token 总量会偏低，这是唯一诚实的表示 |
-| D-5 | **作废答案也进缓存** | 否则每条被协议作废的关系每次重跑都要再付一次钱，且「第二次 0 调用」永远不成立。回放时**照样作废**（`judgement=None`），不会被当成「AI 说不成立」 |
-| D-6 | **设计概要漏写 `ONTOK_DATABASE_URL`**（A-9 · N-4） | `--llm` 除三件 `ONTOK_LLM_*` 外**还要求 `ONTOK_DATABASE_URL`**：AI 缓存要落库（`ai_cache` 表与其余 DDL 编在同一条取了咨询锁的迁移 batch 里，见 §1.2 `src/db/pg.rs`），没有库就没有缓存 ⇒ 每次全量重付费、AC-003 的「第二次 0 调用」根本不成立。**补丁待 BA 落库**（`design-summary.md` 在 `BA/`，本轮 Dev 不改）：§五 开关表 `--llm` 行的「开 ⇒ 必须有三件环境变量，否则 exit≠0」改为「**开 ⇒ 必须有三件 `ONTOK_LLM_*` 且 `ONTOK_DATABASE_URL` 可用（AI 缓存落库），否则 exit≠0**」 |
-| D-7 | **测试模块头的失效引用**（A-9 · N-2②） | `tests/test_req109_ai_semantic.rs:23` 的模块头仍写「真库用例在 `tests/test_req109_ai_cache_pg.rs`」，**该文件不存在**；真实文件是 `tests/test_req109_e2e_fake_llm.rs`（真进程 + 本地假端点 + 真 `ai_cache` 表）。本轮是**文档轮、不碰 `tests/`**，故只登记：下一轮改这一行注释即可（1 行、零逻辑） |
-| L-1 | G1 不变 | AI 只能在候选集合内选择；跨表 retarget 无能为力 ⇒ `model_id` 根因修不了 |
-| L-2 | G2 不变 | 供应商静默升级模型时缓存仍返回旧结果（`model_id` 只防显式切换） |
-| L-3 | 成本 | 全量 82 条 ≈ 101k token（≈1.2k/条，含推理）；83 表全量靠缓存与预算闸控制 |
-| L-4 | 本地库副作用 | 为 AC-010 的端到端 grep，本地库建了 `project req109ai` 并 import→apply 到 **v2**；`req109full` 只建了项目未落版本。两者都不影响仓库内容 |
+| D-1 | **AC-002 与 AC-008 字面互斥** | 见 §10.1。取舍：**闸扫数据正文**（`TtlDocument::body`），文件头是常量（只随动作层条数变）。**请 BA 裁定是否接受这一口径**（不接受的话，AC-008 的 `cardinality` 关键词必须改成别的写法，否则每次客户导出都会 500） |
+| D-2 | **新增 `/api/scope`（出口 H5）** | `/` 变静态壳后，页面必须在拿到口令之后才知道「看哪个项目、哪一版」。R4 说「数据一律走 gated API」⇒ 作用域也走 gated API，而不是塞进 URL/壳。代价：多一条出口（已登记） |
+| D-3 | **H1 golden 重锚** | 见 §10.2。这是需求要求的可见变化，golden 仍由**生产路径**产出，`SHA256SUMS` 同步更新 |
+| D-4 | `state_from_view` 多一个参数 `action_type_count` | 只用于 TTL 文件头声明动作层条数。6 处测试调用点同步补 `0`；`test_req107_zero_visible_change.rs` 的「可在 b714f48 上编译」这一历史属性到此为止（生成器是一次性步骤，golden 已锚定） |
+| D-5 | 客户视图 TTL 不含 `ontok:key` / `ontok:column` / `ontok:cardinality` | 客户视图里**根本没有** key / 列名 / 基数记号；而且 `key` / `cardinality` 是守门词，进了正文 ⇒ 每次导出必被拒。客户侧只导 TBox 骨架（名字、说明、父子、属性、关系、人话基数→OWL 特征） |
+| D-6 | `--format` 只认 `ttl` | demand 的目标命令写的是 `--format ttl`，任务表写的是不带 `--format`；两个都支持：默认 `ttl`，写别的值**直接报错**（不静默回退） |
+
+### 已知限制
+
+| # | 限制 | 影响 |
+| --- | --- | --- |
+| G1 | 只导 TBox（类/属性/关系），不含实例（ABox）与样例值 | 与设计 §七 G1 一致；客户视图的 `sample` 刻意不导出 |
+| G2 | `ActionType` / `Function` 不导出 | OWL 无对应；只在文件头声明**条数** |
+| G3 | 不导 SHACL 形状（`nullable` 只作为 `ontok:nullable` 注解） | 后续可加 |
+| G4 | 建模视图 IRI 本地名用参照脚本的 `local()`（非 `[0-9A-Za-z_]` → `_`） | **不是单射**（`a-b` 与 `a_b` 撞）；参照物如此，本轮照抄以保持等价。客户视图另用 `local_customer`（保留汉字 + 撞车加 `_2`） |
+| G5 | 关系 IRI 用 `from__to`（参照脚本口径） | 同一对类型多条关系会撞成同一 subject；本轮数据 52 条两两不同（`pairs unique = 52`），已在 `ttl.rs` 模块头登记 |
+| G6 | `/` 免 token ⇒ 服务存在性可被探测 | ADR-004 记录的取舍；壳内零数据由 AC-005 钉住 |
 
 ---
 
-## 8 · 我认为最可能被 QA 打回的一点
+## 10 · 两个必须让 BA 拍板的地方
 
-**AC-004 的改口径（D-1）。**
+### 10.1 AC-002 与 AC-008 按字面**不可能同时成立**
 
-理由：这是**唯一一条我没有按字面交付的 AC**。我给出的证据是「差异只有 `cache_hit` 一行」，
-但 QA 完全可以说「AC 写的是四份 sha256 相同，你交的是归一后相同」。
+| AC | 要求 |
+| --- | --- |
+| AC-008 | 文件头注释**必须**包含 `ActionType` / `semantic` / **`cardinality`** |
+| AC-002 | 序列化后跑 `scan_modeling_terms`，**命中即拒绝导出** |
+| 事实 | `cardinality` **正是**守门词表 `MODELING_TERMS` 的一员（`view.rs:898`） |
 
-对打的理由也摆在桌面：要按字面满足 AC-004，只能**把 `cache_hit` 从产物里删掉** ——
-那会同时违反 AC-003（「第二次 `ai.cache_hit == true`」）、AC-010（「model-view 必须有」）
-和 demand §范围 6（「提案条目带 `ai: {…, cache_hit}`」）。**三条 AC 里至少有一条必须让步**，
-我选择让步那条**自相矛盾**的，并在报告里把互斥关系与逐行 diff 一起交出来。
+⇒ 如果「扫整份文件」，那么**每一份合法的客户导出都会被自己的文件头拒掉**（exit 2 / 500）。
+本实现的取舍（已写进 `ttl.rs` 模块头，并有两条测试钉住）：
 
-第二可能被打回的是 **D-2（`ai` 在 `confidence` 内而不是条目顶格）** —— 同上，给了结构性理由。
+- `ttl::TtlDocument` 把**常量头**与**数据正文**分开；管线只扫 `body`；
+- 头是编译期常量 + 一个计数（动作层条数），**不含任何数据字节**，所以排除它不会放过任何泄漏面；
+- 反过来说，**任何由数据生成的文本**（IRI 本地名、label、comment 字面量、`ontok:sourceProject`）
+  都在扫描范围内 —— 这正是 AC-002 要防的（§4.2 的现场证据）。
 
-第三是 **§5.2 的三条误判**：那 3 条采样全命中（`matched == sampled`：5/5、1/1、1/1）的正确关系被 AI 扣了 0.15 分（高→中）。
-按 BA 裁定这**不阻断交付**，但 QA 若认为「AI 降低正确关系」不可接受，需要 BA 决定是否调权重。
+**备选方案（若 BA 不接受）**：把 AC-008 的关键词改成 `multiplicity` / `关系数量`，或允许文件头
+用 `cardinality` 的**断词写法**（`cardina­lity` 带软连字符）—— 两者都比现在丑，且后者会让 grep 判据失真。
+
+### 10.2 REQ-107 的 H1 golden 被有意重锚
+
+`GET /` 从「内嵌项目名的页面」变成「零数据静态壳」是 **R4 / AC-005 的硬要求**，
+所以 H1 的字节**必然**变化。处理方式：
+
+- 新 golden = `src/server/page.rs` 的 `INDEX_HTML` 常量本身（H1 走 `Product::Text`，干净模板过闸后逐字节返回）；
+- `SHA256SUMS` 里 H1 那一行同步更新（其余 12 份**逐字节未动**）；
+- `PROVENANCE.txt` 追加一段说明「REQ-110 重锚 H1，为什么，怎么重锚」；
+- 判据本身**没有放宽**：`test_req107_pipeline_bytes` / `test_req107_zero_visible_change` 仍然是**逐字节**比较。
+
+**QA 可能会问**：「你是不是把 golden 改了让它变绿？」——不是：改的是**被要求改的**那一份，
+改动有需求依据（AC-005）、有来源说明（PROVENANCE）、有独立的判据（AC-005 的 0 命中）。
+
+---
+
+## 11 · 我认为最可能被 QA 打回的一点
+
+**§10.1 的 AC-002 口径收窄。**
+
+AC-002 的原话是「序列化后先跑 `scan_modeling_terms`，命中即拒绝导出」。
+本实现扫的是 `TtlDocument::body`（全部数据字节），**不是整份文件** —— 因为整份文件里有一行
+AC-008 强制要求的 `cardinality`。
+
+我会预期 QA 拿这条来打：
+1. 它确实**不是**字面意义的「扫整份文件」；
+2. 而且我把文件头排除在扫描外，属于**对判据的解释**，不是判据本身。
+
+我的辩护是：（a）两个 AC 字面互斥，必须有一方让步；（b）让的是**常量**那一侧，不是数据那一侧；
+（c）文件头不含任何数据、只随动作层条数变，扫它不可能发现新泄漏；（d）如果 QA 仍不接受，
+最小改法是**把 AC-008 的关键词换掉**（一个字符串），而不是放宽 AC-002。
+
+第二可能被打回的是 **§10.2 的 H1 golden 重锚**（「你动了 REQ-107 的基线」）——见上面的说明。
+
+---
+
+## 附录 A · ADR-004 全文（请 BA 落库到 `BA/decisions/ADR-004-页面可达性与门禁.md`）
+
+```markdown
+# ADR-004 · 页面可达性与门禁（`/` 免 token 的取舍）
+
+- 日期：2026-10-21
+- 状态：已接受（REQ-110 实现，待 BA 落库）
+- 相关：REQ-093（只读图服务）/ REQ-106（首页项目名注入）/ REQ-107（出口收口）/ REQ-110（本 ADR 的触发者）
+- 代码落点：`src/server/http.rs`（`build_router` / `require_token` / `index` / `get_scope`）、
+  `src/server/page.rs`（`INDEX_HTML`）
+- 改写（不是删除）：REQ-093 的判据「未登录探测不到任何路径」
+
+## 背景
+
+REQ-093 的只读图服务把身份门 `require_token` 挂在**全局 layer** 上 —— 包括 `GET /`
+这个**静态页面壳**。于是出现一个死循环：
+
+- 要看到页面，得先有口令；
+- 要填口令，得先看到页面；
+- 而浏览器的导航请求**不可能**带 `Authorization: Bearer …` 头。
+
+这条门禁的初衷写在 REQ-093 的判据里：「未登录连有哪些路径都探测不到」。
+它的代价在当时被接受，是因为服务只给「已经拿着口令的人」用；
+但只要产品要「打开浏览器就能看到页面」，它就把页面本身锁死了。
+
+## 决策
+
+**`GET /` 免 token，`/api/*` 一律要 token。**
+
+| 路由 | token | 内容 |
+| --- | --- | --- |
+| `GET /` | **免** | **静态页面壳**：HTML/CSS/JS 全部内联，**不含任何本体数据**（没有项目名、没有版本号、没有图、没有对象名） |
+| `GET /api/scope` | **必须** | 页面壳拿口令后问「看哪个项目、哪一版」 |
+| `GET /api/graph` | **必须** | 整份客户视图（图） |
+| `GET /api/node` | **必须** | 单个对象的属性与说明 |
+| `GET /api/ontology.ttl` | **必须** | TTL 导出（页面上的「导出 TTL」按钮） |
+
+实现要点：
+
+1. `require_token` 从「全局 layer」改为**只加在 `/api` 子路由**上；
+2. `/api` 子路由**自带 fallback**，且身份门排在 fallback **之前** ——
+   未注册的 `/api/xxx` 无口令同样是 **401**，`/api` 这一层的路径探测仍然探测不到；
+3. `GET /` 的响应体与 `page::index_html()` **逐字节相同**（服务端没有往里拼任何东西）；
+4. 页面拿口令后先 `GET /api/scope`，再 `GET /api/graph` / `/api/node`；导出按钮走 `GET /api/ontology.ttl`。
+
+## 取舍与代价（必须一起读）
+
+| 得到 | 付出 |
+| --- | --- |
+| 浏览器能打开页面（口令框终于等得到人） | **服务存在性可被探测**：无口令的人知道「这里有个服务」 |
+| 页面有「导出 TTL」按钮，不再靠手工脚本 | 多一条 gated 出口（H4 / H5），必须登记进 REQ-107 的 `OUTLETS` |
+| 项目名出口从「首页整页」收窄到「`/api/scope` 一个 JSON」 | `/api/scope` 成为项目名的唯一回显点，必须过同一道发布闸 |
+
+**没有付出的**（这一条是这次决策能被接受的关键）：
+
+- 数据面**一个字节**都没有多放出去：`/api/graph` / `/api/node` / `/api/ontology.ttl` 无口令全部 401；
+- 页面壳**不含任何数据**：用一个叫 `secretproj`、第 7 版、含 `绝密对象` 的项目起服务，
+  `GET /` 的响应体里 grep 项目名 / 版本号 / 对象名 **0 命中**（AC-005）；
+- 口令仍然**不出现在**响应体、页面源码、日志、错误信息里（REQ-106 的既有判据全部保留）。
+
+## 判据改写（不是删除）
+
+REQ-093 的原判据 `unauthenticated_probes_cannot_discover_which_paths_exist`
+（「未登录连有哪些路径都探测不到」）**改写**为
+`unauthenticated_probes_learn_nothing_but_the_shell_exists`：
+
+| 请求 | 期望 | 理由 |
+| --- | --- | --- |
+| `GET /` | **200** | 静态壳，零数据 |
+| `GET /api/…`（含**未注册**路径） | **401** | `/api` 这一层的路径探测仍然探测不到 |
+| `POST /api/…` | **401**（不是 405） | 变更动词也不许泄露「这个 API 存不存在」 |
+
+⛔ 测试是**改写**，不是删除、不是 `#[ignore]`、不是放宽：
+`/api/*` 的每一条断言都还在，只是 `/` 从「401」变成「200 且不含数据」。
+
+## 被拒绝的方案
+
+| 方案 | 为什么不行 |
+| --- | --- |
+| 把 token 写进页面源码 | 等于把口令发给所有能打开页面的人；口令会进缓存、进截图、进 git |
+| token 放 URL query（`/?token=…`） | 进浏览器历史、进 Referer、进代理日志 |
+| 只放开 `/api/graph` | 数据面直接公开，等于取消门禁 |
+| 给浏览器一条「无 token 的壳数据接口」 | 把数据出口换个名字，门禁形同虚设 |
+| 用 Cookie + 登录页 | 需要会话/过期/吊销 —— 那是 REQ-099 的活，本轮不做 |
+
+## 后果
+
+- **正面**：页面可达；导出在产品内；项目名的回显点从「整页 HTML」收窄成一个 gated JSON。
+- **负面**：服务存在性可被探测（已接受）；`/` 从 401 变 200 是对 REQ-093 判据的**有意改写**，
+  已按 AC-010 要求同步改写测试并写本 ADR。
+- **将来**：若需要「连服务存在性都藏起来」，正确做法是**前置一层反代/网关**做统一身份，
+  而不是把静态壳再锁回去（那会把页面可达性重新变成死循环）。
+```
+
+---
+
+## 附录 B · 复现命令（照抄即可）
+
+```powershell
+cd <repo-root>\feature-REQ-110
+$env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/ontok_demo'
+
+# ① 两种导出 + 确定性
+.\target\debug\ontok.exe ontology export --project anspire_ai --version 2 --model-view --out model.ttl
+.\target\debug\ontok.exe ontology export --project anspire_ai --version 2 --out customer.ttl
+.\target\debug\ontok.exe ontology export --project anspire_ai --version 2 > customer2.ttl
+Get-FileHash customer.ttl,customer2.ttl -Algorithm SHA256      # 两个 hash 相同
+
+# ② 与参照物同构（需 python + rdflib）
+python -c "import rdflib; from rdflib.compare import isomorphic; from rdflib.namespace import DCTERMS; \
+ref=rdflib.Graph(); ref.parse('..\code\out\ai-ontology.ttl',format='turtle'); \
+got=rdflib.Graph(); got.parse('model.ttl',format='turtle'); \
+r2=rdflib.Graph(); [r2.add(t) for t in ref if t[1]!=DCTERMS.created]; \
+print(len(ref),len(got),isomorphic(r2,got))"     # 5954 5953 True
+
+# ③ 页面可达性 + AC-007
+$env:ONTOK_VIEW_TOKEN='req110-live-token-8'
+.\target\debug\ontok.exe serve --project anspire_ai --version 2 --bind 127.0.0.1:8791
+# 另开一个终端：
+curl.exe -s -o shell.html -w "%{http_code}`n" http://127.0.0.1:8791/                 # 200
+curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8791/api/ontology.ttl          # 401
+curl.exe -s -H "Authorization: Bearer req110-live-token-8" \
+     -D h.txt -o http.ttl http://127.0.0.1:8791/api/ontology.ttl                        # 200
+Get-FileHash http.ttl,customer.ttl -Algorithm SHA256                                    # 相同
+Select-String -Path shell.html -Pattern 'anspire_ai'                                    # 0 命中
+```
