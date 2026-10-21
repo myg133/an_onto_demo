@@ -8,7 +8,7 @@
   "assigned_at": "2026-10-22 00:54:00",
   "plan": "BA/demands/REQ-115/demand.md",
   "acceptance": "BA/demands/REQ-115/acceptance.md",
-  "status": "进行中（QA 首轮 FAIL → 按裁定 C 修复 C-1/C-2/C-3，待复审）",
+  "status": "进行中（QA 复审 PASS 后补 N-1 真进程接线判据 + P1-1 边界措辞 + N-2 文档，待合并）",
   "scope": "src/domain/{graph,concept,concept_suggest,pipeline,mod}.rs + src/server/{http,page}.rs + src/cli.rs + H1 golden 重锚 + 新测试（test_req115_groups / req115 group_probe）",
   "notes": [
     "用户问「归并没效果？」——查清是三层都空：concept_groups=0 / http.rs 写死 parent:None / 页面 0 命中。",
@@ -20,6 +20,9 @@
     "H1 golden 重锚：d8bd4581…（32396 字节）→ c8d5e148…（49936 字节）；H2 及其余 11 份逐字节未动。",
     "suggest 两次运行 sha256 相同（abc9068a…）；折叠前后 TTL 与 ontology show 逐字节相同。",
     "下一轮待办（已登记）：把 scope_hint 拆成 scope_hint（客户可见）+ review_note（内部轨）。",
+    "N-1：tests/test_req115_import_gate.rs 用真进程钉住导入闸接线（脏 scope_hint ⇒ exit 1 + 提案数不变；干净 ⇒ exit 0 + 提案 +1）；注释掉 cli.rs 调用点 ⇒ 该测试红（已实测）。",
+    "P1-1：边界写准确 —— C-1 只挡新导入；已入库旧快照仍按原行为拒发（v3 仍 500），清理需重新导入/重建快照。",
+    "N-2：闸是词元级匹配，api_key_group/license_key 不算命中（有意）；不改。",
     "本机无 headless 浏览器 ⇒ 折叠/组圈只有源码级 + 纯函数级（Node 探针）+ 真 HTTP 级判据，未做真浏览器手测。"
   ]
 }

@@ -61,10 +61,15 @@ b714f48
 #
 #   ⚠️ 页面的第二次变化（QA 阻断修复 · 第 2 轮 C-1/C-2/C-3）：
 #   组面板**照常显示 `scope_hint`**（客户可见的组说明，与业务总览的 `summary` 同一口径，C-3）。
-#   之所以不再有「一句话打挂整份图」的风险，是因为**导入时**就过客户闸（C-1：
+#   **新导入**的声明不会再出现「一句话打挂整份图」：导入时就过客户闸（C-1：
 #   `display_name` / `scope_hint` / 组 `key` 命中即拒），而且 `concept suggest` 不再往
 #   `scope_hint` 写内部备注（C-2）。QA 阻断的那一句（`api_entitlement.scope_hint` 里的
-#   「未持 Key」）现在会在 `concept import` 被点名拒绝，而不是出图时整份 500。
+#   「未持 Key」）现在会在 `concept import` 被点名拒绝。
+#
+#   ⚠️ **边界（⛔ 别写成「已封堵」）**：C-1 只挡**新导入**。**已入库的旧快照**仍按原行为拒发
+#   （`/api/graph` 500 / `ontology overview` exit 2）—— 读路径本轮没改。
+#   清理旧数据只能**重新导入**（改措辞 + 重算 digest）或**重建快照**。
+#   （本机现场：`anspire_excl_r115` v3 就是 C-1 之前入库的脏快照，仍会 500。）
 #
 #   ⚠️ 为什么 H2_graph.json 可以**不变**（REQ-115 明明加了 `groups`）：
 #   `/api/graph` 的分组落在**另一个装配入口**（`state_from_view_with_groups`），

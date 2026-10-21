@@ -346,6 +346,16 @@ impl std::fmt::Display for GroupNameHit {
 /// - `display_name` —— 客户在页面上看到的组名；
 /// - `scope_hint` —— 客户在总览里看到的组说明（也是图上的组说明，C-3 同一口径）；
 /// - `key` —— 线上是 `groups[].id`（**值**也会被闸扫，不只是键名）。
+///
+/// # ⚠️ 匹配是**词元级**的（有意为之）—— `api_key_group` **不算**命中
+///
+/// `scan_modeling_terms` 把 `_` 当词内字符：`api_key_group` 是一个词元，不等于 `key`，
+/// 所以**不拒**（N-2 裁定）。`api_key` / `license_key` / `order_key_ref` 同理。
+///
+/// 这是**有意的**：`API Key` 是正常业务词，改成「含 key 字样就拒」会把
+/// 「API 密钥与授权」这类合法组名全打死。而且导入闸与出图闸是**同一把尺子** ——
+/// 过得了这里的，出图时也不会 500（`api_key_group` 实测 200）。
+/// ⛔ 别把它改成子串匹配。
 pub fn scan_group_names(groups: &[ConceptGroup]) -> Vec<GroupNameHit> {
     let mut hits: Vec<GroupNameHit> = Vec::new();
     for g in groups {
@@ -745,6 +755,25 @@ mod tests {
         grp.display_name = "API 密钥与授权".into();
         grp.scope_hint = Some("客户手上有什么凭证、以及未持凭证的试用请求".into());
         assert_eq!(scan_group_names(&[grp]), vec![]);
+    }
+
+    /// ⭐ N-2：匹配是**词元级**的 —— `api_key_group` / `license_key` 这类复合词
+    /// **不算命中**（`_` 是词内字符）。这是**有意的**：否则「API Key」这个业务词没法用。
+    #[test]
+    fn test_compound_words_with_key_are_intentionally_not_hits() {
+        for name in ["api_key_group", "license_key", "order_key_ref", "keyring_service"] {
+            let mut grp = g(name, &["t1"]);
+            grp.display_name = "API 密钥与授权".into();
+            assert_eq!(
+                scan_group_names(&[grp]),
+                vec![],
+                "复合词 `{name}` 被误判成词元 `key` —— 那会把正常业务词全打死"
+            );
+        }
+        // 反空转：单独成词的 `key` 仍必须是命中（否则这条测试只是「什么都放行」）。
+        let mut bad = g("g1", &["t1"]);
+        bad.display_name = "未持 Key 的权益".into();
+        assert!(!scan_group_names(&[bad]).is_empty(), "词元 key 必须仍被抓住");
     }
 
     fn decl(groups: Vec<ConceptGroup>, version: &str) -> ConceptDeclaration {

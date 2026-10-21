@@ -246,16 +246,18 @@ show1 = show2 = FD2A916A568960B3E5A834CE28A98A172BFA7DE5CC74D55B98AE0F504E09FDF7
 ### 7.1 数字
 
 ```text
-lib   290 passed / 0 failed   （第 1 轮 272 → 288 → 本轮 290：C-1 的 scope_hint 拒 + 业务措辞通过，C-2 一条）
+lib   291 passed / 0 failed   （272 → 288 → 290 → 本轮 291：N-2 的复合词正反两面）
 doc     4 passed / 0 failed
-集成   74 个目标跑完 · 800 passed / 3 failed（3 条既有红灯见 §7.3）
+集成   75 个目标跑完 · 802 passed / 3 failed（3 条既有红灯见 §7.3）
        另 1 个目标 tests/test_retained_names_req084.rs 因 Windows 绕行未编译（§7.2）
        新增 tests/test_req115_groups.rs —— 13 passed / 0 failed
+       新增 tests/test_req115_import_gate.rs —— 2 passed / 0 failed（真进程 · N-1）
 ```
 
 | 套件 | 结果 |
 | --- | --- |
-| `test_req115_groups`（新增 13 条） | 13 passed |
+| `test_req115_groups`（13 条） | 13 passed |
+| `test_req115_import_gate`（**新增 2 条 · 真进程**） | 2 passed（§9.1） |
 | `test_req107_pipeline_bytes`（H1 重锚 + 其余 12 份） | 1 passed |
 | `test_req107_zero_visible_change`（SHA256SUMS 互校） | 3 passed |
 | `test_req107_source_enumeration`（写点/函数/模块登记） | 10 passed |
@@ -263,7 +265,7 @@ doc     4 passed / 0 failed
 | `test_graph_server`（页面守门 / 零外链 / 域层零 I/O） | 9 passed |
 | `test_req114` / `test_req115` Node 探针 | `ALL PASS` |
 
-> 口径：`lib 272 → 290` 只增不减；`doc 4` 不变；集成 75 个文件 = 74 跑 + 1 绕行。
+> 口径：`lib 272 → 291` 只增不减；`doc 4` 不变；集成 76 个文件 = 75 跑 + 1 绕行。
 > 没有任何既有用例被删 / 被 `#[ignore]` / 被放宽。
 
 ### 7.2 Windows 绕行双证
@@ -332,3 +334,81 @@ ontok concept import --file <file> --project … --base-version …
 1. **组成员只算图里看得见的**：真库现场 84 实体 → 83 节点；同名对象只顾第一个（REQ-093 L2）。
 2. **未做真浏览器手测**：组圈观感、折叠动画、组内引力手感只有源码级 + Node 探针。
 3. **`scope_hint` 不做 AI 命名**（需求「不做」列表）；它由声明作者写。
+
+---
+
+## 9 · 第 3 轮 · QA 复审补项（N-1 / P1-1 / N-2）
+
+### 9.1 N-1（**阻断**）：导入闸的接线用**真进程**钉住
+
+QA 实测：把 `src/cli.rs` 的 `scan_group_names` 调用点删掉（函数留着），
+`lib 290` 与 `test_req115_groups 13` **全绿** —— 与 REQ-114「探针数文本不看行为」同一类病。
+
+**新测试**：`tests/test_req115_import_gate.rs`（2 条，spawn 真 `ontok concept import`）：
+
+```text
+① dirty_scope_hint_is_rejected_by_the_real_import_process
+   声明：scope_hint = "…未持 Key 的试用请求"
+   → exit 1
+   → stderr: 组 `g1` 的 scope_hint 含建模术语 `key`
+   → proposals(project) 仍 = 0（校验在碰库之前）
+
+② clean_declaration_is_imported_by_the_real_import_process
+   声明：scope_hint = "…未持凭证的试用请求"
+   → exit 0 · stdout "共 1 个概念组"
+   → proposals(project) = 1（真的落库，防「通过」假绿）
+```
+
+**变异实测（有牙）**：把 `src/cli.rs` 的闸调用整段注释掉，再跑 ①：
+
+```text
+test dirty_scope_hint_is_rejected_by_the_real_import_process ... FAILED
+assertion `left == right` failed: 脏 scope_hint 必须 exit 1（否则闸根本没接线）
+stdout=概念声明 v1.0.0 已导入提案 p1（项目 t_req115gate_dirty_… · 基于 v1）—— 共 1 个概念组，待双轨审核
+  left: Some(0)
+ right: Some(1)
+test result: FAILED. 1 passed; 1 failed
+```
+
+恢复调用点后 `2 passed; 0 failed`（`src/cli.rs` 用 `git checkout` 还原，无残留标记）。
+
+### 9.2 P1-1：边界写准确（**不是回归，但旧数据仍 500**）
+
+现场：`anspire_excl_r115` **v3** 是 C-1 之前入库的脏快照（`scope_hint` 含「未持 Key」），
+它仍然 `GET /api/graph → 500` / `ontology overview → exit 2`（本轮实测 v3 = **500**，v4 = 200）。
+C-1 只挡**新导入**，读路径没改。
+
+**改前**（`src/domain/graph.rs` `Group` 文档）：
+
+```text
+/// 所以图上带它（与总览口径一致，C-3）。它之所以安全，是因为
+/// `concept import` 会先用客户发布闸判它（C-1：命中即拒不导入）——
+/// 不会出现「快照里有脏说明、出图时整份 500」。
+```
+
+**改后**：
+
+```text
+/// - **新导入**的声明不会把脏说明带进来 —— `concept import` 会先用客户发布闸判它
+///   （C-1：命中即拒不导入，报「组 + 字段 + 词条」）；
+/// - **已入库的旧快照仍按原行为拒发**（`/api/graph` 500、`ontology overview` exit 2）——
+///   读路径本轮没改，C-1 只挡新导入。要清理旧数据只能**重新导入**（改措辞、重算 digest）
+///   或**重建快照**；⛔ 别把这条写成「已封堵」。
+```
+
+同步改：`Group::display_name` 的注释（「坏组名在导入时被拒」→ 只对新声明成立）、
+`graph.rs` 的 L5 边界段、`tests/fixtures/req107/golden/PROVENANCE.txt`（同样写明
+「新导入」与「旧快照仍拒发 + 清理方式」）。
+
+### 9.3 N-2：词元级匹配（**保持现状，不改**）
+
+`scan_modeling_terms` 按「非字母数字/下划线」切词元、且 `_` 是词内字符 ⇒
+`api_key_group` 是一个词元 ≠ `key`，**不拒**；实测它也不会打挂图（200）。
+
+**裁定：保持现状**（导入闸与出图闸是同一把尺子 ⇒ 过得了 import 就不会 500）。
+⛔ 不改「含 key 字样就拒」——那会误伤 `api_key` / `license_key` 这些正常业务词。
+
+文档已写进 `src/domain/concept.rs::scan_group_names` 的「⚠️ 匹配是**词元级**的」一节，
+并加了单测 `test_compound_words_with_key_are_intentionally_not_hits`（正反两面：
+`api_key_group` / `license_key` / `order_key_ref` / `keyring_service` 放行；
+单独成词的 `Key` 仍必须被抓）。

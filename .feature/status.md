@@ -43,6 +43,17 @@ ontology overview --version 4 --json      → exit 0
 groups with scope_hint = 0 · sha256 两次相同 abc9068a…
 ```
 
+## 第 3 轮 · QA 复审补项（N-1 阻断 / P1-1 / N-2）
+
+| # | 项 | 落点 | 一句话 |
+| --- | --- | --- | --- |
+| **N-1** | 导入闸的**接线**用**真进程**钉住 | `tests/test_req115_import_gate.rs`（新增 2 条） | 脏 `scope_hint` ⇒ exit 1 + stderr 点名组/字段/词条 + **提案数不变**；干净 ⇒ exit 0 + 提案 +1 |
+| **P1-1** | 边界写准确（不许写成「已封堵」） | `src/domain/graph.rs`（`Group` 文档 / L5）+ `PROVENANCE.txt` | C-1 只挡**新导入**；**已入库的旧快照仍按原行为拒发**（v3 仍 500）；清理需重新导入/重建快照 |
+| **N-2** | 词元级匹配，**保持现状** | `src/domain/concept.rs` `scan_group_names` 文档 + 单测 | `api_key_group` / `license_key` **不算命中**（有意）—— 否则「API Key」这个业务词没法用 |
+
+N-1 的**变异实测**（有牙）：把 `src/cli.rs` 的闸调用整段注释掉 ⇒
+`test_req115_import_gate::dirty_scope_hint_is_rejected_by_the_real_import_process` **红**：
+`left: Some(0), right: Some(1)`，stdout 显示「已导入提案 p1」。恢复后 2/2 绿。
 ## 本轮改了什么
 
 | # | 项 | 文件 | 一句话 |
@@ -75,8 +86,8 @@ groups with scope_hint = 0 · sha256 两次相同 abc9068a…
 ## 测试
 
 ```text
-lib 290 / doc 4 · 集成 74 个目标：800 passed / 3 failed（3 条均为既有红灯，基线复现）
-新增 tests/test_req115_groups.rs（13 passed）
+lib 291 / doc 4 · 集成 75 个目标：802 passed / 3 failed（3 条均为既有红灯，基线复现）
+新增 tests/test_req115_groups.rs（13 passed）+ tests/test_req115_import_gate.rs（2 passed · 真进程）
 绕行：src/bin/ontok-gate-preflight.rs 挪开 → 跑 → 挪回；sha256 前后 c7cf95e2…；Test-Path=True
       代价 test_retained_names_req084 编不过（与 REQ-113/114 同一口径）
 ```
