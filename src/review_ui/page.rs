@@ -13,13 +13,23 @@
 //! `GET /api/review`。于是 `/` 可以免口令（浏览器导航带不了 `Authorization`），
 //! 而「能探测到有个服务在」是唯一代价（与 REQ-110 的 ADR-004 同一条取舍）。
 //!
-//! # 三条交互纪律（写进页面，不只写在文档里）
+//! # 四条交互纪律（写进页面，不只写在文档里）
 //!
 //! 1. **逐条签**：每条 × 每轨各两个按钮，点了立刻显示服务端回执或**具体原因**；
-//! 2. **批量先预览**：批量只按「档位 + 未签」算候选，先 `GET /api/preview` 拿
+//! 2. **批量先预览**：批量只按「档位/建议 + 未签」算候选，先 `GET /api/preview` 拿
 //!    条数与白名单，弹窗显示「将接受 N 条」并列出条目号，**确认后**才逐条提交；
 //! 3. **没有一键全库**：批量面板不接受「全部条目」，也不含「全选」按钮；
 //!    真正的提交是一串单条 `POST /api/decide`（服务端没有批量写接口）。
+//! 4. ⭐ REQ-112 · **冲突单独成组、排最前**：建议为 `conflict` 的条目渲染在
+//!    独立的 section 里，**不与接受/拒绝混排** —— 它们是唯一一类「程序不知道该
+//!    听谁的」条目，混进普通列表就会被当普通建议扫过去（需求风险 1）。
+//!
+//! # REQ-112 · 页面里**不重算**建议
+//!
+//! 六种 `kind` 与依据文案全部来自 `GET /api/review` 的 `suggestion` 字段；
+//! 分组计数来自同一响应的 `suggestion_counts`。页面只做三件事：映射成中文标签、
+//! 按 `kind` 分组、把 `kind.enters_batch` 的结果（由服务端白名单体现）拿去弹窗。
+//! 档位/权重常量一个都不在 HTML 里 —— 那是 `domain/confidence.rs` 的事（R6 / AC-009）。
 
 /// 审核页面本体。**自包含**：CSS / JS 全内联，不引任何外部资源。
 pub const REVIEW_HTML: &str = r##"<!doctype html>
@@ -63,6 +73,22 @@ article.passed{border-color:#a9d4b8;background:#f7fffa}
 .band.high{border-color:#a9d4b8;color:var(--ok)}
 .band.mid{border-color:#e8cf9a;color:var(--warn)}
 .band.low{border-color:#e0a39e;color:var(--bad)}
+/* REQ-112 · 建议标签（六种 kind，颜色只做「要不要人看」的提示，不是结论） */
+.sugg{font-size:12px;padding:0 8px;border-radius:999px;border:1px solid var(--line);font-weight:600}
+.sugg.accept{color:var(--ok);border-color:#a9d4b8;background:#f2fbf5}
+.sugg.lean_accept{color:#2f6f3f;border-color:#bcdcc6}
+.sugg.review{color:var(--warn);border-color:#e8cf9a;background:#fffdf4}
+.sugg.reject{color:var(--bad);border-color:#e0a39e;background:#fff7f6}
+.sugg.conflict{color:#fff;background:var(--bad);border-color:var(--bad)}
+.sugg.none{color:var(--mut)}
+.suggwhy{margin-top:5px;font-size:12px;color:var(--mut)}
+.suggwhy b{color:var(--fg);font-weight:600}
+h2.grp{font-size:13px;margin:14px 0 8px;color:var(--mut);font-weight:600}
+h2.grp.conflict{color:var(--bad)}
+h2.grp .cnt{font-weight:400}
+#suggbar{padding:6px 16px;border-bottom:1px solid var(--line);background:var(--card);display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--mut)}
+#suggbar b{color:var(--fg);font-variant-numeric:tabular-nums}
+#suggbar .conflict b{color:var(--bad)}
 .tracks{display:flex;gap:22px;flex-wrap:wrap;margin-top:8px}
 .track{display:flex;gap:7px;align-items:center;font-size:13px}
 .track .name{color:var(--mut)}
@@ -104,6 +130,18 @@ summary{cursor:pointer;color:var(--acc);font-size:13px}
   <span id="bar"><i></i></span>
 </div>
 
+<div id="suggbar">
+  <span>建议（后端计数）：
+    冲突 <b id="s-conflict">0</b> ·
+    拒绝 <b id="s-reject">0</b> ·
+    人工核对 <b id="s-review">0</b> ·
+    倾向接受 <b id="s-lean_accept">0</b> ·
+    接受 <b id="s-accept">0</b> ·
+    无建议 <b id="s-none">0</b>
+  </span>
+  <span>冲突与无建议<b>永不参与</b>「按建议接受」。</span>
+</div>
+
 <section id="controls">
   <label>状态
     <select id="f-status">
@@ -123,19 +161,29 @@ summary{cursor:pointer;color:var(--acc);font-size:13px}
     </select>
   </label>
   <label>搜索 <input id="f-q" placeholder="条目号 / 名称" style="width:140px"></label>
+  <label>按建议
+    <select id="f-sugg">
+      <option value="">不限</option>
+      <option value="conflict">冲突（需人工判）</option>
+      <option value="accept">接受</option>
+      <option value="lean_accept">倾向接受</option>
+      <option value="review">人工核对</option>
+      <option value="reject">拒绝</option>
+      <option value="none">无建议</option>
+    </select>
+  </label>
   <span class="sep"></span>
   <label>批量轨
     <select id="b-track"><option value="biz">业务轨</option><option value="model">建模轨</option></select>
   </label>
+  <label>批量口径
+    <select id="b-mode"><option value="suggestion">按建议</option><option value="band">按置信度档位</option></select>
+  </label>
   <label>批量档位
-    <select id="b-band">
-      <option value="0.6">≥ 0.60</option>
-      <option value="0.75">≥ 0.75</option>
-      <option value="0.9">≥ 0.90</option>
-    </select>
+    <select id="b-band"><option value="0.6">≥ 0.60</option><option value="0.75">≥ 0.75</option><option value="0.9">≥ 0.90</option></select>
   </label>
   <button id="b-preview">预览批量接受…</button>
-  <span class="note">批量只作用于**未签**条目，且必须先看条数；没有「一键全库」。</span>
+  <span class="note">批量只作用于**未签**条目，且必须先看条数；「按建议」只含接受/倾向接受，**冲突与无建议不参与**；没有「一键全库」。</span>
 </section>
 
 <main id="list"><div class="empty">填入口令并点「载入口令」。</div></main>
@@ -154,7 +202,7 @@ summary{cursor:pointer;color:var(--acc);font-size:13px}
 
 <script>
 "use strict";
-var S = { token: "", data: null, filter: "unsigned", band: "", query: "", batch: null, busy: false };
+var S = { token: "", data: null, filter: "unsigned", band: "", sugg: "", query: "", batch: null, busy: false };
 
 function $(id) { return document.getElementById(id); }
 function msg(text, cls) { var el = $("msg"); el.textContent = text; el.className = cls || ""; }
@@ -202,10 +250,18 @@ function isUnsigned(it, track) { return (track === "biz" ? it.biz : it.model) ==
 function bothSigned(it) { return it.biz !== "pending" && it.model !== "pending"; }
 function isVetoed(it) { return it.biz === "rejected" || it.model === "rejected"; }
 
+// REQ-112 · 建议只**读后端发的** `suggestion` 字段 —— 页面里不重新判规则。
+// 六种 kind 与依据文案都来自 GET /api/review；这里只做显示映射。
+var SUGG_LABEL = { accept: "接受", lean_accept: "倾向接受", review: "人工核对", reject: "拒绝", conflict: "冲突", none: "无建议" };
+function suggOf(it) { return (it && it.suggestion) ? it.suggestion : { kind: "none", reason: "" }; }
+function suggLabel(k) { return SUGG_LABEL[k] || k; }
+
 function visible(it) {
   if (S.filter === "unsigned" && !(isUnsigned(it, "biz") || isUnsigned(it, "model"))) return false;
   if (S.filter === "signed" && !bothSigned(it)) return false;
   if (S.filter === "vetoed" && !isVetoed(it)) return false;
+  // 「按建议筛选」：值直接是后端 kind，页面不猜。
+  if (S.sugg && suggOf(it).kind !== S.sugg) return false;
   if (S.band) {
     var sc = score(it);
     if (S.band === "none") { if (sc !== null) return false; }
@@ -240,6 +296,56 @@ function trackRow(it, track, label) {
   return wrap;
 }
 
+function card(it) {
+  var sg = suggOf(it);
+  var card = el("article", isVetoed(it) ? "vetoed" : (it.state === "passed" ? "passed" : ""));
+  if (sg.kind === "conflict") card.className += " conflict";
+  var hd = el("div", "hd");
+  hd.appendChild(el("span", "idx", "#" + it.item));
+  hd.appendChild(el("span", "target", it.target));
+  hd.appendChild(el("span", "kind", it.kind));
+  // ⭐ 建议列：标签带 `title`（悬停看整句），依据在下面单独一行 ——
+  // 「人把建议当结论、不再看依据」是需求写明的风险 1，所以依据不藏进 tooltip 里。
+  var sb = el("span", "sugg " + sg.kind, "建议：" + suggLabel(sg.kind));
+  sb.title = sg.reason || "";
+  hd.appendChild(sb);
+  var sc = score(it), b = el("span", "band", bandName(it));
+  if (sc !== null) b.className += sc >= 0.9 ? " high" : (sc >= 0.75 ? " mid" : " low");
+  hd.appendChild(b);
+  card.appendChild(hd);
+  card.appendChild(el("div", "suggwhy", "依据：" + (sg.reason || "（无）")));
+
+  var tracks = el("div", "tracks");
+  tracks.appendChild(trackRow(it, "biz", "业务轨"));
+  tracks.appendChild(trackRow(it, "model", "建模轨"));
+  card.appendChild(tracks);
+
+  if (it.reason) card.appendChild(el("div", "why", "阻断原因：" + it.reason));
+  var ai = it.confidence && it.confidence.ai && it.confidence.ai.rationale;
+  if (ai) card.appendChild(el("div", "detail", "AI 理由：" + ai));
+
+  if (it.evidence && it.evidence.length) {
+    var ev = it.evidence.map(function (e) {
+      if (typeof e === "string") return e;
+      return [e.claim, e.table ? ("表 " + e.table) : "", e.column ? ("列 " + e.column) : "", e.inference ? ("推断 " + e.inference) : ""]
+        .filter(Boolean).join(" · ");
+    }).join("；");
+    card.appendChild(el("div", "detail", "证据：" + ev));
+  }
+
+  var d = el("details");
+  d.appendChild(el("summary", null, "候选定义（建模内容）"));
+  d.appendChild(el("pre", null, JSON.stringify(it.payload, null, 2)));
+  card.appendChild(d);
+  return card;
+}
+
+function groupHead(title, cls, n) {
+  var h = el("h2", "grp" + (cls ? " " + cls : ""), title);
+  h.appendChild(el("span", "cnt", " · " + n + " 条"));
+  return h;
+}
+
 function render() {
   if (!S.data) return;
   var items = S.data.items;
@@ -252,49 +358,35 @@ function render() {
   var pct = p.total ? Math.round((p.signed / p.total) * 100) : 0;
   $("bar").firstElementChild.style.width = pct + "%";
 
+  // 分组计数**用后端发的那一份**（AC-008：分组计数与后端一致）。
+  var counts = S.data.suggestion_counts || {};
+  ["conflict", "reject", "review", "lean_accept", "accept", "none"].forEach(function (k) {
+    var box = $("s-" + k);
+    if (box) box.textContent = counts[k] === undefined ? 0 : counts[k];
+  });
+
   var list = $("list");
   list.textContent = "";
-  var shown = 0;
+
+  // ⭐ REQ-112 · **冲突单独成组、排最前、不与接受/拒绝混排**（AC-008）。
+  // 其余条目按原顺序；冲突卡片不会出现在「其余」里。
+  var conflict = [], rest = [];
   items.forEach(function (it) {
     if (!visible(it)) return;
-    shown++;
-    var card = el("article", isVetoed(it) ? "vetoed" : (it.state === "passed" ? "passed" : ""));
-    var hd = el("div", "hd");
-    hd.appendChild(el("span", "idx", "#" + it.item));
-    hd.appendChild(el("span", "target", it.target));
-    hd.appendChild(el("span", "kind", it.kind));
-    var sc = score(it), b = el("span", "band", bandName(it));
-    if (sc !== null) b.className += sc >= 0.9 ? " high" : (sc >= 0.75 ? " mid" : " low");
-    hd.appendChild(b);
-    card.appendChild(hd);
-
-    var tracks = el("div", "tracks");
-    tracks.appendChild(trackRow(it, "biz", "业务轨"));
-    tracks.appendChild(trackRow(it, "model", "建模轨"));
-    card.appendChild(tracks);
-
-    if (it.reason) card.appendChild(el("div", "why", "阻断原因：" + it.reason));
-    var ai = it.confidence && it.confidence.ai && it.confidence.ai.rationale;
-    if (ai) card.appendChild(el("div", "detail", "AI 理由：" + ai));
-
-    if (it.evidence && it.evidence.length) {
-      var ev = it.evidence.map(function (e) {
-        if (typeof e === "string") return e;
-        return [e.claim, e.table ? ("表 " + e.table) : "", e.column ? ("列 " + e.column) : "", e.inference ? ("推断 " + e.inference) : ""]
-          .filter(Boolean).join(" · ");
-      }).join("；");
-      card.appendChild(el("div", "detail", "依据：" + ev));
-    }
-
-    var d = el("details");
-    d.appendChild(el("summary", null, "候选定义（建模内容）"));
-    d.appendChild(el("pre", null, JSON.stringify(it.payload, null, 2)));
-    card.appendChild(d);
-    list.appendChild(card);
+    if (suggOf(it).kind === "conflict") conflict.push(it);
+    else rest.push(it);
   });
-  if (!shown) {
-    var e = el("div", "empty", "当前筛选下没有条目。");
-    list.appendChild(e);
+
+  if (conflict.length) {
+    list.appendChild(groupHead("⚠ 冲突 —— 证据支持但 AI 否定，需人工判", "conflict", conflict.length));
+    conflict.forEach(function (it) { list.appendChild(card(it)); });
+  }
+  if (rest.length) {
+    list.appendChild(groupHead("其余条目", "", rest.length));
+    rest.forEach(function (it) { list.appendChild(card(it)); });
+  }
+  if (!conflict.length && !rest.length) {
+    list.appendChild(el("div", "empty", "当前筛选下没有条目。"));
   }
 }
 
@@ -325,13 +417,30 @@ function sign(it, track, decision) {
 
 function preview() {
   if (!S.token || !S.data) { msg("先载入口令。", "bad"); return; }
-  var track = $("b-track").value, band = $("b-band").value;
-  api("api/preview?track=" + encodeURIComponent(track) + "&min_confidence=" + encodeURIComponent(band) + "&scope=unsigned")
+  var track = $("b-track").value, mode = $("b-mode").value, band = $("b-band").value;
+  // ⚠️ 两种口径**分开请求**：混在一起时「将接受 N 条」里的 N 就没有唯一含义，
+  // 服务端也会拒绝（by=suggestion 与 min_confidence 不能同时给）。
+  var url = "api/preview?track=" + encodeURIComponent(track) + "&scope=unsigned";
+  url += (mode === "suggestion") ? "&by=suggestion" : ("&min_confidence=" + encodeURIComponent(band));
+  api(url)
     .then(function (p) {
-      S.batch = { track: track, items: p.items, count: p.count };
-      $("m-title").textContent = "将接受 " + p.count + " 条（" + (track === "biz" ? "业务轨" : "建模轨") + " · 置信度 ≥ " + band + " · 仅未签）";
-      $("m-sub").textContent = "总条目 " + p.total + "；已签 " + p.excluded.decided + " 条；低于档位 " +
-        p.excluded.below_band + " 条；无分数 " + p.excluded.no_confidence + " 条。确认后逐条提交（每条一次 POST）。";
+      S.batch = { track: track, mode: mode, items: p.items, count: p.count };
+      var scope = (track === "biz" ? "业务轨" : "建模轨") + " · 仅未签";
+      if (mode === "suggestion") {
+        $("m-title").textContent = "按建议接受 " + p.count + " 条（" + scope + " · 建议=接受/倾向接受）";
+        $("m-sub").textContent = "总条目 " + p.total + "；已签 " + p.excluded.decided + " 条；" +
+          "冲突 " + p.excluded.conflict + " 条、人工核对 " + p.excluded.review + " 条、拒绝 " +
+          p.excluded.reject + " 条、无建议 " + p.excluded.none + " 条 —— **这些不参与**。确认后逐条提交（每条一次 POST）。";
+      } else {
+        $("m-title").textContent = "将接受 " + p.count + " 条（" + scope + " · 置信度 ≥ " + band + "）";
+        // N-2：按档位也有白名单（与「按建议」同一个判据）—— 冲突 / 人工核对 / 拒绝
+        // 即使分数过线也**不参与**，弹窗必须把它们数出来，否则「将接受 N 条」会让人
+        // 以为剩下的也被一起接受了。
+        $("m-sub").textContent = "总条目 " + p.total + "；已签 " + p.excluded.decided + " 条；低于档位 " +
+          p.excluded.below_band + " 条；无分数 " + p.excluded.no_confidence + " 条；" +
+          "冲突 " + p.excluded.conflict + " 条、人工核对 " + p.excluded.review + " 条、拒绝 " +
+          p.excluded.reject + " 条 —— **这些不参与**。确认后逐条提交（每条一次 POST）。";
+      }
       $("ids").textContent = p.items.length ? ("条目号：" + p.items.join(", ")) : "没有符合条件的条目。";
       $("m-go").textContent = "确认接受 " + p.count + " 条";
       $("m-go").disabled = p.count === 0;
@@ -366,7 +475,12 @@ $("load").onclick = load;
 $("token").addEventListener("keydown", function (e) { if (e.code === "Enter") load(); });
 $("f-status").onchange = function () { S.filter = this.value; render(); };
 $("f-band").onchange = function () { S.band = this.value; render(); };
+$("f-sugg").onchange = function () { S.sugg = this.value; render(); };
 $("f-q").oninput = function () { S.query = this.value.trim(); render(); };
+// 口径切到「按建议」时，「批量档位」不再参与计算 —— 置灰而不是藏起来，
+// 免得人以为档位还在生效。
+$("b-mode").onchange = function () { $("b-band").disabled = (this.value === "suggestion"); };
+$("b-band").disabled = true;
 $("b-preview").onclick = preview;
 $("m-cancel").onclick = function () { $("modal").hidden = true; S.batch = null; };
 $("m-go").onclick = runBatch;
