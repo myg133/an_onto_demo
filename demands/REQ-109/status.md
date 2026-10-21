@@ -2,12 +2,21 @@
 
 ## 当前状态
 
-**草稿**（设计已完成，等 REQ-108 合并后开工）
+**进行中**（2026-10-21 · REQ-108 已合并，Dev 开发中）
 
-## 为什么是草稿而不是进行中
+## 前置已满足
 
-REQ-109 依赖 REQ-108 的产出：`confidence` 结构、`semantic_fit` 权重位、自证链校验。
-两个需求都改 `confidence.rs` / `propose.rs`，**并行开发必然冲突** ⇒ 按顺序做。
+REQ-108 已于 2026-10-21 合入 `develop` `a8a51ed`（`confidence` 结构 / `semantic_fit` 权重位 / 自证链校验均已在主干）。
+本需求直接基于 `feature-REQ-109`（base `a8a51ed`）开发。
+
+## LLM 端点（实测通）
+
+| 项 | 值 |
+| --- | --- |
+| Base URL | `https://ollama.apps.anspire.cn/v1`（OpenAI 兼容） |
+| Model | `qwen36-27B` |
+| 连通性 | `/v1/models` 正常；一次 chat 请求 usage **17 / 2** tokens |
+| 凭据 | ⛔ **只进环境变量**，不落任何被跟踪文件（含测试/文档/示例/日志） |
 
 ## 已完成
 
@@ -39,3 +48,4 @@ $env:ONTOK_LLM_BASE_URL = "https://…/v1"
 $env:ONTOK_LLM_API_KEY  = "sk-…"
 $env:ONTOK_LLM_MODEL    = "…"
 ```
+
