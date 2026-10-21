@@ -1437,50 +1437,40 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
         )
         .await?;
 
-    // ── REQ-113 · 提案的输入记录（`inputs.exclusions`）落库 ─────────────
+    // ── REQ-113 · 提案的排除审计段（`inputs.exclusions`）落库 ─────────────
     //
     // 审核界面读的是**库里这一行**（`GET /api/review` 的 `exclusions` 块），
     // 而不是回头去解析一遍 `exclusions.json` —— 纪律 H：「哪些表被排除」
     // 只有一个实现，界面只负责显示那份结果。
     //
-    // 逐条记录在提案旁边的 `proposal-exclusions.json`（提案里只留元信息，
-    // 这样 AC-001 的「proposal.json 里 grep 被排除的表名 = 0」才成立）。
-    // 两者由 **sha256** 绑定：[`crate::extract::exclusions::load_record`] 会先比 sha，
-    // 对不上就拒绝入库 —— 「拿上一轮的记录配这一轮的提案」在页面上看不出来，
-    // 只能在这种地方挡。
+    // ⭐ BA 裁定「单一文件」：逐条明细**就在 proposal.json 里**
+    // （`inputs.exclusions = {file, version, sha256, declared_by, reviewed_by,
+    //   rule, counts, excluded[], flagged[], stale[]}`）。
+    // 所以这里**没有**侧车、也没有第二个文件的 sha 绑定 —— 只读 `--file` 那一份。
+    //
+    // ⚠️ 落库前**再过一遍校验**（与 `--exclude` 那侧同一套判据，`Record::from_inputs`）：
+    // 这份 JSON 是**别人给的**，可能被手改过。一条 `reason` 被清空、
+    // 或 `counts` 与明细对不上的记录若进了库，审核界面会把一份假审计当成真的显示出来。
     if let Some(inputs) = doc.get("inputs").filter(|v| v.is_object()) {
-        if inputs.get("exclusions").is_some() {
-            let name = inputs["exclusions"]["record"]
-                .as_str()
-                .unwrap_or(crate::extract::exclusions::RECORD_FILE)
-                .to_string();
-            // 只允许**裸文件名**：提案是别人给的 JSON，路径不能由它决定
-            // （`../../etc/passwd` 这种在评审时看不出异常，却是真的读别人的文件）。
-            if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
-                anyhow::bail!(
-                    "提案的 `inputs.exclusions.record` = {name:?} 不是一个裸文件名。\n\
-                     记录文件只允许放在**提案旁边**（与本文件同目录）——\
-                     路径由外部 JSON 决定时，读到的可能是任意一个文件。"
+        match crate::extract::exclusions::Record::from_inputs(inputs)? {
+            Some(rec) => {
+                println!(
+                    "  排除记录    : {} 张 · {} v{} · sha256 {}…（判的人 {}；签的人 {}）",
+                    rec.count(),
+                    rec.file,
+                    rec.version,
+                    &rec.sha256[..12.min(rec.sha256.len())],
+                    rec.declared_by,
+                    rec.reviewed_by.as_deref().unwrap_or("—")
                 );
+                proposals
+                    .set_inputs(row.id, &serde_json::json!({ "exclusions": rec }))
+                    .await?;
             }
-            let dir = file.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-            let record_path = dir.join(&name);
-            let rec = crate::extract::exclusions::load_record(&record_path, inputs)?;
-            println!(
-                "  排除记录    : {} 张 · {} v{} · sha256 {}…（判的人 {}；签的人 {}）",
-                rec.count(),
-                rec.file,
-                rec.version,
-                &rec.sha256[..12.min(rec.sha256.len())],
-                rec.declared_by,
-                rec.reviewed_by.as_deref().unwrap_or("—")
-            );
-            proposals
-                .set_inputs(row.id, &serde_json::json!({ "exclusions": rec }))
-                .await?;
-        } else {
-            // 将来 `inputs` 里可能还有别的输入记录：原样留档，不丢。
-            proposals.set_inputs(row.id, inputs).await?;
+            None => {
+                // 有 `inputs` 但没有 `exclusions`（将来的其它输入记录）：原样留档，不丢。
+                proposals.set_inputs(row.id, inputs).await?;
+            }
         }
     }
 

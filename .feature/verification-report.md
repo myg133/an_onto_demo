@@ -13,16 +13,16 @@
 
 | AC | 判据 | 结果 |
 | --- | --- | --- |
-| AC-001 | 被排除的表不产生实体/属性/关系；提案里 grep 表名 = 0；实体数 = `tables_extracted` | ✅ 12 个表名在 `proposal.json` 里出现 **0** 次；实体 **84** = `tables_extracted` |
+| AC-001 | **①** `items` 段里 grep 表名 = 0；**②** 删掉 `inputs.exclusions` 整段后 grep = 0；实体数 = `tables_extracted` | ✅ ① **0** 次；② **0** 次；实体 **84** = `tables_extracted` |
 | AC-002 | `seen − excluded == extracted`（结构性断言） | ✅ 96 − 12 = 84；断言在 `exclusions.rs:887`，不闭合 ⇒ **不写 stats**、exit≠0 |
 | AC-003 | 每条有理由/类别/决策人；空理由/非法类别/缺决策人 ⇒ 拒绝文件 | ✅ 三种坏文件各跑一次：exit≠0 且**不产出**任何文件 |
-| AC-004 | `inputs.exclusions = {file, version, sha256}`；改一字节 sha 变 | ✅ 逐项实测；改一个字符 ⇒ sha256 变 |
+| AC-004 | `inputs.exclusions` = **完整审计段**（`{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`）；改一字节 sha 变 | ✅ 逐项实测；改一个字符 ⇒ sha256 变；`counts` 与明细自查 |
 | AC-005 | 陈旧排除：默认警告 / `--strict-exclusions` exit≠0 | ✅ 两种模式各跑一次（真实库 + 1 条不存在的表） |
 | AC-006 | 审核界面只读区块，条数 = `tables_excluded` | ✅ `GET /api/review` → `count=12`、`readonly=true`（真服务、真数据） |
 | AC-007 | 排除与「无中文名」分开记，排除优先 | ✅ `excluded_tables ∩ tables_without_cn_name = ∅` |
-| AC-008 | 两次运行提案与 stats 逐字节相同 | ✅ 三个文件 sha256 相同，`git diff --no-index` 无输出 |
+| AC-008 | 两次运行提案与 stats 逐字节相同 | ✅ proposal `852281ec…` / stats `9c568845…` 两次相同，`git diff --no-index` 无输出 |
 | AC-009 | 不退化（红线 0 diff / 不删测试 / 不加依赖） | ✅ 见 §5 |
-| AC-010 | 真实库 96 → 排除 12 → 84，13/12 条理由可读 | ✅ 见 §1.3 |
+| AC-010 | 真实库 96 → 排除 12 → 84，12 条理由可读 | ✅ 见 §1.3 |
 
 ---
 
@@ -51,7 +51,9 @@ $env:SRC_URL = "postgresql://***@172.16.120.20:30432/anspire_open_uat"   # 只�
 | 检查 | 值 |
 | --- | --- |
 | `seen − excluded` | 96 − 12 = **84** = `tables_extracted` = 提案里 `add_entity_type` 条数 |
-| `proposal.json` 里 grep 12 个被排除表名 | **0 次** |
+| **AC-001 ①** `items` 段里 grep 12 个被排除表名 | **0 次** |
+| **AC-001 ②** 删掉 `inputs.exclusions` 整段后 grep | **0 次**（表名只允许出现在审计段内；逐名合计 15 次命中都在该段，`llm_provider_back` 是另两张备份表名的前缀） |
+| `inputs.exclusions.counts` | `{seen:96, excluded:12, extracted:84, stale:0, flagged:11}`，闭合 |
 | `excluded_tables` 与 `tables_without_cn_name` 交集 | **0**（被排除的表根本没进抽取作用域） |
 
 ### 1.3 12 条排除（AI 判定 + BA 复核；此处为 `stats.json` 原文摘要）
@@ -116,15 +118,16 @@ Test-Path      = True          # finally 里挪回，字节级相同
 ## 3 · 确定性（AC-008）
 
 ```
-proposal.json  run1 = 91089bd8bce2853debc77437eb3ef5a005254b5de7ab838a2596d482b463223c
-               run2 = 91089bd8bce2853debc77437eb3ef5a005254b5de7ab838a2596d482b463223c
+proposal.json  run1 = 852281ec94f7acb47c429829d44c93cb41b065c7927bc67c1b8ee55f9485ab66
+               run2 = 852281ec94f7acb47c429829d44c93cb41b065c7927bc67c1b8ee55f9485ab66
 stats.json     run1 = 9c5688451d61f72e9f2c2dec4c684e966466f5a03470f7fc0f0b77d174dcf829
                run2 = 9c5688451d61f72e9f2c2dec4c684e966466f5a03470f7fc0f0b77d174dcf829
 git diff --no-index out\proposal.json out2\proposal.json  → exit 0
 git diff --no-index out\stats.json    out2\stats.json     → exit 0
 ```
 
-（两次运行各自独立连源库采样；`sample` 的 digest 是确定性 sha256，且本模块内无 HashMap 迭代、无时间戳。）
+（两次运行各自独立连源库采样；`sample` 的 digest 是确定性 sha256，且本模块内无 HashMap 迭代、无时间戳。
+proposal 变大后 sha 与上一轮不同 —— 上一轮是「元信息 + 侧车」，本轮是「完整审计段」。）
 
 ---
 
@@ -161,7 +164,8 @@ git diff --stat develop -- src/server/http.rs src/mcp/tools.rs src/domain/proper
 ```json
 "exclusions": {
   "present": true, "readonly": true,
-  "count": 12, "flagged_count": 11, "stale": [],
+  "count": 12, "flagged_count": 11,
+  "counts": {"seen":96,"excluded":12,"extracted":84,"stale":0,"flagged":11},
   "file": "exclusions.json", "version": "0.1.1",
   "sha256": "3f77c6b8fd41bded7e5fbe74b507c74a2a385cfc67cccef2b90cada5dacc2c08",
   "declared_by": "ai-table-judge / qwen36-27B",
@@ -182,15 +186,15 @@ git diff --stat develop -- src/server/http.rs src/mcp/tools.rs src/domain/proper
 页面两个 **只读** section（`page.rs:163` / `:178`）：`#excluded`「被排除 12 张」+ `#flagged`「保留但存疑 11 张
 （**没有被排除** · 已照常进本体 · 待裁决）」。⛔ 无按钮、无输入框、无写接口。
 
-> 数据来源：`proposals.inputs`（由 `propose import` 从提案旁边的 `proposal-exclusions.json` 读入并校验 sha256）。
+> 数据来源：`proposals.inputs`（`propose import` **只读 proposal.json 这一个文件**，校验审计段后落库；无侧车）。
 > 界面**不解析** `exclusions.json`、也没有 schema —— 「哪些表被排除」只有一处实现。
 
 ---
 
 ## 7 · 已知限制
 
-1. **侧车文件**：提案只留 `{file, version, sha256, declared_by, record}`（AC-001 要求提案里 grep 不到表名），
-   逐条记录在 `proposal-exclusions.json`；两者由 sha256 绑定，**必须一起搬运**，否则 import 拒绝。
+1. **审计段里含表名**（`inputs.exclusions.excluded[]`）：BA 裁定「单一文件」—— `items` 段 grep = 0，
+   且整份文件里表名只允许出现在审计段内。提案因此大 ~4 KB，换「一个文件 = 一条完整审计链」。
 2. **`keep_but_flagged` 只展示**，不参与判定（表照常进本体）。
 3. **表级**排除（R1）；列级仍是 `property_filter`。
 4. **`tables_extracted` 实测自实体条目数**：重建路径若少抽表，闭合断言会让这一轮失败（R5 的本意，

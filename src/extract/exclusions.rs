@@ -240,27 +240,6 @@ struct RawEntry {
     evidence: Option<String>,
 }
 
-/// 逐条记录落在**提案旁边**的那个文件（`--out` 同目录）。
-///
-/// # 为什么逐条记录不写进 `proposal.json`（这是 AC-001 与 AC-004 的正面冲突）
-///
-/// - **AC-001**：「`proposal.json` 里 grep 被排除的表名 = 0」——
-///   这是**字面判据**，QA 会拿它当命令跑；
-/// - **AC-004**：「提案元信息记 `inputs.exclusions = {file, version, sha256}`」。
-///
-/// 把逐条记录（含表名）塞进提案，AC-004 满足、**AC-001 的 grep 就红了** ——
-/// 而那条 grep 的意图是对的：提案里不该出现被排除表的**任何痕迹**，
-/// 否则「它到底进没进本体」又得靠人眼逐个分辨。
-///
-/// ⇒ 拆成两处，各说各的：
-/// 1. `proposal.json` 的 `inputs.exclusions`：**只有元信息**（file / version / sha256 / 记录路径）；
-/// 2. 本常量指的那个文件：逐条记录（表名 / 类别 / 理由 / 决策人 / 置信度 / 依据 / 陈旧 / 待裁决）。
-///
-/// 两者的**绑定**是 `sha256`：`propose import` 读这份文件时会先比 sha256，
-/// 对不上就拒绝入库（「记录不是这一轮的」）。
-/// 命名沿用本仓既有侧文件约定（`proposal-pending.json` / `proposal-rejected.json`）。
-pub const RECORD_FILE: &str = "proposal-exclusions.json";
-
 /// 一份**已校验**的排除文件。
 ///
 /// 构造只有两条路：[`Exclusions::load`] / [`Exclusions::parse`]，两条都走
@@ -521,9 +500,23 @@ impl Exclusions {
         Run { report: filtered, applied, stale, flagged: self.flagged.clone() }
     }
 
-    /// 本轮排除的**记录块**（写进提案旁边那份 `proposal-exclusions.json`，
-    /// 也是审核界面从库里读的那一份）。
-    pub fn record(&self, run: &Run) -> Record {
+    /// 本轮排除的**审计段** —— 也就是 `proposal.json` 的 `inputs.exclusions`（AC-004）。
+    ///
+    /// # 为什么明细**和**元信息在同一段里（BA 裁定「单一文件」）
+    ///
+    /// 曾经把明细放到侧车文件（`proposal-exclusions.json`），靠 sha256 绑定。
+    /// 那是**错的取舍**：用户要搬两个文件，丢一个就导不进；产品还多一个产出文件。
+    /// 现在的口径：
+    ///
+    /// - **一个文件 = 一条完整审计链**（谁判的、依据什么、排了谁、为什么）；
+    /// - AC-001 的判据随之**精确化**：`items` 段里 grep 被排除表名 = 0，
+    ///   且整份文件里这些表名**只允许**出现在 `inputs.exclusions` 段内
+    ///   （把这一段整段删掉后，剩余文本 grep = 0）。审计段是**元信息**，不是实体。
+    ///
+    /// `counts` 里的三个数是**同一轮抽取**的统计（`seen / excluded / extracted`），
+    /// 与 `stats.json` 同源（都由 [`ExtractionStats::stamp_counts`] 落定）——
+    /// 提案自带这三个数，评审人不必再去旁边找 stats.json 才能回答「84 是怎么来的」。
+    pub fn record(&self, displayed: Displayed<'_>, counts: Counts) -> Record {
         Record {
             file: self.file.clone(),
             version: self.version.clone(),
@@ -531,24 +524,23 @@ impl Exclusions {
             declared_by: self.declared_by.clone(),
             reviewed_by: self.reviewed_by.clone(),
             rule: self.rule.clone(),
-            tables: run.applied.clone(),
-            stale: run.stale.clone(),
-            flagged: run.flagged.clone(),
+            counts,
+            excluded: displayed.applied.to_vec(),
+            flagged: displayed.flagged.to_vec(),
+            stale: displayed.stale.to_vec(),
         }
     }
+}
 
-    /// 提案里的 `inputs.exclusions` 块（AC-004）—— **只有元信息，一个表名都没有**。
-    ///
-    /// 逐条记录在 [`RECORD_FILE`] 里；两处靠 `sha256` 绑定（[`load_record`]）。
-    pub fn inputs_ref(&self, record_file: &str) -> serde_json::Value {
-        serde_json::json!({
-            "file": self.file,
-            "version": self.version,
-            "sha256": self.sha256,
-            "declared_by": self.declared_by,
-            "record": record_file,
-        })
-    }
+/// [`Exclusions::record`] 要的三份清单（就是 [`Run`] 里那三份，按引用传）。
+///
+/// 单独一个结构而不是直接收 `&Run`：装配层手里已经有这三个 `Vec`
+/// （`apply` 之后被拆开用了），再造一个 `Run` 只为了调用一次记录构造函数，
+/// 还得把整份 `SchemaReport` 克隆一遍 —— 那是白花的内存，也会让人误以为记录依赖报告。
+pub struct Displayed<'a> {
+    pub applied: &'a [Entry],
+    pub stale: &'a [String],
+    pub flagged: &'a [Flagged],
 }
 
 /// `version` 字段 → 溯源里那一栏的字符串。
@@ -662,17 +654,55 @@ pub struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_by: Option<String>,
     pub rule: String,
-    /// 真的被剔除的表（= `stats.tables_excluded` 条，逐条带理由与决策人）。
-    pub tables: Vec<Entry>,
+    /// 这一轮的三个数 + 陈旧/待裁决两个计数（与 `stats.json` **同源**）。
+    pub counts: Counts,
+    /// 真的被剔除的表（= `counts.excluded` 条，逐条带理由与决策人）。
+    pub excluded: Vec<Entry>,
     /// 文件里点名、但这份 schema 里没有的表（R4）。
     #[serde(default)]
     pub stale: Vec<String>,
     /// 「保留但存疑」—— 表**照常进本体**，这里只是留痕。
     ///
-    /// ⛔ 与 [`Self::tables`] **语义相反**：前者是「已排除」，这是「还没决定」。
+    /// ⛔ 与 [`Self::excluded`] **语义相反**：前者是「已排除」，这是「还没决定」。
     /// 两栏合并会让「排除了 N 张」与「有 M 张要人看」变成同一个列表。
     #[serde(default)]
     pub flagged: Vec<Flagged>,
+}
+
+/// 审计段里那五个计数（AC-002 / R5）。
+///
+/// 三个主计数由 [`ExtractionStats::stamp_counts`] **一次落定**（那里有闭合断言），
+/// 另外两个是计数（不是清单）：陈旧排除几条、待裁决几张。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Counts {
+    pub seen: usize,
+    pub excluded: usize,
+    pub extracted: usize,
+    #[serde(default)]
+    pub stale: usize,
+    #[serde(default)]
+    pub flagged: usize,
+}
+
+impl Counts {
+    /// 从已定稿的统计里取 —— **同一个来源**，不另算。
+    pub fn of(stats: &ExtractionStats) -> Self {
+        Counts {
+            seen: stats.tables_seen,
+            excluded: stats.tables_excluded,
+            extracted: stats.tables_extracted,
+            stale: stats.stale_exclusions.len(),
+            flagged: stats.flagged_tables.len(),
+        }
+    }
+
+    /// `seen - excluded == extracted`（与 [`ExtractionStats::counts_close`] 同一句）。
+    pub fn close(&self) -> bool {
+        self.seen
+            .checked_sub(self.excluded)
+            .map(|n| n == self.extracted)
+            .unwrap_or(false)
+    }
 }
 
 impl Record {
@@ -688,7 +718,7 @@ impl Record {
             return Ok(None);
         };
         let rec: Record = serde_json::from_value(block.clone())
-            .context("提案 inputs.exclusions 读不懂（期望 {file, version, sha256, declared_by, rule, tables, stale, flagged}）")?;
+            .context("提案 inputs.exclusions 读不懂（期望 {file, version, sha256, declared_by, reviewed_by, rule, counts, excluded, stale, flagged}）")?;
         rec.validate()?;
         Ok(Some(rec))
     }
@@ -718,7 +748,38 @@ impl Record {
         if self.rule.trim().is_empty() {
             bail!("排除记录缺 `rule`（这份文件按什么规则排除）");
         }
-        for (i, e) in self.tables.iter().enumerate() {
+        // 审计段自带的三个数必须**自己闭合**：它是 AC-002 在提案侧的副本，
+        // 若允许写一份「96 − 12 = 83」的审计段，读的人就会看到两个都像真的数。
+        if !self.counts.close() {
+            bail!(
+                "排除记录的 counts 不闭合：seen {} − excluded {} ≠ extracted {}",
+                self.counts.seen,
+                self.counts.excluded,
+                self.counts.extracted
+            );
+        }
+        if self.counts.excluded != self.excluded.len() {
+            bail!(
+                "排除记录的 counts.excluded = {}，但 `excluded` 里有 {} 条 —— 数与明细必须同源",
+                self.counts.excluded,
+                self.excluded.len()
+            );
+        }
+        if self.counts.flagged != self.flagged.len() {
+            bail!(
+                "排除记录的 counts.flagged = {}，但 `flagged` 里有 {} 条",
+                self.counts.flagged,
+                self.flagged.len()
+            );
+        }
+        if self.counts.stale != self.stale.len() {
+            bail!(
+                "排除记录的 counts.stale = {}，但 `stale` 里有 {} 条",
+                self.counts.stale,
+                self.stale.len()
+            );
+        }
+        for (i, e) in self.excluded.iter().enumerate() {
             let n = i + 1;
             if e.table.trim().is_empty() {
                 bail!("排除记录第 {n} 条缺表名");
@@ -742,7 +803,7 @@ impl Record {
             // 同一张表既「已排除」又「保留待裁决」是自相矛盾 —— 落库的那份也要挡住。
             if self.flagged.iter().any(|f| f.table == e.table) {
                 bail!(
-                    "排除记录第 {n} 条（{}）同时出现在 `tables` 与 `flagged`：\
+                    "排除记录第 {n} 条（{}）同时出现在 `excluded` 与 `flagged`：\
                      一个说「已排除」一个说「保留待裁决」，两句话不能同时为真",
                     e.table
                 );
@@ -764,10 +825,13 @@ impl Record {
     /// **它是唯一的算法**：不另存一个 `count` 字段。
     /// 存了就一定会漂（改表不改数、改数不改表），而这里的两处显示必须以同一份为准。
     pub fn count(&self) -> usize {
-        self.tables.len()
+        self.excluded.len()
     }
 
-    /// 审核界面用的 JSON 块（**只读**）。
+    /// 审核界面用的 JSON 块（**只读**；形状与 REQ-113 首版保持一致，页面不用改）。
+    ///
+    /// 键名映射：审计段里叫 `excluded`，界面这块叫 `tables`（页面早就按 `tables` 写的）；
+    /// `count` 就是 `excluded.len()`，与 `stats.tables_excluded` 同源。
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "file": self.file,
@@ -776,8 +840,9 @@ impl Record {
             "declared_by": self.declared_by,
             "reviewed_by": self.reviewed_by,
             "rule": self.rule,
+            "counts": self.counts,
             "count": self.count(),
-            "tables": self.tables.iter().map(|e| serde_json::json!({
+            "tables": self.excluded.iter().map(|e| serde_json::json!({
                 "table": e.table,
                 "category": e.category.as_str(),
                 "category_label": e.category.label(),
@@ -807,60 +872,6 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
-/// **`propose import` 用的那道门**：读提案旁边的 `proposal-exclusions.json`，
-/// 并与提案里记的 `inputs.exclusions` **逐项对齐**。
-///
-/// # 为什么必须校验 sha256（而不是「文件在就读」）
-///
-/// 「记录文件」和「提案」是两个可以被人分开放、分开拷贝的东西：
-/// 拷错一轮、拿旧记录配新提案，都会让审核界面显示**上一轮**的排除清单，
-/// 而页面上看不出任何异常。所以绑定用内容哈希：
-/// `record.sha256 == inputs.exclusions.sha256`（那是**排除文件原文**的哈希）。
-///
-/// # 三种失败都报人话（不降级成「没有记录」）
-///
-/// | 情况 | 处理 |
-/// | --- | --- |
-/// | 提案有 `inputs.exclusions`，但记录文件不在 | 报错：**没有它，AC-006 显示不了「排了谁、为什么」** |
-/// | 记录文件读不懂 | 报错（serde 上下文） |
-/// | 记录与提案不是一个 `sha256` | 报错，并打印两个 sha 让人能对上是哪一轮错位 |
-pub fn load_record(record_path: &std::path::Path, inputs: &serde_json::Value) -> Result<Record> {
-    let block = inputs.get("exclusions").filter(|v| !v.is_null()).ok_or_else(|| {
-        anyhow::anyhow!(
-            "提案的 `inputs` 里没有 `exclusions` —— 调用方不该在没有记录时调本函数（内部契约错）"
-        )
-    })?;
-    let want_sha = block.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if want_sha.is_empty() {
-        bail!("提案的 `inputs.exclusions` 缺 `sha256`：没有它就绑不住记录文件是哪一轮的");
-    }
-
-    let raw = std::fs::read(record_path).with_context(|| {
-        format!(
-            "提案声明了排除记录，但 {record_path:?} 不在提案旁边。\n\
-             \n\
-             没有这份逐条记录，审核界面只能显示一个 sha256 —— 而 REQ-113 的承诺是\n\
-             「**任何一张表被排除，都必须有理由、有记录、能被评审人看见**」（AC-006）。\n\
-             \n\
-             怎么办：重跑一次 `ontok-propose --exclude <文件>`（它会与提案一起写出这份记录），\n\
-             再把**这一对文件**一起 import。⛔ 不要手搓一份记录文件：它必须与 `sha256` 同源。"
-        )
-    })?;
-    let rec: Record = serde_json::from_slice(&raw).with_context(|| {
-        format!("{record_path:?} 不是合法的排除记录（期望 {RECORD_FILE} 的形状）")
-    })?;
-    rec.validate()?;
-    if rec.sha256 != want_sha {
-        bail!(
-            "提案与记录文件不是同一轮：\n  提案记的 exclusions sha256 = {want_sha}\n  \
-             记录文件里的 sha256          = {}\n\
-             这条绑定正是为了防止「拿上一轮的记录配这一轮的提案」—— 那种错位在页面上看不出来。",
-            rec.sha256
-        );
-    }
-    Ok(rec)
-}
-
 // ══════════════════════════════════════════════════════════════
 // R5 · 三计数的**唯一**写入点 + 闭合断言（AC-002）
 // ══════════════════════════════════════════════════════════════
@@ -884,6 +895,10 @@ impl ExtractionStats {
     /// 3. 减法不闭合 ⇒ **返回 Err**，调用方因此**不写出 stats.json**。
     ///
     /// 第 2 条是关键：两张数各自独立取值，等式才携带信息。
+    ///
+    /// `missing` 是**证据**（作用域里有、却没产出实体的表名），只用来写报错正文。
+    /// 判据本身仍是三个数（[`Self::counts_close`] 是同一句），
+    /// 但失败时必须让人**立刻知道是哪几张表没了** —— 只报「84 ≠ 83」等于让人去猜。
     pub fn stamp_counts(
         &mut self,
         seen: usize,
@@ -891,6 +906,7 @@ impl ExtractionStats {
         stale: &[String],
         flagged: &[Flagged],
         extracted: usize,
+        missing: &[String],
     ) -> Result<()> {
         let expected = seen.checked_sub(excluded.len()).ok_or_else(|| {
             anyhow::anyhow!(
@@ -908,11 +924,17 @@ impl ExtractionStats {
         self.flagged_tables = flagged.to_vec();
 
         if expected != extracted {
+            let named = if missing.is_empty() {
+                "（没拿到具体表名：抽取路径没有回报「哪张表没产出实体」）".to_string()
+            } else {
+                format!("点名（{} 张）：{}", missing.len(), missing.join("、"))
+            };
             bail!(
                 "统计不自洽（AC-002）：tables_seen {seen} − tables_excluded {} = {expected}，\
                  但真的产出实体的只有 {extracted} 张表。\n\
                  \n\
                  差 {} 张 —— 有表**被静默吃掉了**：它既没被排除，也没被抽出来。\n\
+                 {named}\n\
                  这正是 R5 要防的那件事（「数字对不上但没人知道为什么」），\
                  所以这里**不写出 stats.json**，而不是写一份能看但错的统计。\n\
                  \n\
@@ -1184,8 +1206,9 @@ mod tests {
                 &run.stale,
                 &run.flagged,
                 run.report.tables.len(),
+                &[],
             )
-            .expect("96 - 13 == 83 必须成立");
+            .expect("seen - excluded == extracted 必须成立");
 
         assert_eq!(stats.tables_seen, 3);
         assert_eq!(stats.tables_excluded, 1);
@@ -1207,7 +1230,7 @@ mod tests {
         let mut stats = ExtractionStats::default();
         // 实测只抽出 1 张（模拟「还有一张被静默吃掉」）
         let e = stats
-            .stamp_counts(rep.tables.len(), &run.applied, &run.stale, &run.flagged, 1)
+            .stamp_counts(rep.tables.len(), &run.applied, &run.stale, &run.flagged, 1, &["b".to_string(), "c".to_string()])
             .expect_err("3 - 1 != 1 ⇒ 必须报错，不许写出对不上的统计");
         let msg = e.to_string();
         assert!(msg.contains("统计不自洽"), "{msg}");
@@ -1222,7 +1245,7 @@ mod tests {
         )
         .unwrap();
         let mut stats = ExtractionStats::default();
-        assert!(stats.stamp_counts(1, ex.entries(), &[], &[], 0).is_err());
+        assert!(stats.stamp_counts(1, ex.entries(), &[], &[], 0, &[]).is_err());
     }
 
     // ── AC-007 / R6 · 排除优先于「无中文名」 ──────────────────────────
@@ -1254,7 +1277,12 @@ mod tests {
         )
         .unwrap();
         let run = ex.apply(&rep);
-        let rec = ex.record(&run);
+        // 3 张表 − 2 排除 = 1 抽取（审计段自带的三计数必须自洽）
+        let counts = Counts { seen: 3, excluded: 2, extracted: 1, stale: 0, flagged: 0 };
+        let rec = ex.record(
+            Displayed { applied: &run.applied, stale: &run.stale, flagged: &run.flagged },
+            counts,
+        );
 
         let inputs = serde_json::json!({ "exclusions": rec });
         let back = Record::from_inputs(&inputs).unwrap().expect("有记录");
@@ -1281,7 +1309,8 @@ mod tests {
     #[test]
     fn test_broken_record_is_an_error_not_silently_absent() {
         let bad = serde_json::json!({"exclusions": {"file": "x", "version": "1", "sha256": "nothex",
-            "declared_by": "BA", "rule": "r", "tables": []}});
+            "declared_by": "BA", "rule": "r",
+            "counts": {"seen": 0, "excluded": 0, "extracted": 0}, "excluded": []}});
         let e = Record::from_inputs(&bad).unwrap_err().to_string();
         assert!(e.contains("sha256"), "{e}");
     }
@@ -1291,7 +1320,8 @@ mod tests {
         let bad = serde_json::json!({"exclusions": {
             "file": "x.json", "version": "1", "sha256": "0".repeat(64),
             "declared_by": "BA", "rule": "r",
-            "tables": [{"table":"t1","category":"cdc_residue","reason":"  ","decided_by":"BA"}],
+            "counts": {"seen": 1, "excluded": 1, "extracted": 0, "stale": 0, "flagged": 0},
+            "excluded": [{"table":"t1","category":"cdc_residue","reason":"  ","decided_by":"BA"}],
             "stale": []
         }});
         let e = Record::from_inputs(&bad).unwrap_err().to_string();
@@ -1345,13 +1375,16 @@ mod tests {
 
         let mut stats = ExtractionStats::default();
         stats
-            .stamp_counts(2, &run.applied, &run.stale, &run.flagged, 1)
+            .stamp_counts(2, &run.applied, &run.stale, &run.flagged, 1, &[])
             .unwrap();
         assert_eq!(stats.tables_excluded, 1);
         assert_eq!(stats.excluded_tables.len(), 1);
         assert_eq!(stats.flagged_tables.len(), 2, "待裁决单独一栏");
 
-        let ui = ex.record(&run).to_json();
+        let counts = Counts { seen: 2, excluded: 1, extracted: 1, stale: 0, flagged: 2 };
+        let ui = ex
+            .record(Displayed { applied: &run.applied, stale: &run.stale, flagged: &run.flagged }, counts)
+            .to_json();
         assert_eq!(ui["count"], 1, "「被排除 N 张」只数 exclude");
         assert_eq!(ui["flagged_count"], 2);
         assert_eq!(ui["flagged"][0]["table"], "internal_staff");
@@ -1366,7 +1399,11 @@ mod tests {
     fn test_confidence_and_evidence_reach_the_review_ui() {
         let rep = report(vec![table("noise", None, 1)]);
         let ex = Exclusions::parse(ai_like_file().as_bytes(), "ai.json").unwrap();
-        let ui = ex.record(&ex.apply(&rep)).to_json();
+        let run1 = ex.apply(&rep);
+        let counts = Counts { seen: 1, excluded: 1, extracted: 0, stale: 0, flagged: 2 };
+        let ui = ex
+            .record(Displayed { applied: &run1.applied, stale: &run1.stale, flagged: &run1.flagged }, counts)
+            .to_json();
         assert_eq!(ui["tables"][0]["confidence"], 0.97);
         assert!(ui["tables"][0]["evidence"].as_str().unwrap().contains("_volc_dts_"));
         assert_eq!(ui["reviewed_by"], "ba-michael（人工复核：推翻 1 条）");

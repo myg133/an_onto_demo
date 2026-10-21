@@ -48,7 +48,7 @@ use ontok::agent::orchestrate::{
 };
 use ontok::agent::registry::{AgentIdentity, AgentRegistration};
 use ontok::agent::{build_agent, Assembly, ExistingType, UsageBudget};
-use ontok::extract::exclusions::{Entry, Exclusions, Record};
+use ontok::extract::exclusions::{Entry, Exclusions};
 use ontok::extract::introspect::{KeyCatalog, SchemaReport, SOURCE_DATABASE_URL_ENV};
 use ontok::extract::names::TableNames;
 
@@ -263,7 +263,6 @@ async fn main() -> Result<()> {
     // 判定本身**只有一处**：`Exclusions::apply`（纪律 H）。本文件只负责
     // 「给它的输入对不对」（文件已在参数解析后校验过）与「把结果记下来」。
     let tables_seen = report.tables.len();
-    let mut exclusion_record: Option<Record> = None;
     let mut exclusion_applied: Vec<Entry> = Vec::new();
     let mut exclusion_stale: Vec<String> = Vec::new();
     let mut exclusion_flagged: Vec<ontok::extract::exclusions::Flagged> = Vec::new();
@@ -294,7 +293,6 @@ async fn main() -> Result<()> {
         if let Some(w) = run.stale_warning(ex.file()) {
             eprintln!("{w}");
         }
-        exclusion_record = Some(ex.record(&run));
         exclusion_applied = run.applied.clone();
         exclusion_stale = run.stale.clone();
         exclusion_flagged = run.flagged.clone();
@@ -762,20 +760,20 @@ async fn main() -> Result<()> {
     // 这一段与 stats.json 里的三个数同源（`tables_seen` / `excluded` / `extracted`），
     // 但 `extracted` 的**实测值**要等分档路由之后才定，所以这里先报
     // 「勘查 / 排除 / 作用域」三行，闭合断言在写盘前做（见下面的 `stamp_counts`）。
-    if let Some(rec) = &exclusion_record {
+    if let Some(ex) = &exclusions {
         println!(
             "  排除        : {} 张（{} v{} · sha256 {}… · 决策人 {}）",
-            rec.count(),
-            rec.file,
-            rec.version,
-            &rec.sha256[..12.min(rec.sha256.len())],
-            rec.declared_by
+            exclusion_applied.len(),
+            ex.file(),
+            ex.version(),
+            &ex.sha256()[..12.min(ex.sha256().len())],
+            ex.declared_by()
         );
         println!(
             "  表          : 勘查 {tables_seen} → 排除 {} → 抽取作用域 {}（陈旧 {}）",
-            rec.count(),
+            exclusion_applied.len(),
             report.tables.len(),
-            rec.stale.len()
+            exclusion_stale.len()
         );
     } else {
         // 没给 --exclude：**明说**这一轮没有排除，而不是让人以为「排了 0 张」。
@@ -1008,42 +1006,56 @@ async fn main() -> Result<()> {
         .iter()
         .filter(|i| i["kind"] == "add_entity_type")
         .count();
+    // 「作用域里有、却没产出实体」的表名 —— 只用于闭合失败时的**报错正文**。
+    // BA 裁定：失败要能说清是哪几张表没了，只报数字不等等于让人去猜。
+    let produced: std::collections::HashSet<&str> = outcome
+        .proposal
+        .items
+        .iter()
+        .filter(|i| i["kind"] == "add_entity_type")
+        .filter_map(|i| i["payload"]["key"].as_str())
+        .collect();
+    let missing: Vec<String> = report
+        .tables
+        .iter()
+        .filter(|t| !produced.contains(t.name.as_str()))
+        .map(|t| t.name.clone())
+        .collect();
     outcome.stats.stamp_counts(
         tables_seen,
         &exclusion_applied,
         &exclusion_stale,
         &exclusion_flagged,
         extracted,
+        &missing,
     )?;
 
-    // ── REQ-113 · 溯源：元信息进提案，逐条记录进旁边的侧车文件 ─────────
+    // ── REQ-113 · 溯源：**一个文件 = 一条完整审计链**（BA 裁定「单一文件」）────
     //
-    // AC-001 与 AC-004 在这里是**两条同时成立的判据**：
-    // - AC-001 要「`proposal.json` 里 grep 被排除的表名 = 0」（提案里不留痕迹）；
-    // - AC-004 要「提案元信息记 `inputs.exclusions = {file, version, sha256}`」。
+    // `inputs.exclusions` 就是完整审计段：
+    // `{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`。
     //
-    // ⇒ 元信息（file / version / sha256 / 记录文件名）进提案；
-    //    逐条记录（表名 / 类别 / 理由 / 决策人 / 置信度 / 依据）进
-    //    `proposal-exclusions.json`，两者由 sha256 绑定（见 `exclusions::load_record`）。
-    //
-    // ⚠️ 顺序：**先写记录、再写提案** —— 提案一旦存在，它的记录就必须已经在了。
-    let mut record_written: Option<String> = None;
-    if let (Some(ex), Some(rec)) = (&exclusions, &exclusion_record) {
-        let record_path = std::path::Path::new(&out).with_file_name(ontok::extract::exclusions::RECORD_FILE);
-        let record_path = record_path.to_string_lossy().to_string();
-        std::fs::write(&record_path, serde_json::to_string_pretty(rec)?)
-            .with_context(|| format!("写不出排除记录 {record_path}"))?;
-        outcome.proposal.inputs =
-            Some(serde_json::json!({ "exclusions": ex.inputs_ref(ontok::extract::exclusions::RECORD_FILE) }));
-        record_written = Some(record_path);
+    // 为什么把逐条明细也放进来（而不是侧车文件）：
+    // 用户要搬的**只有一个** proposal.json；侧车会让「丢一个文件就导不进」，
+    // 产品还多一个产出文件。AC-001 的判据随之精确化：
+    // `items` 段里 grep 被排除表名 = 0，且整份文件里这些表名**只允许**出现在这一段内。
+    // 这一段是**元信息**（谁判的、依据什么、排了谁），不是实体。
+    if let Some(ex) = &exclusions {
+        let counts = ontok::extract::exclusions::Counts::of(&outcome.stats);
+        let rec = ex.record(
+            ontok::extract::exclusions::Displayed {
+                applied: &exclusion_applied,
+                stale: &exclusion_stale,
+                flagged: &exclusion_flagged,
+            },
+            counts,
+        );
+        outcome.proposal.inputs = Some(serde_json::json!({ "exclusions": rec }));
     }
 
     std::fs::write(&out, serde_json::to_string_pretty(&outcome.proposal)?)
         .with_context(|| format!("写不出 {out}"))?;
     std::fs::write(&stats_out, serde_json::to_string_pretty(&outcome.stats)?)?;
-    if let Some(p) = &record_written {
-        println!("  排除记录    : {p}（逐条：表名 / 类别 / 理由 / 决策人 / 置信度 / 依据）");
-    }
     println!();
     println!("排除台账（AC-002 / AC-003）");
     println!(

@@ -171,10 +171,10 @@ struct Run {
     stderr: String,
     proposal: Option<Value>,
     stats: Option<Value>,
-    /// 逐条记录侧车（`proposal-exclusions.json`，与提案同目录）。
-    record: Option<Value>,
     proposal_bytes: Vec<u8>,
     stats_bytes: Vec<u8>,
+    /// 提案旁边**除提案与 stats 之外**还多了什么（用来证明「没有侧车」）。
+    siblings: Vec<String>,
 }
 
 /// 跑一次 `ontok-propose`。`extra` 追加到固定参数之后。
@@ -205,16 +205,25 @@ fn run_propose(dir: &Path, schema: &Path, exclusions: Option<&Path>, extra: &[&s
     let o = cmd.output().expect("跑不动 ontok-propose");
 
     let read = |p: &Path| std::fs::read(p).ok();
-    let record_path = out.with_file_name(ontok::extract::exclusions::RECORD_FILE);
+    // 记下 `--out` 目录里**新出现**的文件：用来断言「没有侧车、只有 proposal + stats」
+    // （pending / rejected 是 REQ-108 的既有产文件，不算新东西）。
+    let siblings = std::fs::read_dir(dir)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(&format!("proposal-{tag}")) || n.starts_with(&format!("stats-{tag}")))
+                .collect()
+        })
+        .unwrap_or_default();
     Run {
         status: o.status.code(),
         stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
         proposal: read(&out).and_then(|b| serde_json::from_slice(&b).ok()),
         stats: read(&stats).and_then(|b| serde_json::from_slice(&b).ok()),
-        record: read(&record_path).and_then(|b| serde_json::from_slice(&b).ok()),
         proposal_bytes: read(&out).unwrap_or_default(),
         stats_bytes: read(&stats).unwrap_or_default(),
+        siblings,
     }
 }
 
@@ -247,12 +256,39 @@ fn test_excluded_tables_never_reach_the_proposal_and_counts_close() {
     let proposal = r.proposal.expect("有提案");
     let stats = r.stats.expect("有统计");
 
-    // AC-001 · 被排除的表**一个字节都不许出现在提案里**（实体 / 属性 / 关系 / 证据）
+    // ── AC-001（精确化）· 被排除的表只允许出现在 `inputs.exclusions` 段内 ──
+    //
+    // ① `items` 段里 grep = 0（「不建实体」的真正判据）；
+    // ② 把 `inputs.exclusions` 整段删掉后，剩余文本里 grep = 0。
     let text = String::from_utf8_lossy(&r.proposal_bytes).into_owned();
+    let items_text = serde_json::to_string(&proposal["items"]).unwrap();
     for gone in ["noise_x", "noise_y"] {
         assert!(
-            !text.contains(gone),
-            "AC-001：被排除的表 {gone:?} 不得出现在 proposal.json 里（连字符串都不许）"
+            !items_text.contains(gone),
+            "AC-001 ①：被排除的表 {gone:?} 不得出现在 items 里（实体/属性/关系/证据都不许）"
+        );
+    }
+    // ② 用「序列化后的提案」做替换：把整段 inputs 拿掉，剩下的就是「除审计段之外的所有字节」
+    let mut stripped = proposal.clone();
+    stripped["inputs"] = Value::Null;
+    let stripped_text = serde_json::to_string(&stripped).unwrap();
+    for gone in ["noise_x", "noise_y"] {
+        assert!(
+            !stripped_text.contains(gone),
+            "AC-001 ②：删掉 `inputs.exclusions` 后，被排除表名 {gone:?} 仍出现 ⇒ 审计段之外还有痕迹"
+        );
+    }
+    assert!(
+        text.contains("noise_x"),
+        "反向确认这条判据不是恒真：审计段里**应当**有这个表名（它是元信息，不是实体）"
+    );
+    // 反向：审计段必须真的有它（否则上面 ② 的「删掉后为 0」是空话）
+    assert_eq!(proposal["inputs"]["exclusions"]["excluded"][0]["table"], "noise_x");
+    // 「没有侧车」：`--out` 目录里只有 proposal + stats（外加 REQ-108 的 pending/rejected）
+    for s in &r.siblings {
+        assert!(
+            !s.contains("exclusions"),
+            "⛔ BA 裁定：明细进提案、取消侧车 —— `--out` 旁边不许再出现 {s:?}"
         );
     }
 
@@ -311,7 +347,7 @@ fn test_excluded_tables_never_reach_the_proposal_and_counts_close() {
 // ══════════════════════════════════════════════════════════════
 
 #[test]
-fn test_provenance_records_file_version_and_sha256() {
+fn test_provenance_is_the_full_audit_block_in_one_file() {
     let dir = scratch("prov");
     let schema = write_schema(&dir);
     let ex = write_exclusions(&dir, "exclusions.json", None, "ai-table-judge");
@@ -320,61 +356,118 @@ fn test_provenance_records_file_version_and_sha256() {
     assert_eq!(r.status, Some(0), "{}", r.stderr);
 
     let proposal = r.proposal.expect("有提案");
+    let stats = r.stats.clone().expect("有统计");
     let block = &proposal["inputs"]["exclusions"];
     assert!(block.is_object(), "AC-004：提案元信息必须有 inputs.exclusions，实际：{proposal}");
+
+    // 元信息（AC-004 的三个必需键都在）
     assert_eq!(block["file"], ex.to_string_lossy().as_ref(), "file 记的是调用方给的路径");
     assert_eq!(block["version"], "0.1.1");
     assert_eq!(block["sha256"], expected_sha, "sha256 必须是**文件原始字节**的哈希");
     assert_eq!(block["declared_by"], "ai-table-judge / test");
-    assert_eq!(block["record"], ontok::extract::exclusions::RECORD_FILE);
+    assert_eq!(block["reviewed_by"], "qa-req113（复核）", "「谁判的」与「谁签的」分开记");
 
-    // AC-001 的硬边界：**提案元信息里不许出现表名**（连记录里的字段都没有）
-    assert!(
-        block.get("tables").is_none(),
-        "AC-001：提案里不许有「被排除的表名」一栏 —— 逐条记录在侧车里，实际：{block}"
+    // 审计段自带三计数（与 stats.json 同源）
+    assert_eq!(block["counts"]["seen"], 5);
+    assert_eq!(block["counts"]["excluded"], 2);
+    assert_eq!(block["counts"]["extracted"], 3);
+    assert_eq!(block["counts"]["flagged"], 1);
+    assert_eq!(
+        block["counts"].as_object().unwrap()["seen"].as_u64().unwrap()
+            - block["counts"]["excluded"].as_u64().unwrap(),
+        block["counts"]["extracted"].as_u64().unwrap(),
+        "审计段里那三个数也必须闭合"
     );
-    let text = String::from_utf8_lossy(&r.proposal_bytes).into_owned();
-    assert!(!text.contains("noise_x") && !text.contains("noise_y"));
+    assert_eq!(block["counts"]["excluded"], stats["tables_excluded"]);
+    assert_eq!(block["counts"]["extracted"], stats["tables_extracted"]);
 
-    // 逐条记录在侧车里（审核界面最终读的是它，经库中转）
-    let rec = r.record.expect("必须写出 proposal-exclusions.json");
-    assert_eq!(rec["sha256"], expected_sha, "侧车与提案元信息**同一个** sha256");
-    assert_eq!(rec["tables"].as_array().unwrap().len(), 2);
-    assert_eq!(rec["flagged"].as_array().unwrap().len(), 1);
-    assert_eq!(rec["reviewed_by"], "qa-req113（复核）", "「谁判的」与「谁签的」分开记");
+    // 逐条明细**就在提案里**（BA 裁定：单一文件，无侧车）
+    let excluded = block["excluded"].as_array().expect("审计段带逐条明细");
+    assert_eq!(excluded.len(), 2);
+    assert_eq!(excluded[0]["table"], "noise_x");
+    assert_eq!(excluded[0]["category"], "cdc_residue");
+    assert_eq!(excluded[0]["decided_by"], "ai-table-judge");
+    assert_eq!(excluded[0]["confidence"], 0.97);
+    assert!(excluded[0]["evidence"].as_str().unwrap().contains("哈希"));
+    // 「保留但存疑」是另一栏，且**不在** excluded 里
+    let flagged = block["flagged"].as_array().expect("审计段带待裁决清单");
+    assert_eq!(flagged.len(), 1);
+    assert_eq!(flagged[0]["table"], "keep_b");
+    assert_eq!(block["stale"].as_array().unwrap().len(), 0);
+
+    // 只有两个产文件：提案 + stats（没有侧车）
+    assert_eq!(r.siblings.len(), 2, "只许 proposal 与 stats 两个文件，实际：{:?}", r.siblings);
 }
 
-#[test]
-fn test_record_sidecar_is_bound_to_the_proposal_by_sha256() {
-    // `load_record` 是 `propose import` 过的那道门：记录必须与提案同一轮。
-    let dir = scratch("bind");
+// ══════════════════════════════════════════════════════════════
+// AC-004 + 「单一文件」· `propose import` 只读一份提案就能落库
+// ══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_single_file_import_persists_the_audit_block() {
+    use ontok::db::project::PgProjectStore;
+    use ontok::db::proposal::PgProposalStore;
+
+    let dir = scratch("import");
     let schema = write_schema(&dir);
     let ex = write_exclusions(&dir, "exclusions.json", None, "ai-table-judge");
-    let r = run_propose(&dir, &schema, Some(&ex), &[], "bind");
+    let r = run_propose(&dir, &schema, Some(&ex), &[], "import");
     assert_eq!(r.status, Some(0), "{}", r.stderr);
+    let proposal_path = dir.join("proposal-import.json");
+    assert!(proposal_path.exists());
 
-    let proposal = r.proposal.expect("有提案");
-    let inputs = &proposal["inputs"];
-    let record_path = dir.join(ontok::extract::exclusions::RECORD_FILE);
+    // 提案里的 `project` 是 `ontok-propose --project req113`（本文件统一用它）：
+    // 这里确保它存在且有 v1，再由 CLI 走**只读一个 --file** 的导入路径。
+    let url = ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL");
+    let pool = common::test_pool().await;
+    common::migrate(&pool).await;
+    let projects = PgProjectStore::new(pool.clone());
+    let p = projects.get_or_create("req113").await.unwrap();
+    if projects.list_versions(p.id).await.unwrap().is_empty() {
+        projects.new_version(p.id).await.unwrap();
+    }
 
-    // ① 正常：能读出来，条数与统计一致
-    let rec = ontok::extract::exclusions::load_record(&record_path, inputs).expect("对齐的记录应当读得出");
+    // ⭐ 只给一个 `--file`：没有侧车、没有第二个参数
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
+        .args(["propose", "import", "--file", proposal_path.to_str().unwrap()])
+        .env("ONTOK_DATABASE_URL", &url)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("跑不动 ontok");
+    assert!(
+        o.status.success(),
+        "单文件导入必须成功：\nSTDOUT:\n{}\nSTDERR:\n{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    assert!(stdout.contains("排除记录"), "回执要说清落了几条排除：{stdout}");
+
+    // 库里那一份就是完整审计段（审核界面读它）。
+    // 项目 `req113` 是多次运行共用的（本文件里所有 CLI 用例都写它），
+    // 所以取**最新**那条提案 —— 旧的没有 inputs，不该被读到。
+    let proposals = PgProposalStore::new(pool.clone());
+    let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM proposals WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(p.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "至少导入过一条提案");
+    let inputs = proposals.inputs(rows[0].0).await.unwrap().expect("inputs 落库了");
+    let block = &inputs["exclusions"];
+    assert_eq!(block["counts"]["excluded"], 2);
+    assert_eq!(block["excluded"].as_array().unwrap().len(), 2);
+    assert_eq!(block["excluded"][0]["reason"], "数据同步工具自动生成的临时表，不对应任何客户业务");
+    assert_eq!(block["flagged"].as_array().unwrap().len(), 1);
+    assert_eq!(block["reviewed_by"], "qa-req113（复核）");
+    // 落库的这份能被审核界面那条路径读回来（同一套校验）
+    let rec = ontok::extract::exclusions::Record::from_inputs(&inputs)
+        .unwrap()
+        .expect("库里有记录");
     assert_eq!(rec.count(), 2);
-    assert_eq!(rec.count(), r.stats.unwrap()["tables_excluded"].as_u64().unwrap() as usize);
-
-    // ② sha 对不上 ⇒ 拒绝（拿上一轮的记录配这一轮的提案，页面上看不出来）
-    let mut tampered: Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
-    tampered["sha256"] = json!("b".repeat(64));
-    let bad = dir.join("tampered.json");
-    std::fs::write(&bad, serde_json::to_vec_pretty(&tampered).unwrap()).unwrap();
-    let e = ontok::extract::exclusions::load_record(&bad, inputs).unwrap_err().to_string();
-    assert!(e.contains("不是同一轮"), "{e}");
-
-    // ③ 记录文件不在 ⇒ 拒绝（不许降级成「没有记录」，那正好把 AC-006 的承诺抹掉）
-    let e = ontok::extract::exclusions::load_record(&dir.join("nope.json"), inputs)
-        .unwrap_err()
-        .to_string();
-    assert!(e.contains("不在提案旁边"), "{e}");
+    assert!(rec.counts.close());
 }
 
 #[test]
@@ -530,6 +623,9 @@ fn test_two_runs_are_byte_identical() {
 // ══════════════════════════════════════════════════════════════
 
 /// 一份「与真实产出一致」的 inputs 记录（键名与 `exclusions::Record` 对齐）。
+///
+/// `seen = excluded + 2`（固定 2 张真的抽出实体）：审计段自带的三计数必须闭合，
+/// 否则 `Record::from_inputs` 会（正确地）拒绝它 —— 这也是本测试想钉住的。
 fn record_with(excluded: usize, flagged: usize) -> Value {
     let tables: Vec<Value> = (0..excluded)
         .map(|i| {
@@ -542,7 +638,7 @@ fn record_with(excluded: usize, flagged: usize) -> Value {
             })
         })
         .collect();
-    let flagged: Vec<Value> = (0..flagged)
+    let flagged_list: Vec<Value> = (0..flagged)
         .map(|i| {
             json!({
                 "table": format!("kept_{i}"),
@@ -559,9 +655,16 @@ fn record_with(excluded: usize, flagged: usize) -> Value {
             "declared_by": "ai-table-judge / test",
             "reviewed_by": "qa-req113（复核）",
             "rule": "只排除不是客户业务世界里的事物",
-            "tables": tables,
+            "counts": {
+                "seen": excluded + 2,
+                "excluded": excluded,
+                "extracted": 2,
+                "stale": 1,
+                "flagged": flagged,
+            },
+            "excluded": tables,
             "stale": ["gone_table_xyz"],
-            "flagged": flagged,
+            "flagged": flagged_list,
         }
     })
 }
