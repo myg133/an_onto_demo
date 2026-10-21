@@ -424,6 +424,11 @@ fn test_req108_review_confidence_table_shape() {
         payload: serde_json::json!({ "confidence": c }),
         biz_status: "pending".into(),
         model_status: "pending".into(),
+        // REQ-111 · 决策审计两栏：这里构造的是**没签过**的条目 ⇒ 全 None。
+        biz_decided_at: None,
+        biz_via: None,
+        model_decided_at: None,
+        model_via: None,
     };
     let rows = vec![
         row(1, "订单→客户", serde_json::to_value(perfect()).unwrap()),

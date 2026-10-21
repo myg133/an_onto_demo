@@ -1815,6 +1815,11 @@ const MODULES: &[(&str, &str)] = &[
     ("src/mcp/mod.rs", "protocol"),
     ("src/mcp/mod.rs", "serve"),
     ("src/mcp/mod.rs", "tools"),
+    // ⭐ REQ-111 · 本地审核界面（**独立于 `server/`**：那一层只读，这一层要写决策）。
+    // 写出口 R1–R5 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "review_ui"),
+    ("src/review_ui/mod.rs", "http"),
+    ("src/review_ui/mod.rs", "page"),
     ("src/server/mod.rs", "http"),
     ("src/server/mod.rs", "page"),
 ];

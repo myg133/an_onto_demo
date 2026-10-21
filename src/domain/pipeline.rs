@@ -85,14 +85,15 @@
 //! - ② 双粒度，但由 [`Granularity`] **声明**，不由出口自决；
 //! - ③ stderr 报告形状唯一（[`DropReport::stderr_line`]），客户正文只报数量。
 //!
-//! # 39 条出口登记表（AC-002 / AC-007）
+//! # 44 条出口登记表（AC-002 / AC-007）
 //!
 //! [`OUTLETS`] 是**机读**的：每条带 `path` + `call_site`（该出口调用管线的源码片段
 //! 唯一子串）+ 轨道 + 格式。判据在 `tests/test_req107_*` 里做**双向对账**
 //! （条数 / 分组 / ID 集合 / needle 命中）。
 //!
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
-//! 所以口径变成 39（客户 17 / 建模 10 / 内部 9 / 静态 2 / 错误路径 1）。
+//! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
+//! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -276,6 +277,17 @@ pub enum OutletId {
     D9,
     /// REQ-110 · `ontology export --model-view --out`：建模视图 TTL → 文件（同 D9）。
     D10,
+    // ── REQ-111 · 本地审核界面（内部：FDE 通道，只绑回环 + 口令）──
+    /// `GET /api/review` —— 条目 + 双轨状态 + 置信度 + AI 理由 + 证据。
+    R1,
+    /// `POST /api/decide` —— 唯一写点的**回执**（写本身走 `review decide` 的同一函数）。
+    R2,
+    /// `GET /api/preview` —— 批量签的**预览**（条数 + `items[]` 白名单）。
+    R3,
+    /// `GET /` —— 审核页面壳（**零数据**）。
+    R4,
+    /// 审核界面的错误通道（正文是 `{"error": …}`，含服务端给的具体原因）。
+    R5,
 }
 
 impl OutletId {
@@ -301,6 +313,11 @@ impl OutletId {
             OutletId::D1 => "D1",
             OutletId::D9 => "D9",
             OutletId::D10 => "D10",
+            OutletId::R1 => "R1",
+            OutletId::R2 => "R2",
+            OutletId::R3 => "R3",
+            OutletId::R4 => "R4",
+            OutletId::R5 => "R5",
         }
     }
 }
@@ -347,6 +364,20 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         // `exemption_reason`），产物是文本而不是 JSON。
         OutletId::D9 => OutletSpec::of("D9", Track::Modeling, Format::Text, Granularity::Whole),
         OutletId::D10 => OutletSpec::of("D10", Track::Modeling, Format::Text, Granularity::Whole),
+        // REQ-111 · 本地审核界面：**内部**轨（FDE 通道）。
+        //
+        // 为什么不是 `Modeling`：建模轨在登记表里是「D1–D10 这 10 条」这一组
+        // **精确集合**（`tests/test_req107_track_manifest.rs` 钉住），
+        // 那组的口径是「同一份客户产物的建模视图」。审核界面产出的是
+        // **审核对象的原始候选定义**（key / 列 / 基数 / 置信度 / 理由），
+        // 既不是客户视图、也不是建模视图 —— 它是**内部工具**的数据面。
+        // `Internal` 的语义（不过闸、内部运维）正是它，且不会把「建模轨 10 条」
+        // 这条既有不变量改宽。
+        OutletId::R1 => OutletSpec::of("R1", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::R2 => OutletSpec::of("R2", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::R3 => OutletSpec::of("R3", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::R4 => OutletSpec::of("R4", Track::Internal, Format::Html, Granularity::Whole),
+        OutletId::R5 => OutletSpec::of("R5", Track::Internal, Format::Json, Granularity::Whole),
     }
 }
 
@@ -867,7 +898,7 @@ fn gate_both(spec: OutletSpec, json_text: &str, text: &str) -> Result<(), Pipeli
 }
 
 // ══════════════════════════════════════════════════════════════
-// 33 条出口登记表（AC-002 / AC-007 / AC-010-1）
+// 44 条出口登记表（AC-002 / AC-007 / AC-010-1）
 // ══════════════════════════════════════════════════════════════
 
 /// 一条出口在管线里的**执行形态**。
@@ -877,7 +908,7 @@ pub enum Enforcement {
     Pipeline,
     /// 建模轨：**显式声明豁免**，产物是人话行/自有闭包接线，本轮不改道（D2–D8）。
     DeclaredOnly,
-    /// 内部运维输出：不过闸，也不需要判据（内部 9）。
+    /// 内部运维输出：不过闸，也不需要判据（内部 14，含 REQ-111 的 R1–R5）。
     InternalOnly,
 }
 
@@ -930,9 +961,9 @@ impl Outlet {
 
 const CUSTOMER: &str = "";
 
-/// ⭐ **39 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口）。
+/// ⭐ **44 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口）。
 ///
-/// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 9 +
+/// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 14 +
 /// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **39**。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
@@ -1114,6 +1145,58 @@ pub const OUTLETS: &[Outlet] = &[
         spec: spec_of(OutletId::D10),
         enforcement: Enforcement::Pipeline,
         exemption_reason: "同 D9：`--out` 写的是**同一份**建模视图 TTL 字节（`model_ttl`），只是落到文件而不是 stdout。",
+    },
+    // ── REQ-111 · R1–R5 · 本地审核界面（内部轨：FDE 通道）──────────────
+    //
+    // 为什么**必须登记**：审核界面是新增的客户端可见写出口（浏览器的页面 + JSON）。
+    // 「不登记 = 没人管」正是 REQ-107 收口的那个洞；新增写出口必须进这张表，
+    // 而 `tests/test_req107_source_enumeration.rs` 的 T1 会从 `src/` **全目录**
+    // 枚举，任何没登记的写点当场红。
+    //
+    // 为什么不走管线：这五条的语气与 D2–D8 / I1–I9 相同 —— 产物是**审核对象的
+    // 原始候选定义**（key / 列 / 基数 / 置信度 / AI 理由）与**运维回执**，
+    // 过客户闸会恒命中（那些词在客户轨是泄露、在这一轨是内容）。
+    // 与 D2–D8 的区别：它们打 stdout，这里回 HTTP；与 `serve` 的区别：
+    // 这是**内部**工具（只绑回环 + 每个 `/api/*` 要口令），不是客户出口。
+    Outlet {
+        id: "R1",
+        path: "src/review_ui/http.rs",
+        call_site: "Ok(Json(review_body))",
+        spec: spec_of(OutletId::R1),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部：`GET /api/review` 的条目列表（双轨状态 / 置信度 / AI 理由 / 证据 / 候选定义）。客户视图零读取；只绑回环 + Bearer 口令。",
+    },
+    Outlet {
+        id: "R2",
+        path: "src/review_ui/http.rs",
+        call_site: "Ok(Json(decide_body))",
+        spec: spec_of(OutletId::R2),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部：`POST /api/decide` 的**回执**（写入后的双轨状态 + 审计 via/decided_at + 进度）。写本身复用 `review decide` 的 `decide_item`，不在 HTTP 层写 SQL。",
+    },
+    Outlet {
+        id: "R3",
+        path: "src/review_ui/http.rs",
+        call_site: "Ok(Json(preview_body))",
+        spec: spec_of(OutletId::R3),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部：`GET /api/preview` 的批量预览（条数 + items[] 白名单）。只读；它是 AC-006「先看条数再执行」的数据来源，服务端没有批量写接口。",
+    },
+    Outlet {
+        id: "R4",
+        path: "src/review_ui/http.rs",
+        call_site: "Html(crate::review_ui::page::REVIEW_HTML)",
+        spec: spec_of(OutletId::R4),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部：审核页面**壳**（零数据：无项目名 / 无条目 / 无决策）。数据全走 R1–R3（都要口令）；浏览器导航带不了 Authorization，所以壳必须免口令。",
+    },
+    Outlet {
+        id: "R5",
+        path: "src/review_ui/http.rs",
+        call_site: "Json(error_body(",
+        spec: spec_of(OutletId::R5),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部：审核界面的**错误通道**（`{\"error\": …}`）。正文必须带具体原因（AC-007：已冻结 / 没有第 N 个条目 / 参数错），否则页面只能显示「失败」二字。不含令牌。",
     },
     Outlet {
         id: "D2",
@@ -1306,17 +1389,26 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 39，分组 17/10/9/2/1。
+    /// 登记表的口径必须**恰好**是 44，分组 17/10/14/2/1。
     ///
     /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
-    /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）。
+    /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）；
+    /// REQ-111 新增 5 条审核界面出口（R1–R5，**全部内部轨**）⇒ 44（17/10/14/2/1）。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
-        assert_eq!(OUTLETS.len(), 39, "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）");
+        assert_eq!(
+            OUTLETS.len(),
+            44,
+            "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）"
+        );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
-        assert_eq!(outlet_count(Track::Internal), 9);
+        assert_eq!(
+            outlet_count(Track::Internal),
+            14,
+            "内部 9 + REQ-111 的 R1–R5（审核界面是内部工具，不是客户/建模出口）"
+        );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);
         // ID 唯一

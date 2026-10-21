@@ -1,3 +1,268 @@
+# REQ-111 · 本地审核界面（HTML 里做双轨审核）—— 交付报告
+
+> 分支 `feature/REQ-111`（worktree `feature-REQ-111/`，基线 `develop` `f624c1a`，REQ-110 已合并）· **未 push**
+> 一句话：**把「142 条目 × 2 轨 = 284 次进程启动」收成「一个进程 + 页面上的点击」**，
+> 而「`serve` 只读」这条**结构**保证一个字节都不动。
+>
+> ⚠️ 三条必须先看的结论：
+> 1. 决策**只有一个实现**：`db::proposal::decide_item`（`review decide` 与 `POST /api/decide` 都调它，只差一个 `via` 参数）；
+> 2. `src/server/http.rs` **零 diff**（`git diff develop -- src/server/http.rs` 输出 0 行），`serve` 的 405 判据原样全绿；
+> 3. 批量**没有**服务端写接口：预览拿 `items[]` 白名单，页面逐条 POST ⇒「一键全库」在 HTTP 面上**表达不出来**。
+
+---
+
+## 0 · 结论先行
+
+| 项 | 结果 |
+| --- | --- |
+| 10 条 AC | **10 条通过**（逐条实测见 §3） |
+| 决策实现份数 | **1**（`decide_item`；`review_ui` 里 `UPDATE/INSERT/DELETE/sqlx::query` **0 命中**） |
+| `serve` 改动 | **0 行**（路由 + middleware 路径过滤的 `git diff` 为空） |
+| 耗时（135 条目 × 2 轨 = 270 次决策） | CLI **59.59 s** ↔ 页面路径 **7.69 s**（**7.75×**） |
+| 幂等 | ✅ accept → reject 后终态 `rejected`，条目行数不变（135） |
+| 双向一致 | ✅ 页面签 ⇒ `review show` 读到；CLI 签 ⇒ `GET /api/review` 读到（`via=cli`） |
+| 冻结拒绝 | ✅ 启动 `exit=1`（点名 `v1 已冻结`）；运行中提交 **HTTP 409** + 具体原因 |
+| 审计 | ✅ 每轨 `decided_at` + `via`（页面 `ui` / CLI `cli`） |
+| 测试 | lib **245**（= 基线）· doc **4**（= 基线）· 32 个基线套件 **313**（**= 基线，一条不少**）· 新增套件 **12** · 合计 36 套件 **349** |
+| 新依赖 | ✅ **零**（`Cargo.toml` 未改） |
+| 红线 | ✅ 四红线 + `tools.rs` + `guard()` + `property_filter` G1–G4 **零改动**（`git diff --numstat` 为空） |
+
+---
+
+## 1 · 各文件改动（`path:line`）
+
+| 文件 | 行 | 内容 |
+| --- | --- | --- |
+| `src/cli.rs` | `261-294` | `ReviewCmd::Serve { project, proposal, bind, token }`（默认 `127.0.0.1:8788`；`--token` 可省，回落 `ONTOK_VIEW_TOKEN`） |
+| `src/cli.rs` | `1487-1493` | `review decide` 改为调 **`decide_item(..., VIA_CLI)`** —— 不再自己查条目 + 写库 |
+| `src/cli.rs` | `1496-1511` | `Serve` 分支：解析监听地址 → 取口令 → `review_ui::http::serve` |
+| `src/cli.rs` | `1948` / `2016` | `resolve_proposal` / `proposal_alias` 改 `pub`（审核界面复用**同一份**别名词典，不抄 SQL） |
+| `src/db/proposal.rs` | `36-38` / `68-69` | `VIA_CLI = "cli"` / `VIA_UI = "ui"`（审计入口标识） |
+| `src/db/proposal.rs` | `41-61` | `ProposalItemRow` 增 4 栏：`biz_decided_at` / `biz_via` / `model_decided_at` / `model_via`；`ITEM_COLUMNS` 一处列清单供两处 SELECT 共用 |
+| `src/db/proposal.rs` | `317-339` | **`decide_item`** —— 序号→条目→`domain::review::apply_decision`→落库+审计，**唯一实现** |
+| `src/db/proposal.rs` | `347-378` | **`set_decision_via`** —— 全仓**唯一**的决策 `UPDATE`（`decided_at = now()` 由数据库取时） |
+| `src/db/proposal.rs` | `388-396` | `set_decision`（旧签名）→ 委托 `set_decision_via(..., VIA_CLI)`，`apply` / 既有测试零改动 |
+| `src/db/pg.rs` | `267` | `StoreError::ItemNotFound { seq }`（CLI 与页面**同一句话**） |
+| `src/db/pg.rs` | `487-515` | `ALTER_PATCHES` 9→13：两轨各 `*_decided_at` + `*_via` |
+| `src/domain/pipeline.rs` | `308-320` / `376-380` | `OutletId::R1–R5` + `spec_of`（**Internal** 轨、`InternalOnly`） |
+| `src/domain/pipeline.rs` | `1148-1202` | `OUTLETS` 登记 5 条新出口：读 / 写回执 / 批量预览 / 页面壳 / 错误通道（各带 needle + 豁免理由） |
+| `src/lib.rs` | `25-31` | `pub mod review_ui;`（**不进 `server/`**，理由见 `review_ui/mod.rs`） |
+| `src/review_ui/mod.rs` | 全文 | 模块边界 + 三条安全边界 + 已知限制 |
+| `src/review_ui/http.rs` | `96-176` | `prepare` —— 四道启动闸门（项目/提案归属、pending、基版本未冻结、快照可读） |
+| `src/review_ui/http.rs` | `179-219` | `serve` —— **只绑回环** + 口令长度 + 横幅（打印绑定地址与提案别名） |
+| `src/review_ui/http.rs` | `222-246` | `build_router`：`/`、`GET /api/review`、`GET /api/preview`、`POST /api/decide`、fallback |
+| `src/review_ui/http.rs` | `252-287` | `check_token`（每个 `/api/*` 的第一行）+ 定长比较 |
+| `src/review_ui/http.rs` | `289-411` | `GET /api/review`：条目 + 双轨状态 + 置信度（含 AI 理由）+ 证据 + 候选定义 + 进度 |
+| `src/review_ui/http.rs` | `415-508` | `GET /api/preview`：**条数** + `items[]` 白名单 + 排除项计数（只读） |
+| `src/review_ui/http.rs` | `532-604` | `POST /api/decide`：**唯一写点** → `decide_item(..., VIA_UI)` → 回执（状态 + 审计 + 进度） |
+| `src/review_ui/http.rs` | `607-623` | `ensure_unfrozen` —— **每次写前**再查冻结（AC-007） |
+| `src/review_ui/page.rs` | `25-` | 独立 HTML（零外部资源、零数据壳）：列表 / 过滤 / 逐条签 / **批量先预览** / 进度条 |
+| `tests/test_req111_review_ui.rs` | 全文 | 12 条判据（AC-001~011 的行为面 + 真二进制双向一致） |
+| `tests/test_req107_outlet_pipeline.rs` | `354-359` / `678-720` | 登记对视对账**纳入** `src/review_ui/http.rs`；条数 39→44、内部 9→14、ID 集合 +R1–R5 |
+| `tests/test_req107_source_enumeration.rs` | `1818-1822` | `MODULES` 登记 `review_ui` / `http` / `page` |
+| `tests/test_req108_confidence.rs` / `test_req109_ai_semantic.rs` | 各 +5 行 | `ProposalItemRow` 字面量补 4 个审计栏（全部 `None`） |
+
+**未改**：`src/server/http.rs`（0 行）、`src/server/page.rs`、`src/mcp/*`、`Cargo.toml`、四红线、`tools.rs`、`property_filter.rs`。
+
+---
+
+## 2 · 决策复用的证明（纪律 H）
+
+### 2.1 同一个函数、两个调用点
+
+```text
+src/db/proposal.rs:317   pub async fn decide_item(                      ← 定义（唯一实现）
+src/cli.rs:1492                  .decide_item(p, item, t, d, VIA_CLI)   ← ontok review decide
+src/review_ui/http.rs:564        .decide_item(state.proposal_id, ..., VIA_UI)  ← POST /api/decide
+src/db/proposal.rs:338           self.set_decision_via(...)             ← 唯一的落库调用
+src/db/proposal.rs:347   pub async fn set_decision_via(                 ← 唯一的决策 UPDATE
+src/db/proposal.rs:394           self.set_decision_via(..., VIA_CLI)    ← 旧签名兼容（apply / 既有测试）
+```
+
+`git grep -n "decide_item("` 恰好 **3 处**：定义 + CLI 调用 + HTTP 调用（源码注释里那句说明不计）。
+`decide_item` 里四步一步不少：**序号解析 → 条目行 → `domain::review::apply_decision`（纯状态机）→ `set_decision_via`（落库 + 审计）**。
+
+### 2.2 HTTP 层没有第二份决策 / 没有 SQL
+
+```text
+$ Select-String -Path src/review_ui/*.rs -Pattern "UPDATE |INSERT |DELETE FROM|sqlx::query|set_decision|apply_proposal"
+（仅命中两行模块注释；代码 0 命中）
+```
+
+页面能写的**只有** `POST /api/decide`，它调的是 `decide_item`；自身不碰 `PgProposalStore` 之外的任何写方法，也没有 `UPDATE` 字面量。
+
+### 2.3 为什么审计不另开日志表
+
+AC-005 要求「同 `item+track` 连签**不产生两条记录**」，AC-009 又要求每次决策有 `decided_at` / `via`。
+⇒ 审计栏放在**同一条目行**上（两轨各两栏），后写覆盖前写。追加一张 `decisions_log` 会让这两条判据互相打架。
+
+---
+
+## 3 · 10 条 AC 逐条实测
+
+| AC | 判据 | 实测 | 证据 |
+| --- | --- | --- | --- |
+| **AC-001** 只绑回环 | `0.0.0.0` ⇒ exit≠0；`127.0.0.1` ⇒ 正常 | ✅ | `--bind 0.0.0.0:8790` → **exit=1**，文案「只允许绑回环地址…审核界面会**写**决策」；`127.0.0.1:8788` → 起服务并打印横幅；`ac001_non_loopback_bind_is_refused`（含回环对照组） |
+| **AC-002** 只服务未冻结 | 已冻结 ⇒ 启动失败、点名 `v2 已冻结` | ✅ | 冻结 `req111_live` v1 后重启：**exit=1**「项目「req111_live」的 v1 已冻结（2026-10-21T13:57:23Z）：审核界面只服务**未冻结**的提案…」；`ac002_frozen_base_version_refuses_to_start` |
+| **AC-003** 写接口鉴权 | 无 token 401 / 正确 token 200 | ✅ | 实测 `GET /api/review` 无 token **401**、`POST /api/decide` 无 token **401**、带 token **200**；401 后库中仍 `pending`（未写入）；`ac003_both_apis_require_a_token` |
+| **AC-004** 同一个领域函数 | 页面签 ⇒ CLI 读得到；反向一致 | ✅ | 页面签 item 2 `biz` ⇒ `review show` 里 `biz=accepted` 计数 **134**（另一条是 item 1 的 rejected）；CLI 签 item 3 `model --reject` ⇒ `GET /api/review` 读回 `model=rejected`；`ac004_page_signs_then_the_cli_reads_it_and_back`（**真二进制**） |
+| **AC-005** 幂等覆盖 | accept→reject 终态 reject、不产生两条记录 | ✅ | 实测 item 1 `biz` accept→reject：回执 `biz=rejected`、`via=ui`；`GET` 里**条目总数仍 135**；`ac005_signing_twice_overwrites_and_keeps_one_row`（并断言 `review show` 里不再有 `biz=accepted`） |
+| **AC-006** 批量先预览 | 先显示条数；批量接口带 `items[]` 白名单 | ✅ | 未签提案实测：`GET /api/preview?track=biz&min_confidence=0.9` → **count=39**（below=13、no_conf=83）；`model&≥0.60` → **52**；按白名单接受 3 条后 count **36**、decided=3；页面壳含「将接受 N 条」与 `api/preview`，**不含** `api/decide-bulk`；`ac006_batch_preview_shows_the_count_and_the_whitelist`（10 条未签 ⇒ count=3） |
+| **AC-007** 失败可见 | 冻结后提交 ⇒ 非 2xx + 具体原因 | ✅ | 服务运行中冻结 ⇒ `POST /api/decide` **HTTP 409**，正文 `{"error":"项目「req111_live」的 v1 已冻结，不能再改判 —— 审核界面只服务未冻结的提案。"}`；且条目仍 `pending`；`ac007_write_after_freeze_is_conflict_with_the_concrete_reason` |
+| **AC-008** 与 serve 隔离 | `serve` 一行未改；POST 到 serve 仍 405 | ✅ | `git diff develop -- src/server/http.rs` **0 行**；405 判据原样在跑：`change_verbs_are_405_on_registered_api_paths` / `every_405_carries_a_human_message`（lib 245 全绿）+ `test_graph_server` 9 全绿 |
+| **AC-009** 审计可区分 | `decided_at` + `via`（`cli`/`ui`） | ✅ | `ac009_audit_distinguishes_ui_from_cli`：页面签 ⇒ 库 `biz_via="ui"`、`biz_decided_at` 非空、`model_via` 仍 NULL；CLI 签 ⇒ `model_via="cli"`；实测 API 回执 `via.model=cli` |
+| **AC-010** 不退化 | 基线一条不少；禁改禁删 | ✅ | lib **245** / doc **4** / 32 套件 **313** 全部 = 基线；四红线 + `tools.rs` + `property_filter` 的 `git diff --numstat` 为空；无 `#[ignore]`、无删测试、`Cargo.toml` 未改 |
+
+> AC-011 不存在（验收只有 AC-001~010）；新套件 12 条是**行为判据**，不是新 AC。
+
+---
+
+## 4 · 耗时对比（同一份 135 条目提案，逐条签 × 两轨）
+
+| 路径 | 命令/请求 | 决策数 | 墙钟 | 单次均值 | 失败 |
+| --- | --- | --- | --- | --- | --- |
+| **CLI** | `ontok review decide --item N --track biz\|model --accept`（逐次进程启动） | 270 | **59.59 s** | 220.7 ms | 0 |
+| **页面路径** | `POST /api/decide`（同一个进程、同一条连接复用，**页面发的就是这串请求**） | 270 | **7.69 s** | 28.5 ms | 0 |
+
+- **7.75×**。CLI 的瓶颈是**每次进程启动**（连接池 + `migrate()` 的列存在性探询 + 进程加载），
+  而不是决策本身；页面路径把这些做了一次。
+- 两条路径用的是**两份内容相同的提案**（135 条目，同一 `ai-proposal.json`：83 实体 + 52 关系），
+  避免「第二次签已签过的条目」影响读数。
+- ⚠️ **口径如实说**：本机没有 headless 浏览器，「页面」的墙钟是**页面发出的那 270 个 HTTP 请求**
+  从开始到结束的时间（不含浏览器渲染/点击间隔）。把页面真正点一遍还要加上人手的点击时间 ——
+  那部分对 270 次决策是分钟级，**不在本数字内**。
+
+---
+
+## 5 · 「`serve` 一行未动」的证据
+
+```text
+$ git diff develop --stat -- src/server/http.rs
+（空）
+
+$ git diff develop -- src/server/http.rs | Measure-Object -Line
+Lines: 0
+```
+
+结构上的原因：审核界面是**新模块** `src/review_ui/`，`serve` 的 `AppState` / `build_router` /
+`require_token` / `normalize_405` / `serve` 一行都没碰。`POST` 到 `serve` 的端口仍是 405 ——
+那是它自己 `#[cfg(test)]` 里的 `change_verbs_are_405_on_registered_api_paths` 在跑（lib 245 全绿）。
+
+---
+
+## 6 · 测试数字 + 绕行双证
+
+```text
+# 全量 cargo test 在 Windows 编不过（既有问题：src/bin/ontok-gate-preflight.rs 是 unix-only）
+# 绕行：临时挪开该文件 → 逐套件跑 → finally 挪回 → sha256 与 Test-Path 双证
+
+RESTORE moved=True sha256_before=C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+             sha256_after=C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+             Test-Path=True  Hold-empty=True
+```
+
+| 项 | 本轮 | 基线 | 判 |
+| --- | --- | --- | --- |
+| lib（`cargo test --lib`） | **245** | 245 | ✅ 一条不少 |
+| doc（`cargo test --doc`） | **4** | 4 | ✅ 一条不少 |
+| 32 个基线回归套件 | **313** | 313 | ✅ **一条不少**（逐套件见下） |
+| `test_req110_ttl`（REQ-110 新增） | **15** | 14（REQ-110 报告口径） | ✅ 全绿（该文件 `#[test]` 实测 15 条；本轮未触碰） |
+| 新增套件 `test_req111_review_ui` | **12** | — | 新增 |
+| 另跑（受影响）`test_read_only_guard` / `test_domain_print_sites_binary_req078` | 5 / 4 | 5 / 4 | ✅ |
+| **套件合计（36 个）** | **349** | 336 | ✅ 313 一条不少 + 36 新增/受影响 |
+
+<details>
+<summary>逐套件（本轮实测，全部 0 failed）</summary>
+
+| 套件 | passed | 套件 | passed |
+| --- | --- | --- | --- |
+| `test_req107_outlet_pipeline` | 12 | `test_review_state` | 28 |
+| `test_req107_guard_granularity` | 4 | `test_db` | 11 |
+| `test_req107_zero_visible_change` | 3 | `test_extracted_by_provenance` | 9 |
+| `test_req107_pipeline_bytes` | 1 | `test_review_provenance` | 17 |
+| `test_req107_scope_error_gate` | 4 | `test_concept_proposal` | 19 |
+| `test_req107_track_manifest` | 2 | `test_diff` | 13 |
+| `test_req107_static_texts` | 3 | `test_no_write_path` | 4 |
+| `test_req107_red_lines` | 2 | `test_provenance_source` | 5 |
+| `test_property_filter` | 10 | `test_overview` | 17 |
+| `test_exit_ordering_req106` | 7 | `test_req108_live` | 5 |
+| `test_binary_output_guard` | 7 | `test_req108_confidence` | 10 |
+| `test_graph_server` | 9 | `test_req107_source_enumeration` | 10 |
+| `test_guard_manifest_req081` | 6 | `test_snapshot` | 10 |
+| `test_apply` | 21 | `test_snapshot_write_paths` | 8 |
+| `test_review_show_e2e` | 11 | `test_model_view` | 10 |
+| `test_proposal` | 9 | `test_view` | 26 |
+| **小计（32 套件 = 基线 313）** | **313** | | |
+| `test_req110_ttl` | 15 | `test_read_only_guard` | 5 |
+| `test_domain_print_sites_binary_req078` | 4 | `test_req111_review_ui`（新） | 12 |
+| **合计** | **349** | | |
+
+</details>
+
+> 与 REQ-110 报告的口径差异（如实登记）：那份写 `test_req110_ttl = 14`，
+> 本轮实测该文件有 **15** 个 `#[test]`（`Select-String -Pattern '^#\[test\]|^\s*#\[tokio::test\]'` 计数 15），
+> 全绿。**不是本轮加的**（该文件本轮 0 改动）。
+>
+> `tests/test_retained_names_req084.rs` 用 `include_str!("../src/bin/ontok-gate-preflight.rs")`，
+> 挪开绕行文件时它编不过 —— 既有问题（REQ-110 报告 §8 已登记），本轮未触碰。
+
+---
+
+## 7 · 已知限制（如实登记，⛔ 不写成「已封堵」）
+
+| # | 限制 | 影响 / 为什么本轮不修 |
+| --- | --- | --- |
+| G1 | **口令校验是第二份实现**（`review_ui/http.rs` 的 `token_matches`） | AC-008 要求 `src/server/http.rs` **一行不动**，所以不能把它的私有 `token_matches` 公开复用。这是**认证**不是**决策**：两份的失败方式都是「拒绝」，不会静默放行。 |
+| G2 | **审计只留最后一次改判** | AC-005 明确要求「同 item+track 连签不产生两条记录」；要完整历史就得追加日志表，两条判据会互相打架。需要「改判史」应另立需求。 |
+| G3 | **单机单人**：静态共享令牌，无过期/吊销/不区分谁签的 | 与 `serve` 同一条临时身份门（完整方案是 REQ-099）。 |
+| G4 | **页面无服务端渲染 / 无自动化浏览器测试** | 页面壳零数据是**要求**；页面的交互（弹窗、过滤）只在 `page.rs` 源码层断言 + 手工跑过。没有 headless 浏览器 ⇒ 无法把「点击」变成判据。 |
+| G5 | **`src/review_ui/` 不在 REQ-107 的 `OUTLET_FILES` 里** | 见 §8 第 1 条：它是**新增出口文件**，T1（全目录写点枚举）覆盖它，T5（函数登记）/T9（响应体必须管线产物）不覆盖。理由：它不是客户出口、不过管线；但它确实是一条新的 HTTP 写面 —— **这是本轮最可能被 QA 打回的一点**。 |
+| G6 | 预览的档位比较用 `score + ε >= min` | 分数是两位小数近似量；严格 `>=` 会在 `0.9000000000000001` 这类表示误差上把本该入选的条目漏掉。ε 只放宽**浮点表示**，不放宽档位语义。 |
+
+---
+
+## 8 · 我认为最可能被 QA 打回的一点
+
+**`src/review_ui/` 是新增的「出口文件」，但 `OUTLET_FILES`（T5/T9 的扫描面）没把它纳入。**
+
+- 已做的：T1（`src/` **全目录**写点枚举）覆盖它 —— 任何未登记的 `Json(` / `Html(` 都会红；
+  `OUTLETS` 登记了 R1–R5，`test_req107_outlet_pipeline::outlet_sources()` 也把它纳入登记表对账。
+- 没做的：T5（出口文件里每个 `fn` 必须登记用途）与 T9（`Json(`/`Html(` 的实参必须是管线产物）
+  只扫 `cli.rs` / `server/http.rs` / `mcp/serve.rs`。把 `review_ui/http.rs` 加进去会让
+  **T9 立刻红** —— 审核界面的 JSON 是**审核对象的原始候选定义**，不该、也不能过客户发布闸。
+- 所以这是一个**口径选择**：要么承认「`OUTLET_FILES` 是客户出口的扫描面，审核界面是内部轨」，
+  要么给 T9 加一条「Internal 轨豁免」的判据（那要改 REQ-107 的判据本体，超出本需求范围）。
+  本轮选前者并**明确登记**，请 QA 裁定是否接受。
+
+次可能被打回的：**「批量签」在 HTTP 层没有批量接口**。AC-006 的原话是「HTTP 层批量接口**若存在**，
+必须带 `items[]` 白名单」—— 本实现让它**不存在**：预览返回 `items[]`，页面逐条 POST。
+好处是「一键全库」在协议面上表达不出来；代价是「批量」的原子性没有（中途失败会停在半途，
+页面显示停在哪一条、原因是什么）。
+
+---
+
+## 9 · 复现命令（照抄即可）
+
+```powershell
+# ① 种子数据：req111_live v1（未冻结）+ 同一份 135 条目提案
+#    （交付物里的临时 example 已删除；测试侧等价做法见 tests/test_req111_review_ui.rs 的 fixture）
+
+# ② 起审核界面
+$env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/ontok_demo'
+.\target\debug\ontok.exe review serve --project req111_live --proposal p1 `
+    --bind 127.0.0.1:8788 --token 'req111-local-token'
+
+# ③ 浏览器打开 http://127.0.0.1:8788/ ，填口令后：
+#    列表（未签/档位过滤）→ 逐条接受/拒绝 → 「预览批量接受…」→ 弹窗「将接受 N 条」→ 确认
+```
+
+---
+
+<div style="border-top:2px solid #999;margin:32px 0"></div>
+
+<!-- 以下为 REQ-110 的交付报告，原样保留（本 worktree 从其基线继承） -->
+
+
 # REQ-110 · 内置 TTL 导出 + 页面查看与下载 —— 交付报告
 
 > 分支 `feature/REQ-110`（worktree `feature-REQ-110/`，基线 `develop` `5737ecf`）· **未 push**

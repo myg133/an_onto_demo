@@ -351,6 +351,12 @@ fn outlet_sources() -> BTreeMap<&'static str, String> {
     for rel in OUTLET_FILES {
         m.insert(*rel, read_source(rel));
     }
+    // ⭐ REQ-111 · 审核界面**不在** `OUTLET_FILES`（它不是客户出口、不走管线），
+    // 但它往登记表里新增了 5 条出口（R1–R5）。登记表对账必须连它一起查 ——
+    // 否则「新增出口的 needle 漂移」在这张表上永远看不见（这正是「漏接即红」
+    // 那条判据要防的形态）。`tests/test_req107_source_enumeration.rs` 的 T1
+    // 另从 `src/` 全目录枚举写点，两边合起来才是双向的。
+    m.insert("src/review_ui/http.rs", read_source("src/review_ui/http.rs"));
     m
 }
 
@@ -672,19 +678,27 @@ fn ctx(view: ontok::domain::view::CustomerView) -> ontok::mcp::tools::OntologyCo
 
 #[test]
 fn test_req107_outlet_registry_matches_the_declared_baseline() {
-    // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）= 39。
-    assert_eq!(OUTLETS.len(), 39, "33（REQ-107）+ 6（REQ-110 TTL 出口）");
+    // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）
+    //        + 5（REQ-111 的审核界面出口 R1–R5）= 44。
+    assert_eq!(
+        OUTLETS.len(),
+        44,
+        "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）"
+    );
 
-    // ② 分组：客户 17 / 建模 10 / 内部 9 / 静态 2 / 错误路径 1。
+    // ② 分组：客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1。
     //
     // ⚠️ 与 TC-007 用例原文的差异（**AC/用例自身缺陷**，纪律 S）：
     // 原文写 `Static == 3`（Z2,Z3,Z4）+ ErrorPath 1 ⇒ 13+8+9+3+1 = **34**，
     // 与它自己断言的 `OUTLETS.len() == 33` 矛盾。按 A1 的裁定（Z4 不是出口）
     // 这里取 Static == 2，Z4 单列 `STATIC_TEMPLATES`。已在交付物「异议」登记。
     // REQ-110 把客户 13→17、建模 8→10（+6 条 TTL 出口），其余分组不动。
+    // REQ-111 只动内部 9→14（R1–R5）：审核界面是**内部**工具（只绑回环 + 口令），
+    // 既不是客户出口、也不是「建模视图」那 10 条 —— 改建模轨会放宽
+    // `test_req107_track_manifest.rs` 的「恰好 D1–D10」不变量。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 9);
+    assert_eq!(outlet_count(Track::Internal), 14);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -701,6 +715,8 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=5).map(|i| format!("M{i}")));
     want.extend((1..=10).map(|i| format!("D{i}")));
     want.extend((1..=9).map(|i| format!("I{i}")));
+    // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
+    want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());
     want.push("Z2".into());
     want.push("Z3".into());
