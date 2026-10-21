@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已退回**（2026-10-21 · QA 判 PASS 带 2 条非阻断，BA 改判为阻断：自证链可手改 / importable 不强制）
+**待验证（第 2 轮）**（2026-10-21 · A-7/A-8/A-10 已修，QA 复验中）
 
 ## 状态流转
 
@@ -74,3 +74,21 @@
 | 测试 | `--lib` 217 / `--doc` 4 / 邻域 16 套件 218 全绿（QA 共验 509 个测试） |
 
 **改判理由**：N1 让「置信度」变成可手写的数字（一行 JSON 即可让拒绝档变高分）；N2 让「拒绝档」可被一条命令灌回本体。两者各用一行推翻需求承诺。
+
+## 第 2/3 轮修复（`4acbf5a` + `4af61f5`）
+
+| 要求 | 修法 | 位置 |
+| --- | --- | --- |
+| **AC-014** 三条自证链 | `score ≤ veto.cap`（上限由**证据**推，不读文件声明）/ `signals 权重 == method 权重表` / `veto 必须有对应证据信号` | `confidence.rs:793`（`validate_self_evidence`）、`:735`、`:781`；上限表 `VETO_CAPS:90` |
+| **AC-015** importable | `ensure_importable()`，`propose_cmd` 读文件后第一步 | `cli.rs:1220/1249`；产出侧 `ontok-propose.rs:590` |
+| **A-10** signals 必填 | `from_untrusted` 拒绝「有 score/method 但 signals 缺失 / null / 空数组」；`confidence: null` 按「未声明」放行 | `confidence.rs:872-896` |
+
+**6 条自证全过**（改分/改权重/删证据信号/导 rejected/正常 proposal/pending）。
+Dev 另关掉 4 种：删 `veto`、改 `veto.cap`、改命中率 `value`、**绕过 import 直接改库 → apply 侧第二道闸仍 exit 1**。
+
+### ⚠️ Dev 主动披露的基线问题（QA 必须独立核实）
+
+1. **`4acbf5a` 上 `test_req107_source_enumeration::t5` 本来就是红的** —— 原因：`ensure_importable` 是新函数，没登记进 `OUTLET_FNS`，而 t5 要求「出口文件的每个函数都要登记」。⇒ **上一轮「31 套件 300 passed」的基线不成立**。Dev 补了一行登记（登记 ≠ 放宽），现全绿。
+2. 既有测试改动 2 处（fixture 补全）：`absent_optional_fields_…` 保留全部原断言，只把已失效的 `signals==[]` 断言换成最小证据链；`review_confidence_table_shape` 改走 `score(--no-sample)` 真产出。**Dev 称均为收紧**，需 QA 逐行判。
+
+**当前测试数字**：lib **227** / doc **4** / 31 套件 **307 passed / 0 failed**。
