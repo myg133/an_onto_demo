@@ -159,3 +159,11 @@
 `git add -A` 把「Dev 测试绕行挪走的 `src/bin/ontok-gate-preflight.rs`」当成删除提交（2758 行）。
 **本地全绿、CI 编不过**——只有在 fresh checkout 上才暴露。
 ⇒ 规程：提交前看 `D` 行；挪文件必须 `finally` 挪回，并同时打印 `sha256` 与 `Test-Path`。
+
+## 2026-10-21 — REQ-111 合并后回收 + 真实数据演示
+
+- 合并：`git merge --no-ff feature/REQ-111` → `develop` `4178a4e`；合并后 `cargo check --lib` ✅
+- 红线 + `src/server/http.rs` + `Cargo.*` 相对 `f624c1a` **numstat 空**
+- 回收：feature worktree + 本地分支
+- 演示（`review_demo` / 135 条目）：页面壳 200 无数据；`/api/review` 135；预览 `≥0.90` **39 条**、`≥0.60` **52 条**；参数越界全 **400**；`POST` 签一条 ⇒ `via=ui` + 时间戳；读回一致
+- ⚠️ 演示踩坑（已记入 status）：预览参数名是 **`min_confidence`**；拼成 `min_score` 会被**静默忽略**（变全量）。建议下一轮对未知 query 参数报 400。
