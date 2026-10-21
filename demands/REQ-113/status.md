@@ -48,3 +48,22 @@ schema.json（96 表）──【python 脚本】──▶ schema.filtered.json�
 | 文件 | `code/out/exclusions-ai.json`（`version 0.1.1`，sha256[:16] `3f77c6b8fd41bded`） |
 
 **AI 判对的地方**（值得记）：它保住了三张「名字像内部、内容是业务事实」的表——`internal_messages`（发给客户的站内信）、`internal_operation_records`（余额变动原因）、`seetings`（拼写错误但实际是平台设置）。
+
+## Dev 首轮交付与 BA 裁定（2026-10-21）
+
+Dev 实测：**96 − 12 = 84 闭合**，`entities=84`，`stale=0`，`flagged=11`，提案里 grep 12 个被排除表名 = 0。
+
+**它提出的 AC 冲突（根因是 BA 的 AC-004 写得太窄）**：
+
+| AC | 原文 | 冲突 |
+| --- | --- | --- |
+| AC-001 | 「整份文件里 grep 被排除表名 = 0」 | 与下面的审计段互斥 |
+| AC-004 | 「`inputs.exclusions = {file, version, sha256}`」 | 只允许元信息 ⇒ 明细只能外放 |
+
+**裁定：单一文件（明细进提案，取消侧车）**
+
+- `inputs.exclusions` 扩成**完整审计段**（含 `excluded[]` 逐条理由 / `flagged[]` / `stale[]` / `counts`）
+- ⛔ 删掉 `proposal-exclusions.json` 侧车与导入时的 sha 校验
+- AC-001 精确化为两条：① `items` 段 0 命中；② **删掉审计段后**剩余文本 0 命中
+
+**为什么不选侧车**：用户要搬两个文件、丢一个就导不进；产品多一个产文件。单一文件 = 完整审计链 + 一条判据即可证明「不建实体」。
