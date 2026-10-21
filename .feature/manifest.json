@@ -1,20 +1,23 @@
 {
-  "req_id": "REQ-114",
-  "title": "页面图交互升级（可拖拽 / 防重叠 / 可用性）",
-  "branch": "feature/REQ-114",
+  "req_id": "REQ-115",
+  "title": "概念分组与图上的归并（groups 接线 / 组圈与折叠 / concept suggest）",
+  "branch": "feature/REQ-115",
   "base": "develop",
-  "base_commit": "e9755e8",
+  "base_commit": "71ae770",
   "assigned_by": "BA（会话 id 见 BA/dispatch/registry.md）",
-  "assigned_at": "2026-10-21 23:42:00",
-  "plan": "BA/demands/REQ-114/demand.md",
-  "acceptance": "BA/demands/REQ-114/acceptance.md",
-  "status": "进行中（QA 首轮 FAIL → 已修探针，待复审）",
-  "scope": "只改 src/server/page.rs 的页面 JS/CSS + 该页 golden 重锚 + tests/fixtures/req114/layout_probe.js",
+  "assigned_at": "2026-10-22 00:54:00",
+  "plan": "BA/demands/REQ-115/demand.md",
+  "acceptance": "BA/demands/REQ-115/acceptance.md",
+  "status": "进行中（实现完成，待 QA 审核）",
+  "scope": "src/domain/{graph,concept,concept_suggest,mod}.rs + src/server/{http,page}.rs + src/cli.rs + H1 golden 重锚 + 新测试（test_req115_groups / req115 group_probe）",
   "notes": [
-    "用户原话：「html ui 有问题，太简陋了，graph 的点也无法拖动，导致重叠遮挡。」",
-    "零外部依赖：页面内 <script src= / <link href= 各 0 处；页面 32396 字节（上限 60KB）。",
-    "golden 重锚：H1_index.html 96eb5f…（12479 字节）→ d8bd4581…（32396 字节），PROVENANCE 写明原因。",
-    "AC-002 的数据级判据已入库：node tests/fixtures/req114/layout_probe.js（失败 exit 1，五种变异实测全红）。",
-    "本机无 headless 浏览器 ⇒ 未做真浏览器手测，只有源码级 + 纯函数级 + 真 HTTP 级判据。"
+    "用户问「归并没效果？」——查清是三层都空：concept_groups=0 / http.rs 写死 parent:None / 页面 0 命中。",
+    "权威层只有一处：concept_groups（import→双轨签→apply）；建议层 concept suggest 只产声明文件、不写库。",
+    "⛔ AC-001 的 groups[].key 在线上叫 id：key 是发布闸词表里的词，写成线上键名会让每次带分组的 /api/graph 500（Node 早已因此把 key 改叫 id）。",
+    "H1 golden 重锚：d8bd4581…（32396 字节）→ e665a0ad…（49728 字节）；H2 及其余 11 份逐字节未动。",
+    "真实库往返已跑：anspire_excl v2 → suggest（9 组 / 84 对象）→ import → 双轨签 → apply → freeze → /api/graph groups=9。",
+    "suggest 两次运行 sha256 相同；跑前跑后 concept_groups/proposals/ontology_versions/proposal_items 指纹相同。",
+    "折叠是纯前端状态：setFold/foldAll/relayout 里没有 fetch/ask/api；导出 TTL 与 ontology show 折叠前后逐字节相同。",
+    "本机无 headless 浏览器 ⇒ 折叠/组圈只有源码级 + 纯函数级（Node 探针）+ 真 HTTP 级判据，未做真浏览器手测。"
   ]
 }

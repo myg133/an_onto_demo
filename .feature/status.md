@@ -1,4 +1,59 @@
-# 开发状态 · REQ-114 页面图交互升级
+# 开发状态 · REQ-115 概念分组与图上的归并
+
+> worktree `feature-REQ-115` · 分支 `feature/REQ-115` · 基线 `develop` `71ae770` · **未 push**
+> 本轮性质：**实现完成，待 QA 审核**（PR 与状态机流转由 BA 决定，Dev 不发布）
+
+- **需求**：REQ-115 · 概念分组与图上的归并（AC-001~AC-011）
+- **状态**：进行中（已交付，待 QA）
+- **日期**：2026-10-22
+
+## 本轮改了什么
+
+| # | 项 | 文件 | 一句话 |
+| --- | --- | --- | --- |
+| 1 | `/api/graph` 返回 `groups` + 节点 `group` | `src/domain/graph.rs` / `src/server/http.rs` | 权威层只有 `concept_groups`；三态 `groups` 保证 H2 golden 不动 |
+| 2 | 页面：组圈 / 折叠 / 组面板 / 组内引力 | `src/server/page.rs` | 默认全折叠；折叠 = 一个「组名 + N」的聚合节点；⛔ 页面不算分组 |
+| 3 | `ontok concept suggest` | `src/cli.rs` / `src/domain/concept_suggest.rs` | 贪心模块度（整数打分、有序迭代）；只产声明文件、**不写库** |
+| 4 | 无组时如实显示「未分组」 | `src/server/page.rs` | `GROUPS.length === 0` ⇒ 一个聚合节点都不画，⛔ 无默认组 |
+| 5 | 往返 | 真库 `anspire_excl` → `anspire_excl_r115` | suggest → import → 双轨签 → apply → freeze → 图 `groups=9` |
+| 6 | H1 golden 重锚 | `tests/fixtures/req107/golden/*` | `d8bd4581…`（32396）→ `e665a0ad…`（49728）；其余 12 份逐字节未动 |
+
+## 判据实测（摘要，细节见 `verification-report.md`）
+
+| 判据 | 实测 |
+| --- | --- |
+| 真库 `/api/graph` 有组 | `nodes=83 edges=52 groups=9`，`node.group` 一致性 `bad=0` |
+| 真库 `/api/graph` 无组 | `groups:[]` + 83 个 `group:null`，**没有默认组** |
+| 折叠态节点数（Node 探针） | `7 = 3 组 + 4 未分组`，`exit 0` |
+| 无组（Node 探针） | 渲染单元 = 对象数、零聚合单元 |
+| `concept suggest` 两次 | sha256 相同（5 次运行全同） |
+| suggest 不写库 | 库指纹 `b4ad1c172ad37f28` 跑前跑后相同 |
+| 折叠不改数据 | TTL / `ontology show` 折叠前后 sha256 两两相同 |
+| 页面不算分组 | 剥注释后 7 个算法词全 0；只读 `DATA.groups` |
+| 401 | 无 token `/api/graph` → 401，正文不回显分组内容 |
+
+## 测试
+
+```text
+lib 284 / doc 4 · 集成 74 个目标：799 passed / 3 failed（3 条均为既有红灯，基线复现）
+新增 tests/test_req115_groups.rs（12 passed）
+绕行：src/bin/ontok-gate-preflight.rs 挪开 → 跑 → 挪回；sha256 前后 c7cf95e2…；Test-Path=True
+      代价 test_retained_names_req084 编不过（与 REQ-113/114 同一口径）
+```
+
+## 如实登记
+
+1. **AC-001 的 `groups[].key` 在线上叫 `id`** —— `key` 是发布闸词表里的词，写成线上键名会让
+   每次带分组的 `/api/graph` 500。这是 AC 与红线的冲突，最可能被 QA 打回（见报告 §8.1）。
+2. **未做真浏览器手测**（本机无 headless 浏览器）；组圈观感 / 折叠动画 / 引力手感只有源码级 + Node 探针。
+3. **组成员只算图里看得见的**：声明按实体 key 写，客户视图挡掉的对象不进 `members`
+   （真库现场 84 实体 → 83 节点）。
+4. **同名对象只能落到第一个**（继承 REQ-093 L2）。
+5. **不改 `concept import` 的审核语义**，不做 AI 命名（需求「不做」列表）。
+
+---
+
+# 历史：REQ-114 页面图交互升级
 
 > worktree `feature-REQ-114` · 分支 `feature/REQ-114` · 基线 `develop` `e9755e8` · **未 push**
 > 本轮性质：**QA 首轮判 FAIL（阻断 P0：探针无牙）→ 只修探针 + 三处文档 + 两条非阻断**，产品逻辑不再动

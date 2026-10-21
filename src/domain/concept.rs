@@ -360,6 +360,23 @@ pub struct ConceptDeclaration {
     /// 业务确认人。`None` = **还没人确认**（过渡声明的常态）
     #[serde(default)]
     pub confirmed_by: Option<String>,
+    /// 这份声明**从哪来**（REQ-115 · AC-010）。
+    ///
+    /// - `Some("algorithm-suggest")` = `concept suggest` 从关系拓扑算出来的**建议**；
+    /// - `None` = 旧声明（那时还没有这一栏）。
+    ///
+    /// ⚠️ **它不进 [`content_digest`]**：来源记的是「谁算的」，不是「内容是什么」。
+    /// 把来源算进指纹会让「同一批分组、换了个算法版本」必须升声明版本 ——
+    /// 那两件事本来就该分别看待。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// **审核人**（REQ-115 · AC-010）。**恒有键**：`null` = 还没人审过。
+    ///
+    /// 与 `confirmed_by` 的区别：那个是「业务上认不认这组」，这个是
+    /// 「谁把这份**文件**审过」。建议层产出的文件永远是 `null` ——
+    /// 「算法算过」不等于「人审过」，把两者写成同一个字段就是冒充。
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
     /// 追加式版本历史。见 [`ConceptDeclaration::verify`]
     #[serde(default)]
     pub history: Vec<DeclarationRevision>,
@@ -604,6 +621,8 @@ mod tests {
             declared_by: "prefix-cluster-seed".into(),
             rule: "按表名前缀聚类".into(),
             confirmed_by: None,
+            source: None,
+            reviewed_by: None,
             history: vec![DeclarationRevision {
                 version: version.into(),
                 content_digest: d,

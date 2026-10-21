@@ -801,9 +801,34 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
         "`propose import` 的记录回执：条数 / 排除文件名 / 版本 / sha256 前缀 / 判的人 / 签的人。\
          全是**溯源元数据**（文件与决定者），不含客户视图字段，也不打表名与理由",
     ),
+    // ── REQ-115 · 建议层的两个输出（都不是客户视图）──
+    (
+        "src/cli.rs",
+        "{receipt}",
+        1,
+        "`concept suggest --out` 的回执：路径 / 组数 / 对象数 / 来源 / 下一步。\
+         建议层的**运维面**输出；声明文件本身走 `--out` 写盘，客户视图不读它。\
+         ⛔ 建议不是结论：该组只有在 import → 双轨签 → apply 之后才可能进客户视图",
+    ),
+    (
+        "src/cli.rs",
+        r#"print!("{text}")"#,
+        1,
+        "`concept suggest` 省略 `--out` 时打到 stdout 的**声明文件**（含实体 key 与成员名单）。\
+         它与 `concept import --file` 读的是同一份口径 ⇒ 属建模轨内容（同 D1 的豁免理由），\
+         不是客户视图字节，也**不**过发布闸：闸管的是客户出口，建议层还没进权威层",
+    ),
     ("src/cli.rs", "review_show_prefix(&proposal, &row.status)", 1, "`review show` 的**抬头**（提案别名 + 状态），正文由 D2 的闭包式出口写出"),
     ("src/cli.rs", "提案未通过：可应用", 1, "`proposal apply` 的汇总回执（条数），与 D6 的逐条被拦清单同源"),
     ("src/cli.rs", "已写出客户视图页面", 1, "C2（`--out`）写文件之后的**回执**：路径 / 对象数 / 抽样数，不是客户字节本身"),
+    (
+        "src/cli.rs",
+        "fs::write(path, text.as_bytes())",
+        1,
+        "`concept suggest --out` 把**建议声明**写到磁盘：建模轨文件（含实体 key 与成员名单），\
+         与 `concept import --file` 读的是同一份口径 —— 不是客户视图字节，也**不**过客户发布闸\
+         （建议层还没进权威层；它要经 import → 双轨签 → apply 才可能出现在客户视图里）",
+    ),
     ("src/cli.rs", "x.summary()", 1, "`ontology diff` 的逐条变化行（I9 的子行；diff 已裁定归建模轨，R1/R3）"),
     // ── REQ-108 · 置信度的两处运维面输出（都不是客户视图）──
     (
@@ -1597,6 +1622,12 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/cli.rs", "publish_customer", "管线适配器（Err → 退出码）"),
     ("src/cli.rs", "run", "入口分发"),
     ("src/cli.rs", "concept_cmd", "子命令 handler"),
+    // ⭐ REQ-115 · 建议层：只读快照、只写声明文件，**不写库**（AC-004）。
+    (
+        "src/cli.rs",
+        "concept_suggest",
+        "子命令 handler（`concept suggest`：从关系拓扑算建议分组，产出声明文件；不写库）",
+    ),
     // REQ-108 · 置信度：审核界面与校准命令（都不写客户视图字节）
     (
         "src/cli.rs",
@@ -1644,6 +1675,17 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/server/http.rs", "token_matches", "HTTP 路由/装配"),
     ("src/server/http.rs", "build_router", "HTTP 路由/装配"),
     ("src/server/http.rs", "state_from_view", "HTTP 路由/装配"),
+    // ⭐ REQ-115 · 分组通道：生产入口 + 两条入口共用的唯一实现。
+    (
+        "src/server/http.rs",
+        "state_from_view_with_groups",
+        "HTTP 路由/装配（**生产入口**：带权威概念组；空切片 = 接通通道但没有组）",
+    ),
+    (
+        "src/server/http.rs",
+        "state_from_view_inner",
+        "HTTP 路由/装配（`state_from_view` 与 `_with_groups` 共用的**唯一**实现）",
+    ),
     ("src/server/http.rs", "serve", "HTTP 路由/装配"),
     ("src/mcp/serve.rs", "prepare", "MCP 分发/装配"),
     ("src/mcp/serve.rs", "serve", "MCP 分发/装配"),
@@ -1795,6 +1837,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/db/mod.rs", "snapshot_store"),
     ("src/domain/mod.rs", "apply"),
     ("src/domain/mod.rs", "concept"),
+    // REQ-115 · 建议层（从关系拓扑算候选分组；纯函数、零 I/O、不写库）。
+    ("src/domain/mod.rs", "concept_suggest"),
     // REQ-108 · 证据评分卡（纯函数，AC-004 / AC-005）
     ("src/domain/mod.rs", "confidence"),
     ("src/domain/mod.rs", "diff"),

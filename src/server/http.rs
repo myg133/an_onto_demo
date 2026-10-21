@@ -106,12 +106,24 @@ pub struct ServeArgs {
 /// 冻结闸门与 `mcp::prepare` 同一条（fail-closed）：**未冻结不是降级服务，
 /// 是拒绝**。规格要求客户看的必须是定稿之后的东西。
 ///
-/// 返回值第二项是快照里**动作层条数**（只供 TTL 文件头声明有损，不导出内容）。
+/// 返回值：
+/// - 第一项：客户视图；
+/// - 第二项：快照里**动作层条数**（只供 TTL 文件头声明有损，不导出内容）；
+/// - 第三项 ⭐ REQ-115：**已声明的概念组**（成员已换算成展示名）。
+///
+/// # 为什么概念组在**载入期**就取好
+///
+/// 与客户视图同一时刻、同一份快照取出来，之后服务运行期不再查库
+/// （`AppState` 的既有约定：一次性载入并冻结）。于是「图上显示的分组」
+/// 与「这份快照里人签过的分组」只能是同一批 —— 不存在运行中变组的窗口。
+///
+/// ⚠️ 换算只做「实体 key → 展示名」（[`crate::domain::graph::declared_groups`]）；
+/// 「展示名 → 节点标识」在 [`state_from_view_with_groups`] 里随投影一起完成。
 async fn load_frozen_view(
     pool: &sqlx::PgPool,
     project: &str,
     version: i32,
-) -> Result<(CustomerView, usize), ApiError> {
+) -> Result<(CustomerView, usize, Vec<crate::domain::graph::DeclaredGroup>), ApiError> {
     let ps = PgProjectStore::new(pool.clone());
     let store = PgStore::new(pool.clone());
 
@@ -137,9 +149,12 @@ async fn load_frozen_view(
         .ok_or_else(|| ApiError::NoSnapshot(project.to_string(), version))?;
 
     let action_type_count = snap.action_types.len();
+    // ⭐ REQ-115：分组与视图取自**同一份快照**。
+    let groups = crate::domain::graph::declared_groups(&snap);
     Ok((
         crate::domain::view::project(&crate::cli::snapshot_to_view(&snap)),
         action_type_count,
+        groups,
     ))
 }
 
@@ -603,6 +618,18 @@ pub fn build_router(state: AppState) -> Router {
 ///
 /// ⇒ 所以 [`serve`] 与 `server::http::tests` **都调这里**，没有第二份接线。
 /// 把 bug 放回本函数 → 生产坏、**测试同时红**。
+///
+/// # ⭐ REQ-115：分组是**另一个入口**，接线仍只有一份
+///
+/// 本函数**不带概念组**，产出的图是「分组通道未接通」的旧形状
+/// （[`crate::domain::graph::GraphProjection::groups`] = `None`）。
+/// 它保留下来只为一件事：REQ-107 的 golden `H2_graph.json` 逐字节冻结，
+/// 而那份字节就是**这个形状**。生产路径（[`serve`]）**永远**走
+/// [`state_from_view_with_groups`] —— 分组接通后线上必然有 `groups` 字段
+/// （没有组时是 `[]`，不是缺席，R6）。
+///
+/// 两条入口共用 [`state_from_view_inner`]：投影、节点索引、断言、
+/// `AppState` 装配**一份代码**。差别只有「用哪个投影函数」这一行。
 pub fn state_from_view(
     view: &CustomerView,
     project: &str,
@@ -610,9 +637,39 @@ pub fn state_from_view(
     token: &str,
     action_type_count: usize,
 ) -> AppState {
+    state_from_view_inner(view, None, project, version, token, action_type_count)
+}
+
+/// ⭐ REQ-115 · **生产入口**：带权威概念组（`concept_groups`）的状态。
+///
+/// `declared` 来自 [`crate::domain::graph::declared_groups`]（同一份冻结快照）。
+/// 传空切片 = **接通了分组通道、但这一版没有组** ⇒ 线上是 `"groups":[]`
+/// 且每个节点 `"group": null`（AC-003 的「没有分组」）。
+///
+/// ⛔ 分组**只**来自 `declared`：本函数不推断、不补默认组、不读第二处数据源。
+pub fn state_from_view_with_groups(
+    view: &CustomerView,
+    declared: &[crate::domain::graph::DeclaredGroup],
+    project: &str,
+    version: i32,
+    token: &str,
+    action_type_count: usize,
+) -> AppState {
+    state_from_view_inner(view, Some(declared), project, version, token, action_type_count)
+}
+
+/// 两条入口的**唯一**实现（`groups = None` ⇒ 旧形状；`Some` ⇒ 接通分组通道）。
+fn state_from_view_inner(
+    view: &CustomerView,
+    groups: Option<&[crate::domain::graph::DeclaredGroup]>,
+    project: &str,
+    version: i32,
+    token: &str,
+    action_type_count: usize,
+) -> AppState {
     // ── REQ-104 · 出口层属性级剔除 ──
     //
-    // 放在 `state_from_view` 里而不是 `serve()` 里，是因为这个文件里
+    // 放在这里而不是 `serve()` 里，是因为这个文件里
     // **`serve` 与 `server::http::tests` 都调它，没有第二份接线** ——
     // 放这里，生产接线与测试接线**不可能分叉**。
     //
@@ -626,7 +683,11 @@ pub fn state_from_view(
     let filtered = crate::domain::pipeline::prepare_view(view);
     let view = &filtered.view;
 
-    let graph = crate::domain::graph::project(view);
+    // ⭐ REQ-115：接不接分组通道，只差这一行。
+    let graph = match groups {
+        Some(declared) => crate::domain::graph::project_grouped(view, declared),
+        None => crate::domain::graph::project(view),
+    };
 
     // 节点索引的键**直接取自 `graph.nodes[i].key`** ——
     // 也就是 `/api/graph` 序列化给客户的**同一个 key**，不是另算一份。
@@ -688,15 +749,20 @@ pub async fn serve(pool: &sqlx::PgPool, args: ServeArgs) -> anyhow::Result<()> {
         );
     }
 
-    let (view, action_type_count) = load_frozen_view(pool, &args.project, args.version)
+    let (view, action_type_count, declared_groups) = load_frozen_view(pool, &args.project, args.version)
         .await
         .map_err(|e| anyhow::anyhow!("只读图服务拒绝启动：{}", e.message()))?;
 
-    // ⚠️ 接线**只有这一处**：`state_from_view` 同时被 `serve()`（这里）
-    // 与 `server::http::tests` 调用。测试**不得**自己另搭一份 AppState ——
-    // 上一轮就是这么写的，结果测试完全不守护生产（纪律 H，见该函数文档）。
-    let state = state_from_view(
+    // ⚠️ 接线**只有这一处**：本函数与 `server::http::tests` 都走
+    // `state_from_view*`（两条入口共用一份实现）。测试**不得**自己另搭一份
+    // `AppState` —— 上一轮就是这么写的，结果测试完全不守护生产
+    // （纪律 H，见 `state_from_view` 文档）。
+    //
+    // ⭐ REQ-115：生产**永远**走带分组的那条入口 —— 线上 `groups` 字段因此恒在
+    // （没有组时是 `[]`），页面的「未分组」才是一个**可判读的结论**而不是缺字段。
+    let state = state_from_view_with_groups(
         &view,
+        &declared_groups,
         &args.project,
         args.version,
         &token,
@@ -733,6 +799,8 @@ mod tests {
             graph: Arc::new(crate::domain::graph::GraphProjection {
                 nodes: vec![],
                 edges: vec![],
+                // 本夹具是「分组通道未接通」的旧形状（H2 golden 那一份）。
+                groups: None,
             }),
             // REQ-110：TTL 导出的数据面与图/节点共用同一份（这里是一份空视图）。
             view: Arc::new(CustomerView { objects: vec![], relations: vec![] }),
@@ -753,8 +821,10 @@ mod tests {
                     label: "外键约束表".into(),
                     attribute_count: 1,
                     parent: None,
+                    group: None,
                 }],
                 edges: vec![],
+                groups: None,
             }),
             ..st()
         }

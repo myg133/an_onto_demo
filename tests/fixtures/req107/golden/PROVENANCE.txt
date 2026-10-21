@@ -45,4 +45,24 @@ b714f48
 #     · `src/server/page.rs` 模块文档的「已知限制」小节（核心出处）；
 #     · `tests/fixtures/req114/layout_probe.js` 文件头的「边界」段（同一份措辞）。
 #     本文件与 `.feature/verification-report.md` 只是照抄，不是原始出处。
+#
+# ⭐ REQ-115 重锚 H1_index.html（其余 12 份逐字节未动）：
+#   **REQ-115 给页面加了分组渲染** —— 组圈（背景虚线大圈）+ 组名、折叠/展开
+#   （折叠时一个组 = 一个「组名 + N」的聚合节点）、组面板（成员列表 / 点击定位）、
+#   组内聚拢引力，以及无组时的「未分组」。这些都内联在 `src/server/page.rs` 的
+#   `INDEX_HTML` 里 ⇒ 页面字节**必然**变。这是**需求要求的可见变化**，不是 golden 漂移。
+#   H1 的字节 = `INDEX_HTML` 常量本身（H1 出口仍是 `Product::Text`，干净模板过闸后
+#   逐字节返回，服务端不做任何拼装）。sha256 已同步进 SHA256SUMS，只记**最终态**：
+#     旧（REQ-114 最终态）d8bd4581c264a483815c0bf67636966da190b3799e8abbaa79c6f5a2a849c5c0（32396 字节）
+#     新（REQ-115 最终态）e665a0add9c1e4c5ae8a055ec7d88343e4b38a1c16eafdcd1801926e0abf7155（49728 字节）
+#   重锚方式：从 `page.rs` 抽出 `r##"…"##` 常量本体逐字节写出（不手抄、不编辑器另存），
+#   再由 `tests/test_req107_pipeline_bytes.rs`（真路由 + 管线）复核逐字节相等。
+#   ⛔ 同样别「为了让它对上」手改 H1：要改就改模板，再按同一条方式重锚并更新 sha256。
+#
+#   ⚠️ 为什么 H2_graph.json 可以**不变**（REQ-115 明明加了 `groups`）：
+#   `/api/graph` 的分组落在**另一个装配入口**（`state_from_view_with_groups`），
+#   而 H2 这份 golden 钉的是 REQ-107 的旧形状（`state_from_view`：`groups` 字段缺席、
+#   节点无 `group`）。两种形状由同一个 `GraphProjection` 的三态表达
+#   （`groups: None` = 通道未接通；`Some([])` = 接通但没有组）。生产 `serve` 永远走
+#   已接通的那条 ⇒ 线上恒有 `groups`（没有组时是 `[]`），而这份 golden 的字节不动。
 
