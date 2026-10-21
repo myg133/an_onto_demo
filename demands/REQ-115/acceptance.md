@@ -102,3 +102,37 @@ src/domain/view.rs:902   pub const MODELING_TERMS: &[&str] = &[ "pk", "primary_k
 
 1. **`id` 的选择不是自说自话**：QA 要做变异——把线上的 `id` 改成 `key`，确认 `/api/graph` 真的被闸拒（否则「必须叫 id」这个约束就是编的）。
 2. **往返是在副本项目上做的**（`anspire_excl_r115`），因为 `apply` 拒绝冻结 base。QA 要确认：副本与源是**同一份快照**（同 84 实体 / 52 关系），且真实项目 `anspire_excl` 上**确实没有分组**（页面应显示未分组，不是偷偷用了副本的组）。
+
+---
+
+## 四 · QA 首轮裁定（FAIL 1 阻断）
+
+### A-3 · 阻断成立：`scope_hint` 把整份图打挂
+
+QA 用 AI 的 8 组声明走完 `import → 签 → apply → freeze` 后：
+
+```
+GET /api/graph → 500
+stderr: 守门器命中 1 项建模术语 ["key"]
+```
+
+根因：`api_entitlement.scope_hint` 里「未持 **Key**」，被发布闸当词条 `key` 命中，而 `scope_hint` **被原样带到线上** ⇒ 整份响应被拒。
+
+**连带确认 A-2.1**：`id` vs `key` 的约束**是真的**——QA 把 `graph.rs:110` 的 `rename="id"` 改成 `"key"`，真请求 ⇒ **500 + 报词条**；未变异 ⇒ 200。**「必须叫 id」不是编的。**
+
+### A-4 · 修法：`scope_hint` 不上客户图 + `display_name` 导入时过闸
+
+| # | 修法 | 理由 |
+| --- | --- | --- |
+| **B-1** | `/api/graph` 的 `groups[]` **删掉 `scope_hint`**，只留 `{id, display_name, members}`；`scope_hint` 只在审核界面展示 | `scope_hint` 是**评审人注解**（「算法建议…待人审」），本就不该给客户看。删掉比扫它更根本，且 AI 那份声明**不用改写**就能导入 |
+| **B-2** | `concept import` 对 `display_name` 跑 `scan_modeling_terms`，命中 ⇒ **拒绝导入**并报**组名 + 词条** | `display_name` 客户可见，坏声明应**根本进不来**，而不是流到出图阶段才整份 500 |
+
+⛔ 不放宽 `guard()`；⛔ 不静默剔除。
+
+### A-5 · 非阻断（登记）
+
+| # | 项 |
+| --- | --- |
+| 1 | 无真浏览器手测（一如既往，如实登记） |
+| 2 | AI 声明文件本身无 `source` / `reviewed_by`（它不是 `suggest` 产物，是外部声明）——可接受，但审核界面应显示「来源未知/外部声明」 |
+| 3 | H2 出口仍走旧入口（已由测试钉住） |
