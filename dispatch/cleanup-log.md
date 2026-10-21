@@ -146,3 +146,16 @@
   分档 **AI 开 高39·中13·低19·拒绝10 / AI 关 高43·中9·低16·拒绝13**；**token 消耗 0（全部命中缓存）**
 - ⚠️ **使用陷阱**：REQ-108 后 schema 产物新增 `primary_key` / `unique_columns`。
   用旧 schema 跑新 propose ⇒ 采样读不到、全部 `data_evidence=none`、AI 不判。**必须先重新 introspect**。
+
+## 2026-10-21 — REQ-110 合并后回收 + 冒烟
+
+- 合并：`git merge --no-ff feature/REQ-110` → `develop` `f624c1a`（21 文件 / +3202 / −758）
+- 合并后 `cargo check --lib` ✅；四红线 + `mcp/tools.rs` 相对 `abf1c9f` numstat **空**
+- 回收：`feature-REQ-110` worktree + 分支 + QA 的 `qa/REQ-110` 分支 + 外部克隆 `D:\MyCodes\AI\_qa2_req110`
+- 冒烟：**产品内置导出**（客户 215.5 KB / 建模 226.5 KB）+ **页面可达**（`GET /` 200 零数据壳；`/api/*` 全 401；带 token 导出 200 `text/turtle`）
+
+### 本轮事故（已写进 `dispatch/rules.md`）
+
+`git add -A` 把「Dev 测试绕行挪走的 `src/bin/ontok-gate-preflight.rs`」当成删除提交（2758 行）。
+**本地全绿、CI 编不过**——只有在 fresh checkout 上才暴露。
+⇒ 规程：提交前看 `D` 行；挪文件必须 `finally` 挪回，并同时打印 `sha256` 与 `Test-Path`。

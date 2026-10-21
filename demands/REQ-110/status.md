@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已验证**（2026-10-21 · QA 两轮：首轮 FAIL 1 阻断→已修，复审 PASS；待合并）
+**已完成**（2026-10-21 · 已合并 `develop` `f624c1a`，冒烟通过）
 
 ## 状态流转
 
@@ -64,3 +64,24 @@
 | `/` 零数据壳 | `secretproj`/v7：项目名/版本/对象名 **0 命中**；`/api/*` 含未注册路径与 POST 全 401 |
 | H1 golden 重锚 | QA 独立确认：新 golden 与实测 `GET /` 逐字节一致，PROVENANCE 说明原因，其余 12 份未动 |
 | 变异 | 4 组（关闸/扫整份/摘身份门/HTTP 多一字节）分别被 5/7/6/1 条判据抓住 |
+
+## 合并与冒烟（2026-10-21）
+
+| 项 | 结果 |
+| --- | --- |
+| 合并 | `develop` **`f624c1a`**（`--no-ff`，21 文件 / +3202 / −758）；合并后 `cargo check --lib` ✅ |
+| 红线 | 相对 `abf1c9f`，四红线 + `tools.rs` **numstat 空** |
+| bin | `src/bin/ontok-gate-preflight.rs` 在合并后仍存在 ✅ |
+| 回收 | feature worktree + 分支 + `qa/REQ-110` + 外部 QA 克隆（`_qa2_req110`）全部清理 |
+
+**冒烟（用户最初的两个诉求）**：
+
+```
+① 产品内置导出：
+   ontok ontology export → 客户视图 215.5 KB（83 对象 / 52 关系）
+   ontok ontology export --model-view → 226.5 KB（83 类 / 52 关系）
+② 页面可达：
+   GET /                    = 200 · 12.2 KB（项目名 0 命中、对象名 0 命中）
+   /api/{graph,scope,ontology.ttl,nonexistent} 无 token = **全部 401**
+   /api/ontology.ttl +token = 200 · 215.5 KB · text/turtle · attachment; filename="anspire_ai-v2.ttl"
+```
