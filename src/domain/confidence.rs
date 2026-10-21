@@ -570,6 +570,68 @@ fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
+/// 从**不可信的 JSON** 读一条 confidence（AC-008 的入口判据）。
+///
+/// 为什么不让 serde 直接反序列化：`#[derive(Deserialize)]` 对**缺字段**
+/// 只有两种态度 —— 报一句 `missing field 'band'`（读者不知道这意味着什么），
+/// 或者 `default` 成一个**编出来的值**。而这里需要的是第三条：
+///
+/// - `method` **缺失/空** ⇒ 拒绝，理由要能直接给到人：
+///   「没有 method 的分数不可复核」（AC-008 的原话）；
+/// - `score` 缺失 / 越界 ⇒ 拒绝；
+/// - `band` 是**派生量**：以 `score` 为准重算；若 JSON 里写了一个跟分数
+///   对不上的 `band`，那是**被改过的**数据 ⇒ 拒绝（而不是悄悄改成对的）；
+/// - `signals` / `veto` / `data_evidence` 可缺省（前两者缺失时为空/无）。
+pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
+    let method = v
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| {
+            "confidence 缺 method —— 没有 method 的分数不可复核（AC-008）".to_string()
+        })?;
+    let score = v
+        .get("score")
+        .and_then(|s| s.as_f64())
+        .ok_or_else(|| "confidence 缺 score（或不是数字）".to_string())?;
+    if !(0.0..=1.0).contains(&score) {
+        return Err(format!("confidence.score = {score} 越界（必须在 0.0–1.0）"));
+    }
+    let band = Band::of(score);
+    if let Some(declared) = v.get("band").and_then(|b| b.as_str()) {
+        // 只接受与分数一致的声明；不一致 = 数据被改过（band 是派生量）
+        let declared_band: Band = serde_json::from_value(serde_json::Value::String(
+            declared.to_string(),
+        ))
+        .map_err(|_| format!("confidence.band = {declared:?} 不是合法档位"))?;
+        if declared_band != band {
+            return Err(format!(
+                "confidence.band = {declared} 与 score = {score} 对不上（按阈值应为 {}）",
+                band.as_str()
+            ));
+        }
+    }
+    let signals: Vec<Signal> = match v.get("signals") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(s) => serde_json::from_value(s.clone())
+            .map_err(|e| format!("confidence.signals 形状不合法：{e}"))?,
+    };
+    let veto: Option<Veto> = match v.get("veto") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) => Some(
+            serde_json::from_value(x.clone()).map_err(|e| format!("confidence.veto 形状不合法：{e}"))?,
+        ),
+    };
+    let data_evidence = match v.get("data_evidence").and_then(|d| d.as_str()) {
+        None => DataEvidence::Sampled,
+        Some("sampled") => DataEvidence::Sampled,
+        Some("none") => DataEvidence::None,
+        Some(other) => return Err(format!("confidence.data_evidence = {other:?} 不是 sampled/none")),
+    };
+    Ok(Confidence { score, method: method.to_string(), band, signals, veto, data_evidence })
+}
+
 /// 四档计数（AC-009 的「统计四档条数」）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BandCounts {
@@ -1073,8 +1135,7 @@ mod tests {
 
     /// 四档计数（AC-009 的统计口径）。
     #[test]
-    fn band_counts_are_stable() {
-        let bands = [Band::High, Band::High, Band::Middle, Band::Low, Band::Rejected];
+    fn band_counts_are_stable() {        let bands = [Band::High, Band::High, Band::Middle, Band::Low, Band::Rejected];
         let c = BandCounts::of(bands.iter());
         assert_eq!((c.high, c.middle, c.low, c.rejected, c.total()), (2, 1, 1, 1, 5));
     }
@@ -1101,5 +1162,70 @@ mod tests {
         // 反序列化回来必须相等（落库 → 读回这一跳）
         let back: Confidence = serde_json::from_value(v).unwrap();
         assert_eq!(back, score(&i));
+    }
+
+    // ── AC-008 · `method` 必填的入口判据 ─────────────────────
+
+    /// **缺 method ⇒ 拒绝**，且错误信息要能直接告诉人「为什么」。
+    ///
+    /// 变异自证：把 `from_untrusted` 里那段 `ok_or_else(...)` 换成
+    /// `unwrap_or(METHOD)`，本测试立刻红 —— 而那时的表现是
+    /// 「一份没写方法的分数被**冒名**装成 evidence-scorecard-v1」。
+    #[test]
+    fn confidence_without_method_is_rejected() {
+        let no_method = serde_json::json!({"score": 0.9});
+        let err = from_untrusted(&no_method).unwrap_err();
+        assert!(err.contains("method"), "{err}");
+        assert!(err.contains("不可复核"), "错误信息要说出「没有 method 的分数不可复核」：{err}");
+
+        for bad in [serde_json::json!(""), serde_json::json!("   "), serde_json::json!(null)] {
+            let v = serde_json::json!({"score": 0.9, "method": bad});
+            assert!(from_untrusted(&v).is_err(), "method = {bad:?} 也必须拒绝");
+        }
+        // 有 method 就放行
+        assert!(from_untrusted(&serde_json::json!({"score": 0.9, "method": METHOD})).is_ok());
+    }
+
+    /// `score` 缺失 / 越界 ⇒ 拒绝；`band` 与分数对不上 ⇒ 拒绝（派生量不许被改）。
+    #[test]
+    fn confidence_score_and_band_are_validated() {
+        assert!(from_untrusted(&serde_json::json!({"method": METHOD})).is_err(), "缺 score");
+        for s in [-0.1, 1.1, 2.0] {
+            assert!(
+                from_untrusted(&serde_json::json!({"method": METHOD, "score": s})).is_err(),
+                "score = {s} 越界必须拒绝"
+            );
+        }
+        // band 与 score 一致 ⇒ 通过；不一致 ⇒ 拒绝
+        assert!(from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.95, "band": "high"
+        }))
+        .is_ok());
+        let err = from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.95, "band": "low"
+        }))
+        .unwrap_err();
+        assert!(err.contains("对不上"), "{err}");
+        // 杂牌 band 也要拒绝（不是「认不出就当没写」）
+        assert!(from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.95, "band": "excellent"
+        }))
+        .is_err());
+    }
+
+    /// 缺省字段的语义：`band` 由分数**算**、`data_evidence` 默认 `sampled`、`veto` 可空。
+    #[test]
+    fn absent_optional_fields_get_derived_not_invented_values() {
+        let c = from_untrusted(&serde_json::json!({"method": METHOD, "score": 0.72})).unwrap();
+        assert_eq!(c.band, Band::Middle, "band 是派生量");
+        assert_eq!(c.signals, vec![]);
+        assert_eq!(c.veto, None);
+        assert_eq!(c.data_evidence, DataEvidence::Sampled);
+        let c = from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.1, "data_evidence": "none"
+        }))
+        .unwrap();
+        assert_eq!(c.data_evidence, DataEvidence::None);
+        assert_eq!(c.band, Band::Rejected);
     }
 }

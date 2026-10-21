@@ -107,6 +107,7 @@ fn base_snapshot(vid: Uuid) -> Snapshot {
         cardinality: "N:1".into(),
         semantic: "belongs_to".into(),
         evidence: vec![],
+        confidence: None,
     }];
     s.concept_groups = vec![unconfirmed_group(
         "concept_customer",

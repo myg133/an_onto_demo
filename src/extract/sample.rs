@@ -72,7 +72,11 @@ pub struct SampleEvidence {
 }
 
 impl SampleEvidence {
-    fn none(reason: &'static str) -> Self {
+    /// 「没取到样本」的显式构造：`sampled = 0` + 原因。
+    ///
+    /// 公开它是因为装配层也要用（目标表没有单列键 ⇒ `no_key_column`），
+    /// 而那种情形**根本没查库**，不该走 [`sample_one`]。
+    pub fn none(reason: &'static str) -> Self {
         Self { sampled: 0, matched: 0, digest: None, reason: Some(reason) }
     }
 }
@@ -225,15 +229,29 @@ pub async fn sample_one(pool: &PgPool, spec: &SampleSpec, timeout: Duration) -> 
     }
 }
 
-/// 顺序采完全部关系。
+/// 顺序采完全部关系（使用生产超时 [`SAMPLE_TIMEOUT`]）。
+pub async fn sample_all(pool: &PgPool, specs: &[SampleSpec]) -> Vec<SampleEvidence> {
+    sample_all_with(pool, specs, SAMPLE_TIMEOUT).await
+}
+
+/// 顺序采完全部关系，**超时可覆盖**。
 ///
 /// **刻意串行**（不是 `join_all`）：源库是客户资产，并发 5 条关系意味着 5 条连接
-/// 同时压在大表上；串行 + 每条 2s 超时的最坏耗时是可预期的。
+/// 同时压在大表上；串行 + 每条超时的最坏耗时是可预期的。
 /// 顺序也不影响结果（每条关系互相独立）。
-pub async fn sample_all(pool: &PgPool, specs: &[SampleSpec]) -> Vec<SampleEvidence> {
+///
+/// ⚠️ 为什么把超时做成参数：**AC-002 的「两次运行 digest 相同」不该被
+/// 墙钟超时打破**。超时是「这次没采到」，不是「采到了别的值」——
+/// 判据应当用足够长的超时去比 SQL 的确定性，并把「有没有超时」单独断言，
+/// 而不是让一条 2s 的慢查询把确定性判据变成偶发红。
+pub async fn sample_all_with(
+    pool: &PgPool,
+    specs: &[SampleSpec],
+    timeout: Duration,
+) -> Vec<SampleEvidence> {
     let mut out = Vec::with_capacity(specs.len());
     for spec in specs {
-        out.push(sample_one(pool, spec, SAMPLE_TIMEOUT).await);
+        out.push(sample_one(pool, spec, timeout).await);
     }
     out
 }

@@ -91,6 +91,7 @@ fn fixture_snapshot() -> Snapshot {
             column: "customer_id".into(),
             claim: "外键指向 t_customer".into(),
         }],
+        confidence: None,
     }];
     s
 }

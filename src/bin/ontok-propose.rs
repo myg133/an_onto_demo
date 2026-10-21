@@ -48,7 +48,7 @@ use ontok::agent::orchestrate::{
 };
 use ontok::agent::registry::{AgentIdentity, AgentRegistration};
 use ontok::agent::{build_agent, Assembly, ExistingType, UsageBudget};
-use ontok::extract::introspect::SchemaReport;
+use ontok::extract::introspect::{KeyCatalog, SchemaReport, SOURCE_DATABASE_URL_ENV};
 use ontok::extract::names::TableNames;
 
 #[tokio::main]
@@ -82,6 +82,15 @@ async fn main() -> Result<()> {
     // 不给就是「不设闸」—— 对零成本实现（`inproc`）合理；
     // 对声明了「我会上报用量」的实现，编排入口会**直接拒绝**（义务不靠自觉）。
     let mut budget_tokens: Option<u64> = None;
+    // REQ-108 · 置信度接线（AC-002 / AC-003 / AC-006）
+    //
+    // 采样**默认开**：不给 `--no-sample` 就试着采。但「试着」不等于「必须成功」——
+    // 没有源库连接串时**不报错**（既有调用点 `ontok-propose` 一轮都不连库），
+    // 而是所有关系标 `data_evidence: none`，并且**大声说出来**。
+    // 为什么是「说」而不是「静默继续」：缺少证据 ≠ 有证据（R1 ④），
+    // 静默继续会让一份「没验过」的提案看起来和验过的一样。
+    let mut no_sample = false;
+    let mut src_url: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -110,6 +119,10 @@ async fn main() -> Result<()> {
                         .context("--budget-tokens 要一个非负整数（累计用量上限，单位由协议自己定）")?,
                 );
             }
+            // REQ-108 · R1 ④：整个采样可关（关掉时 confidence 只由结构信号算）
+            "--no-sample" => no_sample = true,
+            // REQ-108 · 源库连接串（**只从参数/环境变量来，绝不写进任何文件**）
+            "--src" => src_url = Some(val()?),
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -126,6 +139,7 @@ async fn main() -> Result<()> {
                 println!("REQ-013 agent-registry（带上才连 ONTOK_DATABASE_URL）:\n  --agent-registry <name> / --agent-registry-version <ver> / --round <n>");
                 println!("REQ-019:\n  --attempts <n>  每组抽取的尝试次数（默认 {DEFAULT_ATTEMPTS}）\n  --round ≥2 时会连库载入基版本的已有类型（规格 §7.1 阶段 1 的五个输入之一）");
                 println!("REQ-022:\n  --budget-tokens <n>  成本闸门：累计用量上限，超了**停**并上报\n                （外置 agent 的强制义务；没设闸又声明会上报用量 ⇒ 入口拒绝）");
+                println!("REQ-108 置信度:\n  --src <url>  源库连接串（只读会话；也可用环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}）\n  --no-sample  关闭采样：confidence 只由结构信号算，且全部标 data_evidence=none（缺数据证据不进主提案）");
                 return Ok(());
             }
             other => anyhow::bail!("未知参数 {other}"),
@@ -299,9 +313,108 @@ async fn main() -> Result<()> {
     orchestration.base_version = base_seq;
     // REQ-022：闸门由**装配层**给（CLI 是装配层）；编排层只判「越没越」。
     orchestration.budget = budget_tokens.map(|max_used| UsageBudget { max_used, max_cost: None });
-    let ExtractionRun { outcome, stage } = orchestrate(&*agent, &report, &orchestration)?;
-    let s = &outcome.stats;
+    let ExtractionRun { mut outcome, stage } = orchestrate(&*agent, &report, &orchestration)?;
+    // REQ-108：`stats` 先克隆一份 —— 下面要给 `outcome.proposal.items` 贴置信度
+    // （可变借用），而统计只读。克隆一个小结构比把 20 处 `s.xxx` 改成
+    // 「先取值再打印」安全得多。
+    let s = outcome.stats.clone();
 
+    // ── REQ-108 · 置信度：采样 → 评分 → 贴回条目 ────────────────────
+    //
+    // 顺序不能换：采样只产出聚合量 → 评分是纯函数 → 贴分数**只新增一个键**。
+    // 「抽取结果不被置信度改动」这条（AC-005）在这个顺序下是结构性的：
+    // 评分函数的输入里根本没有 items 本身，只有坐标与聚合量。
+    let keys = KeyCatalog::from_product(
+        &serde_json::from_str::<serde_json::Value>(&schema_raw)
+            .context("schema JSON 解析失败（键目录）")?,
+    );
+    let candidates = ontok::extract::propose::link_candidates(&outcome.proposal.items, &keys);
+    let mut evidence: std::collections::HashMap<
+        usize,
+        ontok::extract::sample::SampleEvidence,
+    > = std::collections::HashMap::new();
+
+    let sample_url = if no_sample {
+        None
+    } else {
+        src_url
+            .clone()
+            .or_else(|| std::env::var("SRC_URL").ok().filter(|s| !s.trim().is_empty()))
+            .or_else(|| std::env::var(SOURCE_DATABASE_URL_ENV).ok().filter(|s| !s.trim().is_empty()))
+    };
+    let mut sampled_relations = 0usize;
+    if let Some(url) = sample_url {
+        if keys.is_empty() {
+            eprintln!(
+                "⚠ 这份 schema.json 没有 primary_key / unique_columns（REQ-108 之前的产品）——\
+                 采样无法确定「目标表用哪一列验命中」，本轮**不采样**。\
+                 先重跑 ontok-introspect 生成新产物。"
+            );
+        } else {
+            let pool = ontok::extract::sample::sample_pool(&url)
+                .await
+                .context("连不上源库（只读采样）")?;
+            for c in &candidates {
+                match c.sample_spec() {
+                    Some(spec) => {
+                        let e = ontok::extract::sample::sample_one(
+                            &pool,
+                            &spec,
+                            ontok::extract::sample::SAMPLE_TIMEOUT,
+                        )
+                        .await;
+                        if e.sampled > 0 {
+                            sampled_relations += 1;
+                        }
+                        evidence.insert(c.item_index, e);
+                    }
+                    // 目标表没有单列键（复合主键 / 无主键）⇒ 不能采样，但**要留痕**
+                    None => {
+                        evidence.insert(
+                            c.item_index,
+                            ontok::extract::sample::SampleEvidence::none("no_key_column"),
+                        );
+                    }
+                }
+            }
+            pool.close().await;
+        }
+    } else {
+        eprintln!(
+            "⚠ 未采样（{}）：本轮置信度只由结构信号算，全部标 data_evidence=none。\
+             要给数据证据请传 --src <url> 或环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}。",
+            if no_sample { "给了 --no-sample" } else { "没有源库连接串" }
+        );
+    }
+    let scored = ontok::extract::propose::score_links(
+        &outcome.proposal.items,
+        &report,
+        &keys,
+        &evidence,
+    );
+    ontok::extract::propose::attach_confidence(&mut outcome.proposal.items, &scored);
+    let scored_by_band = ontok::domain::confidence::BandCounts::of(scored.iter().map(|(_, c)| &c.band));
+
+    println!();
+    println!("置信度（evidence-scorecard-v1）");
+    println!(
+        "  关系评分    : {} 条（其中 {} 条真的读到了样本）",
+        scored.len(),
+        sampled_relations
+    );
+    println!(
+        "  分档        : 高 {} · 中 {} · 低 {} · 拒绝 {}",
+        scored_by_band.high, scored_by_band.middle, scored_by_band.low, scored_by_band.rejected
+    );
+    let no_evidence = scored
+        .iter()
+        .filter(|(_, c)| c.data_evidence == ontok::domain::confidence::DataEvidence::None)
+        .count();
+    if no_evidence > 0 {
+        println!("  ⚠ 无数据证据: {no_evidence} 条（data_evidence=none，不会进主提案）");
+    }
+
+    println!();
     println!("抽取完成");
     println!("  源库        : {}（勘查于 {}，只读={}）", report.schema, report.introspected_at, report.transaction_read_only);
     // ⚠️ REQ-059：这一行与下面「抽取执行者」那行是**两件不同的东西**，

@@ -259,6 +259,13 @@ pub enum StoreError {
     /// REQ-010 · 概念组声明不合法。三条硬约束的理由见 `domain::concept`。
     #[error("概念组声明不合法：{0}")]
     BadConceptGroup(String),
+
+    /// REQ-108 · 关系条目的置信度不合法（缺 method / 分数越界 / band 与分数对不上）。
+    ///
+    /// 与 `domain::apply::ApplyError::BadConfidence` 是**同一条事实的两次呈现**：
+    /// 领域层先判（纯函数可单测），存储层把它翻成自己的错误类型。
+    #[error("关系条目的 confidence 不合法：{0}")]
+    BadConfidence(String),
 }
 
 const SCHEMA: &str = r#"
@@ -305,6 +312,13 @@ CREATE TABLE IF NOT EXISTS link_types (
   semantic     TEXT NOT NULL,
   evidence     JSONB NOT NULL DEFAULT '[]',
   ordinal      INT  NOT NULL DEFAULT 0,
+  -- REQ-108 · 置信度三栏。**全可空**：NULL = 这个版本没有这条信息
+  --（旧版本 / 人工修订），与 0.0（确定不成立）是两件事。
+  -- ⚠️ 客户视图**不读**这三栏 —— `domain::view::project` 读的是
+  -- `SnapshotView`（它压根没有这三栏），所以「零泄漏」是结构保证。
+  confidence          REAL,
+  confidence_method   TEXT,
+  confidence_signals  JSONB,
   UNIQUE (version_id, key)
 );
 
@@ -353,6 +367,11 @@ CREATE TABLE IF NOT EXISTS proposal_items (
   payload      JSONB NOT NULL,
   biz_status   TEXT NOT NULL DEFAULT 'pending',
   model_status TEXT NOT NULL DEFAULT 'pending',
+  -- REQ-108 · 置信度三栏（审核界面与校准命令读它）。
+  -- NULL = 该条目没有分数（实体条目 / 人工提案），**不是 0 分**。
+  confidence          REAL,
+  confidence_method   TEXT,
+  confidence_signals  JSONB,
   UNIQUE (proposal_id, seq)
 );
 
@@ -389,7 +408,7 @@ CREATE TABLE IF NOT EXISTS concept_groups (
 /// 的结果把「已存在」的列从 batch 里摘掉，一大坨字符串没法逐条摘。
 /// 元组里的 `(表名, 列名)` 同时就是探查询「查什么」的答案 ——
 /// 「改什么」与「查什么」永远同源，加第 4 条只改这一张表。
-const ALTER_PATCHES: [(&str, &str, &str); 3] = [
+const ALTER_PATCHES: [(&str, &str, &str); 9] = [
     // REQ-004 · 抽取来源（ADR-001：apply 时原样取提案的值，缺失记 NULL，
     // 不继承 base、不推断）。
     (
@@ -421,6 +440,42 @@ const ALTER_PATCHES: [(&str, &str, &str); 3] = [
         "concept_groups",
         "low_confidence",
         "ALTER TABLE concept_groups ADD COLUMN IF NOT EXISTS low_confidence BOOLEAN;",
+    ),
+    // ── REQ-108 · 置信度三栏（proposal_items / link_types 各三列）─────────
+    //
+    // 六条一起进这张表，理由与上面三条相同：**能不能跳过是逐列决定的**，
+    // 稳态库上一把排他锁都不该取（REQ-039）。类型选 `REAL` 而不是 `NUMERIC`：
+    // 分数是两位小数的近似量，不是金额；`REAL` 与 `domain::confidence::Confidence::score`
+    // （f64）在 `0.0–1.0`、两位小数的取值域上往返无损。
+    (
+        "proposal_items",
+        "confidence",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS confidence REAL;",
+    ),
+    (
+        "proposal_items",
+        "confidence_method",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS confidence_method TEXT;",
+    ),
+    (
+        "proposal_items",
+        "confidence_signals",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS confidence_signals JSONB;",
+    ),
+    (
+        "link_types",
+        "confidence",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS confidence REAL;",
+    ),
+    (
+        "link_types",
+        "confidence_method",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS confidence_method TEXT;",
+    ),
+    (
+        "link_types",
+        "confidence_signals",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS confidence_signals JSONB;",
     ),
 ];
 
