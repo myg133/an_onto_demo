@@ -124,3 +124,15 @@
 - ⚠️ **`git branch -d` 二次误报**：判定基准是 HEAD（`workspace`）不是 `develop`，报「not fully merged」。
   与 **2026-10-10** 那条教训同因。⇒ 规程固定为「先 `merge-base --is-ancestor <branch> <目标分支>` 核实，再用 `-D`」
 - 状态：REQ-107 `已验证` → **`已完成`**
+
+## 2026-10-21 — REQ-108 合并后回收
+
+- 合并：`git merge --no-ff feature/REQ-108` → `develop` `a8a51ed`（11 提交；合并前 `is-ancestor` = YES）
+- 合并后 `cargo check --lib` ✅；四红线 + `mcp/tools.rs` 相对 `4573269` 的 `numstat` **为空**
+- 远程 `feature/REQ-108` **不存在**（Dev 全程未 push）⇒ `push --delete` 报 "remote ref does not exist"，属预期
+- 回收：`git worktree remove feature-REQ-108` → `git branch -D`（先 `is-ancestor` 核实）
+- 另清 QA 留下的 3 个 review worktree（`.review-workspace/req108/{qa,qa2,qa3}`，各 ~3.8MB，其中 2 个脏但只含 QA 临时脚本）
+- 状态：REQ-108 `已验证` → **`已完成`**
+
+**本轮新增的一条流程教训**：QA 与 Dev 各自报「31 套件全绿 / 300 passed」时，实测差 5 条——**整体性断言失真，因为清单与断言对不上**。
+⇒ 规程：**报告必须列出回归集名单，数字要能逐项对上**（已写进 REQ-108 的 A-14）。
