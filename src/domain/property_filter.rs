@@ -143,6 +143,18 @@
 //!
 //! ⛔ 以上三条**均未封堵**。任何把本段改写成「已补测试」「已改 fail-closed」
 //! 或「结构守卫已覆盖多份判据」的说法都是错的。
+//!
+//! # 出口侧的不变量（REQ-107 · AC-003）——与本段 ③ **各管一段**
+//!
+//! 上面 ③ 说的是**判据侧**：`has_raw_identifier` 被抄第二份的问题（已划给 REQ-103）。
+//!
+//! **出口侧**由 REQ-107 负责：客户类出口**不得直调**判据（含本模块的
+//! [`filter_view`]），必须经由 `crate::domain::pipeline`；判据的调用点只允许出现在
+//! 管线模块内。判据是**否定式计数**（出口文件里直调点数 == 0），
+//! 见 `tests/test_req107_outlet_pipeline.rs`。
+//!
+//! 两者形态相近，但针对的**文件集合与目标不同**，可以同时存在、互不重叠。
+//! ⛔ 本段**不是**对上面三条的封堵声明 —— 上面三条仍然未封堵。
 
 use crate::domain::identifier_shape::has_raw_identifier;
 use crate::domain::view::{CustomerView, EntityView, PropertyView};

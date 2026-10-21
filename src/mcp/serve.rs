@@ -98,11 +98,10 @@ pub async fn prepare(pool: &PgPool, args: &ServerArgs) -> anyhow::Result<Ontolog
     // 它是 B1 的职责、动作不同（保留周围业务文字）。本轮加的是**剔除**：
     // 名字是标识符的整条属性不上，名字干净而说明脏的只隐去说明。
     // 两者先后无冲突（替换过之后 `has_raw_identifier` 更不容易命中）。
-    let filtered = crate::domain::property_filter::filter_view(&view);
-    let report = filtered.report();
-    if !report.is_empty() {
-        eprintln!("{report}");
-    }
+    //
+    // ⭐ REQ-107：前处理与它的 stderr 报告**都收进管线**（`prepare_view`）——
+    // 与 CLI / HTTP 共用同一份前处理与同一种报告形状。
+    let filtered = crate::domain::pipeline::prepare_view(&view);
     let view = filtered.view;
 
     let overview =
@@ -197,14 +196,27 @@ pub async fn serve(ctx: OntologyContext) -> anyhow::Result<()> {
         let out = handle_line(&ctx, &line);
         // 只有请求才有响应；通知**必须**静默
         if let Some(resp) = out {
-            let mut stdout = std::io::stdout();
-            stdout
-                .write_all(resp.as_bytes())
-                .and_then(|_| stdout.write_all(b"\n"))
-                .and_then(|_| stdout.flush())
-                .context("写 stdout 失败 —— 客户端可能已经断开")?;
+            write_mcp_line(&resp)?;
         }
     }
+}
+
+/// MCP **传输层**：把**已编码好的一行**写给客户端（REQ-107 第 3 轮 F3）。
+///
+/// ⛔ 这是 `serve.rs` 里**唯一**被允许碰 fd 的地方 —— 判据
+/// （`tests/test_req107_source_enumeration.rs` 的 `TRANSPORT_FNS`）把「禁用
+/// `std::io::stdout` / `write_all(`」的豁免**精确到这一个函数**，
+/// 而不是整条 `serve()`（后者的函数体很大，在里面加一行裸写不会被抓）。
+///
+/// 写的字节来自 `handle_line` → `dispatch` → `p::encode_result(..)` 的返回值，
+/// 不是客户视图本身；它到这一步已经过 `publish_value` 的闸。
+fn write_mcp_line(resp: &str) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(resp.as_bytes())
+        .and_then(|_| stdout.write_all(b"\n"))
+        .and_then(|_| stdout.flush())
+        .context("写 stdout 失败 —— 客户端可能已经断开")
 }
 
 /// 处理一行入站消息，返回**该回的那一行**（通知返回 `None`）。
@@ -242,7 +254,18 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
                 .get("protocolVersion")
                 .and_then(Value::as_str);
             let agreed = p::negotiate_protocol_version(requested);
-            p::encode_result(id, p::initialize_result(agreed, &tools::instructions(ctx)))
+            // ⭐ REQ-107 · AC-008（Z3）：`initialize` 的**整段 result** 过运行时闸。
+            //
+            // 收口前只有**项目名**过闸（`tools::instructions` 里那一句），
+            // 模板正文（「该版本已冻结」「confirmation…」）与 `serverInfo`
+            // **从不过闸** —— 往模板里塞一个守门词不会有任何测试红。
+            // 现在整段 result（模板正文 + serverInfo + 已过闸的项目名）一起判，
+            // 与 `tools/call` 的返回值同一条外送路径、同一道闸。
+            let result = p::initialize_result(agreed, &tools::instructions(ctx));
+            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletId::Z3, result) {
+                Ok(rendered) => p::encode_result(id, rendered.into_value()),
+                Err(e) => p::encode_error_line(id, p::INTERNAL_ERROR, e.message(), None),
+            }
         }
 
         "notifications/initialized" => {
@@ -265,7 +288,16 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
                     })
                 })
                 .collect();
-            p::encode_result(id, p::tools_list_result(Value::Array(tools)))
+            // ⭐ REQ-107 · AC-008（Z2）：`tools/list` 过运行时闸。
+            //
+            // `description` / `title` 从**真实响应体**里发出去，进的是客户端的
+            // 工具面板与下游 LLM 的提示词素材 —— 与 `tools/call` 的返回值同一条外送路径。
+            // 收口前这条路径**零闸**（而且 `description`/`title` 连断言都没有）。
+            let result = p::tools_list_result(Value::Array(tools));
+            match crate::domain::pipeline::publish_value(crate::domain::pipeline::OutletId::Z2, result) {
+                Ok(rendered) => p::encode_result(id, rendered.into_value()),
+                Err(e) => p::encode_error_line(id, p::INTERNAL_ERROR, e.message(), None),
+            }
         }
 
         "tools/call" => {
@@ -287,14 +319,23 @@ fn dispatch(ctx: &OntologyContext, method: &str, params: &Value, id: &Value) -> 
             }
 
             match tools::call(ctx, name, &arguments) {
-                // ── 守门器（AC-005）── 对**每一个**返回值无条件执行
-                Ok(value) => match tools::guard(&value) {
-                    Ok(json_text) => p::encode_result(id, p::tool_call_result(&json_text, value)),
+                // ── 发布闸（REQ-107 · AC-001/002/003）── 对**每一个**返回值无条件执行，
+                // 且只有**一个**调用点 —— 五个工具（M1–M5）共用它。
+                //
+                // 判定在管线里（`publish_value` 复用 `tools::guard` 本体，不抄判据）；
+                // 出口这一步只把结果映射成协议形状。
+                Ok(value) => match crate::domain::pipeline::publish_value(
+                    crate::domain::pipeline::OutletId::McpTools,
+                    value,
+                ) {
+                    Ok(rendered) => {
+                        let text = rendered.text().to_string();
+                        let structured = rendered.into_value();
+                        p::encode_result(id, p::tool_call_result(&text, structured))
+                    }
                     // 命中 ⇒ `isError: true`，**不给数据**（fail-closed）。
                     // 命中词条只进 stderr，见 `tools::guard` 的模块内说明。
-                    Err(reason) => {
-                        p::encode_result(id, p::tool_call_error_result(&reason))
-                    }
+                    Err(e) => p::encode_result(id, p::tool_call_error_result(e.message())),
                 },
                 Err(e) => match e {
                     // 参数不合法 / 工具不存在 ⇒ 协议错误（连接坏了）

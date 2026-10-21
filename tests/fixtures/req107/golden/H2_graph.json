@@ -1,0 +1,1 @@
+{"edges":[{"count_from":"多个","count_to":"1 个","from":"样例客户","label":"拥有","to":"样例订单"},{"count_from":"1 个","count_to":"多个","from":"样例订单","label":"属于","to":"样例客户"}],"nodes":[{"attribute_count":2,"id":"样例客户","label":"样例客户","parent":null},{"attribute_count":2,"id":"样例订单","label":"样例订单","parent":"样例客户"}]}

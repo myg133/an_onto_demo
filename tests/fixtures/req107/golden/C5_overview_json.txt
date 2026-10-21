@@ -1,0 +1,75 @@
+{
+  "concepts": [
+    {
+      "name": "样例客户概念",
+      "summary": "样例客户与订单的范围",
+      "members": [
+        {
+          "name": "样例客户",
+          "note": "样例客户这张表的用途说明",
+          "property_count": 3
+        },
+        {
+          "name": "样例订单",
+          "note": null,
+          "property_count": 2
+        }
+      ],
+      "properties": [
+        {
+          "name": "客户编号",
+          "from_members": [
+            "样例客户"
+          ],
+          "required": true,
+          "sample": "样例-001"
+        },
+        {
+          "name": "下单时间",
+          "from_members": [
+            "样例客户"
+          ],
+          "required": false,
+          "sample": null
+        },
+        {
+          "name": "金额",
+          "from_members": [
+            "样例订单"
+          ],
+          "required": true,
+          "sample": "100"
+        },
+        {
+          "name": "样例属性说明",
+          "from_members": [
+            "样例订单"
+          ],
+          "required": false,
+          "sample": null
+        }
+      ],
+      "relations": [],
+      "relations_inside_skipped": 2,
+      "duplicate_member_names": 0,
+      "properties_dropped": 1
+    }
+  ],
+  "uncovered": [],
+  "stats": {
+    "objects_total": 2,
+    "objects_in_groups": 2,
+    "objects_uncovered": 0,
+    "concept_count": 1,
+    "concepts_dropped": 0,
+    "properties_before_dedup": 5,
+    "properties_after_dedup": 4,
+    "properties_dropped": 1,
+    "relations_total": 2,
+    "relation_ends_redirected": 0,
+    "relations_inside_skipped": 2
+  },
+  "notes": [
+    "概念「样例客户概念」有 1 项属性名称带技术用语，没上总览"
+  ]
+}

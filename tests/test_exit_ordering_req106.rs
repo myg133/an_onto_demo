@@ -106,73 +106,87 @@ fn the_stripper_is_not_vacuous() {
 
 // ══════════════════════════════════════════════════════════════
 // AC-001 · JSON 出口必须**先判后写**
+//
+// ⚠️ REQ-107 迁移说明（本文件是本轮**第二个**被改写的既有守卫，第一个是
+// `tests/test_property_filter.rs` 的 `all_three_outlets_call_the_one_shared_function`）：
+//
+// 收口前这两条判据钉的是 `src/cli.rs` 里的
+// `let leaked = scan_modeling_terms(&json);` 这一行 —— 而 REQ-107 的 AC-001
+// 要求出口文件里**没有任何判据直调**（判据收进 `src/domain/pipeline.rs`）。
+// ⇒ 锚点**随代码迁移**到管线，断言的内容（判定在写出之前、产物不在拒发分支内）
+// 一个字没放宽。旧锚点在收口后**不存在**，继续钉它会得到「找不到 anchor」式的假红。
 // ══════════════════════════════════════════════════════════════
 
-/// ⛔ `ontology show`（JSON 出口）的三步顺序必须是
-/// **判定 → 不通过则拒发 → 通过才写出**。
+/// 管线模块的**生产代码**（剥注释、去测试模块）。
+fn pipeline_code() -> String {
+    production_code("src/domain/pipeline.rs")
+}
+
+/// 取 `render` 里某一个 arm 的片段（从 arm 头到下一个 `Product::` arm 头）。
+fn arm_slice<'a>(src: &'a str, arm: &str) -> &'a str {
+    let from = src
+        .find(arm)
+        .unwrap_or_else(|| panic!("管线里找不到 arm `{arm}` —— 收口后的结构变了，判据必须跟着改"))
+        + arm.len();
+    let rest = &src[from..];
+    match rest.find("Product::") {
+        Some(n) => &rest[..n],
+        None => rest,
+    }
+}
+
+/// ⛔ 客户类出口的三步顺序必须是 **判定 → 不通过则拒发 → 通过才产出可写出的产物**。
 ///
-/// REQ-106 之前是 `emit_domain_line(&json)` 写在 `if !leaked.is_empty()`
-/// **之上** ⇒ 命中时完整视图已逐字节落在 stdout，`exit 2` 只是**事后信号**，
-/// `ontology show … > out.json` 照样写出一份带建模术语的视图。
-///
-/// ⛔ 判据钉的是**相对次序**：三条语句在同一个 `let leaked = …` 之后，
-/// 谁都不许跑到前面去。
+/// 收口前这里是「`let leaked = scan_modeling_terms(&json);` 之后才是
+/// `emit_domain_line(&json)`」；收口后判据与写出都在管线里，判据变成
+/// 「闸调用必须在产物构造之前」—— 「先判后写」这句话的落点没变。
 #[test]
 fn the_json_exit_judges_before_it_writes() {
-    let body = production_code("src/cli.rs");
-    let anchor = "let leaked = scan_modeling_terms(&json);";
-    let from = body
-        .find(anchor)
-        .unwrap_or_else(|| panic!("cli.rs 里找不到 `{anchor}` —— JSON 出口的判定不见了"))
-        + anchor.len();
-    let tail = &body[from..];
+    let src = pipeline_code();
+    let arm = arm_slice(&src, "Product::CustomerJson(view) => {");
 
-    let refuse = tail.find("EXIT_LEAKED_MODELING_TERMS").unwrap_or_else(|| {
-        panic!("判定之后看不到「不通过则拒发」那一步（EXIT_LEAKED_MODELING_TERMS）")
-    });
-    let write = tail
-        .find("emit_domain_line(&json)")
-        .unwrap_or_else(|| panic!("判定之后看不到写出那一步（emit_domain_line(&json)）"));
+    let gate = arm
+        .find("gate_text(spec, &text)?")
+        .unwrap_or_else(|| panic!("JSON arm 里找不到闸调用 `gate_text(spec, &text)?` —— 判定不见了"));
+    let build = arm
+        .find("Ok(OutletRender::build(")
+        .unwrap_or_else(|| panic!("JSON arm 里找不到产物构造 —— 「写出」那一步不见了"));
 
     assert!(
-        refuse < write,
-        "AC-001 被破坏：写出发生在判定之前（写出位置 {write} < 拒发位置 {refuse}）\
-         —— 命中建模术语时数据会先落到 stdout 上"
+        gate < build,
+        "AC-001 被破坏：产物在判定之前就构造出来了（构造位置 {build} < 判定位置 {gate}）\
+         —— 命中建模术语时出口已经拿到一份可写出的字节"
     );
 }
 
-/// AC-001 的**另一半**：写出必须发生在拒发分支**之外**。
+/// AC-001 的**另一半**：产物构造必须发生在拒发分支**之外**。
 ///
-/// ⛔ 只靠「谁在前」不够：有人可以把 `emit_domain_line` 挪进
-/// `if !leaked.is_empty() { … }` **块内部**，并把拒发改到它**后面** ——
-/// 这样字面量上「拒发位置 > 写出位置」看着像是对的，实际却是
-/// 「判定通过就写出、判定不通过就拒发」的反面：块里的写出永远不执行。
-///
-/// 判据用**缩进**钉住块归属：写出那一行的缩进**不得深于**拒发分支头。
+/// ⛔ 只靠「谁在前」不够：有人可以把产物构造挪进 `if !hits.is_empty() { … }`
+/// **块内部**，字面量上看着仍然是「判定在前」。
+/// 判据用**缩进**钉住块归属 —— 产物构造那一行不得比闸那一行更深。
 #[test]
 fn the_json_exit_writes_outside_the_refusal_branch() {
-    let body = production_code("src/cli.rs");
-    let anchor = "let leaked = scan_modeling_terms(&json);";
-    let from = body
-        .find(anchor)
-        .unwrap_or_else(|| panic!("cli.rs 里找不到 `{anchor}`"))
-        + anchor.len();
+    let src = pipeline_code();
+    for arm in [
+        "Product::CustomerJson(view) => {",
+        "Product::CustomerHtml { view, sampling } => {",
+    ] {
+        let body = arm_slice(&src, arm);
+        let gate_at = body
+            .find("gate_text(spec, &")
+            .unwrap_or_else(|| panic!("{arm} 里找不到闸调用"));
+        let build_at = body
+            .find("Ok(OutletRender::build(")
+            .unwrap_or_else(|| panic!("{arm} 里找不到产物构造"));
 
-    let if_at = from
-        + body[from..]
-            .find("if !leaked.is_empty()")
-            .expect("判定之后应当有拒发分支 `if !leaked.is_empty() { … }`");
-    let write_at = body
-        .find("emit_domain_line(&json)")
-        .expect("JSON 出口应当有写出那一步");
-
-    let if_indent = line_indent(&body, if_at);
-    let write_indent = line_indent(&body, write_at);
-    assert!(
-        write_indent <= if_indent,
-        "写出那一行缩进 {write_indent} 比拒发分支头 {if_indent} 更深 —— \
-         写出被挪进了 `if !leaked.is_empty()` 的块内部"
-    );
+        let gate_indent = line_indent(body, gate_at);
+        let build_indent = line_indent(body, build_at);
+        assert!(
+            build_indent <= gate_indent,
+            "{arm}：产物构造那一行缩进 {build_indent} 比闸那一行 {gate_indent} 更深 —— \
+             它被挪进了拒发分支的块内部（那样这一条臂永远不会产出字节）"
+        );
+    }
 }
 
 /// 某一处偏移量**所在行**的行首缩进宽度（按字节，中文注释不影响：已被剥掉）。

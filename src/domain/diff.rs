@@ -50,7 +50,16 @@ pub struct DiffItem {
 }
 
 impl DiffItem {
-    /// 人话一行 —— 给 CLI 与客户看
+    /// 人话一行 —— 给 CLI 与**建模人员**看。
+    ///
+    /// ⚠️ REQ-107 · R2 改口径：这行注释原文写的是「给 CLI 与客户看」，与
+    /// BA 的裁定 R1（`ontology diff` 归**建模轨**、豁免发布闸）冲突 ——
+    /// 它会误导下一个人「这条是客户出口」，从而把它接到客户管线上。
+    /// 输出的是「key / field / parent / evidence」这类**建模结构本身**，
+    /// 过客户可见性闸等于把闸用错地方。
+    ///
+    /// ⛔ R3：`DiffItem.target` 与 `before`/`after`（原始 JSON，字符串直接 `clone`）
+    /// 都**未**经转义，真换行能原样进 stdout —— 已知限制，本轮不修。
     pub fn summary(&self) -> String {
         let k = self.kind.as_str();
         match (&self.field, &self.before, &self.after) {

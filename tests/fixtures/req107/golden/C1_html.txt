@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>业务对象总览</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:28px 20px 60px;background:#f6f7f9;color:#1b1f24;
+line-height:1.7;font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.wrap{max-width:960px;margin:0 auto}
+h1{font-size:22px;margin:0 0 6px}
+.副题,.提示,.空,.说明{color:#5b6570;font-size:14px}
+.副题{margin:0 0 18px}
+.查找{margin:14px 0 20px}
+.查找框{width:100%;padding:10px 12px;font-size:15px;border:1px solid #d3d8de;
+border-radius:8px;background:#fff}
+.分组{margin:0 0 10px;border:1px solid #e2e6ea;border-radius:10px;background:#fff}
+.组名{cursor:pointer;padding:11px 14px;font-weight:600;font-size:16px}
+.计数{color:#78828c;font-weight:400;font-size:13px;margin-left:6px}
+.对象{margin:0 10px 8px;border:1px solid #e6eaee;border-radius:8px;background:#fcfdfe}
+.对象.重点{border-color:#c8912f;background:#fffdf6}
+.对象>summary{cursor:pointer;padding:10px 12px;font-size:15px}
+.名{font-weight:600}
+.star{margin-left:10px;color:#a9761a;font-size:13px}
+.体{padding:2px 14px 14px}
+h4{margin:16px 0 6px;font-size:14px;color:#39424c}
+.属性,.关系{margin:0;padding:0;list-style:none}
+.属性 li{padding:6px 0;border-top:1px solid #eef1f4}
+.属性 li:first-child{border-top:none}
+.属性名{font-weight:600;margin-right:10px}
+.属性说明{color:#5b6570;font-size:13px}
+.样例{color:#8a929b;font-size:12px;margin-left:8px}
+.未显示{color:#8a6410;background:#fdf6e7;border:1px solid #e8d9b4;border-radius:6px;
+padding:7px 10px;font-size:13px;margin:6px 0 0}
+.未显示汇总{margin:14px 0 4px;padding:11px 14px;border:1px solid #e8d9b4;
+border-left:4px solid #c8912f;border-radius:8px;background:#fffdf6}
+.未显示标题{margin:0 0 6px;font-weight:600;font-size:14px;color:#6b5410}
+.未显示汇总 ul{margin:0;padding-left:20px}
+.未显示汇总 li{margin:3px 0;font-size:14px}
+.未显示脚{margin:8px 0 0;font-size:13px;color:#5b6570}
+.关系 li{padding:6px 0;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.问{flex:0 1 auto}
+.答{color:#1b5e20;background:#eaf5ea;border-radius:6px;padding:1px 8px;font-size:13px}
+</style>
+</head>
+<body><div class="wrap">
+<h1>业务对象总览</h1>
+<p class="副题">这份清单把贵方系统里识别出来的业务对象列了出来。点开任意一个，可以看到它记录了什么、以及它和别的东西是什么关系。</p>
+<p class="提示">点一个名字就能展开。共 2 个对象，按首字分组；标了 ★ 的是本次判读建议重点看的 1 个。</p><div class="未显示汇总"><p class="未显示标题">这份清单没有列全，说明一下</p><ul class="未显示"><li>另有 2 项因为名称带系统内部的技术叫法，没有显示（每个对象下面会单独标出它自己少了几项）。</li></ul><p class="未显示脚">这些项本身不是不重要，是当前叫法还带着系统的内部说法，直接搬过来会让清单难读。想看它们请告诉我们。</p></div><p class="查找"><input class="查找框" type="text" placeholder="输入对象名，页面上会只留匹配的那些"></p><details class="分组" open><summary class="组名">样 <span class="计数">2 个</span></summary><details class="对象 重点"><summary><span class="名">样例客户</span><span class="star">★ 本次重点查看</span></summary><div class="体"><p class="说明">样例客户这张表的用途说明</p><h4>它记录了什么（2 项）</h4><p class="未显示">另有 1 项因为名称带系统内部的技术叫法，没有显示。</p><ul class="属性"><li><span class="属性名">客户编号</span><span class="样例">举例：样例-001</span></li><li><span class="属性名">下单时间</span><span class="属性说明">样例客户第一次下单的时间</span></li></ul><h4>它和别的东西是什么关系（2 条）</h4><ul class="关系"><li><span class="问">一个 样例客户，有几个 样例订单？</span><span class="答">多个</span></li><li><span class="问">一个 样例客户，有几个 样例订单？</span><span class="答">多个</span></li></ul></div></details><details class="对象"><summary><span class="名">样例订单</span></summary><div class="体"><p class="说明">它是「样例客户」的一部分。</p><h4>它记录了什么（2 项）</h4><p class="未显示">另有 1 项因为名称带系统内部的技术叫法，没有显示。</p><ul class="属性"><li><span class="属性名">金额</span><span class="样例">举例：100</span></li><li><span class="属性名">样例属性说明</span></li></ul><h4>它和别的东西是什么关系（2 条）</h4><ul class="关系"><li><span class="问">一个 样例订单，有几个 样例客户？</span><span class="答">1 个</span></li><li><span class="问">一个 样例订单，有几个 样例客户？</span><span class="答">1 个</span></li></ul></div></details></details>
+</div>
+<script>
+
+const box = document.querySelector('.查找框');
+const cards = Array.from(document.querySelectorAll('.对象'));
+const groups = Array.from(document.querySelectorAll('.分组'));
+function 过滤() {
+  const q = box.value.trim();
+  cards.forEach(function (c) {
+    c.style.display = (q === '' || c.textContent.indexOf(q) >= 0) ? '' : 'none';
+  });
+  groups.forEach(function (g) {
+    const any = Array.from(g.querySelectorAll('.对象')).some(function (c) {
+      return c.style.display !== 'none';
+    });
+    g.style.display = any ? '' : 'none';
+  });
+}
+box.addEventListener('input', 过滤);
+
+</script>
+</body>
+</html>

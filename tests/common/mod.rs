@@ -10,10 +10,163 @@
 // 契约（锚点顺序、上界、两类报错抬头），而它们住在 `tests/test_anchor_guard.rs`。
 pub mod source_root;
 
+/// REQ-107 · AC-005 的 golden 比对夹具（合成客户视图 + 概念组 + 总览）。
+///
+/// 抽成子模块是因为**两条**判据都要用它（基线复刻版与管线生产版）——
+/// 各写一份夹具一定会漂。
+pub mod req107;
+
 /// 判据读源码的**唯一入口** —— 锚点是**运行时**定位到的 crate 根，
 /// 不是编译期常量。REQ-046 起，仓内**所有**读源码的判据都走这里。
 #[allow(unused_imports)]
 pub use source_root::{crate_root, read_source};
+
+/// **词法级**剥注释：只删注释，**保留字符串字面量**（它们是代码）。
+///
+/// 与 `tests/test_binary_output_guard.rs` 的 `strip_comments` 同一套口径
+/// （行注释 / 可嵌套块注释 / 普通字符串 / raw string / 字符常量）：
+/// 裸 grep 会栽在「守卫被删掉、字符串还留在注释里」这个形态上（REQ-002 复审栽过），
+/// 而那正是源码扫描型判据最常见的假绿来源。
+///
+/// ⚠️ 保留字符串字面量 = 字符串里出现判据名会被算成一次「命中」。
+/// 这是**刻意**的（与既有守卫一致）：宁可假红一次让人去看，也不要放过一次。
+///
+/// ⚠️ 已知边界：不认 `'` 作为生命周期标记（`&'static str` 会把后面的代码吞进
+/// 「字符常量」状态直到下一个 `'`）。调用方只用它扫**小片段**（出口文件），
+/// 而那几个文件里 `'` 只出现在字符常量与生命周期两处 —— 判据若因此漏算，
+/// 会在 `strip_comments_is_not_vacuous` 的自检里暴露。
+pub fn strip_comments(src: &str) -> String {
+    let cs: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    #[derive(PartialEq)]
+    enum St {
+        Code,
+        Line,
+        Block(usize),
+        Str,
+        Raw(usize),
+        Char,
+    }
+    let mut st = St::Code;
+    while i < cs.len() {
+        let c = cs[i];
+        match st {
+            St::Code => {
+                if c == '/' && cs.get(i + 1) == Some(&'/') {
+                    st = St::Line;
+                    i += 2;
+                } else if c == '/' && cs.get(i + 1) == Some(&'*') {
+                    st = St::Block(1);
+                    i += 2;
+                } else if c == 'r' {
+                    let mut j = i + 1;
+                    let mut hashes = 0usize;
+                    while cs.get(j) == Some(&'#') {
+                        hashes += 1;
+                        j += 1;
+                    }
+                    if cs.get(j) == Some(&'"') {
+                        out.extend(cs[i..=j].iter());
+                        i = j + 1;
+                        st = St::Raw(hashes);
+                    } else {
+                        out.push(c);
+                        i += 1;
+                    }
+                } else if c == '"' {
+                    out.push(c);
+                    i += 1;
+                    st = St::Str;
+                } else if c == '\'' {
+                    // 字符常量：`'x'` / `'\n'` / `'\u{..}'`。生命周期标记
+                    // （`'static`）不以 `'` 结尾，所以这里只在「真的能闭合」时进 Char。
+                    let closes = cs.get(i + 2) == Some(&'\'')
+                        || (cs.get(i + 1) == Some(&'\\')
+                            && cs[i + 2..].iter().take(12).any(|c| *c == '\''));
+                    out.push(c);
+                    i += 1;
+                    if closes {
+                        st = St::Char;
+                    }
+                } else {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+            St::Line => {
+                if c == '\n' {
+                    out.push('\n');
+                    st = St::Code;
+                }
+                i += 1;
+            }
+            St::Block(depth) => {
+                if c == '/' && cs.get(i + 1) == Some(&'*') {
+                    st = St::Block(depth + 1);
+                    i += 2;
+                } else if c == '*' && cs.get(i + 1) == Some(&'/') {
+                    st = if depth <= 1 { St::Code } else { St::Block(depth - 1) };
+                    i += 2;
+                } else {
+                    if c == '\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                }
+            }
+            St::Str => {
+                if c == '\\' {
+                    out.push(c);
+                    if let Some(n) = cs.get(i + 1) {
+                        out.push(*n);
+                    }
+                    i += 2;
+                } else {
+                    out.push(c);
+                    i += 1;
+                    if c == '"' {
+                        st = St::Code;
+                    }
+                }
+            }
+            St::Raw(hashes) => {
+                if c == '"' {
+                    let mut j = i + 1;
+                    let mut seen = 0usize;
+                    while seen < hashes && cs.get(j) == Some(&'#') {
+                        seen += 1;
+                        j += 1;
+                    }
+                    if seen == hashes {
+                        out.extend(cs[i..j].iter());
+                        i = j;
+                        st = St::Code;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i += 1;
+            }
+            St::Char => {
+                if c == '\\' {
+                    out.push(c);
+                    if let Some(n) = cs.get(i + 1) {
+                        out.push(*n);
+                    }
+                    i += 2;
+                } else {
+                    out.push(c);
+                    i += 1;
+                    if c == '\'' {
+                        st = St::Code;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
 
 use ontok::db::pool;
 use ontok::db::project::{NewProject, PgProjectStore, ProjectError, ProjectRow};

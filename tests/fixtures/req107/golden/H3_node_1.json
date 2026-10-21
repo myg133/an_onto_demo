@@ -1,0 +1,1 @@
+{"aliases":["样例甲方"],"belongs_to":null,"name":"样例客户","note":"样例客户这张表的用途说明","properties":[{"name":"客户编号ID","note":null,"required":true,"sample":"样例-001"},{"name":"下单时间","note":"样例客户第一次下单的时间","required":false,"sample":null}]}
