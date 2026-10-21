@@ -704,6 +704,13 @@ fn evidence_hint(name: &str, signals: &[Signal]) -> String {
 /// | 2 | `signals[].weight` 与 `method` 的权重表**逐项相等** | 设计概要 §2.1：「可复核」 |
 /// | 3 | 每个 `veto` 信号名必须在 `signals` 里有**对应证据** | 防止「声明了 veto、但没有证据」 |
 ///
+/// 另有两条**证据链完整性**判据（A-10 / A-13）也在这里落地：
+///
+/// | # | 校验 | 为什么 |
+/// | --- | --- | --- |
+/// | R5-a | `data_evidence = sampled` ⇒ `signals` 必须有完整的 `sample_hit_rate`（含 `sampled` / `matched`） | 否则删掉最强的那条证据后，四个结构信号照样能凑出 0.99（QA R5） |
+/// | R5-b | `data_evidence = none` ⇒ `signals` 里**不得**有 `sample_hit_rate` | 「没采过样」与「有一份采样证据」不能同时成立 |
+///
 /// 第 1 条的「触发」由**证据**决定（[`evidence_vetoes`]），不由文件里的
 /// `veto` 字段决定 —— 这一条是这三条校验的关键：只要 `signals` 说
 /// 「5 行 0 命中」，`score` 就**不可能**是 0.99，写 `veto` 或删 `veto` 都一样。
@@ -786,7 +793,57 @@ fn validate_self_evidence(
         }
     }
 
-    // ── 4. AC-014 #1：`score ≤ 每个触发 veto 的上限` ──────────────
+    // ── 4. A-13（R5）：`data_evidence` 与 signals 里的采样证据必须一致 ──
+    //
+    // QA 实测的攻击链：把 `sample_hit_rate`（连同 `veto`）一起删掉，只留四个
+    // 结构信号，`data_evidence` 仍是 `sampled`，分数写 0.99 —— 旧实现全放行。
+    //
+    // 这与 A-10（R1）是同一件事的粗细版本：R1 删**整条**证据链，R5 只删
+    // **最强的那一环**。`data_evidence = sampled` 的意思是「我读过源库的数据」，
+    // 而这句声明的唯一载体就是 `sample_hit_rate`（sampled/matched/digest 都在
+    // 它上面）。把它删掉，剩下 0.40 的结构分照样能凑出高分，于是「有数据证据」
+    // 这句话不再有任何东西为它背书。
+    //
+    // 反向同样要封：声明 `none`（没采过样）却摆出一条 `sample_hit_rate`，
+    // 等于既说「没用数据」又拿出一份数据证据 —— 两头都想要。
+    //
+    // `data_evidence` 缺失时 `from_untrusted` 已按 `sampled` 处理（严格侧），
+    // 所以这里只需要处理两个枚举值。
+    match data_evidence {
+        DataEvidence::Sampled => {
+            let Some(hit) = signals.iter().find(|s| s.name == "sample_hit_rate") else {
+                return Err(
+                    "confidence.data_evidence = sampled —— 声明了采样证据但 signals 里没有 \
+                     sample_hit_rate：数据证据（sampled/matched/digest）只挂在这条信号上，\
+                     删掉它之后剩下的结构信号不可复核（A-13 · R5）"
+                        .to_string(),
+                );
+            };
+            // 只写 `name/value/weight` 的 `sample_hit_rate` 同样推不出任何 veto：
+            // `evidence_vetoes` 要 `sampled` / `matched` 才能判定零命中/部分命中。
+            // 换句话说，缺聚合量等于换个写法把这一环删掉。
+            if hit.sampled.is_none() || hit.matched.is_none() {
+                return Err(
+                    "confidence.data_evidence = sampled（声明了采样证据），但 signals 里的 \
+                     sample_hit_rate 缺 sampled/matched —— 聚合量不完整，命中率与 veto 都 \
+                     无从复核（A-13 · R5）"
+                        .to_string(),
+                );
+            }
+        }
+        DataEvidence::None => {
+            if signals.iter().any(|s| s.name == "sample_hit_rate") {
+                return Err(
+                    "confidence.data_evidence = none（声明没采过样），但 signals 里出现了 \
+                     sample_hit_rate —— 声明没有采样证据却又摆出一份采样证据，二者矛盾\
+                     （A-13 · R5）"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    // ── 5. AC-014 #1：`score ≤ 每个触发 veto 的上限` ──────────────
     //
     // 先按**证据**推出来的上限判（删掉 `veto` 字段也逃不掉），
     // 再按**声明**的那条判（防止声明一条更大的上限来抬高分数）。
@@ -823,9 +880,10 @@ fn validate_self_evidence(
 /// - `score` 缺失 / 越界 ⇒ 拒绝；
 /// - `band` 是**派生量**：以 `score` 为准重算；若 JSON 里写了一个跟分数
 ///   对不上的 `band`，那是**被改过的**数据 ⇒ 拒绝（而不是悄悄改成对的）；
-/// - `veto` / `data_evidence` 可缺省（`None` / `sampled`），
+/// - `veto` 可缺省；`data_evidence` 可缺省（缺省 = `sampled`，严格侧），
 ///   **但 `signals` 不可缺省**（A-10：有 `confidence` 就必须有证据链，见下）；
-///   一旦给出，就必须与 `method` 的权重表、与彼此自洽（AC-014，
+///   一旦给出，就必须与 `method` 的权重表、与彼此自洽（AC-014），
+///   并且 `data_evidence` 必须与 `signals` 里的采样信号一致（A-13 / R5，
 ///   见 [`validate_self_evidence`]）。
 ///
 /// # A-10（R1）：`signals` 不是「可选字段」
@@ -1063,13 +1121,32 @@ mod tests {
         base()
     }
 
-    /// A-10：一份**最小但完整**的证据链（只有 `name_match`，权重与表一致）。
+    /// A-10：一份**最小但完整**的证据链（`sample_hit_rate` + `name_match`，权重与表一致）。
     ///
     /// 只用来满足「有 `confidence` 就必须有证据链」这条入口前提 ——
     /// 它不参与分数断言，也不冒充评分卡的真实产出（真实产出永远是五个信号
     /// 里至少 `name_match` + `target_is_key` 两个）。
+    ///
+    /// ★ A-13（R5）：`data_evidence` 缺省按 `sampled` 处理，所以这份「最小证据链」
+    /// 必须带 `sample_hit_rate`（且 `sampled` / `matched` 齐全）—— 否则它描述的
+    /// 是一份「声明读过库、却删掉了唯一数据证据」的形状，正是 R5 要拒的。
     fn minimal_signals() -> serde_json::Value {
-        serde_json::json!([{"name": "name_match", "value": 1.0, "weight": 0.2}])
+        serde_json::json!([
+            {"name": "sample_hit_rate", "value": 1.0, "weight": 0.45, "sampled": 5, "matched": 5},
+            {"name": "name_match", "value": 1.0, "weight": 0.2}
+        ])
+    }
+
+    /// `--no-sample` 的**真产出形状**（3 个结构信号，没有 `sample_hit_rate`）。
+    ///
+    /// 用于「`data_evidence: none` 不得带采样信号」的正向对照：它只能配
+    /// `data_evidence: none`，配 `sampled` 就是 R5 要拒的那一半。
+    fn no_sample_signals() -> serde_json::Value {
+        serde_json::json!([
+            {"name": "name_match", "value": 1.0, "weight": 0.2},
+            {"name": "type_compatible", "value": 1.0, "weight": 0.1},
+            {"name": "target_is_key", "value": 1.0, "weight": 0.1}
+        ])
     }
 
     #[test]
@@ -1605,6 +1682,10 @@ mod tests {
     /// 所以这里在**带一份最小证据链**的前提下测其余缺省字段；原断言的
     /// band 派生 / `data_evidence` 默认 / `veto` 可空三条**一条没少**，
     /// 只是把「`signals == []`」这条默认值断言换成了「必须有证据」。
+    ///
+    /// ★ A-13（R5）：`data_evidence` 缺省 = `sampled`（严格侧）⇒ 证据链里必须有
+    /// `sample_hit_rate`；而 `data_evidence: none` 的那一半反过来**不许**有它
+    /// （用 `no_sample_signals`）。两条断言都还在，只是各自配了自洽的证据形状。
     #[test]
     fn absent_optional_fields_get_derived_not_invented_values() {
         let c = from_untrusted(&serde_json::json!({
@@ -1616,7 +1697,7 @@ mod tests {
         assert_eq!(c.data_evidence, DataEvidence::Sampled);
         let c = from_untrusted(&serde_json::json!({
             "method": METHOD, "score": 0.1, "data_evidence": "none",
-            "signals": minimal_signals()
+            "signals": no_sample_signals()
         }))
         .unwrap();
         assert_eq!(c.data_evidence, DataEvidence::None);
@@ -1661,6 +1742,99 @@ mod tests {
             "method": METHOD, "score": 0.99, "signals": minimal_signals()
         }))
         .is_ok());
+    }
+
+    // ── A-13（R5）· 声明了采样证据，就必须有采样信号 ─────────────
+
+    /// QA 实测的原样攻击链：删掉 `sample_hit_rate` + `veto`，四个结构信号凑 0.99。
+    ///
+    /// 旧行为：`import` / `decide` / `apply` 全部 EXIT=0，快照里变成 `0.99 / high`。
+    /// 根因不是「分数算错了」，而是「声明读过库」这句话没有任何信号为它背书。
+    ///
+    /// 变异自证：把 [`validate_self_evidence`] 第 4 段（R5）删掉，本测试立刻红。
+    #[test]
+    fn ac013_r5_sampled_without_sample_hit_rate_is_rejected() {
+        let attack = serde_json::json!({
+            "score": 0.99,
+            "method": METHOD,
+            "data_evidence": "sampled",
+            "signals": [
+                {"name": "name_match", "value": 1.0, "weight": 0.2},
+                {"name": "type_compatible", "value": 1.0, "weight": 0.1},
+                {"name": "target_is_key", "value": 1.0, "weight": 0.1},
+                {"name": "not_all_null", "value": 1.0, "weight": 0.15}
+            ]
+        });
+        let err = from_untrusted(&attack).unwrap_err();
+        assert!(
+            err.contains("声明了采样证据但 signals 里没有 sample_hit_rate"),
+            "文案必须点名缺失的那条信号：{err}"
+        );
+        assert!(err.contains("不可复核"), "还要说清为什么：{err}");
+
+        // `data_evidence` 缺失 ⇒ 按 `sampled`（严格侧）⇒ 同样拒
+        let mut no_field = attack.clone();
+        no_field.as_object_mut().unwrap().remove("data_evidence");
+        let err = from_untrusted(&no_field).unwrap_err();
+        assert!(
+            err.contains("声明了采样证据但 signals 里没有 sample_hit_rate"),
+            "缺省 data_evidence 不能被当成 none 放行：{err}"
+        );
+
+        // 换个写法删证据：保留 `sample_hit_rate` 但拿掉 `sampled`/`matched`。
+        // 空壳信号推不出任何 veto（`evidence_vetoes` 需要聚合量），等于把这一环删掉。
+        let mut hollow = attack.clone();
+        hollow["signals"].as_array_mut().unwrap().push(serde_json::json!({
+            "name": "sample_hit_rate", "value": 1.0, "weight": 0.45
+        }));
+        let err = from_untrusted(&hollow).unwrap_err();
+        assert!(err.contains("缺 sampled/matched"), "空壳信号不算证据：{err}");
+    }
+
+    /// 反向：`data_evidence: none`（没采过样）却带 `sample_hit_rate` ⇒ 拒。
+    ///
+    /// 不封这一半的话，「声明没采样」与「摆一份采样证据」可以同时成立，
+    /// `no_data_evidence` 的 0.45 上限就能被一条自相矛盾的声明绕开。
+    #[test]
+    fn ac013_r5_none_with_sample_hit_rate_is_rejected() {
+        let mut v = serde_json::json!({
+            "score": 0.20,
+            "method": METHOD,
+            "data_evidence": "none",
+            "signals": no_sample_signals()
+        });
+        v["signals"].as_array_mut().unwrap().push(serde_json::json!({
+            "name": "sample_hit_rate", "value": 1.0, "weight": 0.45,
+            "sampled": 5, "matched": 5
+        }));
+        let err = from_untrusted(&v).unwrap_err();
+        assert!(err.contains("data_evidence = none"), "要点名声明的取值：{err}");
+        assert!(err.contains("却又摆出一份采样证据"), "要说清这是自相矛盾：{err}");
+    }
+
+    /// **不许误伤** `--no-sample` 的真产出：`data_evidence: none` + 无
+    /// `sample_hit_rate` + 三个结构信号 ⇒ 放行，且读回来逐字段相同。
+    #[test]
+    fn ac013_r5_no_sample_output_still_passes() {
+        let no_data = score(&ScoreInput {
+            column: "customer_id".into(),
+            to_table: "customers".into(),
+            from_type: TypeFamily::Str,
+            to_type: Some(TypeFamily::Str),
+            target_key: TargetKey::Primary,
+            data: None,
+            composite_target_key: false,
+            polymorphic: false,
+            self_ref: false,
+        });
+        assert_eq!(no_data.data_evidence, DataEvidence::None);
+        assert!(
+            !no_data.signals.iter().any(|s| s.name == "sample_hit_rate"),
+            "`--no-sample` 的产出本来就没有采样信号"
+        );
+        let v = serde_json::to_value(&no_data).unwrap();
+        let back = from_untrusted(&v).unwrap_or_else(|e| panic!("真产出被拒了（误伤）：{e}\n{v}"));
+        assert_eq!(back, no_data);
     }
 
     // ── AC-014 · 自证链：分数不能脱离证据 ─────────────────────

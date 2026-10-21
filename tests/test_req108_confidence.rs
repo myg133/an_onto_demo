@@ -225,7 +225,10 @@ fn test_req108_ac008_import_rejects_item_without_method() {
     ok["confidence"]["method"] = serde_json::json!(METHOD);
     // ★ A-10：有 confidence 就必须有证据链 —— 补一份最小 signals 只是让 fixture 完整，
     //   本用例断言的东西（method 必填 / 分数搬进 payload / band 派生校验）一条没变。
+    // ★ A-13（R5）：`data_evidence` 缺省 = sampled ⇒ 这份最小证据链必须带
+    //   `sample_hit_rate`（含 sampled/matched），否则 fixture 自身就是违规形状。
     ok["confidence"]["signals"] = serde_json::json!([
+        {"name": "sample_hit_rate", "value": 1.0, "weight": 0.45, "sampled": 5, "matched": 5},
         {"name": "name_match", "value": 1.0, "weight": 0.2}
     ]);
     let parsed = ontok::db::proposal::NewItem::from_json(&ok, 0).unwrap();
@@ -272,11 +275,74 @@ fn test_req108_ac014_item_with_confidence_but_no_signals_is_rejected() {
     assert!(err.contains("空数组"), "空数组与缺失要能区分开：{err}");
 
     // 阴性对照：同一份条目**带上**证据链就放行（否则上面只是「什么都拒」）
+    // ★ A-13（R5）：仍然带 `sample_hit_rate`（缺省 data_evidence = sampled）。
     item["confidence"]["signals"] = serde_json::json!([
+        {"name": "sample_hit_rate", "value": 1.0, "weight": 0.45, "sampled": 5, "matched": 5},
         {"name": "name_match", "value": 1.0, "weight": 0.2}
     ]);
     let parsed = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap();
     assert_eq!(parsed.payload["confidence"]["score"], serde_json::json!(0.99));
+}
+
+/// **A-13（R5）· 声明了采样证据但删掉 `sample_hit_rate` ⇒ 条目入口就拒**。
+///
+/// QA 实测的攻击链（原样）：`score 0.99` + `data_evidence: sampled` +
+/// 只剩 `name_match` / `type_compatible` / `target_is_key` / `not_all_null`。
+/// 旧行为是 `import` / `decide` / `apply` 全部 EXIT=0，快照里写成 `0.99 / high`。
+///
+/// 这条测试走的是**与 `propose import` 相同的入口**（`NewItem::from_json`
+/// → `confidence::from_untrusted`），所以断言「import 会 exit≠0」不是另一套逻辑。
+///
+/// 变异自证：删掉 `validate_self_evidence` 第 4 段（R5），本测试立刻红。
+#[test]
+fn test_req108_ac013_sampled_without_sample_hit_rate_is_rejected_at_import() {
+    let mut item = serde_json::json!({
+        "kind": "add_link_type",
+        "target": "订单→客户",
+        "payload": {
+            "key": "orders_customer_id__customers",
+            "from_type": "orders", "to_type": "customers",
+            "cardinality": "N:1", "semantic": "belongs_to"
+        },
+        "confidence": {
+            "score": 0.99,
+            "method": METHOD,
+            "data_evidence": "sampled",
+            "signals": [
+                {"name": "name_match", "value": 1.0, "weight": 0.2},
+                {"name": "type_compatible", "value": 1.0, "weight": 0.1},
+                {"name": "target_is_key", "value": 1.0, "weight": 0.1},
+                {"name": "not_all_null", "value": 1.0, "weight": 0.15}
+            ]
+        }
+    });
+    let err = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap_err().to_string();
+    assert!(
+        err.contains("声明了采样证据但 signals 里没有 sample_hit_rate"),
+        "文案必须点名缺失的信号：{err}"
+    );
+
+    // 反向：声明没采过样，却带一条采样信号 ⇒ 同样拒
+    item["confidence"]["data_evidence"] = serde_json::json!("none");
+    item["confidence"]["signals"] = serde_json::json!([
+        {"name": "sample_hit_rate", "value": 1.0, "weight": 0.45, "sampled": 5, "matched": 5}
+    ]);
+    let err = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap_err().to_string();
+    assert!(err.contains("data_evidence = none"), "{err}");
+    assert!(err.contains("却又摆出一份采样证据"), "{err}");
+
+    // 阴性对照：`--no-sample` 的形状（none + 无采样信号）⇒ 放行
+    item["confidence"]["signals"] = serde_json::json!([
+        {"name": "name_match", "value": 1.0, "weight": 0.2},
+        {"name": "type_compatible", "value": 1.0, "weight": 0.1},
+        {"name": "target_is_key", "value": 1.0, "weight": 0.1}
+    ]);
+    item["confidence"]["score"] = serde_json::json!(0.40);
+    item["confidence"]["band"] = serde_json::json!("low");
+    assert!(
+        ontok::db::proposal::NewItem::from_json(&item, 0).is_ok(),
+        "`--no-sample` 的真产出形状不许被误伤"
+    );
 }
 
 /// **A-10 的对照（不许误伤）**：老的人工提案 —— **完全没有 `confidence` 字段** ——
