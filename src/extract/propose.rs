@@ -988,14 +988,13 @@ fn fk_comment_is_restatement(
 /// 它带 `-ses → -s` 这条规则（`buses → bus`），于是 `licenses` 会命中 `-ses`
 /// 返回**原样**的 `licenses` —— 拿它比 `license` 永远比不相等。
 /// 这里要的是「表名单复数两种写法」，判据必须更窄。
+///
+/// ⚠️ **REQ-108 起实现搬到了 [`crate::domain::confidence::name_forms`]**：
+/// 评分卡的 `name_match` 也要判「`customer_id` 是不是 `customers` 的直接展开」，
+/// 而那必须与这里的判据**逐字相同**。两处各写一份 = 同一件事两种归一，
+/// 迟早会出现「关系是 `customer_id → customers`，评分卡却判它 0.6」这种自相矛盾。
 fn english_forms(table: &str) -> [String; 2] {
-    let t = table.to_ascii_lowercase();
-    let singular = if t.len() > 3 && t.ends_with('s') && !t.ends_with("ss") {
-        t[..t.len() - 1].to_string()
-    } else {
-        t.clone()
-    };
-    [t, singular]
+    crate::domain::confidence::name_forms(table)
 }
 
 /// 值域分隔符。`is_enum_domain` 用 ASCII 那组（REQ-005 定的），

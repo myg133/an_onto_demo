@@ -1741,6 +1741,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/db/mod.rs", "snapshot_store"),
     ("src/domain/mod.rs", "apply"),
     ("src/domain/mod.rs", "concept"),
+    // REQ-108 · 证据评分卡（纯函数，AC-004 / AC-005）
+    ("src/domain/mod.rs", "confidence"),
     ("src/domain/mod.rs", "diff"),
     ("src/domain/mod.rs", "graph"),
     ("src/domain/mod.rs", "hierarchy"),

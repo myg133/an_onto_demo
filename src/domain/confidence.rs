@@ -1,0 +1,1105 @@
+//! **证据评分卡 v1**（`evidence-scorecard-v1`）—— 纯函数，零 I/O（REQ-108 · AC-004 / AC-005）
+//!
+//! 把「这条推断关系有多可信」变成**一个可复算的数**：五个信号加权，
+//! 再由 **veto 上限**压顶，最后按 0.90 / 0.60 / 0.30 分四档。
+//!
+//! # 为什么这个文件必须**纯**
+//!
+//! AC-005 要求「同一 schema + 同一数据跑两次，`score` **逐位相同**」。
+//! 靠约定做不到 —— 只要这里能读时间、能取随机数、能查库，就总有一条路径会漂。
+//! 所以本模块**没有** `use std::time`、没有随机源、没有任何 I/O；
+//! 数据信号由调用方（`extract::sample`）读好后**作为参数**传进来。
+//! 判据是结构式的：输入相同 ⇒ 输出逐位相同，不需要「记得别乱来」。
+//!
+//! # 为什么 veto 优先于加权和
+//!
+//! 五个信号按权重加起来很容易「救回」一条铁错的关系：
+//! `name_match = 1.0` + `target_is_key = 1.0` + `type_compatible = 1.0`
+//! 已经把 0.40 的结构分拿满，再加一点点别的就过 0.60 了。
+//! 而「类型不相容」或「5 行 0 命中」是**反驳**，不是「扣分项」：
+//! 加权和只能让分数变小，不能让它**不超过**某个上限。所以：
+//!
+//! ```text
+//! 基线分 = Σ(wᵢ·sᵢ) / Σ(wᵢ)        ← 只对「权重保留且值可得」的信号归一化
+//! 最终分 = min(基线分, 所有触发 veto 的上限中的最小值)
+//! ```
+//!
+//! AC-004 的判据正是构造「把 name_match / target_is_key 人为置 1.0」的样本，
+//! 断言分数仍被上限压住 —— 这条在 [`tests::vetoes_survive_maxed_structural_signals`]
+//! 里逐类执行。
+//!
+//! # 权重为什么是这样（AC-013 第 1 项要求把理由写出来）
+//!
+//! | 信号 | 权重 | 依据 |
+//! | --- | --- | --- |
+//! | `sample_hit_rate` | **0.45** | 实测：零外键库上「列名推断」只有 58% 准确（`demand.md`），数据证据是唯一能推翻列名猜测的东西 |
+//! | `name_match` | 0.20 | 名字仍然有用（`customer_id → customers` 基本不会错），但不能主导 —— 泛化名（`batch_id`）实测 0/5 |
+//! | `not_all_null` | 0.15 | 「源列全空」会让命中率失去意义，必须先判；但它是**弱**信号（空列不等于关系错） |
+//! | `type_compatible` | 0.10 | 类型不相容是**硬反驳**，已由 veto 兜住；信号本身只做微调，权重给低避免「类型对=可信」的错觉 |
+//! | `target_is_key` | 0.10 | 目标是主键/唯一列说明「可被引用」，是**结构合理性**，不是数据证据 |
+//!
+//! 数据证据合计 0.60、结构证据 0.40 —— 与设计概要 §3.2 一致。
+//!
+//! # 语义项 `semantic_fit` 留了位，但 v1 不接
+//!
+//! [`SIGNAL_SEMANTIC_FIT`] 这个常量存在、**权重表里没有它**（因此不参与归一化），
+//! 目的只是把「将来要加什么」写死在一个地方 —— REQ-109 接 AI 时改权重表，
+//! 不改这一段算法。
+
+use serde::{Deserialize, Serialize};
+
+/// 评分方法标识 —— **必填**（AC-008：没有 method 的分数不可复核）。
+pub const METHOD: &str = "evidence-scorecard-v1";
+
+/// AI 语义项的预留位（v1 **不接**，不参与归一化，见模块头）。
+pub const SIGNAL_SEMANTIC_FIT: &str = "semantic_fit";
+
+/// 五个信号的权重（**顺序即信号在输出里的顺序**，确定性的一部分）。
+///
+/// 合计必须 = 1.0（[`tests::weights_sum_to_one`] 钉住）；改这里 = 升 method 版本。
+pub const WEIGHTS: [(&str, f64); 5] = [
+    ("sample_hit_rate", 0.45),
+    ("name_match", 0.20),
+    ("not_all_null", 0.15),
+    ("type_compatible", 0.10),
+    ("target_is_key", 0.10),
+];
+
+/// 泛化列名 —— 名字**不指向任何具体实体**，实测命中率极低（`batch_id` 0/5）。
+///
+/// 名单来自设计概要 §3.1，**不是**「凡是 `*_id` 都算」：
+/// `customer_id` 这种直接展开成表名的列名是好证据（1.0 档），不能一起降级。
+const GENERIC_COLUMNS: [&str; 13] = [
+    "batch_id",
+    "session_id",
+    "request_id",
+    "task_id",
+    "group_id",
+    "template_id",
+    "product_id",
+    "channel_id",
+    "policy_id",
+    "auth_id",
+    "related_id",
+    "business_ref_id",
+    "external_task_id",
+];
+
+/// 多态列的**词干**白名单：`target_id` + `target_type` 同表并存时，
+/// 「`target_id` 指向哪张表」由 `target_type` 决定 ⇒ 单列推断不成立（R3）。
+const POLYMORPHIC_STEMS: [&str; 8] = [
+    "target", "object", "owner", "subject", "entity", "related", "biz", "business",
+];
+
+/// 命中率查表：`matched` 从 0 到 5 的取值（5 行样本）。
+///
+/// **为什么查表而不线性**：5 样本下 `1/5`（0.15）与 `4/5`（0.8）的语义差
+/// 远大于线性给出的 0.6；`0/5` 是**硬反驳**（0.0），不是「差了 0.2」。
+const HIT_RATE_TABLE: [f64; 6] = [0.0, 0.15, 0.3, 0.5, 0.8, 1.0];
+
+/// 四档（阈值见 [`Band::of`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Band {
+    /// ≥ 0.90 · 进提案，审核界面默认折叠
+    High,
+    /// 0.60–0.90 · 进提案，逐条显示
+    Middle,
+    /// 0.30–0.60 · 进「待查清单」，**不进主提案**
+    Low,
+    /// < 0.30 · **不提案**，只记拒绝理由
+    Rejected,
+}
+
+impl Band {
+    /// 阈值（BA 裁定 R6）：`≥0.90` 高 · `≥0.60` 中 · `≥0.30` 低 · 否则拒绝。
+    pub fn of(score: f64) -> Self {
+        if score >= 0.90 {
+            Band::High
+        } else if score >= 0.60 {
+            Band::Middle
+        } else if score >= 0.30 {
+            Band::Low
+        } else {
+            Band::Rejected
+        }
+    }
+
+    /// 产物里的取值（`snake_case`，与 serde 一致）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Band::High => "high",
+            Band::Middle => "middle",
+            Band::Low => "low",
+            Band::Rejected => "rejected",
+        }
+    }
+
+    /// 人读标签（**只出现在 CLI 输出**，不进 JSON 字段值 —— 免得同一件事两种拼法）。
+    pub fn label_zh(self) -> &'static str {
+        match self {
+            Band::High => "高",
+            Band::Middle => "中",
+            Band::Low => "低",
+            Band::Rejected => "拒绝",
+        }
+    }
+
+    /// 进不进主提案（AC-009：低档进「待查清单」，不进主提案）。
+    pub fn enters_proposal(self) -> bool {
+        matches!(self, Band::High | Band::Middle)
+    }
+}
+
+/// 数据证据的来源（R1 ④：`--no-sample` 时必须标 `none`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataEvidence {
+    /// 真的去源库读过样本（哪怕 0 命中 —— 那是**有**证据的反驳）。
+    Sampled,
+    /// 没读（`--no-sample`，或源库不可连）。**缺少证据 ≠ 有证据**。
+    None,
+}
+
+/// SQL 类型族 —— 只用来判「能不能比」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeFamily {
+    Num,
+    Str,
+    Time,
+    Bool,
+    Json,
+    Uuid,
+    Binary,
+    /// 认不出的类型（自定义类型、枚举、数组……）—— 保守当「不相容」。
+    Other,
+}
+
+impl TypeFamily {
+    /// 类型族相同 ⇒ 1.0；`num` ↔ `str` ⇒ 0.2；其它 ⇒ 0.0（设计概要 §3.1）。
+    pub fn compatibility(self, other: TypeFamily) -> f64 {
+        if self == other {
+            return 1.0;
+        }
+        match (self, other) {
+            (TypeFamily::Num, TypeFamily::Str) | (TypeFamily::Str, TypeFamily::Num) => 0.2,
+            _ => 0.0,
+        }
+    }
+}
+
+/// SQL 类型名 → 类型族（**形态判据，不查表**：`bigint`/`int8`/`numeric` 都归 `Num`）。
+pub fn type_family(sql_type: &str) -> TypeFamily {
+    let t = sql_type.trim().to_ascii_lowercase();
+    // `character varying` / `timestamp without time zone` 这类带修饰的写法先归一
+    let head = t.split(['(', ' ']).next().unwrap_or("").to_string();
+    match head.as_str() {
+        "smallint" | "integer" | "int" | "int2" | "int4" | "int8" | "bigint" | "numeric"
+        | "decimal" | "real" | "double" | "float4" | "float8" | "money" | "serial" | "bigserial" => {
+            TypeFamily::Num
+        }
+        "character" | "varchar" | "char" | "text" | "citext" | "name" | "bpchar" => TypeFamily::Str,
+        "timestamp" | "timestamptz" | "date" | "time" | "timetz" | "interval" => TypeFamily::Time,
+        "boolean" | "bool" => TypeFamily::Bool,
+        "json" | "jsonb" => TypeFamily::Json,
+        "uuid" => TypeFamily::Uuid,
+        "bytea" => TypeFamily::Binary,
+        _ => TypeFamily::Other,
+    }
+}
+
+/// 目标列的「是不是键」档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKey {
+    /// 单列主键 —— 1.0
+    Primary,
+    /// 单列唯一索引 —— 0.9
+    Unique,
+    /// 普通列 —— 0.4
+    Plain,
+    /// **不知道**（旧 `schema.json` 没有键字段）—— 按 0.4 算，但要在报告里说出来
+    Unknown,
+}
+
+impl TargetKey {
+    pub fn value(self) -> f64 {
+        match self {
+            TargetKey::Primary => 1.0,
+            TargetKey::Unique => 0.9,
+            TargetKey::Plain | TargetKey::Unknown => 0.4,
+        }
+    }
+}
+
+/// 一条关系的数据证据 —— **只有聚合，没有原值**（AC-003）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SampleFacts {
+    pub sampled: u32,
+    pub matched: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// 没取到样本的原因（`all_null` / `timeout` / `no_key_column` / `query_error`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// 一个信号的实际取值 + 它在 `method` 版本里的权重。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Signal {
+    pub name: String,
+    pub value: f64,
+    pub weight: f64,
+    /// 只有 `sample_hit_rate` 带这三项（聚合量，**不是原值**）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_digest: Option<String>,
+}
+
+impl Signal {
+    fn new(name: &str, value: f64, weight: f64) -> Self {
+        Self {
+            name: name.to_string(),
+            value,
+            weight,
+            sampled: None,
+            matched: None,
+            sample_digest: None,
+        }
+    }
+
+    fn with_sample(mut self, facts: &SampleFacts) -> Self {
+        self.sampled = Some(facts.sampled);
+        self.matched = Some(facts.matched);
+        self.sample_digest = facts.digest.clone();
+        self
+    }
+}
+
+/// 触发的一条 veto 上限。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Veto {
+    /// 信号名（`type_incompatible` / `zero_hit` / …）
+    pub signal: String,
+    /// 该信号给出的上限
+    pub cap: f64,
+    /// 人读理由（进审核界面与报告；**不进客户视图**）
+    pub reason: String,
+}
+
+/// 评分结果 —— 内嵌在提案条目里（设计概要 §2.1）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Confidence {
+    /// `0.0–1.0`，两位小数
+    pub score: f64,
+    /// **必填**（AC-008）
+    pub method: String,
+    pub band: Band,
+    pub signals: Vec<Signal>,
+    /// 生效的 veto（多条触发时取上限最低的那条；`reason` 里会列出同时触发的）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub veto: Option<Veto>,
+    pub data_evidence: DataEvidence,
+}
+
+/// 评分输入 —— **只有事实，没有 I/O**。
+#[derive(Debug, Clone)]
+pub struct ScoreInput {
+    /// 源列名（判 `name_match` 用）
+    pub column: String,
+    /// 目标表名（判 `name_match` 用）
+    pub to_table: String,
+    /// 源列类型族
+    pub from_type: TypeFamily,
+    /// 目标键列类型族；`None` = 不知道（不判类型 veto，也不给 `type_compatible` 信号）
+    pub to_type: Option<TypeFamily>,
+    pub target_key: TargetKey,
+    /// 数据证据；`None` = `--no-sample` 或源库不可连
+    pub data: Option<SampleFacts>,
+    /// 目标表是复合主键（R2）
+    pub composite_target_key: bool,
+    /// 源列是多态列（R3）
+    pub polymorphic: bool,
+    /// 自引用（`parent_id` 指向本表，R4）
+    pub self_ref: bool,
+}
+
+/// 列名 → `name_match` 取值（1.0 / 0.3 / 0.6，设计概要 §3.1）。
+pub fn name_match_value(column: &str, to_table: &str) -> f64 {
+    let col = column.to_ascii_lowercase();
+    // ① 直接展开命中：`customer_id` → `customers`
+    for form in name_forms(to_table) {
+        if col == format!("{form}_id") {
+            return 1.0;
+        }
+    }
+    // ② 泛化名：名字不指向任何具体实体
+    if GENERIC_COLUMNS.contains(&col.as_str()) {
+        return 0.3;
+    }
+    // ③ 其它（含 `*_code` / 尾缀匹配命中的那些）
+    0.6
+}
+
+/// 表的两种英文写法：原样 + 去掉一个尾 `s`（`customers` → `customer`）。
+///
+/// ⚠️ **与 `extract::propose::english_forms` 是同一份** —— 那边改为调用本函数，
+/// 免得「单复数怎么归一」出现两套判据（本仓的重复实现纪律）。
+pub fn name_forms(table: &str) -> [String; 2] {
+    let t = table.to_ascii_lowercase();
+    let singular = if t.len() > 3 && t.ends_with('s') && !t.ends_with("ss") {
+        t[..t.len() - 1].to_string()
+    } else {
+        t.clone()
+    };
+    [t, singular]
+}
+
+/// 一列是不是**泛化名**（`batch_id` 这类不指向具体实体的名字）。
+pub fn is_generic_column(column: &str) -> bool {
+    GENERIC_COLUMNS.contains(&column.to_ascii_lowercase().as_str())
+}
+
+/// 同一张表里某列是不是**多态列**（R3）。
+///
+/// 判据（两条）：
+/// 1. 列名是 `<stem>_id`，且同表还有 `<stem>_type` —— 目标由 `*_type` 决定；
+/// 2. 或者词干本身在白名单里（`target` / `object` / …），哪怕没配 `*_type`：
+///    这类词干**天生**不指向唯一一张表（`target_id` 在真实库里指过 5 张表）。
+pub fn is_polymorphic_column(columns: &[&str], column: &str) -> bool {
+    let lower = column.to_ascii_lowercase();
+    let Some(stem) = lower.strip_suffix("_id") else {
+        return false;
+    };
+    if !stem.is_empty() && columns.iter().any(|c| c.eq_ignore_ascii_case(&format!("{stem}_type"))) {
+        return true;
+    }
+    POLYMORPHIC_STEMS.contains(&stem)
+}
+
+/// 命中率查表：`matched / sampled` → 0–1（分母不是 5 时按比例映射回 5 档）。
+pub fn hit_rate_value(sampled: u32, matched: u32) -> f64 {
+    if sampled == 0 {
+        return 0.0;
+    }
+    let m = matched.min(sampled);
+    // (m/sampled) 映射到 5 行基准表上最接近的档，再查表。
+    let idx = ((m as f64 * 5.0) / sampled as f64).round() as usize;
+    HIT_RATE_TABLE[idx.min(5)]
+}
+
+/// **评分卡入口**（纯函数）。
+pub fn score(input: &ScoreInput) -> Confidence {
+    // ── ① 信号取值 ───────────────────────────────────────
+    let name_match = name_match_value(&input.column, &input.to_table);
+    let type_compatible = input
+        .to_type
+        .map(|to| input.from_type.compatibility(to));
+    let target_is_key = input.target_key.value();
+    let data_facts = input.data.as_ref();
+    let hit_rate = data_facts.map(|d| hit_rate_value(d.sampled, d.matched));
+    // 「不是全空」只有在**真的采过**时才可得：`--no-sample` 时它是**未知**，
+    // 不能当成 1.0（那会把「没看」说成「有值」），也不能当成 0.0（那是断言全空）。
+    let not_all_null = data_facts.map(|d| if d.sampled > 0 { 1.0 } else { 0.0 });
+
+    // ── ② 基线分：只对**可用**信号归一化 ─────────────────
+    //
+    // 顺序严格照 [`WEIGHTS`]（浮点加法的结果依赖顺序 ⇒ 顺序也是确定性的一部分）。
+    let mut signals: Vec<Signal> = Vec::with_capacity(WEIGHTS.len());
+    for (name, weight) in WEIGHTS {
+        let value = match name {
+            "sample_hit_rate" => hit_rate,
+            "name_match" => Some(name_match),
+            "not_all_null" => not_all_null,
+            "type_compatible" => type_compatible,
+            "target_is_key" => Some(target_is_key),
+            _ => None,
+        };
+        let Some(value) = value else { continue };
+        let mut s = Signal::new(name, value, weight);
+        if name == "sample_hit_rate" {
+            if let Some(f) = data_facts {
+                s = s.with_sample(f);
+            }
+        }
+        signals.push(s);
+    }
+    let sum_w: f64 = signals.iter().map(|s| s.weight).sum();
+    let sum_ws: f64 = signals.iter().map(|s| s.weight * s.value).sum();
+    let baseline = if sum_w > 0.0 { sum_ws / sum_w } else { 0.0 };
+
+    // ── ③ veto（**优先于加权和**）────────────────────────
+    let mut vetoes: Vec<Veto> = Vec::new();
+    if let Some(to) = input.to_type {
+        if input.from_type != to {
+            vetoes.push(Veto {
+                signal: "type_incompatible".into(),
+                cap: 0.15,
+                reason: format!(
+                    "源列类型族 {:?} 与目标键列类型族 {:?} 不相容 —— 值永远比不中，关系不成立",
+                    input.from_type, to
+                ),
+            });
+        }
+    }
+    if let Some(f) = data_facts {
+        if f.sampled == 0 {
+            vetoes.push(Veto {
+                signal: "all_null".into(),
+                cap: 0.45,
+                reason: format!(
+                    "源列取不到任何非空样本（{}）——没有数据证据",
+                    f.reason.as_deref().unwrap_or("空列")
+                ),
+            });
+            if is_generic_column(&input.column) {
+                vetoes.push(Veto {
+                    signal: "generic_name_no_evidence".into(),
+                    cap: 0.40,
+                    reason: format!(
+                        "泛化列名 {} + 无数据证据：名字不指向具体实体，数据也没能证明它指向 {}",
+                        input.column, input.to_table
+                    ),
+                });
+            }
+        } else if f.matched == 0 {
+            vetoes.push(Veto {
+                signal: "zero_hit".into(),
+                cap: 0.20,
+                reason: format!(
+                    "采了 {} 行、命中 0 行 —— 这是硬反驳（{} 里没有这些值）",
+                    f.sampled, input.to_table
+                ),
+            });
+        } else if f.matched < f.sampled {
+            vetoes.push(Veto {
+                signal: "partial_hit".into(),
+                cap: 0.75,
+                reason: format!(
+                    "部分命中 {}/{} —— 有真实引用，但不完全（值域稀疏或存在多态）",
+                    f.matched, f.sampled
+                ),
+            });
+        }
+    } else {
+        // `--no-sample`：**缺少证据 ≠ 有证据**（R1 ④）。
+        // 只算结构信号会把「名字像 + 目标是主键」算成 0.65 —— 那正是
+        // 「没看反而分更高」的漏洞，所以这里给一个上限，把它压到「低」档，
+        // 让它只能进「待查清单」。
+        vetoes.push(Veto {
+            signal: "no_data_evidence".into(),
+            cap: 0.45,
+            reason: "未采样（--no-sample 或源库不可连）：只有结构证据，缺少数据证据不算可信"
+                .into(),
+        });
+        if is_generic_column(&input.column) {
+            vetoes.push(Veto {
+                signal: "generic_name_no_evidence".into(),
+                cap: 0.40,
+                reason: format!("泛化列名 {} + 无数据证据", input.column),
+            });
+        }
+    }
+    if input.composite_target_key {
+        vetoes.push(Veto {
+            signal: "composite_key_unsupported".into(),
+            cap: 0.50,
+            reason: "目标表是复合主键，v1 不支持复合键引用（R2）".into(),
+        });
+    }
+    if input.polymorphic {
+        vetoes.push(Veto {
+            signal: "polymorphic_target".into(),
+            cap: 0.40,
+            reason: format!(
+                "{} 是多态列（同表有 *_type 或多态词干），目标表由数据决定，不能靠列名定（R3）",
+                input.column
+            ),
+        });
+    }
+    if input.self_ref && input.target_key != TargetKey::Primary {
+        vetoes.push(Veto {
+            signal: "self_ref_non_unique".into(),
+            cap: 0.50,
+            reason: "自引用且目标列不是主键（R4）：自引用必须指向唯一行".into(),
+        });
+    }
+
+    // 多条触发 ⇒ 取**上限最低**的那条（同分按信号名排序，保证确定性）。
+    vetoes.sort_by(|a, b| {
+        a.cap
+            .partial_cmp(&b.cap)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.signal.cmp(&b.signal))
+    });
+    let min_cap = vetoes.first().map(|v| v.cap).unwrap_or(1.0);
+    let veto = vetoes.first().map(|v| {
+        let mut v = v.clone();
+        if vetoes.len() > 1 {
+            let others: Vec<&str> = vetoes[1..].iter().map(|x| x.signal.as_str()).collect();
+            v.reason = format!("{}（同时触发：{}）", v.reason, others.join(", "));
+        }
+        v
+    });
+
+    // ── ④ 最终分 = min(基线分, 上限)，再取两位小数 ────────
+    //
+    // 先压顶再取整：取整不会把分数抬过上限（上限本身是两位小数）。
+    let score = round2(baseline.min(min_cap));
+
+    Confidence {
+        score,
+        method: METHOD.to_string(),
+        band: Band::of(score),
+        signals,
+        veto,
+        data_evidence: if data_facts.is_some() {
+            DataEvidence::Sampled
+        } else {
+            DataEvidence::None
+        },
+    }
+}
+
+/// 两位小数。**不用 `format!` 解析回浮点**（那条路会引入十进制字符串的舍入差异）。
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// 四档计数（AC-009 的「统计四档条数」）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BandCounts {
+    pub high: usize,
+    pub middle: usize,
+    pub low: usize,
+    pub rejected: usize,
+}
+
+impl BandCounts {
+    pub fn total(&self) -> usize {
+        self.high + self.middle + self.low + self.rejected
+    }
+
+    pub fn add(&mut self, band: Band) {
+        match band {
+            Band::High => self.high += 1,
+            Band::Middle => self.middle += 1,
+            Band::Low => self.low += 1,
+            Band::Rejected => self.rejected += 1,
+        }
+    }
+
+    pub fn of<'a>(bands: impl IntoIterator<Item = &'a Band>) -> Self {
+        let mut c = Self::default();
+        for b in bands {
+            c.add(*b);
+        }
+        c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── 构造器：默认一条「结构上看起来很好」的关系 ──────────────
+
+    fn base() -> ScoreInput {
+        ScoreInput {
+            column: "customer_id".into(),
+            to_table: "customers".into(),
+            from_type: TypeFamily::Str,
+            to_type: Some(TypeFamily::Str),
+            target_key: TargetKey::Primary,
+            data: Some(SampleFacts { sampled: 5, matched: 5, digest: None, reason: None }),
+            composite_target_key: false,
+            polymorphic: false,
+            self_ref: false,
+        }
+    }
+
+    /// AC-004 的前提：**把 name_match / target_is_key 人为置 1.0**。
+    /// 命中率 5/5、类型相容 —— 加权和能拿满分。
+    fn maxed_structural() -> ScoreInput {
+        base()
+    }
+
+    #[test]
+    fn weights_sum_to_one_and_match_the_design_table() {
+        let sum: f64 = WEIGHTS.iter().map(|(_, w)| w).sum();
+        assert!((sum - 1.0).abs() < 1e-12, "权重合计必须为 1.0，实际 {sum}");
+        assert_eq!(
+            WEIGHTS,
+            [
+                ("sample_hit_rate", 0.45),
+                ("name_match", 0.20),
+                ("not_all_null", 0.15),
+                ("type_compatible", 0.10),
+                ("target_is_key", 0.10),
+            ],
+            "权重表就是设计概要 §3.2 那张（数据证据 0.60 / 结构证据 0.40）"
+        );
+        // 语义项**不在**权重表里（v1 不接，不参与归一化）
+        assert!(!WEIGHTS.iter().any(|(n, _)| *n == SIGNAL_SEMANTIC_FIT));
+    }
+
+    #[test]
+    fn band_thresholds_are_exactly_090_060_030() {
+        assert_eq!(Band::of(1.0), Band::High);
+        assert_eq!(Band::of(0.90), Band::High, "0.90 是高档的**闭**下界");
+        assert_eq!(Band::of(0.89), Band::Middle);
+        assert_eq!(Band::of(0.60), Band::Middle, "0.60 是中档的闭下界");
+        assert_eq!(Band::of(0.59), Band::Low);
+        assert_eq!(Band::of(0.30), Band::Low, "0.30 是低档的闭下界");
+        assert_eq!(Band::of(0.29), Band::Rejected);
+        assert_eq!(Band::of(0.0), Band::Rejected);
+        assert!(Band::High.enters_proposal() && Band::Middle.enters_proposal());
+        assert!(!Band::Low.enters_proposal(), "低档进「待查清单」，不进主提案（AC-009）");
+        assert!(!Band::Rejected.enters_proposal());
+        // 四档标签只给 CLI 用；JSON 值用 as_str
+        assert_eq!(Band::Rejected.as_str(), "rejected");
+        assert_eq!(Band::Rejected.label_zh(), "拒绝");
+    }
+
+    /// 全绿的一条关系应当拿满分并落「高」（否则阈值无从谈起）。
+    #[test]
+    fn a_perfect_relation_scores_one_and_lands_high() {
+        let c = score(&maxed_structural());
+        assert_eq!(c.score, 1.0);
+        assert_eq!(c.band, Band::High);
+        assert_eq!(c.method, METHOD, "method 必填（AC-008）");
+        assert_eq!(c.veto, None);
+        assert_eq!(c.data_evidence, DataEvidence::Sampled);
+        assert_eq!(c.signals.len(), 5);
+    }
+
+    // ── AC-004 · 四类 veto 上限逐类执行 ────────────────────
+
+    /// ① 类型族不相容（int vs text）⇒ ≤ 0.15。
+    #[test]
+    fn veto_type_incompatible_caps_at_015() {
+        let mut i = maxed_structural();
+        i.from_type = TypeFamily::Str;
+        i.to_type = Some(TypeFamily::Num);
+        let c = score(&i);
+        assert!(c.score <= 0.15, "类型不相容必须 ≤ 0.15，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "type_incompatible");
+        assert_eq!(c.band, Band::Rejected);
+    }
+
+    /// ② 采样 0 命中 ⇒ ≤ 0.20。
+    #[test]
+    fn veto_zero_hit_caps_at_020() {
+        let mut i = maxed_structural();
+        i.data = Some(SampleFacts { sampled: 5, matched: 0, digest: None, reason: None });
+        let c = score(&i);
+        assert!(c.score <= 0.20, "0 命中必须 ≤ 0.20，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "zero_hit");
+        assert_eq!(c.band, Band::Rejected);
+    }
+
+    /// ③ 泛化列名 + 无数据证据 ⇒ ≤ 0.40。
+    #[test]
+    fn veto_generic_name_without_evidence_caps_at_040() {
+        let mut i = maxed_structural();
+        i.column = "batch_id".into();
+        i.to_table = "gift_code_batch".into();
+        i.data = Some(SampleFacts { sampled: 0, matched: 0, digest: None, reason: Some("all_null".into()) });
+        let c = score(&i);
+        assert!(c.score <= 0.40, "泛化名 + 无证据必须 ≤ 0.40，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "generic_name_no_evidence");
+    }
+
+    /// ④ 源列全空（`sampled = 0`）⇒ ≤ 0.45。
+    #[test]
+    fn veto_all_null_caps_at_045() {
+        let mut i = maxed_structural();
+        i.data = Some(SampleFacts { sampled: 0, matched: 0, digest: None, reason: Some("all_null".into()) });
+        let c = score(&i);
+        assert!(c.score <= 0.45, "全空必须 ≤ 0.45，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "all_null");
+        assert_eq!(c.band, Band::Low);
+    }
+
+    /// **AC-004 的核心判据**：把结构信号全置 1.0，四类 veto 依然各自压顶。
+    ///
+    /// 变异自证：把 `score` 里的 `baseline.min(min_cap)` 改成 `baseline`（或被
+    /// veto 的 cap 加回去），本测试四个断言同时红 —— 那是「加权和把 veto 救回来」。
+    #[test]
+    fn vetoes_survive_maxed_structural_signals() {
+        // 先证明结构信号确实被置满了（否则下面四条断言是空的）
+        let full = score(&maxed_structural());
+        let by_name = |n: &str, c: &Confidence| {
+            c.signals.iter().find(|s| s.name == n).map(|s| s.value)
+        };
+        assert_eq!(by_name("name_match", &full), Some(1.0));
+        assert_eq!(by_name("target_is_key", &full), Some(1.0));
+        assert_eq!(by_name("type_compatible", &full), Some(1.0));
+
+        let cases: [(&str, ScoreInput, f64, Band); 4] = [
+            (
+                "type_incompatible",
+                {
+                    let mut i = maxed_structural();
+                    i.to_type = Some(TypeFamily::Num);
+                    i
+                },
+                0.15,
+                Band::Rejected,
+            ),
+            (
+                "zero_hit",
+                {
+                    let mut i = maxed_structural();
+                    i.data = Some(SampleFacts { sampled: 5, matched: 0, digest: None, reason: None });
+                    i
+                },
+                0.20,
+                Band::Rejected,
+            ),
+            (
+                "generic_name_no_evidence",
+                {
+                    let mut i = maxed_structural();
+                    i.column = "session_id".into();
+                    i.to_table = "simulate_login_sessions".into();
+                    i.data = Some(SampleFacts { sampled: 0, matched: 0, digest: None, reason: Some("all_null".into()) });
+                    i
+                },
+                0.40,
+                // 这一类的**基线本身就掉到 0.26**（泛化名 0.3 + 全空 0），
+                // 上限 0.40 并没有被用到 —— 正好说明「泛化名 + 无证据」是双重坏消息。
+                Band::Rejected,
+            ),
+            (
+                "all_null",
+                {
+                    let mut i = maxed_structural();
+                    i.data = Some(SampleFacts { sampled: 0, matched: 0, digest: None, reason: Some("all_null".into()) });
+                    i
+                },
+                0.45,
+                Band::Low,
+            ),
+        ];
+        for (name, input, cap, expect_band) in cases {
+            let c = score(&input);
+            // 目标列是主键这条事实在这四类里都没变 ⇒ 它必须仍是 1.0。
+            assert_eq!(by_name("target_is_key", &c), Some(1.0), "{name}：target_is_key 必须仍是 1.0");
+            // ⚠️ `name_match` 在「泛化列名」那一类里**不可能**是 1.0 ——
+            // 那个泛化名本身就是触发条件（同一件事实既是信号又是 veto）。
+            // AC-004 的字面要求是「把结构信号置满，上限仍生效」；本条对
+            // 其余三类逐条断言 name_match = 1.0，对泛化那一类改为断言
+            // 「加权和本可以超过上限，但最终分没有」—— 那才是 veto 没被救回来的证据。
+            if name != "generic_name_no_evidence" {
+                assert_eq!(by_name("name_match", &c), Some(1.0), "{name}：name_match 必须仍是 1.0");
+            }
+            assert!(
+                c.score <= cap,
+                "{name}：结构信号全满时分数仍必须 ≤ {cap}，实际 {}",
+                c.score
+            );
+            assert_eq!(c.band, expect_band, "{name}：上限 {cap} 对应的档位");
+
+            // ★ 关键证据：**不做 veto 时加权和会是多少** —— 只要它高于上限，
+            //   最终分低于它，就说明「是 veto 压住的，不是加权和自己掉下来的」。
+            let sum_w: f64 = c.signals.iter().map(|s| s.weight).sum();
+            let sum_ws: f64 = c.signals.iter().map(|s| s.weight * s.value).sum();
+            let baseline = sum_ws / sum_w;
+            assert!(c.score <= baseline + 1e-12, "{name}：最终分不可能高于未压顶的基线");
+            if baseline > cap {
+                assert!(
+                    c.score < baseline,
+                    "{name}：基线 {baseline} 高于上限 {cap}，最终分 {} 必须被压下来",
+                    c.score
+                );
+            }
+        }
+    }
+
+    /// ⑤ 部分命中（0 < rate < 1）⇒ ≤ 0.75，**不得落「高」**（AC-007）。
+    #[test]
+    fn veto_partial_hit_caps_at_075_and_never_high() {
+        for (sampled, matched) in [(5u32, 1u32), (5, 2), (5, 3), (5, 4), (4, 1), (2, 1), (3, 1)] {
+            let mut i = maxed_structural();
+            i.data = Some(SampleFacts { sampled, matched, digest: None, reason: None });
+            let c = score(&i);
+            assert!(
+                c.score <= 0.75,
+                "{matched}/{sampled} 部分命中必须 ≤ 0.75，实际 {}",
+                c.score
+            );
+            assert_ne!(c.band, Band::High, "{matched}/{sampled} 不得落「高」档（AC-007）");
+        }
+    }
+
+    /// ⑥ 复合键（R2）⇒ ≤ 0.50。⑦ 多态（R3）⇒ ≤ 0.40。⑧ 自引用非唯一（R4）⇒ ≤ 0.50。
+    #[test]
+    fn veto_r2_r3_r4_caps() {
+        let mut composite = maxed_structural();
+        composite.composite_target_key = true;
+        let c = score(&composite);
+        assert!(c.score <= 0.50, "复合键 ≤ 0.50，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "composite_key_unsupported");
+
+        let mut poly = maxed_structural();
+        poly.polymorphic = true;
+        let c = score(&poly);
+        assert!(c.score <= 0.40, "多态目标 ≤ 0.40，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "polymorphic_target");
+
+        let mut self_ref = maxed_structural();
+        self_ref.self_ref = true;
+        self_ref.target_key = TargetKey::Unique;
+        let c = score(&self_ref);
+        assert!(c.score <= 0.50, "自引用非主键 ≤ 0.50，实际 {}", c.score);
+        assert_eq!(c.veto.as_ref().unwrap().signal, "self_ref_non_unique");
+
+        // 自引用 + 主键：**不**触发（R4 允许）
+        let mut self_ref_pk = maxed_structural();
+        self_ref_pk.self_ref = true;
+        assert_eq!(score(&self_ref_pk).veto, None);
+    }
+
+    /// 多条 veto ⇒ 取**最小上限**，且理由里要列出同时触发的其它信号。
+    #[test]
+    fn multiple_vetoes_take_the_lowest_cap() {
+        let mut i = maxed_structural();
+        i.column = "batch_id".into();
+        i.to_table = "gift_code_batch".into();
+        i.from_type = TypeFamily::Str;
+        i.to_type = Some(TypeFamily::Num);
+        i.data = Some(SampleFacts { sampled: 5, matched: 0, digest: None, reason: None });
+        let c = score(&i);
+        let v = c.veto.as_ref().unwrap();
+        assert_eq!(v.signal, "type_incompatible", "0.15 是这里的最低上限");
+        assert!(v.cap <= 0.15);
+        assert!(c.score <= 0.15);
+        // 这条输入有**数据证据**（采了 5 行、0 命中）⇒ 触发的是 zero_hit；
+        // `generic_name_no_evidence` **不**触发（它专门表示「没有数据证据」，
+        // 有证据的反驳由 `zero_hit` 表达 —— 两个信号不许混）
+        assert!(
+            v.reason.contains("zero_hit"),
+            "同时触发的 zero_hit 必须在理由里可见：{}",
+            v.reason
+        );
+        assert!(
+            !v.reason.contains("generic_name_no_evidence"),
+            "有数据证据时不该再报「泛化名且无证据」：{}",
+            v.reason
+        );
+    }
+
+    // ── R1 ④：`--no-sample` 不许把分数抬高 ─────────────────
+
+    /// 没采样 vs 采了但 0 命中：**后者更低**，而且前者必须被压进「低」档。
+    ///
+    /// 变异自证：删掉 `no_data_evidence` 那条 veto，结构信号会让
+    /// `customer_id → customers` 拿到 0.80（中档），于是「没看反而分更高」。
+    #[test]
+    fn no_sample_never_scores_higher_than_sampled_evidence() {
+        let mut no_data = maxed_structural();
+        no_data.data = None;
+        let c = score(&no_data);
+        assert_eq!(c.data_evidence, DataEvidence::None, "必须标 none（R1 ④）");
+        assert!(c.score <= 0.45, "无数据证据必须 ≤ 0.45，实际 {}", c.score);
+        assert!(!c.band.enters_proposal(), "无数据证据不得进主提案");
+
+        let mut zero = maxed_structural();
+        zero.data = Some(SampleFacts { sampled: 5, matched: 0, digest: None, reason: None });
+        assert!(
+            score(&zero).score < c.score,
+            "「采了但 0 命中」必须比「没采」更确定地低"
+        );
+
+        // `--no-sample` 时不给 `sample_hit_rate.capability` —— 它**不参与归一化**
+        assert!(
+            !c.signals.iter().any(|s| s.name == "sample_hit_rate"),
+            "没采就没有命中率信号（不是 0.0，那是断言全不命中）"
+        );
+        assert!(
+            !c.signals.iter().any(|s| s.name == "not_all_null"),
+            "没采就不知道有没有值（不能当 1.0，也不能当 0.0）"
+        );
+    }
+
+    // ── 信号取值本身 ────────────────────────────────────────
+
+    #[test]
+    fn name_match_uses_the_design_table() {
+        assert_eq!(name_match_value("customer_id", "customers"), 1.0, "直接展开");
+        assert_eq!(name_match_value("order_id", "order"), 1.0);
+        assert_eq!(name_match_value("batch_id", "gift_code_batch"), 0.3, "泛化名");
+        assert_eq!(name_match_value("session_id", "simulate_login_sessions"), 0.3);
+        assert_eq!(name_match_value("model_id", "llm_model"), 0.6, "其它");
+        assert_eq!(name_match_value("channel_code", "marketing_channel"), 0.6);
+        // 泛化名单**不**等于「所有 *_id」
+        assert!(!is_generic_column("customer_id"));
+        assert!(is_generic_column("batch_id"));
+    }
+
+    #[test]
+    fn type_families_are_mapped_by_shape() {
+        assert_eq!(type_family("bigint"), TypeFamily::Num);
+        assert_eq!(type_family("character varying"), TypeFamily::Str);
+        assert_eq!(type_family("timestamp without time zone"), TypeFamily::Time);
+        assert_eq!(type_family("numeric(10,2)"), TypeFamily::Num);
+        assert_eq!(type_family("jsonb"), TypeFamily::Json);
+        assert_eq!(type_family("uuid"), TypeFamily::Uuid);
+        assert_eq!(type_family("my_custom_enum"), TypeFamily::Other);
+        // 相容性三档
+        assert_eq!(TypeFamily::Num.compatibility(TypeFamily::Num), 1.0);
+        assert_eq!(TypeFamily::Num.compatibility(TypeFamily::Str), 0.2);
+        assert_eq!(TypeFamily::Num.compatibility(TypeFamily::Time), 0.0);
+    }
+
+    #[test]
+    fn target_key_values_are_1_09_04() {
+        assert_eq!(TargetKey::Primary.value(), 1.0);
+        assert_eq!(TargetKey::Unique.value(), 0.9);
+        assert_eq!(TargetKey::Plain.value(), 0.4);
+        assert_eq!(TargetKey::Unknown.value(), 0.4, "不知道按普通列算，但报告里要显形");
+    }
+
+    #[test]
+    fn hit_rate_lookup_table() {
+        assert_eq!(hit_rate_value(5, 5), 1.0);
+        assert_eq!(hit_rate_value(5, 4), 0.8);
+        assert_eq!(hit_rate_value(5, 3), 0.5);
+        assert_eq!(hit_rate_value(5, 2), 0.3);
+        assert_eq!(hit_rate_value(5, 1), 0.15);
+        assert_eq!(hit_rate_value(5, 0), 0.0);
+        // 分母不是 5 时按比例映射：0/3 → 0、3/3 → 1.0
+        assert_eq!(hit_rate_value(3, 0), 0.0);
+        assert_eq!(hit_rate_value(3, 3), 1.0);
+        assert_eq!(hit_rate_value(0, 0), 0.0);
+        // 表本身必须是设计概要那张（单调递增）
+        for i in 1..HIT_RATE_TABLE.len() {
+            assert!(HIT_RATE_TABLE[i] > HIT_RATE_TABLE[i - 1]);
+        }
+    }
+
+    #[test]
+    fn polymorphic_columns_are_detected_by_structure_not_by_list_only() {
+        let cols = ["id", "subject_type", "subject_id", "status"];
+        assert!(is_polymorphic_column(&cols, "subject_id"), "同表有 subject_type");
+        assert!(!is_polymorphic_column(&cols, "id"));
+        // 白名单词干：没有 *_type 也算多态
+        assert!(is_polymorphic_column(&["target_id", "memo"], "target_id"));
+        assert!(!is_polymorphic_column(&["customer_id"], "customer_id"));
+    }
+
+    // ── AC-005 · 可复算（逐位相同）────────────────────────────
+
+    /// 同一输入 ⇒ `score` **逐位相同**，连信号顺序都一样。
+    ///
+    /// 注意这条**不能**证明「跨进程一致」（浮点在同一个二进制里是确定的），
+    /// 它证明的是：本函数没有隐藏状态（时间/随机/缓存）参与计算。
+    #[test]
+    fn scoring_is_bit_for_bit_reproducible() {
+        let mut i = base();
+        i.data = Some(SampleFacts {
+            sampled: 5,
+            matched: 4,
+            digest: Some("sha256:abc".into()),
+            reason: None,
+        });
+        let a = score(&i);
+        let b = score(&i);
+        assert_eq!(a, b, "同一输入两次评分必须逐字段相同");
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap(),
+            "序列化后也必须逐字节相同"
+        );
+        assert_eq!(a.score.to_bits(), b.score.to_bits(), "浮点位模式相同");
+        // 分数是两位小数
+        assert_eq!(a.score, round2(a.score));
+    }
+
+    /// 分数域：永远在 [0,1]，且 `band` 与分数一致。
+    #[test]
+    fn score_stays_in_range_and_band_agrees_with_score() {
+        let mut cases = vec![maxed_structural()];
+        let mut z = maxed_structural();
+        z.data = Some(SampleFacts { sampled: 5, matched: 0, digest: None, reason: None });
+        cases.push(z);
+        let mut n = maxed_structural();
+        n.data = None;
+        cases.push(n);
+        let mut p = maxed_structural();
+        p.data = Some(SampleFacts { sampled: 5, matched: 3, digest: None, reason: None });
+        cases.push(p);
+        for i in cases {
+            let c = score(&i);
+            assert!((0.0..=1.0).contains(&c.score), "分数越界：{}", c.score);
+            assert_eq!(c.band, Band::of(c.score), "band 必须由分数算出");
+            assert_eq!(c.data_evidence == DataEvidence::None, c.signals.len() == 3);
+        }
+    }
+
+    /// 数据证据里带的是**聚合量**，且原值在类型上无处可放（AC-003）。
+    #[test]
+    fn sample_signal_carries_only_aggregates() {
+        let mut i = base();
+        i.data = Some(SampleFacts {
+            sampled: 5,
+            matched: 4,
+            digest: Some("sha256:deadbeef".into()),
+            reason: None,
+        });
+        let c = score(&i);
+        let s = c.signals.iter().find(|s| s.name == "sample_hit_rate").unwrap();
+        assert_eq!(s.value, 0.8);
+        assert_eq!(s.weight, 0.45);
+        assert_eq!(s.sampled, Some(5));
+        assert_eq!(s.matched, Some(4));
+        assert_eq!(s.sample_digest.as_deref(), Some("sha256:deadbeef"));
+        // 落库/落盘的那份 JSON 里，`signals` 只有这三个聚合字段
+        let v = serde_json::to_value(&c).unwrap();
+        let sig = &v["signals"][0];
+        let keys: Vec<&str> = sig.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        for k in &keys {
+            assert!(
+                ["name", "value", "weight", "sampled", "matched", "sample_digest"].contains(k),
+                "signals 里出现了意料之外的键：{k}（原值不许进产物）"
+            );
+        }
+    }
+
+    /// 四档计数（AC-009 的统计口径）。
+    #[test]
+    fn band_counts_are_stable() {
+        let bands = [Band::High, Band::High, Band::Middle, Band::Low, Band::Rejected];
+        let c = BandCounts::of(bands.iter());
+        assert_eq!((c.high, c.middle, c.low, c.rejected, c.total()), (2, 1, 1, 1, 5));
+    }
+
+    /// `Confidence` 的 JSON 形状就是设计概要 §2.1 那张（字段名对齐，method 在内）。
+    #[test]
+    fn confidence_json_shape_matches_the_design() {
+        let mut i = base();
+        i.data = Some(SampleFacts {
+            sampled: 5,
+            matched: 4,
+            digest: Some("sha256:x".into()),
+            reason: None,
+        });
+        let v = serde_json::to_value(score(&i)).unwrap();
+        for k in ["score", "method", "band", "signals", "data_evidence"] {
+            assert!(v.get(k).is_some(), "confidence 缺字段 {k}");
+        }
+        assert_eq!(v["method"], serde_json::json!(METHOD));
+        assert_eq!(v["data_evidence"], serde_json::json!("sampled"));
+        // 这一条是 4/5 ⇒ 部分命中，veto 必须**带出来**（审核界面要显示理由）
+        assert_eq!(v["veto"]["signal"], serde_json::json!("partial_hit"));
+        assert!(v["veto"]["reason"].as_str().unwrap().contains("4/5"));
+        // 反序列化回来必须相等（落库 → 读回这一跳）
+        let back: Confidence = serde_json::from_value(v).unwrap();
+        assert_eq!(back, score(&i));
+    }
+}
