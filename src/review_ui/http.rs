@@ -46,6 +46,18 @@
 //! ⚠️ **两条批量口径共用那一个判据**（BA 裁定 A-6 / QA 非阻断 N-2）：`by=confidence`
 //! 只在 `enters_batch()` 为真的条目里再按分数筛；否则一条 `score = 0.85` 的冲突
 //! 在 `min_confidence = 0.80` 下会被自动接受，「冲突永不被自动接受」就只对另一种口径成立。
+//!
+//! # REQ-113 · 「被排除的表」接在哪
+//!
+//! | 接口 | 变化 |
+//! | --- | --- |
+//! | `GET /api/review` | 顶层多 `exclusions` 块（`present / count / tables[] / stale[] / sha256 …`） |
+//! | `GET /api/preview` · `POST /api/decide` | **一个字节都没动** |
+//!
+//! 这块数据**不是在这里算的**：它来自提案自己的 `inputs.exclusions`，
+//! 也就是抽取那一轮实际用的那份记录（[`crate::extract::exclusions::Record`]）。
+//! 本文件连 schema 都没有，所以「哪些表被排除」在结构上不可能有第二个答案。
+//! ⛔ 只读：没有写端点，页面也不渲染任何按钮 —— 改排除要改文件重跑（AC-006）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -66,6 +78,7 @@ use crate::db::proposal::{PgProposalStore, ProposalItemRow, VIA_UI};
 use crate::db::snapshot_store::PgStore;
 use crate::domain::confidence::{suggestion, Confidence, SuggestKind, Suggestion};
 use crate::domain::review::{entry_state, summarize, Decision, EntryState, ItemView, Track};
+use crate::extract::exclusions::Record;
 
 use super::ReviewArgs;
 
@@ -375,6 +388,18 @@ async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
         .await
         .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读版本状态失败：{e}")))?;
 
+    // REQ-113 · AC-006：被排除的表（**只读**区块）。
+    //
+    // 数据来自提案自己的 `inputs.exclusions` —— 也就是**抽取那一轮实际用的**
+    // 那一份记录（含 sha256 与逐条理由），不是在这里重新解析 `exclusions.json`。
+    // 纪律 H 的含义就是这个：排除判定只有一处实现（`extract::exclusions`），
+    // 本文件连 schema 都拿不到，只负责把那份记录原样交给页面。
+    let inputs = PgProposalStore::new(state.pool.clone())
+        .inputs(state.proposal_id)
+        .await
+        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读提案输入记录失败：{e}")))?;
+    let exclusions = exclusions_block(inputs.as_ref());
+
     Ok(json!({
         "project": state.project.as_ref(),
         "proposal": state.proposal_alias.as_ref(),
@@ -386,7 +411,49 @@ async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
         "progress": progress_json(&rows, &views),
         // REQ-112 · 建议分组计数（`conflict` 永远排第一 —— 冲突要最先被人看到）。
         "suggestion_counts": suggestion_counts,
+        // REQ-113 · 被排除的表：`{present, count, tables[], stale[], sha256, …}`。
+        // `count == tables.len()`，而 `tables` 就是 `stats.excluded_tables` 那一份。
+        "exclusions": exclusions,
     }))
+}
+
+/// **被排除的表** → 页面区块（AC-006）。**只读**，没有任何写入口。
+///
+/// # 三种「没有记录」必须分开说
+///
+/// | 情况 | 页面显示 | 为什么不能合并成一句「无」 |
+/// | --- | --- | --- |
+/// | 提案没有 `inputs`（人工修订 / 老提案） | 「这份提案没有输入记录」 | 与「抽取时没给 --exclude」是两件事：一个是**不知道**，一个是**知道没有** |
+/// | 有 `inputs` 但没有 `exclusions` | 「抽取时没有排除任何表」 | 这正是 REQ-113 之前的常态，需要被说出来 |
+/// | 记录存在但读不懂 | 「记录读不懂：…」+ `broken: true` | 静默降级成「没有记录」会让一份被改坏的溯源看起来像本来就没有 |
+///
+/// 判据「区块条数 = `tables_excluded`」由 `count` 携带：它就是
+/// `stats.excluded_tables` 的条数（同一个 `Vec`，同一个 `count()` 实现）。
+fn exclusions_block(inputs: Option<&Value>) -> Value {
+    let Some(inputs) = inputs else {
+        return json!({
+            "present": false,
+            "reason": "这份提案没有输入记录（人工修订 / REQ-113 之前的提案）：不知道抽取时是否排除过表。",
+        });
+    };
+    match Record::from_inputs(inputs) {
+        Ok(Some(rec)) => {
+            let mut v = rec.to_json();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("present".to_string(), json!(true));
+            }
+            v
+        }
+        Ok(None) => json!({
+            "present": false,
+            "reason": "这份提案抽取时没有给 --exclude：全部表都被当成业务表。",
+        }),
+        Err(e) => json!({
+            "present": false,
+            "broken": true,
+            "reason": format!("提案里的排除记录读不懂（不降级成「没有记录」）：{e:#}"),
+        }),
+    }
 }
 
 /// 条目 → 建议。**唯一取值点**：`/api/review` 与 `/api/preview` 都走这里。

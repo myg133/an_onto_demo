@@ -793,6 +793,14 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
     ("src/cli.rs", r"契约\t{}", 1, "`concept digest` 的契约校验行（内部校验工具输出）"),
     ("src/cli.rs", "本提案无 extracted_by", 1, "`propose import` 的固定提示（零数据）"),
     ("src/cli.rs", "抽取来源：{}", 1, "`propose import` 的抽取来源（agent 名 + 版本，运维面）"),
+    // ── REQ-113 · 排除记录的回执（运维/评审面，零客户视图字节）──
+    (
+        "src/cli.rs",
+        "排除记录    : {} 张",
+        1,
+        "`propose import` 的记录回执：条数 / 排除文件名 / 版本 / sha256 前缀 / 判的人 / 签的人。\
+         全是**溯源元数据**（文件与决定者），不含客户视图字段，也不打表名与理由",
+    ),
     ("src/cli.rs", "review_show_prefix(&proposal, &row.status)", 1, "`review show` 的**抬头**（提案别名 + 状态），正文由 D2 的闭包式出口写出"),
     ("src/cli.rs", "提案未通过：可应用", 1, "`proposal apply` 的汇总回执（条数），与 D6 的逐条被拦清单同源"),
     ("src/cli.rs", "已写出客户视图页面", 1, "C2（`--out`）写文件之后的**回执**：路径 / 对象数 / 抽样数，不是客户字节本身"),
@@ -1807,6 +1815,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "cardinality"),
     // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）
     ("src/extract/mod.rs", "ai_semantic"),
+    // REQ-113 · 排除表（**判定只有这一个实现**：解析 / 校验 / 剔除 / 记录 / 闭合断言）
+    ("src/extract/mod.rs", "exclusions"),
     ("src/extract/mod.rs", "introspect"),
     ("src/extract/mod.rs", "names"),
     ("src/extract/mod.rs", "propose"),

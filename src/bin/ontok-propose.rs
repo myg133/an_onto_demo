@@ -48,6 +48,7 @@ use ontok::agent::orchestrate::{
 };
 use ontok::agent::registry::{AgentIdentity, AgentRegistration};
 use ontok::agent::{build_agent, Assembly, ExistingType, UsageBudget};
+use ontok::extract::exclusions::{Entry, Exclusions};
 use ontok::extract::introspect::{KeyCatalog, SchemaReport, SOURCE_DATABASE_URL_ENV};
 use ontok::extract::names::TableNames;
 
@@ -102,6 +103,12 @@ async fn main() -> Result<()> {
     let mut llm_only: Option<String> = None;
     // 分阶段上线用：最多送前 N 条关系给 AI（**只截断请求**，不改变判据）。
     let mut llm_limit: Option<usize> = None;
+    // REQ-113 · 排除表：**数据**由产品执行，不是调用方先跑脚本过滤一遍。
+    //
+    // 不给 `--exclude` ⇒ 行为与 REQ-112 逐字节相同（提案里连 `inputs` 都不出现）。
+    let mut exclude_path: Option<String> = None;
+    // 陈旧排除（文件里点名、schema 里没有）默认只警告；这个开关把它变成**硬失败**。
+    let mut strict_exclusions = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -154,6 +161,9 @@ async fn main() -> Result<()> {
                 }
                 llm_limit = Some(n);
             }
+            // REQ-113 · 排除表
+            "--exclude" => exclude_path = Some(val()?),
+            "--strict-exclusions" => strict_exclusions = true,
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -171,6 +181,14 @@ async fn main() -> Result<()> {
                 println!("REQ-019:\n  --attempts <n>  每组抽取的尝试次数（默认 {DEFAULT_ATTEMPTS}）\n  --round ≥2 时会连库载入基版本的已有类型（规格 §7.1 阶段 1 的五个输入之一）");
                 println!("REQ-022:\n  --budget-tokens <n>  成本闸门：累计用量上限，超了**停**并上报\n                （外置 agent 的强制义务；没设闸又声明会上报用量 ⇒ 入口拒绝）");
                 println!("REQ-108 置信度:\n  --src <url>  源库连接串（只读会话；也可用环境变量 SRC_URL / {SOURCE_DATABASE_URL_ENV}）\n  --no-sample  关闭采样：confidence 只由结构信号算，且全部标 data_evidence=none（缺数据证据不进主提案）\n  --pending-out / --rejected-out  待查清单 / 拒绝清单的落点（默认与 --out 同目录的 proposal-pending.json / proposal-rejected.json）");
+                println!("REQ-113 排除表（**数据**由产品执行，不是先跑脚本过滤）:\n  --exclude <file>      排除文件（version / rule / declared_by / exclude:[\
+{{table, category, reason, decided_by}}]）；被排除的表**不建实体**，且在抽取前就剔除\n\
+                        \x20 理由为空 / 类别不在枚举内 / 缺决策人 ⇒ **拒绝文件**（exit≠0）\n\
+                        \x20 stats.json 记 tables_seen / tables_excluded / tables_extracted，且必须满足\n\
+                        \x20 seen - excluded == extracted（不闭合 ⇒ 不写出统计）\n\
+                        \x20 提案元信息记 inputs.exclusions = {{file, version, sha256}}（+ 逐条记录）\n\
+                  --strict-exclusions  文件里点名、schema 里没有的表（陈旧排除）⇒ exit≠0；\n\
+                        \x20 不给这个开关时只警告 + 记进 stats.stale_exclusions");
                 println!("REQ-109 AI 语义项（**默认关**）:\n  --llm        打开 AI 语义判断（semantic_fit 权重 0.15，method 变 evidence-scorecard-v2）\n               开 ⇒ 必须有 {base} / {key} / {model}，否则 exit≠0 并点名缺哪个（R4）\n  --budget-tokens <n>  --llm 时**必填且 >0**；超预算即停并按「已用/上限/停在第几条」报告（R5）\n  --refresh    忽略已有缓存并覆盖（迭代提示词时用）；会打印「强制刷新 N 条」（R3）\n  --llm-only <substr>  只判关系键包含该子串的关系（分阶段上线的闸，其余按语义缺失处理）\n  --llm-limit <n>      最多送 n 条关系给 AI（分阶段上线的闸，**只截请求**，不改变判据）",
                     base = ontok::extract::ai_semantic::BASE_URL_ENV,
                     key = ontok::agent::llm::API_KEY_ENV,
@@ -180,6 +198,25 @@ async fn main() -> Result<()> {
             other => anyhow::bail!("未知参数 {other}"),
         }
     }
+
+    // ── REQ-113 · 排除文件：**先校验输入，再干活** ─────────────────────
+    //
+    // 位置是刻意的：在 schema / 翻译表 / LLM 三件套之前就把文件判掉。
+    // 一份理由为空、类别拼错的 `exclusions.json` 若等到抽完才报，
+    // 那一轮的代价（时间，开了 --llm 时还有钱）就白付了 —— 而它压根不是
+    // 「跑起来才会知道」的问题。校验规则只有一处：
+    // [`ontok::extract::exclusions::Exclusions::load`]。
+    if strict_exclusions && exclude_path.is_none() {
+        anyhow::bail!(
+            "--strict-exclusions 只在 --exclude 下有意义：它说的是「陈旧排除（文件里点名、\
+             但这份 schema 里没有）要直接失败」。没给排除文件时不存在陈旧项，\
+             给这个开关只会让人以为发生过一次检查。"
+        );
+    }
+    let exclusions = match &exclude_path {
+        Some(p) => Some(Exclusions::load(p)?),
+        None => None,
+    };
 
     // ── REQ-109 · AI 开关的前置校验（**在干活之前**失败）────────────
     //
@@ -212,7 +249,56 @@ async fn main() -> Result<()> {
 
     let schema_raw = std::fs::read_to_string(&schema_path)
         .with_context(|| format!("读不到 {schema_path}（先跑 ontok-introspect）"))?;
-    let report: SchemaReport = serde_json::from_str(&schema_raw).context("schema JSON 解析失败")?;
+    let mut report: SchemaReport =
+        serde_json::from_str(&schema_raw).context("schema JSON 解析失败")?;
+
+    // ── REQ-113 · 排除表：**在抽取之前**剔除（AC-001 / AC-002 / AC-005）──
+    //
+    // 为什么在这里、而不是「抽完再从 items 里删」：
+    // 1. 抽完再删要保证实体、属性、关系、证据、置信度、TTL 六处都不剩 —— 漏一处
+    //    就是噪声进了本体；
+    // 2. 剔除后这些表也不在「已知表集合」里，于是没有 `xxx_id` 会再推断出一条
+    //    指向噪声表的关系（抽完再删会留下悬空关系）。
+    //
+    // 判定本身**只有一处**：`Exclusions::apply`（纪律 H）。本文件只负责
+    // 「给它的输入对不对」（文件已在参数解析后校验过）与「把结果记下来」。
+    let tables_seen = report.tables.len();
+    let mut exclusion_applied: Vec<Entry> = Vec::new();
+    let mut exclusion_stale: Vec<String> = Vec::new();
+    let mut exclusion_flagged: Vec<ontok::extract::exclusions::Flagged> = Vec::new();
+    if let Some(ex) = &exclusions {
+        let run = ex.apply(&report);
+        // R4 · 陈旧排除：默认**警告 + 计数**，`--strict-exclusions` ⇒ 当场失败。
+        //
+        // 为什么默认不硬失败：库结构会变，硬失败会让一份老文件一夜之间不能用，
+        // 于是人的反应是「把它从命令行摘掉」—— 那正好让排除**消失**。
+        // 警告 + 计数仍然把「这条排除从没生效过」说出来。
+        if strict_exclusions && !run.stale.is_empty() {
+            anyhow::bail!(
+                "陈旧排除 {} 条（--strict-exclusions ⇒ 失败）：{}\n\
+                 \n\
+                 这些表在 {} 里被点名排除，但这份 schema 里**没有**它们。\n\
+                 两种可能，都得人来判：\n\
+                 ① 源库已删掉 / 改名了这些表 —— 排除该跟着删（留着就是一份过期的决定）；\n\
+                 ② 表名写错了 —— 这条排除**从来没生效过**，那批被排除的表里可能一直\
+                 被当成业务表抽进了本体。\n\
+                 \n\
+                 不加 --strict-exclusions 时这只是警告（R4：库结构会变，硬失败会把\
+                 老文件逼出命令行）。",
+                run.stale.len(),
+                run.stale.join("、"),
+                ex.file(),
+            );
+        }
+        if let Some(w) = run.stale_warning(ex.file()) {
+            eprintln!("{w}");
+        }
+        exclusion_applied = run.applied.clone();
+        exclusion_stale = run.stale.clone();
+        exclusion_flagged = run.flagged.clone();
+        // 之后的一切（分组、采样、AI、统计）都只看**这个作用域**。
+        report = run.report;
+    }
 
     // 翻译表是**知识资产**：它自己的 agent/version 记的是「这份翻译表由谁产出」，
     // 与「这次抽取由谁执行」是**两件不相干的事**。
@@ -668,7 +754,32 @@ async fn main() -> Result<()> {
     // 抽取执行者是**这份提案的 items 由谁抽**。基线上这两行读起来像同一件事。
     println!("  翻译表来源   : agent={} v{}（知识资产：**谁产的这份翻译表**，不是抽取执行者）", names.agent, names.version);
     println!("  抽取执行者   : agent={} v{}（协议 {}）—— **这一行才是 extracted_by 记的**", agent.identity().agent, agent.identity().version, registration.protocol);
-    println!("  翻译覆盖    : {} / {} 表", names.coverage(&report.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>()).0, s.tables_seen);
+    println!("  翻译覆盖    : {} / {} 表", names.coverage(&report.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>()).0, report.tables.len());
+    // ── REQ-113 · 排除表：**三计数必须同屏可见**（AC-002）──────
+    //
+    // 这一段与 stats.json 里的三个数同源（`tables_seen` / `excluded` / `extracted`），
+    // 但 `extracted` 的**实测值**要等分档路由之后才定，所以这里先报
+    // 「勘查 / 排除 / 作用域」三行，闭合断言在写盘前做（见下面的 `stamp_counts`）。
+    if let Some(ex) = &exclusions {
+        println!(
+            "  排除        : {} 张（{} v{} · sha256 {}… · 决策人 {}）",
+            exclusion_applied.len(),
+            ex.file(),
+            ex.version(),
+            &ex.sha256()[..12.min(ex.sha256().len())],
+            ex.declared_by()
+        );
+        println!(
+            "  表          : 勘查 {tables_seen} → 排除 {} → 抽取作用域 {}（陈旧 {}）",
+            exclusion_applied.len(),
+            report.tables.len(),
+            exclusion_stale.len()
+        );
+    } else {
+        // 没给 --exclude：**明说**这一轮没有排除，而不是让人以为「排了 0 张」。
+        // 这两件事在产物里也必须分得开（没有 `inputs` 块 vs `inputs.exclusions` 存在）。
+        println!("  排除        : 未启用（没给 --exclude：本轮把 {tables_seen} 张表全当业务表）");
+    }
     let n_ent = outcome.proposal.items.iter().filter(|i| i["kind"] == "add_entity_type").count();
     let n_link = outcome.proposal.items.iter().filter(|i| i["kind"] == "add_link_type").count();
     // 与上面「已有类型 …基版本 v{base_seq}」是**同一个值**。
@@ -881,9 +992,114 @@ async fn main() -> Result<()> {
         "四档条数 + 未评分 == 评分过的关系数（口径必须对得上）"
     );
 
+    // ── REQ-113 · 三计数闭合（AC-002 / R5）：**写盘之前**的最后一道闸 ──────
+    //
+    // `tables_extracted` 取**实测**：最终提案（分档路由之后）里 `add_entity_type`
+    // 的条数。它与 `tables_seen - tables_excluded` 是两个**独立**来源的数 ——
+    // 反推出来的差永远等于差，那样的「断言」不携带任何信息。
+    //
+    // 路由从不搬动实体条目（`route_items` 只对 `add_link_type` 分档），
+    // 所以这个实测值就是「真的建成本体的表数」。
+    let extracted = outcome
+        .proposal
+        .items
+        .iter()
+        .filter(|i| i["kind"] == "add_entity_type")
+        .count();
+    // 「作用域里有、却没产出实体」的表名 —— 只用于闭合失败时的**报错正文**。
+    // BA 裁定：失败要能说清是哪几张表没了，只报数字不等等于让人去猜。
+    let produced: std::collections::HashSet<&str> = outcome
+        .proposal
+        .items
+        .iter()
+        .filter(|i| i["kind"] == "add_entity_type")
+        .filter_map(|i| i["payload"]["key"].as_str())
+        .collect();
+    let missing: Vec<String> = report
+        .tables
+        .iter()
+        .filter(|t| !produced.contains(t.name.as_str()))
+        .map(|t| t.name.clone())
+        .collect();
+    outcome.stats.stamp_counts(
+        tables_seen,
+        &exclusion_applied,
+        &exclusion_stale,
+        &exclusion_flagged,
+        extracted,
+        &missing,
+    )?;
+
+    // ── REQ-113 · 溯源：**一个文件 = 一条完整审计链**（BA 裁定「单一文件」）────
+    //
+    // `inputs.exclusions` 就是完整审计段：
+    // `{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`。
+    //
+    // 为什么把逐条明细也放进来（而不是侧车文件）：
+    // 用户要搬的**只有一个** proposal.json；侧车会让「丢一个文件就导不进」，
+    // 产品还多一个产出文件。AC-001 的判据随之精确化：
+    // `items` 段里 grep 被排除表名 = 0，且整份文件里这些表名**只允许**出现在这一段内。
+    // 这一段是**元信息**（谁判的、依据什么、排了谁），不是实体。
+    if let Some(ex) = &exclusions {
+        let counts = ontok::extract::exclusions::Counts::of(&outcome.stats);
+        let rec = ex.record(
+            ontok::extract::exclusions::Displayed {
+                applied: &exclusion_applied,
+                stale: &exclusion_stale,
+                flagged: &exclusion_flagged,
+            },
+            counts,
+        );
+        outcome.proposal.inputs = Some(serde_json::json!({ "exclusions": rec }));
+    }
+
     std::fs::write(&out, serde_json::to_string_pretty(&outcome.proposal)?)
         .with_context(|| format!("写不出 {out}"))?;
     std::fs::write(&stats_out, serde_json::to_string_pretty(&outcome.stats)?)?;
+    println!();
+    println!("排除台账（AC-002 / AC-003）");
+    println!(
+        "  三计数      : 勘查 {} − 排除 {} = 抽取 {}（闭合 = {}）",
+        outcome.stats.tables_seen,
+        outcome.stats.tables_excluded,
+        outcome.stats.tables_extracted,
+        outcome.stats.counts_close()
+    );
+    if outcome.stats.excluded_tables.is_empty() {
+        println!("  逐条        : 无（本轮没有排除）");
+    } else {
+        for e in &outcome.stats.excluded_tables {
+            println!(
+                "  · {:<40} {:<22} {}（{} · 置信度 {}）",
+                e.table,
+                e.category.as_str(),
+                e.reason,
+                e.decided_by,
+                match e.confidence {
+                    Some(c) => format!("{c:.2}"),
+                    None => "—".to_string(),
+                }
+            );
+        }
+    }
+    // 「保留但存疑」**单独一段**（⛔ 不与上面的排除合并）：
+    // 上面是「已经不建实体」的决定，这里是「照常建、但请人看一眼」。
+    if !outcome.stats.flagged_tables.is_empty() {
+        println!(
+            "  待裁决      : {} 张（**没有被排除**，已照常进本体；只是有疑虑，见审核界面）",
+            outcome.stats.flagged_tables.len()
+        );
+        for f in &outcome.stats.flagged_tables {
+            println!("  ? {:<40} {}", f.table, f.why);
+        }
+    }
+    if !outcome.stats.stale_exclusions.is_empty() {
+        eprintln!(
+            "  ⚠ 陈旧排除 {} 条已记进 stats.stale_exclusions：{}",
+            outcome.stats.stale_exclusions.len(),
+            outcome.stats.stale_exclusions.join("、")
+        );
+    }
 
     // 成本超限 ⇒ **非零退出**（产物已写出，方便核对「钱花到哪了」）。
     // 为什么不是「写完就当没事」：超预算是**需要人知道**的事实，

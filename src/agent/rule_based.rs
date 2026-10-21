@@ -415,7 +415,15 @@ mod tests {
     }
 
     /// `ExtractionStats` 的统计口径**不许动**（BA 已知它会失真，但那是后续批次的事）。
-    /// 把 10 个字段名钉死 —— 改名/增删字段会让 E2E 报告的判读器读不到数。
+    /// 把字段名一个个钉死 —— 改名/增删字段会让 E2E 报告的判读器读不到数。
+    ///
+    /// # ⚠️ REQ-113 起是 **16 个**（原 11 个 + 排除表 5 个）
+    ///
+    /// 新加的五个是 **AC-002 / AC-003 / AC-005 明确要求**的（需求 R5/R6）：
+    /// `tables_excluded` / `tables_extracted` / `excluded_tables` /
+    /// `stale_exclusions` / `flagged_tables`。
+    /// 这不是「顺手放宽」—— 断言仍然是**逐个字段全等**（多一个少一个都红），
+    /// 只是清单跟着需求长了五格。改这里的正确方式是加需求，不是把断言改软。
     #[test]
     fn test_extraction_stats_fields_are_untouched() {
         let agent = RuleBasedAgent::new(AgentIdentity::legacy_cli("a", "1.0.0"), names());
@@ -440,11 +448,17 @@ mod tests {
             "links_inferred",
             "links_dangling",
             "tables_without_cn_name",
+            // ── REQ-113 · 排除表（AC-002 / AC-003 / AC-005）──
+            "tables_excluded",
+            "tables_extracted",
+            "excluded_tables",
+            "stale_exclusions",
+            "flagged_tables",
         ];
         expected.sort_unstable();
         assert_eq!(
             keys, expected,
-            "ExtractionStats 的字段集不许变（10 个标量 + 1 个列表）"
+            "ExtractionStats 的字段集不许变（11 个标量/列表 + REQ-113 的 5 个排除字段 = 16）"
         );
     }
 }

@@ -364,6 +364,9 @@ CREATE TABLE IF NOT EXISTS proposals (
   base_version_id  UUID NOT NULL REFERENCES ontology_versions(id),
   round            INT  NOT NULL,
   extracted_by     JSONB,                          -- ← NULL = 人工修订（ADR-001）
+  -- REQ-113 · 本轮输入的**可查记录**（今天只有 `exclusions`）。
+  -- NULL = 没有记录（人工修订 / REQ-113 之前的提案），与「排除了 0 张」是两件事。
+  inputs           JSONB,
   status           TEXT NOT NULL DEFAULT 'pending',
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -418,7 +421,7 @@ CREATE TABLE IF NOT EXISTS concept_groups (
 /// 的结果把「已存在」的列从 batch 里摘掉，一大坨字符串没法逐条摘。
 /// 元组里的 `(表名, 列名)` 同时就是探查询「查什么」的答案 ——
 /// 「改什么」与「查什么」永远同源，加第 4 条只改这一张表。
-const ALTER_PATCHES: [(&str, &str, &str); 13] = [
+const ALTER_PATCHES: [(&str, &str, &str); 14] = [
     // REQ-004 · 抽取来源（ADR-001：apply 时原样取提案的值，缺失记 NULL，
     // 不继承 base、不推断）。
     (
@@ -515,6 +518,20 @@ const ALTER_PATCHES: [(&str, &str, &str); 13] = [
         "proposal_items",
         "model_via",
         "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS model_via TEXT;",
+    ),
+    // ── REQ-113 · 提案的输入记录（`inputs`）──────────────────────────────
+    //
+    // 为什么必须**落库**，而不是「审核界面自己去读 exclusions.json」：
+    // 评审人看到的那份记录必须是**这一轮抽取实际用的**那一份。若界面回头去读文件，
+    // 「抽取之后文件被改了」就会让界面显示的排除清单与提案里的表对不上 ——
+    // 而那个不一致**没有任何标记**（看起来都很正常），正是 R5 要消灭的形态。
+    //
+    // 允许 NULL 且无 DEFAULT：既有提案读出来是 NULL =「没有记录」，
+    // 不往历史行回填一个空 `{}` —— 那等于替旧提案声明「这轮没排除任何表」。
+    (
+        "proposals",
+        "inputs",
+        "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS inputs JSONB;",
     ),
 ];
 

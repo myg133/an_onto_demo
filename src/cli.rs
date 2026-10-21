@@ -1437,6 +1437,43 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
         )
         .await?;
 
+    // ── REQ-113 · 提案的排除审计段（`inputs.exclusions`）落库 ─────────────
+    //
+    // 审核界面读的是**库里这一行**（`GET /api/review` 的 `exclusions` 块），
+    // 而不是回头去解析一遍 `exclusions.json` —— 纪律 H：「哪些表被排除」
+    // 只有一个实现，界面只负责显示那份结果。
+    //
+    // ⭐ BA 裁定「单一文件」：逐条明细**就在 proposal.json 里**
+    // （`inputs.exclusions = {file, version, sha256, declared_by, reviewed_by,
+    //   rule, counts, excluded[], flagged[], stale[]}`）。
+    // 所以这里**没有**侧车、也没有第二个文件的 sha 绑定 —— 只读 `--file` 那一份。
+    //
+    // ⚠️ 落库前**再过一遍校验**（与 `--exclude` 那侧同一套判据，`Record::from_inputs`）：
+    // 这份 JSON 是**别人给的**，可能被手改过。一条 `reason` 被清空、
+    // 或 `counts` 与明细对不上的记录若进了库，审核界面会把一份假审计当成真的显示出来。
+    if let Some(inputs) = doc.get("inputs").filter(|v| v.is_object()) {
+        match crate::extract::exclusions::Record::from_inputs(inputs)? {
+            Some(rec) => {
+                println!(
+                    "  排除记录    : {} 张 · {} v{} · sha256 {}…（判的人 {}；签的人 {}）",
+                    rec.count(),
+                    rec.file,
+                    rec.version,
+                    &rec.sha256[..12.min(rec.sha256.len())],
+                    rec.declared_by,
+                    rec.reviewed_by.as_deref().unwrap_or("—")
+                );
+                proposals
+                    .set_inputs(row.id, &serde_json::json!({ "exclusions": rec }))
+                    .await?;
+            }
+            None => {
+                // 有 `inputs` 但没有 `exclusions`（将来的其它输入记录）：原样留档，不丢。
+                proposals.set_inputs(row.id, inputs).await?;
+            }
+        }
+    }
+
     let rows = proposals.items(row.id).await?;
     let alias = proposal_alias(pool, p.id, row.id).await;
     println!("提案 {alias} 已导入，共 {} 个条目：", rows.len());
