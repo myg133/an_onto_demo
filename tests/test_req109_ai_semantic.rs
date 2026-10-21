@@ -705,6 +705,11 @@ fn ac010_customer_view_has_zero_ai_leakage() {
         payload: serde_json::json!({ "confidence": snap.link_types[0].confidence }),
         biz_status: "pending".into(),
         model_status: "pending".into(),
+        // REQ-111 · 决策审计两栏：构造的是没签过的条目 ⇒ 全 None。
+        biz_decided_at: None,
+        biz_via: None,
+        model_decided_at: None,
+        model_via: None,
     };
     let text = ontok::cli::render_confidence_table(&[row]);
     for needed in ["ai qwen36-27B", "fit 0.90", "cache_hit true", "tokens 17", "业务键存在"] {

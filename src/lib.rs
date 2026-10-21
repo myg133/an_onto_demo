@@ -22,6 +22,14 @@ pub mod mcp;
 // **不放 domain/**：它要连库、要绑 socket，理由与上面 mcp 模块的同一条。
 pub mod server;
 
+// REQ-111 · **本地审核界面**（在 HTML 里做双轨审核）。
+// ⛔ **不放 `server/`**：那一层被「只读」的结构判据钉着
+// （`tests/test_graph_server.rs` 扫 `src/server/*.rs` 里不许出现 `set_decision` 等），
+// 而审核界面必须**写**决策（唯一写点 `POST /api/decide`）。
+// 把它塞进 `server/` 等于让「`serve` 只读」这条守卫为真而事实为假 ——
+// 见 `src/review_ui/mod.rs` 模块头。
+pub mod review_ui;
+
 // REQ-013 · 抽取 agent 抽象（规格 §7.1 阶段 1「可插拔」）。
 // **不放 domain/**：它要跑真实 agent（含将来的协议客户端与 DB 查询），
 // 而 `domain` 的 AC-002 判据是「零 I/O」。理由见 `src/agent/mod.rs`。

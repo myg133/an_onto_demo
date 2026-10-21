@@ -258,6 +258,42 @@ pub enum ReviewCmd {
         #[arg(long)]
         confidence: bool,
     },
+    /// ⭐ REQ-111 · 起一个**本地审核界面**（在 HTML 里做双轨审核）
+    ///
+    /// 与 `serve` 是**两个命令**，不是给 `serve` 加一个开关：
+    ///
+    /// | `serve` | `review serve` |
+    /// | --- | --- |
+    /// | 只读：任何非 GET ⇒ 405 | 可写：**唯一**写点是 `POST /api/decide` |
+    /// | 只服务**已冻结**版本 | 只服务**未冻结**的提案（已冻结 ⇒ 拒绝启动） |
+    ///
+    /// 加开关会让「`serve` 是只读的」从**结构保证**退化成**配置保证** ——
+    /// 那正是这个仓库反复栽的坑（REQ-093 的硬判据是「没有可写的地方」）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok review serve --project demo3 --proposal p1 --bind 127.0.0.1:8788 --token '换成你自己的口令'
+    ///
+    /// 然后浏览器打开 http://127.0.0.1:8788/
+    ///
+    /// ⚠️ **只绑回环**：`--bind 0.0.0.0:8788` 直接拒绝启动（exit≠0）。
+    /// ⚠️ 口令也可以从环境变量 `ONTOK_VIEW_TOKEN` 读；两处都没有 ⇒ 拒绝启动。
+    /// ⚠️ 页面壳（`/`）免口令、**不含任何数据**；`/api/*` 全部要 Bearer 口令。
+    #[command(verbatim_doc_comment)]
+    Serve {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 提案（`p1` = 该项目内**最近导入**的那个；也可直接给 UUID）
+        #[arg(long)]
+        proposal: String,
+        /// 监听地址。**只允许回环地址**（如 127.0.0.1:8788）
+        #[arg(long, default_value = "127.0.0.1:8788")]
+        bind: String,
+        /// 访问口令（至少 8 个字符）。省略时读环境变量 `ONTOK_VIEW_TOKEN`
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1448,12 +1484,30 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
                 other => anyhow::bail!("--track 只能是 biz 或 model，收到 {other}"),
             };
             let p = resolve_proposal_arg(pool, &proposal, project.as_deref()).await?;
-            let it = proposals
-                .item_by_seq(p, item)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("提案里没有第 {item} 个条目"))?;
-            proposals.set_decision(it.id, t, d).await?;
+            // ⭐ REQ-111 · **不再**在这里自己查条目 + 写库：那条路径与审核界面的
+            // `POST /api/decide` 必须**是同一个函数**（纪律 H）。`decide_item` 里
+            // 收着「序号 → 条目 → 领域状态机 → 落库 + 审计」四步；本分支只负责
+            // 解析别名与打印。页面签的和 CLI 签的因此在结构上不可能不一致。
+            proposals
+                .decide_item(p, item, t, d, crate::db::proposal::VIA_CLI)
+                .await?;
             println!("item {} 的 {} 轨 → {}", item, track, d.as_str());
+        }
+        ReviewCmd::Serve { project, proposal, bind, token } => {
+            // 绑地址先解析：给错格式要报人话，不要把 axum 的栈倒给用户。
+            let addr: std::net::SocketAddr = bind.parse().with_context(|| {
+                format!("监听地址看不懂：{bind:?}。要写成 127.0.0.1:8788 这样的样子。")
+            })?;
+            // 口令两种来源：显式 `--token` 优先，其次环境变量（与 `serve` 同一个变量）。
+            // 两处都没有 ⇒ 拒绝启动，**没有开发模式旁路**。
+            let token = match token {
+                Some(t) => t,
+                None => crate::config::require_env(crate::config::VIEW_TOKEN_ENV).map_err(|e| {
+                    anyhow::anyhow!("{e}；也可以用 --token 显式给（至少 8 个字符）")
+                })?,
+            };
+            let args = crate::review_ui::ReviewArgs { project, proposal, bind: addr, token };
+            crate::review_ui::http::serve(pool, args).await?;
         }
         ReviewCmd::Show { proposal, project, confidence } => {
             let p = resolve_proposal_arg(pool, &proposal, project.as_deref()).await?;
@@ -1887,7 +1941,11 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
 ///
 /// 与 `proposal_alias` 完全一致 —— 否则打印的 `p1`
 /// 和下次 `--proposal p1` 解析到的不是同一个提案。
-async fn resolve_proposal(pool: &PgPool, project_id: Uuid, spec: &str) -> anyhow::Result<Uuid> {
+///
+/// ⚠️ REQ-111 起是 `pub`：审核界面（`src/review_ui`）启动时用**同一个**
+/// 别名解析器，不抄第二份「p1 是哪个」的 SQL。抄一份的后果是页面显示 `p1`、
+/// CLI 的 `p1` 却指另一个提案 —— 那种不一致只有人肉对账才发现。
+pub async fn resolve_proposal(pool: &PgPool, project_id: Uuid, spec: &str) -> anyhow::Result<Uuid> {
     if let Ok(u) = Uuid::parse_str(spec) {
         return Ok(u);
     }
@@ -1952,7 +2010,10 @@ async fn resolve_proposal_arg(
 ///
 /// **必须与 `resolve_proposal` 用同一套作用域与排序** —— 否则打印的 `p1`
 /// 和下次 `--proposal p1` 解析到的不是同一个提案。
-async fn proposal_alias(pool: &PgPool, project_id: Uuid, id: Uuid) -> String {
+///
+/// ⚠️ REQ-111 起是 `pub`：审核界面用它把「绑的是哪个 pN」打在启动横幅上，
+/// 与 CLI 的 `review show` 抬头同源。
+pub async fn proposal_alias(pool: &PgPool, project_id: Uuid, id: Uuid) -> String {
     let rows: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM proposals WHERE project_id = $1 ORDER BY created_at DESC, id DESC",
     )

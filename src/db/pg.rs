@@ -259,6 +259,13 @@ pub enum StoreError {
     #[error("提案没有可应用的条目")]
     NothingApplicable,
 
+    /// REQ-111 · 决策指向一个不存在的条目序号。
+    ///
+    /// CLI 与审核界面**共用**这一条错误（同一个 `decide_item`），
+    /// 所以「第 N 个条目不存在」在两个入口上是同一句话、同一个判据。
+    #[error("提案里没有第 {seq} 个条目")]
+    ItemNotFound { seq: i32 },
+
     /// REQ-010 · 概念组声明不合法。三条硬约束的理由见 `domain::concept`。
     #[error("概念组声明不合法：{0}")]
     BadConceptGroup(String),
@@ -411,7 +418,7 @@ CREATE TABLE IF NOT EXISTS concept_groups (
 /// 的结果把「已存在」的列从 batch 里摘掉，一大坨字符串没法逐条摘。
 /// 元组里的 `(表名, 列名)` 同时就是探查询「查什么」的答案 ——
 /// 「改什么」与「查什么」永远同源，加第 4 条只改这一张表。
-const ALTER_PATCHES: [(&str, &str, &str); 9] = [
+const ALTER_PATCHES: [(&str, &str, &str); 13] = [
     // REQ-004 · 抽取来源（ADR-001：apply 时原样取提案的值，缺失记 NULL，
     // 不继承 base、不推断）。
     (
@@ -479,6 +486,35 @@ const ALTER_PATCHES: [(&str, &str, &str); 9] = [
         "link_types",
         "confidence_signals",
         "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS confidence_signals JSONB;",
+    ),
+    // ── REQ-111 · 决策审计两栏 × 两轨（`via` 区分 CLI / 页面）─────────────
+    //
+    // 「谁在什么时候改的」必须能**查库**回答（AC-009），而不是只看 CLI 的回执：
+    // CLI 与页面是两个入口，写的是同一行 —— 审计只能落在**这一行**上，
+    // 否则「同 item+track 连签两次只留终态、不产生两条记录」（AC-005）
+    // 与「每次决策都有 decided_at / via」会互相打架（追加一张日志表就是两条记录）。
+    //
+    // 于是两轨各两栏：`*_decided_at` 是最后一次改判的时间，`*_via` 是最后一次
+    // 改判的入口（`cli` / `ui`）。后写覆盖前写，与「决策是幂等覆盖」同一条语义。
+    (
+        "proposal_items",
+        "biz_decided_at",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS biz_decided_at TIMESTAMPTZ;",
+    ),
+    (
+        "proposal_items",
+        "biz_via",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS biz_via TEXT;",
+    ),
+    (
+        "proposal_items",
+        "model_decided_at",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS model_decided_at TIMESTAMPTZ;",
+    ),
+    (
+        "proposal_items",
+        "model_via",
+        "ALTER TABLE proposal_items ADD COLUMN IF NOT EXISTS model_via TEXT;",
     ),
 ];
 

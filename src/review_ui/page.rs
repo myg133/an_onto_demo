@@ -1,0 +1,376 @@
+//! REQ-111 · 审核界面页面 —— **独立 HTML**（R4）、零外部依赖、壳内零数据。
+//!
+//! # 为什么与 `server/page.rs` 分开
+//!
+//! R4 的裁定：复用**样式与组件做法**，但**不复用那个文件** ——
+//! 「客户看结果」与「FDE 做裁决」是两套语义，混在一个 HTML 里，
+//! 下一个改导航栏的人会同时改到两边。两页各自自包含，代价是几段 CSS 重复，
+//! 换来的是「改审核页不会碰客户页」这条结构边界。
+//!
+//! # 壳里零数据
+//!
+//! 这个常量里**没有**项目名 / 提案名 / 条目 / 决策 —— 全部在拿到口令后走
+//! `GET /api/review`。于是 `/` 可以免口令（浏览器导航带不了 `Authorization`），
+//! 而「能探测到有个服务在」是唯一代价（与 REQ-110 的 ADR-004 同一条取舍）。
+//!
+//! # 三条交互纪律（写进页面，不只写在文档里）
+//!
+//! 1. **逐条签**：每条 × 每轨各两个按钮，点了立刻显示服务端回执或**具体原因**；
+//! 2. **批量先预览**：批量只按「档位 + 未签」算候选，先 `GET /api/preview` 拿
+//!    条数与白名单，弹窗显示「将接受 N 条」并列出条目号，**确认后**才逐条提交；
+//! 3. **没有一键全库**：批量面板不接受「全部条目」，也不含「全选」按钮；
+//!    真正的提交是一串单条 `POST /api/decide`（服务端没有批量写接口）。
+
+/// 审核页面本体。**自包含**：CSS / JS 全内联，不引任何外部资源。
+pub const REVIEW_HTML: &str = r##"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提案审核</title>
+<style>
+:root{--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#d2d2d7;--card:#fff;--acc:#0a6cff;--ok:#0a8f3c;--bad:#c2261c;--warn:#b26a00}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+h1{font-size:15px;margin:0;font-weight:600;white-space:nowrap}
+#scope{color:var(--mut);font-size:13px}
+input,select{font:inherit;padding:5px 9px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+input[type=password]{width:180px}
+button{font:inherit;padding:4px 11px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer;white-space:nowrap}
+button:hover{border-color:var(--acc);color:var(--acc)}
+button:disabled{opacity:.45;cursor:default}
+button.ok{border-color:var(--ok);color:var(--ok)}
+button.bad{border-color:var(--bad);color:var(--bad)}
+#msg{font-size:13px;flex:1;min-width:200px}
+#msg.bad{color:var(--bad);font-weight:600}
+#msg.ok{color:var(--ok)}
+#progress{padding:8px 16px;border-bottom:1px solid var(--line);background:var(--card);display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--mut)}
+#bar{flex:1;min-width:160px;height:8px;background:#e8e8ed;border-radius:4px;overflow:hidden}
+#bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+#controls{padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line);background:#f4f4f7}
+#controls .sep{width:1px;height:22px;background:var(--line)}
+#controls .note{color:var(--mut);font-size:12px}
+main{padding:12px 16px 60px;max-width:1180px;margin:0 auto}
+article{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+article.vetoed{border-color:#e0a39e;background:#fff7f6}
+article.passed{border-color:#a9d4b8;background:#f7fffa}
+.hd{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.idx{font-variant-numeric:tabular-nums;color:var(--mut);font-size:12px}
+.target{font-weight:600}
+.kind{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 8px}
+.band{font-size:12px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
+.band.high{border-color:#a9d4b8;color:var(--ok)}
+.band.mid{border-color:#e8cf9a;color:var(--warn)}
+.band.low{border-color:#e0a39e;color:var(--bad)}
+.tracks{display:flex;gap:22px;flex-wrap:wrap;margin-top:8px}
+.track{display:flex;gap:7px;align-items:center;font-size:13px}
+.track .name{color:var(--mut)}
+.st{font-size:12px;border-radius:5px;padding:1px 7px;border:1px solid var(--line)}
+.st.accepted{color:var(--ok);border-color:#a9d4b8}
+.st.rejected{color:var(--bad);border-color:#e0a39e}
+.st.pending{color:var(--mut)}
+.why{margin-top:8px;font-size:13px;color:var(--bad)}
+.why.grey{color:var(--mut)}
+.detail{margin-top:6px;font-size:13px;color:var(--mut)}
+.detail b{color:var(--fg);font-weight:600}
+pre{margin:6px 0 0;padding:8px;background:#f4f4f7;border-radius:6px;font-size:12px;overflow:auto;max-height:260px}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--acc);font-size:13px}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:20px;z-index:20}
+#modal[hidden]{display:none}
+#box{background:var(--card);border-radius:12px;max-width:620px;width:100%;max-height:80vh;overflow:auto;padding:18px 20px}
+#box h2{margin:0 0 6px;font-size:16px}
+#box p{margin:6px 0;color:var(--mut);font-size:13px}
+#box .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+#ids{font-size:12px;color:var(--mut);word-break:break-all;background:#f4f4f7;border-radius:6px;padding:8px;max-height:180px;overflow:auto}
+.empty{color:var(--mut);text-align:center;padding:40px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>提案审核</h1>
+  <span id="scope">未载入</span>
+  <input id="token" type="password" placeholder="访问口令" autocomplete="off">
+  <button id="load">载入口令</button>
+  <span id="msg">口令只留在本页内存里，不进地址栏、不进浏览器存储。</span>
+</header>
+
+<div id="progress">
+  <span>已签 <b id="p-signed">0</b> / <span id="p-total">0</span></span>
+  <span>待签 <b id="p-pending">0</b></span>
+  <span>两轨通过 <b id="p-passed">0</b></span>
+  <span>被否 <b id="p-vetoed">0</b></span>
+  <span id="bar"><i></i></span>
+</div>
+
+<section id="controls">
+  <label>状态
+    <select id="f-status">
+      <option value="all">全部</option>
+      <option value="unsigned" selected>未签</option>
+      <option value="signed">已签</option>
+      <option value="vetoed">被否</option>
+    </select>
+  </label>
+  <label>置信度
+    <select id="f-band">
+      <option value="">不限</option>
+      <option value="0.9">≥ 0.90</option>
+      <option value="0.75">≥ 0.75</option>
+      <option value="0.6">≥ 0.60</option>
+      <option value="none">无分数</option>
+    </select>
+  </label>
+  <label>搜索 <input id="f-q" placeholder="条目号 / 名称" style="width:140px"></label>
+  <span class="sep"></span>
+  <label>批量轨
+    <select id="b-track"><option value="biz">业务轨</option><option value="model">建模轨</option></select>
+  </label>
+  <label>批量档位
+    <select id="b-band">
+      <option value="0.6">≥ 0.60</option>
+      <option value="0.75">≥ 0.75</option>
+      <option value="0.9">≥ 0.90</option>
+    </select>
+  </label>
+  <button id="b-preview">预览批量接受…</button>
+  <span class="note">批量只作用于**未签**条目，且必须先看条数；没有「一键全库」。</span>
+</section>
+
+<main id="list"><div class="empty">填入口令并点「载入口令」。</div></main>
+
+<div id="modal" hidden>
+  <div id="box">
+    <h2 id="m-title">预览</h2>
+    <p id="m-sub"></p>
+    <div id="ids"></div>
+    <div class="acts">
+      <button id="m-cancel">取消</button>
+      <button id="m-go" class="ok" disabled>确认</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+var S = { token: "", data: null, filter: "unsigned", band: "", query: "", batch: null, busy: false };
+
+function $(id) { return document.getElementById(id); }
+function msg(text, cls) { var el = $("msg"); el.textContent = text; el.className = cls || ""; }
+function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined && text !== null) n.textContent = text; return n; }
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers["Authorization"] = "Bearer " + S.token;
+  if (opts.body) opts.headers["Content-Type"] = "application/json";
+  return fetch(path, opts).then(function (r) {
+    return r.text().then(function (t) {
+      var body = null;
+      try { body = t ? JSON.parse(t) : null; } catch (e) { body = null; }
+      if (!r.ok) {
+        var why = body && body.error ? body.error : ("HTTP " + r.status + (t ? ("：" + t.slice(0, 200)) : ""));
+        throw new Error(why);
+      }
+      return body;
+    });
+  });
+}
+
+function load() {
+  S.token = $("token").value.trim();
+  if (!S.token) { msg("先填访问口令。", "bad"); return; }
+  api("api/review").then(function (d) {
+    S.data = d; S.filter = $("f-status").value; S.band = $("f-band").value; S.query = "";
+    $("scope").textContent = d.project + " · 提案 " + d.proposal + " · 基于 v" + d.base_version;
+    msg("已载入 " + d.items.length + " 条。", "ok");
+    render();
+  }).catch(function (e) { msg("载入失败：" + e.message, "bad"); });
+}
+
+function score(it) {
+  if (it.confidence && typeof it.confidence.score === "number") return it.confidence.score;
+  return null;
+}
+function bandName(it) {
+  var c = it.confidence;
+  if (!c) return "无分数";
+  return (c.band || "") + (typeof c.score === "number" ? " " + c.score.toFixed(2) : "");
+}
+function isUnsigned(it, track) { return (track === "biz" ? it.biz : it.model) === "pending"; }
+function bothSigned(it) { return it.biz !== "pending" && it.model !== "pending"; }
+function isVetoed(it) { return it.biz === "rejected" || it.model === "rejected"; }
+
+function visible(it) {
+  if (S.filter === "unsigned" && !(isUnsigned(it, "biz") || isUnsigned(it, "model"))) return false;
+  if (S.filter === "signed" && !bothSigned(it)) return false;
+  if (S.filter === "vetoed" && !isVetoed(it)) return false;
+  if (S.band) {
+    var sc = score(it);
+    if (S.band === "none") { if (sc !== null) return false; }
+    else if (sc === null || sc + 1e-9 < parseFloat(S.band)) return false;
+  }
+  if (S.query) {
+    var q = S.query.toLowerCase();
+    if (String(it.item) !== q && it.target.toLowerCase().indexOf(q) < 0) return false;
+  }
+  return true;
+}
+
+function statusBadge(v) {
+  var map = { accepted: "已接受", rejected: "已拒绝", pending: "未签" };
+  return el("span", "st " + v, map[v] || v);
+}
+
+function trackRow(it, track, label) {
+  var wrap = el("div", "track");
+  wrap.appendChild(el("span", "name", label + "："));
+  var v = track === "biz" ? it.biz : it.model;
+  wrap.appendChild(statusBadge(v));
+  var via = it.via && it.via[track] ? (" · 最后由 " + (it.via[track] === "ui" ? "页面" : "CLI") + " 于 " + (it.decided_at[track] || "")) : "";
+  if (via) wrap.appendChild(el("span", "name", via));
+  var a = el("button", "ok", "接受");
+  a.disabled = S.busy;
+  a.onclick = function () { sign(it, track, "accept"); };
+  var r = el("button", "bad", "拒绝");
+  r.disabled = S.busy;
+  r.onclick = function () { sign(it, track, "reject"); };
+  wrap.appendChild(a); wrap.appendChild(r);
+  return wrap;
+}
+
+function render() {
+  if (!S.data) return;
+  var items = S.data.items;
+  var p = S.data.progress;
+  $("p-total").textContent = p.total;
+  $("p-signed").textContent = p.signed;
+  $("p-pending").textContent = p.pending;
+  $("p-passed").textContent = p.passed;
+  $("p-vetoed").textContent = p.vetoed;
+  var pct = p.total ? Math.round((p.signed / p.total) * 100) : 0;
+  $("bar").firstElementChild.style.width = pct + "%";
+
+  var list = $("list");
+  list.textContent = "";
+  var shown = 0;
+  items.forEach(function (it) {
+    if (!visible(it)) return;
+    shown++;
+    var card = el("article", isVetoed(it) ? "vetoed" : (it.state === "passed" ? "passed" : ""));
+    var hd = el("div", "hd");
+    hd.appendChild(el("span", "idx", "#" + it.item));
+    hd.appendChild(el("span", "target", it.target));
+    hd.appendChild(el("span", "kind", it.kind));
+    var sc = score(it), b = el("span", "band", bandName(it));
+    if (sc !== null) b.className += sc >= 0.9 ? " high" : (sc >= 0.75 ? " mid" : " low");
+    hd.appendChild(b);
+    card.appendChild(hd);
+
+    var tracks = el("div", "tracks");
+    tracks.appendChild(trackRow(it, "biz", "业务轨"));
+    tracks.appendChild(trackRow(it, "model", "建模轨"));
+    card.appendChild(tracks);
+
+    if (it.reason) card.appendChild(el("div", "why", "阻断原因：" + it.reason));
+    var ai = it.confidence && it.confidence.ai && it.confidence.ai.rationale;
+    if (ai) card.appendChild(el("div", "detail", "AI 理由：" + ai));
+
+    if (it.evidence && it.evidence.length) {
+      var ev = it.evidence.map(function (e) {
+        if (typeof e === "string") return e;
+        return [e.claim, e.table ? ("表 " + e.table) : "", e.column ? ("列 " + e.column) : "", e.inference ? ("推断 " + e.inference) : ""]
+          .filter(Boolean).join(" · ");
+      }).join("；");
+      card.appendChild(el("div", "detail", "依据：" + ev));
+    }
+
+    var d = el("details");
+    d.appendChild(el("summary", null, "候选定义（建模内容）"));
+    d.appendChild(el("pre", null, JSON.stringify(it.payload, null, 2)));
+    card.appendChild(d);
+    list.appendChild(card);
+  });
+  if (!shown) {
+    var e = el("div", "empty", "当前筛选下没有条目。");
+    list.appendChild(e);
+  }
+}
+
+function mergeReply(reply) {
+  var it = S.data.items.filter(function (x) { return x.item === reply.item; })[0];
+  if (it) {
+    it.biz = reply.biz; it.model = reply.model; it.state = reply.state;
+    it.decided_at = reply.decided_at; it.via = reply.via;
+  }
+  S.data.progress = reply.progress;
+}
+
+function sign(it, track, decision) {
+  if (S.busy) return;
+  S.busy = true; render();
+  api("api/decide", { method: "POST", body: JSON.stringify({ item: it.item, track: track, decision: decision }) })
+    .then(function (reply) {
+      mergeReply(reply);
+      msg("#" + reply.item + " 的" + (track === "biz" ? "业务轨" : "建模轨") + " → " + (decision === "accept" ? "已接受" : "已拒绝") + "（入口 ui）", "ok");
+      S.busy = false; render();
+    })
+    .catch(function (e) {
+      // AC-007：把服务端的**具体原因**原样显示 —— 不写成「失败」两个字。
+      msg("#" + it.item + " 签不下去：" + e.message, "bad");
+      S.busy = false; render();
+    });
+}
+
+function preview() {
+  if (!S.token || !S.data) { msg("先载入口令。", "bad"); return; }
+  var track = $("b-track").value, band = $("b-band").value;
+  api("api/preview?track=" + encodeURIComponent(track) + "&min_confidence=" + encodeURIComponent(band) + "&scope=unsigned")
+    .then(function (p) {
+      S.batch = { track: track, items: p.items, count: p.count };
+      $("m-title").textContent = "将接受 " + p.count + " 条（" + (track === "biz" ? "业务轨" : "建模轨") + " · 置信度 ≥ " + band + " · 仅未签）";
+      $("m-sub").textContent = "总条目 " + p.total + "；已签 " + p.excluded.decided + " 条；低于档位 " +
+        p.excluded.below_band + " 条；无分数 " + p.excluded.no_confidence + " 条。确认后逐条提交（每条一次 POST）。";
+      $("ids").textContent = p.items.length ? ("条目号：" + p.items.join(", ")) : "没有符合条件的条目。";
+      $("m-go").textContent = "确认接受 " + p.count + " 条";
+      $("m-go").disabled = p.count === 0;
+      $("modal").hidden = false;
+    })
+    .catch(function (e) { msg("预览失败：" + e.message, "bad"); });
+}
+
+function runBatch() {
+  var b = S.batch;
+  if (!b || !b.items.length) return;
+  $("modal").hidden = true;
+  S.busy = true; render();
+  var done = 0, failed = null;
+  function step() {
+    if (done >= b.items.length || failed) {
+      S.busy = false; render();
+      if (failed) msg("批量在中途停下：" + failed, "bad");
+      else msg("批量完成：接受 " + b.items.length + " 条（" + (b.track === "biz" ? "业务轨" : "建模轨") + "）。", "ok");
+      S.batch = null;
+      return;
+    }
+    var item = b.items[done++];
+    api("api/decide", { method: "POST", body: JSON.stringify({ item: item, track: b.track, decision: "accept" }) })
+      .then(function (reply) { mergeReply(reply); render(); msg("批量进行中 " + done + "/" + b.items.length, ""); step(); })
+      .catch(function (e) { failed = "#" + item + "：" + e.message; step(); });
+  }
+  step();
+}
+
+$("load").onclick = load;
+$("token").addEventListener("keydown", function (e) { if (e.code === "Enter") load(); });
+$("f-status").onchange = function () { S.filter = this.value; render(); };
+$("f-band").onchange = function () { S.band = this.value; render(); };
+$("f-q").oninput = function () { S.query = this.value.trim(); render(); };
+$("b-preview").onclick = preview;
+$("m-cancel").onclick = function () { $("modal").hidden = true; S.batch = null; };
+$("m-go").onclick = runBatch;
+</script>
+</body>
+</html>
+"##;

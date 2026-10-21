@@ -28,6 +28,15 @@ pub struct ProposalRow {
     pub created_at: DateTime<Utc>,
 }
 
+/// ⭐ REQ-111 · 条目表的**唯一**列清单。
+///
+/// 两处 `SELECT`（`items` / `item_by_seq`）共用它：`ProposalItemRow` 加了审计两栏
+/// 之后，抄两份列清单迟早会出现「一处带 via、一处不带」—— 那正是
+/// 「页面签的看得到、CLI 签的看不到」这类不一致的来源（AC-004 双向一致要防的）。
+const ITEM_COLUMNS: &str = "id, proposal_id, seq, kind, target_key, payload, \
+                            biz_status, model_status, \
+                            biz_decided_at, biz_via, model_decided_at, model_via";
+
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct ProposalItemRow {
     pub id: Uuid,
@@ -39,7 +48,33 @@ pub struct ProposalItemRow {
     pub payload: Value,
     pub biz_status: String,
     pub model_status: String,
+    /// ⭐ REQ-111 · 决策审计（AC-009）：**最后一次**改判的时间与入口。
+    ///
+    /// 两轨各两栏（不是一张追加日志表）—— 因为 AC-005 要求同 `item+track`
+    /// 连签只留**终态、不产生两条记录**。审计放在同一行上，两条判据才不互相打架。
+    /// `*_decided_at` 为 `NULL` = 这一轨还没人签过（与 `pending` 同源，不是零值）。
+    pub biz_decided_at: Option<DateTime<Utc>>,
+    /// `cli` / `ui`（见 [`VIA_CLI`] / [`VIA_UI`]）
+    pub biz_via: Option<String>,
+    pub model_decided_at: Option<DateTime<Utc>>,
+    pub model_via: Option<String>,
 }
+
+/// ⭐ REQ-111 · 决策入口标识（写进 `proposal_items.*_via`）。
+///
+/// 为什么是**字符串常量**而不是枚举：这一栏是**审计面**（人查库时读它），
+/// 不是状态机的输入 —— 状态机只看 `Decision`。加一个枚举会让人以为
+/// 「via 也参与判定」，而它不参与。
+pub const VIA_CLI: &str = "cli";
+pub const VIA_UI: &str = "ui";
+
+/// 一次决策后该条目的**双轨状态**（来自 `UPDATE … RETURNING`，不另查一次）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionOutcome {
+    pub biz: Decision,
+    pub model: Decision,
+}
+
 
 /// 新提案的输入。
 #[derive(Debug, Clone)]
@@ -234,10 +269,9 @@ impl PgProposalStore {
     }
 
     pub async fn items(&self, proposal_id: Uuid) -> Result<Vec<ProposalItemRow>, StoreError> {
-        let rows = sqlx::query_as(
-            "SELECT id, proposal_id, seq, kind, target_key, payload, biz_status, model_status
-             FROM proposal_items WHERE proposal_id = $1 ORDER BY seq",
-        )
+        let rows = sqlx::query_as(&format!(
+            "SELECT {ITEM_COLUMNS} FROM proposal_items WHERE proposal_id = $1 ORDER BY seq"
+        ))
         .bind(proposal_id)
         .fetch_all(&self.pool)
         .await?;
@@ -250,10 +284,9 @@ impl PgProposalStore {
         proposal_id: Uuid,
         seq: i32,
     ) -> Result<Option<ProposalItemRow>, StoreError> {
-        let r = sqlx::query_as(
-            "SELECT id, proposal_id, seq, kind, target_key, payload, biz_status, model_status
-             FROM proposal_items WHERE proposal_id = $1 AND seq = $2",
-        )
+        let r = sqlx::query_as(&format!(
+            "SELECT {ITEM_COLUMNS} FROM proposal_items WHERE proposal_id = $1 AND seq = $2"
+        ))
         .bind(proposal_id)
         .bind(seq)
         .fetch_optional(&self.pool)
@@ -261,31 +294,106 @@ impl PgProposalStore {
         Ok(r)
     }
 
-    /// 写入单轨判定。
+    /// ⭐ REQ-111 · **决策的唯一实现**（CLI 的 `review decide` 与审核界面的
+    /// `POST /api/decide` 都走这里）。
+    ///
+    /// # 为什么必须只剩这一个入口（纪律 H）
+    ///
+    /// 「提案内序号 → 条目 → 单轨判定 → 落库」这条路径此前只住在
+    /// `cli.rs::review_cmd` 的分支里。审核界面若在 HTTP 层再写一遍 UPDATE，
+    /// 就成了**第二份决策逻辑**：两份永远一致只是巧合，而「同 item+track
+    /// 连签只留终态」（AC-005）与「审计带 via」（AC-009）会先在其中一份上漂。
+    ///
+    /// 所以：**序号解析、领域更新、落库、审计**四步全部收进本函数，
+    /// 两个入口只差一个 `via` 参数。`set_decision_via` 是**唯一**的 UPDATE 点；
+    /// `git grep 'set_decision_via'` 只会命中「定义 + 本函数 + 兼容旧的
+    /// `set_decision`」三处。
+    ///
+    /// # 为什么还调一次 `domain::review::apply_decision`
+    ///
+    /// 状态机是纯函数（`domain::review`，零 I/O）。让**它**算下一态、
+    /// 存储层只负责落库，等于把「判定」与「持久化」的边界写清楚：
+    /// 将来状态机加规则（例如「已否决能否被抹掉」），两个入口同时生效。
+    pub async fn decide_item(
+        &self,
+        proposal_id: Uuid,
+        seq: i32,
+        track: crate::domain::review::Track,
+        d: Decision,
+        via: &str,
+    ) -> Result<DecisionOutcome, StoreError> {
+        let row = self
+            .item_by_seq(proposal_id, seq)
+            .await?
+            .ok_or(StoreError::ItemNotFound { seq })?;
+        // 领域层算下一态（`apply_decision` 是纯函数：只改被签的那一轨）。
+        let view = Self::to_item_views(std::slice::from_ref(&row))
+            .pop()
+            .ok_or(StoreError::ItemNotFound { seq })?;
+        let next = crate::domain::review::apply_decision(&view, track, d);
+        let status = match track {
+            crate::domain::review::Track::Biz => next.biz_status,
+            crate::domain::review::Track::Model => next.model_status,
+        };
+        self.set_decision_via(row.id, track, status, via).await
+    }
+
+    /// 写入单轨判定 —— **全仓唯一**的决策 UPDATE。
+    ///
+    /// `via` 与 `now()` 一起落库（AC-009）：`decided_at` 由**数据库**取时间，
+    /// 不用进程时钟（多进程下进程时钟会给出先后矛盾的审计）。
+    ///
+    /// 返回更新后的双轨状态，调用方不必再查一次。
+    pub async fn set_decision_via(
+        &self,
+        item_id: Uuid,
+        track: crate::domain::review::Track,
+        d: Decision,
+        via: &str,
+    ) -> Result<DecisionOutcome, StoreError> {
+        // 三列名都是上面 match 出来的字面量，不来自用户输入 —— 无注入面。
+        let (col, at_col, via_col) = match track {
+            crate::domain::review::Track::Biz => ("biz_status", "biz_decided_at", "biz_via"),
+            crate::domain::review::Track::Model => {
+                ("model_status", "model_decided_at", "model_via")
+            }
+        };
+        let row: (String, String) = sqlx::query_as(&format!(
+            "UPDATE proposal_items
+                SET {col} = $2, {at_col} = now(), {via_col} = $3
+              WHERE id = $1
+          RETURNING biz_status, model_status"
+        ))
+        .bind(item_id)
+        .bind(d.as_str())
+        .bind(via)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::Db(sqlx::Error::RowNotFound))?;
+        Ok(DecisionOutcome {
+            biz: parse_decision(&row.0),
+            model: parse_decision(&row.1),
+        })
+    }
+
+    /// 写入单轨判定（**兼容旧签名**：默认入口记 `cli`）。
+    ///
+    /// 保留它是因为 `proposal apply`（`db/apply.rs`）与一批既有测试直接调它；
+    /// 生产上的两条**人工**入口都走 [`Self::decide_item`] / [`Self::set_decision_via`]。
+    /// 语义仍是「后写覆盖」，审计栏随之更新。
     ///
     /// **不校验是否已 rejected** —— 那正是 G-5 待拍板的语义问题：
     /// 同轨的 `accepted` 能否抹掉显式的 `rejected`？
-    /// 当前实现**允许**（后写覆盖），并在 `decisions_log` 留痕。
-    /// 拍板后这里要加守卫。
+    /// 当前实现**允许**（后写覆盖，AC-005 要求的正是「连签 = 改判」）。
     pub async fn set_decision(
         &self,
         item_id: Uuid,
         track: crate::domain::review::Track,
         d: Decision,
     ) -> Result<(), StoreError> {
-        let col = match track {
-            crate::domain::review::Track::Biz => "biz_status",
-            crate::domain::review::Track::Model => "model_status",
-        };
-        // col 是上面 match 出来的字面量，不来自用户输入 —— 无注入面
-        sqlx::query(&format!(
-            "UPDATE proposal_items SET {col} = $2 WHERE id = $1"
-        ))
-        .bind(item_id)
-        .bind(d.as_str())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        self.set_decision_via(item_id, track, d, VIA_CLI)
+            .await
+            .map(|_| ())
     }
 
     pub async fn set_status(&self, id: Uuid, status: &str) -> Result<(), StoreError> {
