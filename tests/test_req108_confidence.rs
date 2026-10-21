@@ -223,6 +223,11 @@ fn test_req108_ac008_import_rejects_item_without_method() {
     // 有 method 的同一份 ⇒ 通过，且分数搬进了 payload（apply 那条路只读 payload）
     let mut ok = item.clone();
     ok["confidence"]["method"] = serde_json::json!(METHOD);
+    // ★ A-10：有 confidence 就必须有证据链 —— 补一份最小 signals 只是让 fixture 完整，
+    //   本用例断言的东西（method 必填 / 分数搬进 payload / band 派生校验）一条没变。
+    ok["confidence"]["signals"] = serde_json::json!([
+        {"name": "name_match", "value": 1.0, "weight": 0.2}
+    ]);
     let parsed = ontok::db::proposal::NewItem::from_json(&ok, 0).unwrap();
     assert_eq!(parsed.payload["confidence"]["method"], serde_json::json!(METHOD));
 
@@ -231,6 +236,79 @@ fn test_req108_ac008_import_rejects_item_without_method() {
     tampered["confidence"]["method"] = serde_json::json!(METHOD);
     tampered["confidence"]["band"] = serde_json::json!("low");
     assert!(ontok::db::proposal::NewItem::from_json(&tampered, 0).is_err());
+}
+
+// ── A-10（R1 修复）· 有 confidence 就必须有证据链 ────────────
+
+/// R1 的原样复现：`{"score":0.99,"method":"evidence-scorecard-v1"}`（**没有 signals**）
+/// 在条目入口就被拒 —— `propose import` 因此非 0 退出。
+///
+/// 这就是 BA 裁定 A-10 的判据 1：删字段和改数字是同一类漏洞（都只要一行），
+/// 不能靠「文件里写了 veto」兜底，因为这里连 `signals` 都没写。
+///
+/// 变异自证：把 `confidence::from_untrusted` 里 `signals` 的 `None | Null` 分支
+/// 改回 `Vec::new()`（旧实现），本测试立刻红 —— 那时一份无证据的 0.99 会成功入库。
+#[test]
+fn test_req108_ac014_item_with_confidence_but_no_signals_is_rejected() {
+    let mut item = serde_json::json!({
+        "kind": "add_link_type",
+        "target": "订单→客户",
+        "payload": {
+            "key": "orders_customer_id__customers",
+            "from_type": "orders", "to_type": "customers",
+            "cardinality": "N:1", "semantic": "belongs_to"
+        },
+        "confidence": {"score": 0.99, "method": METHOD}
+    });
+
+    let err = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap_err().to_string();
+    assert!(err.contains("有置信度但缺证据链"), "文案要说清「有置信度但缺证据链」：{err}");
+    assert!(err.contains("不可复核"), "{err}");
+
+    // 空数组同样拒（「写了证据链但一条都没有」与「没写」等价）
+    item["confidence"]["signals"] = serde_json::json!([]);
+    let err = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap_err().to_string();
+    assert!(err.contains("有置信度但缺证据链"), "{err}");
+    assert!(err.contains("空数组"), "空数组与缺失要能区分开：{err}");
+
+    // 阴性对照：同一份条目**带上**证据链就放行（否则上面只是「什么都拒」）
+    item["confidence"]["signals"] = serde_json::json!([
+        {"name": "name_match", "value": 1.0, "weight": 0.2}
+    ]);
+    let parsed = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap();
+    assert_eq!(parsed.payload["confidence"]["score"], serde_json::json!(0.99));
+}
+
+/// **A-10 的对照（不许误伤）**：老的人工提案 —— **完全没有 `confidence` 字段** ——
+/// 必须继续成功导入。
+///
+/// 两者能精确区分，靠的是**位置**而不是「有没有 `signals`」：
+/// `proposal::NewItem::from_json`（以及 `apply::link_from_item`）只在
+/// `confidence` **存在且非 null** 时才调 `from_untrusted`；没有这个键的条目
+/// 根本走不到证据链校验。`confidence: null` 与缺失同义（JSON 的 null = 没有分数，
+/// 不是「0 分的分数」），见交付报告。
+#[test]
+fn test_req108_ac014_legacy_item_without_confidence_still_imports() {
+    let item = serde_json::json!({
+        "kind": "add_link_type",
+        "target": "订单→客户",
+        "payload": {
+            "key": "orders_customer_id__customers",
+            "from_type": "orders", "to_type": "customers",
+            "cardinality": "N:1", "semantic": "belongs_to"
+        }
+    });
+    let parsed = ontok::db::proposal::NewItem::from_json(&item, 0).unwrap();
+    assert!(
+        !parsed.payload.as_object().unwrap().contains_key("confidence"),
+        "老提案不该被凭空补一个 confidence"
+    );
+
+    // `null` 与「没有这个键」同义：同样放行、同样不补字段
+    let mut nulled = item.clone();
+    nulled["confidence"] = serde_json::Value::Null;
+    let parsed = ontok::db::proposal::NewItem::from_json(&nulled, 0).unwrap();
+    assert!(!parsed.payload.as_object().unwrap().contains_key("confidence"));
 }
 
 // ── AC-015 · `importable: false` 是硬闸（第 2 轮）────────────
@@ -314,14 +392,23 @@ fn test_req108_review_confidence_table_shape() {
     assert!(empty.contains("没有分数"), "{empty}");
 
     // 数据证据缺失时也要说清楚（不能看不出「没采」）
-    let no_data = Confidence {
-        score: 0.4,
-        method: METHOD.into(),
-        band: Band::Low,
-        signals: vec![],
-        veto: None,
-        data_evidence: DataEvidence::None,
-    };
-    let text = ontok::cli::render_confidence_table(&[row(3, "无证据", serde_json::to_value(no_data).unwrap())]);
+    //
+    // ★ A-10：这里改用评分卡**真实产出**（`--no-sample` 的形状），不再手拼一个
+    //   `signals: vec![]` 的 Confidence —— 后者在新规则下已不是合法值
+    //   （`render_confidence_table` 读回时会判为「没有分数」，本断言就变空了）。
+    let no_data = score(&ScoreInput {
+        column: "customer_id".into(),
+        to_table: "customers".into(),
+        from_type: TypeFamily::Str,
+        to_type: Some(TypeFamily::Str),
+        target_key: TargetKey::Primary,
+        data: None,
+        composite_target_key: false,
+        polymorphic: false,
+        self_ref: false,
+    });
+    assert_eq!(no_data.data_evidence, DataEvidence::None);
+    let text =
+        ontok::cli::render_confidence_table(&[row(3, "无证据", serde_json::to_value(no_data).unwrap())]);
     assert!(text.contains("data_evidence=none"), "{text}");
 }

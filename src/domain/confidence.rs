@@ -823,9 +823,22 @@ fn validate_self_evidence(
 /// - `score` 缺失 / 越界 ⇒ 拒绝；
 /// - `band` 是**派生量**：以 `score` 为准重算；若 JSON 里写了一个跟分数
 ///   对不上的 `band`，那是**被改过的**数据 ⇒ 拒绝（而不是悄悄改成对的）；
-/// - `signals` / `veto` / `data_evidence` 可缺省（前两者缺失时为空/无），
-///   **但一旦写了，就必须与 `method` 的权重表、与彼此自洽**（AC-014，
+/// - `veto` / `data_evidence` 可缺省（`None` / `sampled`），
+///   **但 `signals` 不可缺省**（A-10：有 `confidence` 就必须有证据链，见下）；
+///   一旦给出，就必须与 `method` 的权重表、与彼此自洽（AC-014，
 ///   见 [`validate_self_evidence`]）。
+///
+/// # A-10（R1）：`signals` 不是「可选字段」
+///
+/// 本函数**只在条目带了 `confidence` 时被调用** —— `proposal::NewItem::from_json`
+/// 与 `apply::link_from_item` 对 `None | Some(Null)` 都直接跳过。所以走到这里
+/// 就说明「声明了一份分数」，而 `signals` 缺失 / `null` / 空数组意味着
+/// **声明了分数却没有能推出它的证据**：`{"score":0.99,"method":"…"}` 一行
+/// 就能冒充「高可信」，且删字段比改数字更省事。
+///
+/// 因此这里直接拒绝，而不是默认成空证据链。老的人工提案不受影响 ——
+/// 它们**没有** `confidence` 键，根本走不到本函数（判据见
+/// `tests/test_req108_confidence.rs` 的「legacy item 仍可导入」）。
 pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
     let method = v
         .get("method")
@@ -856,11 +869,28 @@ pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
             ));
         }
     }
+    // ★ A-10：**有 `confidence` 就必须有证据链**。
+    //
+    // 缺失与空数组分开报：读的人需要知道自己是「没写」还是「写了个空的」，
+    // 但两者都拒绝 —— 一份没有 `signals` 的分数无从复核。
     let signals: Vec<Signal> = match v.get("signals") {
-        None | Some(serde_json::Value::Null) => Vec::new(),
+        None | Some(serde_json::Value::Null) => {
+            return Err(
+                "confidence 有 score/method 但缺 signals —— 有置信度但缺证据链：\
+                 分数必须由 signals 里的证据推出来，否则不可复核（A-10）"
+                    .to_string(),
+            );
+        }
         Some(s) => serde_json::from_value(s.clone())
             .map_err(|e| format!("confidence.signals 形状不合法：{e}"))?,
     };
+    if signals.is_empty() {
+        return Err(
+            "confidence.signals 是空数组 —— 有置信度但缺证据链：\
+             声明了分数却没有证据，分数不可复核（A-10）"
+                .to_string(),
+        );
+    }
     let veto: Option<Veto> = match v.get("veto") {
         None | Some(serde_json::Value::Null) => None,
         Some(x) => Some(
@@ -1031,6 +1061,15 @@ mod tests {
     /// 命中率 5/5、类型相容 —— 加权和能拿满分。
     fn maxed_structural() -> ScoreInput {
         base()
+    }
+
+    /// A-10：一份**最小但完整**的证据链（只有 `name_match`，权重与表一致）。
+    ///
+    /// 只用来满足「有 `confidence` 就必须有证据链」这条入口前提 ——
+    /// 它不参与分数断言，也不冒充评分卡的真实产出（真实产出永远是五个信号
+    /// 里至少 `name_match` + `target_is_key` 两个）。
+    fn minimal_signals() -> serde_json::Value {
+        serde_json::json!([{"name": "name_match", "value": 1.0, "weight": 0.2}])
     }
 
     #[test]
@@ -1525,8 +1564,11 @@ mod tests {
             let v = serde_json::json!({"score": 0.9, "method": bad});
             assert!(from_untrusted(&v).is_err(), "method = {bad:?} 也必须拒绝");
         }
-        // 有 method 就放行
-        assert!(from_untrusted(&serde_json::json!({"score": 0.9, "method": METHOD})).is_ok());
+        // 有 method 就放行（A-10：有 confidence 就必须有证据链，故带上最小 signals）
+        assert!(from_untrusted(&serde_json::json!({
+            "score": 0.9, "method": METHOD, "signals": minimal_signals()
+        }))
+        .is_ok());
     }
 
     /// `score` 缺失 / 越界 ⇒ 拒绝；`band` 与分数对不上 ⇒ 拒绝（派生量不许被改）。
@@ -1539,9 +1581,9 @@ mod tests {
                 "score = {s} 越界必须拒绝"
             );
         }
-        // band 与 score 一致 ⇒ 通过；不一致 ⇒ 拒绝
+        // band 与 score 一致 ⇒ 通过；不一致 ⇒ 拒绝（A-10：带上最小证据链）
         assert!(from_untrusted(&serde_json::json!({
-            "method": METHOD, "score": 0.95, "band": "high"
+            "method": METHOD, "score": 0.95, "band": "high", "signals": minimal_signals()
         }))
         .is_ok());
         let err = from_untrusted(&serde_json::json!({
@@ -1557,19 +1599,68 @@ mod tests {
     }
 
     /// 缺省字段的语义：`band` 由分数**算**、`data_evidence` 默认 `sampled`、`veto` 可空。
+    ///
+    /// ★ A-10（第 2 轮）：`signals` **不是**缺省字段 —— 有 `confidence` 就必须有
+    /// 证据链（见 [`ac014_confidence_without_evidence_chain_is_rejected`]）。
+    /// 所以这里在**带一份最小证据链**的前提下测其余缺省字段；原断言的
+    /// band 派生 / `data_evidence` 默认 / `veto` 可空三条**一条没少**，
+    /// 只是把「`signals == []`」这条默认值断言换成了「必须有证据」。
     #[test]
     fn absent_optional_fields_get_derived_not_invented_values() {
-        let c = from_untrusted(&serde_json::json!({"method": METHOD, "score": 0.72})).unwrap();
+        let c = from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.72, "signals": minimal_signals()
+        }))
+        .unwrap();
         assert_eq!(c.band, Band::Middle, "band 是派生量");
-        assert_eq!(c.signals, vec![]);
         assert_eq!(c.veto, None);
         assert_eq!(c.data_evidence, DataEvidence::Sampled);
         let c = from_untrusted(&serde_json::json!({
-            "method": METHOD, "score": 0.1, "data_evidence": "none"
+            "method": METHOD, "score": 0.1, "data_evidence": "none",
+            "signals": minimal_signals()
         }))
         .unwrap();
         assert_eq!(c.data_evidence, DataEvidence::None);
         assert_eq!(c.band, Band::Rejected);
+    }
+
+    /// **A-10（R1）· 有 `confidence` 却缺证据链 ⇒ 拒绝**。
+    ///
+    /// R1 的原样复现：`{"score":0.99,"method":"evidence-scorecard-v1"}` 一行就能
+    /// 冒充「高可信」—— 删字段比改数字更省事，而旧行为会放行。
+    ///
+    /// 三种「没有证据链」的写法都必须拒：
+    ///
+    /// | 输入 | 为什么拒 |
+    /// | --- | --- |
+    /// | 无 `signals` 键 | 分数没有来源 |
+    /// | `signals: null` | 显式写了空，同样没有证据 |
+    /// | `signals: []` | 空证据链 |
+    ///
+    /// 变异自证：把 `from_untrusted` 里 `signals` 的 `None | Null` 分支改回
+    /// `Vec::new()`（旧实现），本测试第一条立刻红。
+    ///
+    /// ⚠️ 这**不是**「误伤老提案」：老的人工提案没有 `confidence` 键，
+    /// 走不到本函数（见 `test_req108_confidence.rs` 的 legacy 用例）。
+    #[test]
+    fn ac014_confidence_without_evidence_chain_is_rejected() {
+        let cases = [
+            serde_json::json!({"method": METHOD, "score": 0.99}),
+            serde_json::json!({"method": METHOD, "score": 0.99, "signals": null}),
+            serde_json::json!({"method": METHOD, "score": 0.99, "signals": []}),
+        ];
+        for v in cases {
+            let err = from_untrusted(&v).unwrap_err();
+            assert!(
+                err.contains("有置信度但缺证据链"),
+                "文案要说清「有置信度但缺证据链」：{err}"
+            );
+            assert!(err.contains("不可复核"), "还要说清为什么（不可复核）：{err}");
+        }
+        // 阴性对照：同一份分数**带上**证据链就放行（否则上面只是「什么都拒」）
+        assert!(from_untrusted(&serde_json::json!({
+            "method": METHOD, "score": 0.99, "signals": minimal_signals()
+        }))
+        .is_ok());
     }
 
     // ── AC-014 · 自证链：分数不能脱离证据 ─────────────────────

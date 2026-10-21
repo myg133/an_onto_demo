@@ -1586,6 +1586,14 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "运维辅助（`review show --confidence` 的分档表渲染，纯文本、零客户字段）",
     ),
     ("src/cli.rs", "confidence_cmd", "子命令 handler（`confidence calibrate`）"),
+    // REQ-108 · A-8/A-15：导入前的顶层硬闸（`importable: false` 的提案不能导入）。
+    // ⚠️ 4acbf5a 加了函数却漏登记，T5 在 HEAD 上就是红的；这里补的是**登记**，
+    // 不是放宽判据 —— T5 要求「出口文件里每一个 fn 都必须显式登记用途」。
+    (
+        "src/cli.rs",
+        "ensure_importable",
+        "导入前硬闸（A-8/A-15：`importable: false` 的提案不能导入）",
+    ),
     ("src/cli.rs", "project_cmd", "子命令 handler"),
     ("src/cli.rs", "version_cmd", "子命令 handler"),
     ("src/cli.rs", "propose_cmd", "子命令 handler"),
