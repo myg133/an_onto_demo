@@ -5,7 +5,7 @@
 > 不产结构、不翻 veto；指纹缓存 + 预算闸 + 三件套无 key 即拒。**
 >
 > **P0（流程通）全绿**：协议解析、缓存命中/未命中、预算闸、同输入两次一致、无 key 报错退出、
-> `semantic_fit` 不影响 veto。**语义准不准是 P1 观察项**（第 §6 节，含 3 条**标红**的误判）。
+> `semantic_fit` 不影响 veto。**语义准不准是 P1 观察项**（第 §5.2 节，含 3 条**标红**的误判）。
 
 ---
 
@@ -25,13 +25,33 @@
 
 ---
 
+## 0.1 · 本轮文档订正（QA N-2 / N-3 / N-4 / N-5 ⇒ acceptance A-9 / A-10）
+
+> 纯文档轮：**不改代码**（`src/` / `tests/` / `Cargo.toml` 零改动）。下表是「原写法 → 订正后」的索引，
+> 正文对应处已就地改好，后面每处都有 §号可查。
+
+| # | 原写法（不实） | 订正后 | 落点 |
+| --- | --- | --- | --- |
+| **N-2①** | 「逐套件同 **§11.3** 名单」—— 本报告只有 §0–§8，**没有 §11.3**（那是 REQ-108 报告的章节号） | 改为「见 **§6.1**」，并把 32 个回归套件的**逐套件名单就地补齐**（数据源 `out/req109/suites-final.log`，合计 313） | §6 表 · §6.1 |
+| **N-2②** | 引用了**不存在**的测试文件 `tests/test_req109_ai_cache_pg.rs` | 该字符串**不在本报告正文**，而在 `tests/test_req109_ai_semantic.rs:23` 的模块头注释；**真实文件是** `tests/test_req109_e2e_fake_llm.rs`（真进程 + 假端点 + 真 `ai_cache` 表）。本轮不改 `tests/`，登记为待下一轮改一行注释 | §7 · D-7 |
+| **N-2③** | `src/extract/ai_semantic.rs`「~1030 行」 | **1002 行**（实测：`(Get-Content src/extract/ai_semantic.rs).Count`） | §1.1 |
+| **N-2④** | 用 `out/req109/full1/run.log` 当预算闸证据，但它是**旧构建**产物（写缓存 72 条，现行构建会把作废答案也写缓存） | 日志**保留但显式降级**为「旧构建，只作文案样例，不作为证据」，预算闸证据改用「full1 目录 0 份提案文件」＋ QA 独立复验；本轮**未重跑** | §2.6 |
+| **N-3** | 「3 条都是采样 **5/5**」 | 三者的共同点是 **`matched == sampled`（全部命中）**，样本数分别是 **5/5、1/1、1/1**；判据是命中率 = 1.0，不是「必须采到 5 条」 | §5.2 |
+| **N-4** | 开关表漏写 `--llm` 还要求 `ONTOK_DATABASE_URL` | 补丁文本见 §7 · D-6，**由 BA 落库**（`design-summary.md` 在 `BA/`，不在 Dev 的改动范围） | §7 · D-6 |
+| **N-5** | model-view 的 AI 条数写死 **51** | **≥51**（运行相关：Dev 真实模型 51 / QA 端到端 52） | §2.10 |
+
+> 顺手修正 4 处**同类失效交叉引用**（同一类问题，不一并修就是留坑）：开篇「第 §6 节」⇒ **§5.2**、
+> §2.9「见 §6」⇒ **§5.3**、§2.11「全量测试 0 failed（§7）」⇒ **§6**、§2.12「逐套件见 §7」⇒ **§6.1**。
+
+---
+
 ## 1 · 改动清单（`path:line`）
 
 ### 1.1 新增
 
 | 文件 | 职责 | 关键位置 |
 | --- | --- | --- |
-| `src/extract/ai_semantic.rs`（新，~1030 行） | 指纹、协议校验、缓存抽象、编排、预算 | 提示词 `:108` · `JudgeRequest::schema_digest` `:278` · `fingerprint` `:302` · `CachedOutput` `:393` · `parse_judgement` `:499` · `AiCache` trait `:612` · `AiStats` `:672` · `AiSemanticJudge::judge` `:800` · `require_ai_budget` `:985` |
+| `src/extract/ai_semantic.rs`（新，**1002 行**） | 指纹、协议校验、缓存抽象、编排、预算 | 提示词 `:108` · `JudgeRequest::schema_digest` `:278` · `fingerprint` `:302` · `CachedOutput` `:393` · `parse_judgement` `:499` · `AiCache` trait `:612` · `AiStats` `:672` · `AiSemanticJudge::judge` `:800` · `require_ai_budget` `:985` |
 | `src/db/ai_cache.rs`（新） | `ai_cache` 表、预加载/回写 | DDL `:43` · `PgAiCache` `:57` · `preload` `:67` · `persist` `:125` · `delete_fingerprints` `:168` · `delete_by_model` `:183` |
 | `tests/test_req109_ai_semantic.rs`（新，22 条） | scripted transport：指纹/缓存/协议/预算/veto/零泄漏 | — |
 | `tests/test_req109_cli_gate.rs`（新，6 条） | CLI 闸门：无 key / 无预算 / `--refresh` 误用 | — |
@@ -150,13 +170,20 @@ line 8:  +   "cache_hit": true,
 | `--llm` 缺 `--budget-tokens` | exit 1，点名 `--budget-tokens` |
 | `--budget-tokens 0` | exit 1（「0 等于一次都不许调用」） |
 | 预算 1 token（真进程 + 假端点） | 只调 1 次即停，exit 1，**四份产物一个都不存在** |
-| **真实全量 100k** | **101,326 / 100,000 停在第 82 条之后**（82 条全判完、用量越顶），exit **1**，`out/req109/full1/` 里**只有 run.log**，没有任何提案文件 |
+| **真实全量 100k** | **101,326 / 100,000 停在第 82 条之后**（82 条全判完、用量越顶），exit **1**，`out/req109/full1/` 里**只有 run.log**，没有任何提案文件（此为目录级事实，与日志新旧无关） |
 
 报告格式实测（`out/req109/full1/run.log`）：
 
 ```
 ✗ 预算超限  : 已用 101326 / 上限 100000，停在第 82 条之后（82 条已全部判完，用量越过了上限）
 ```
+
+> ⚠️ **该日志来自旧构建，只作文案样例，不作为证据**（A-9 · N-2④）。
+> 判据：日志写「新写入缓存 **72** 条」＝ 78 次调用 − 6 条协议作废 ⇒ 那份构建**还不把作废答案写缓存**；
+> 现行构建按 **D-5** 把作废答案也入缓存（否则「第二次 0 调用」永远不成立），写入条数与之不同。
+> 本轮是文档轮、**未重跑**（不改代码，也不重复烧真实 token）。预算闸的证据改用两条与日志新旧无关的事实：
+> ① `out/req109/full1/` **只有 run.log、0 份提案文件**；② QA 独立复验 budget=1 / 500 均 **exit 1、目录 0 文件**（acceptance A-11）。
+> （`out/` 是本机未跟踪目录，该日志不随仓库走；要复现预算闸请按 QA 的 budget=1/500 做法自己跑。）
 
 ### 2.7 AC-007 · `semantic_fit` 不能翻转 veto ✅
 
@@ -187,7 +214,7 @@ REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）�
 | **正好 60 字** | **通过**（边界不能写成 ≤59） |
 
 真实模型实测：82 条里 **6 条** rationale 超 60 字被作废（68/64/85/75/73/71 字）——
-这是**协议按 AC-009 正常生效**，不是流程缺陷；强化格式约束后仍有 1/82 不守（见 §6）。
+这是**协议按 AC-009 正常生效**，不是流程缺陷；强化格式约束后仍有 1/82 不守（见 §5.3）。
 
 ### 2.10 AC-010 · 客户视图零泄漏 / 建模轨必须有 ✅
 
@@ -198,7 +225,13 @@ REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）�
 | `ontology show`（客户 JSON） | **0** | **0** | **0** | **0** | **0** |
 | `ontology show --html`（客户页面） | **0** | **0** | — | **0** | **0** |
 | `ontology overview`（客户总览） | **0** | **0** | — | **0** | **0** |
-| `ontology show --model-view` | **51** | **51** | **51** | **51** | **51** |
+| `ontology show --model-view` | **≥51** | **≥51** | **≥51** | **≥51** | **≥51** |
+
+> **为什么是 `≥51` 而不是一个写死的数**（A-10 · N-5）：AI 条数**随运行浮动** ——
+> Dev 的真实模型跑（`out/req109/e2e/model.json`：52 条关系、**51** 条带 `confidence.ai`，缺的 1 条是
+> `usage_details.license_id → licenses`）是 51；QA 的端到端 v2 跑是 52。差的那 1 条来自「AI 给 1.0
+> 把某条关系抬进了 v2 主提案」，属运行相关，不是缺陷。判据是「**每条被 AI 判过、且进了 v2 的关系都有**」，
+> 故本报告统一记为 **≥51**。
 
 零泄漏是**结构保证**：客户视图的投影输入 `SnapshotView` / `LinkTypeView` 里**没有** confidence 栏。
 审核界面（`review show --confidence`）由 `render_confidence_table` 新增 AI 行覆盖，单测断言
@@ -208,7 +241,7 @@ REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）�
 
 所有自动化用例**零网络、零 key**：引擎层用 `ScriptedTransport`；端到端层用**本地
 `TcpListener` 假端点**（标准库，零新依赖，HTTP 请求计数）。清空 `ONTOK_LLM_*` 后
-全量测试 0 failed（§7）。真实端点**只**用于 §3/§5 的手工验证，**没有**进任何测试。
+全量测试 0 failed（§6）。真实端点**只**用于 §3/§5 的手工验证，**没有**进任何测试。
 
 ### 2.12 AC-012 · 红线与不退化 ✅
 
@@ -217,7 +250,7 @@ REQ-108 的 9 条已知错误：**E1–E7 仍全部 0.20/拒绝**（见 §5）�
 | 四红线 + `tools.rs` + `guard()` + `property_filter.rs` G1–G4 | **零改动**（`git status` 只有 §1 那 7 个文件 + 6 个新增） |
 | 删测试 / `#[ignore]` / 放宽断言 | 无。`test_req107_source_enumeration.rs` 只加了**两条模块登记**（0 条断言改动） |
 | 新增依赖 | **零**（Cargo.toml 一个字没动） |
-| 不许退化 | lib **230**（=基线）· doc **4**（=基线）· 32 套件 **313**（=基线，逐套件见 §7） |
+| 不许退化 | lib **230**（=基线）· doc **4**（=基线）· 32 套件 **313**（=基线，逐套件见 §6.1） |
 
 ---
 
@@ -377,16 +410,22 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 > 也就是说：**它读懂了「关系说得通」，但没有回答「目标列选对了吗」**；而 REQ-109 的语义项
 > **不允许改结构**（G1），所以「6 条 `model_id` 根因」**没有被修**（本轮也没打算修）。
 
-### 5.2 🔴 标红：AI 把 3 条**已被 5/5 采样证实**的正确关系判成 0.00
+### 5.2 🔴 标红：AI 把 3 条**采样全部命中（`matched == sampled`）**的正确关系判成 0.00
 
-| 关系 | 采样 | AI | 后果 |
+| 关系 | 采样（`matched / sampled`） | AI | 后果 |
 | --- | --- | --- | --- |
 | `customer_rebate.customer_id → customers` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
-| `deductions.customer_id → customers` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
-| `deductions.license_id → licenses` | **5/5 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+| `deductions.customer_id → customers` | **1/1 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+| `deductions.license_id → licenses` | **1/1 命中** | 0.00 | 1.00 → 0.85（**高→中**） |
+
+> **订正（A-10 · N-3）**：原文写「3 条都是采样 **5/5**」，不准确。三者的**共同点是 `matched == sampled`**
+> （采样全部命中、命中率 1.0），**样本数分别是 5/5、1/1、1/1** —— 判据是「全部命中」，不是「必须采到 5 条」，
+> 结论方向不变。（实测来源：`out/req109/full3/proposal.json` 三条关系的 `sample_hit_rate` 信号，
+> `sampled`/`matched` 逐个为 5/5、1/1、1/1。）
 
 模型的三条 rationale 都建立在**同一个误解**上：「外键应指向业务键，不该指向无业务语义的主键 `id`」。
-但数据证据（5/5 命中）恰恰证明 `customer_id` 的取值**确实存在于** `customers.id`。
+但数据证据（各自 `matched == sampled`：5/5、1/1、1/1）恰恰证明 `customer_id` / `license_id` 的取值
+**确实存在于**目标的 `id` 里。
 采样**没能拦住**这条误判 —— 因为采样只往下压（veto），AI 的错判是往下扣分前的正常加权。
 
 - 影响：3 条**正确**关系从「高」降到「中」（仍进主提案，不会被丢弃）；
@@ -416,7 +455,7 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 | --- | --- | --- | --- |
 | `cargo test --lib` | **230 passed / 0 failed** | 230 | ✅ 不退化 |
 | `cargo test --doc` | **4 passed / 0 failed** | 4 | ✅ 不退化 |
-| 32 个回归套件 | **313 passed / 0 failed** | 313 | ✅ 不退化（逐套件同 §11.3 名单） |
+| 32 个回归套件 | **313 passed / 0 failed** | 313 | ✅ 不退化（32 个套件逐套件名单见 **§6.1**） |
 | 新增 3 套件 | **31 passed / 0 failed** | — | 22 + 6 + 3 |
 | **套件合计（35 个）** | **344 passed / 0 failed** | 313（32 套件） | +31 |
 | **总计** | **578 passed / 0 failed** | 547 | +31 |
@@ -432,6 +471,35 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 | `test_req109_cli_gate` | 6 | AC-002（全缺 / 单缺逐个）· AC-006（缺预算 / 0 预算）· `--refresh` 误用 · AI 关不受环境变量影响 |
 | `test_req109_e2e_fake_llm` | 3 | 真进程 + 假端点 + 真缓存表：缓存命中/删行重调 · 幂等（含 `cache_hit` 一位的差异证明）· 预算 1 不写产物 |
 
+### 6.1 · 32 个回归套件逐套件名单（合计 **313**）
+
+> **订正（A-9 · N-2①）**：原文此处写「逐套件同 **§11.3** 名单」——**本报告没有 §11.3**（那是 REQ-108 报告的
+> 章节号）。引用不存在的东西比不引用更坏，故把名单就地落地，别人不必去别处找。
+> 数据源：本次运行的 `out/req109/suites-final.log`（`out/` 是**本机未跟踪**目录，名单已就地落表，
+> 别人不必去别处找；绕行文件的 sha256 前后比对见 §6 抬头）。
+
+| 套件 | passed | 套件 | passed |
+| --- | --- | --- | --- |
+| `test_req107_outlet_pipeline` | 12 | `test_proposal` | 9 |
+| `test_req107_guard_granularity` | 4 | `test_model_view` | 10 |
+| `test_req107_zero_visible_change` | 3 | `test_view` | 26 |
+| `test_req107_pipeline_bytes` | 1 | `test_review_show_e2e` | 11 |
+| `test_req107_scope_error_gate` | 4 | `test_review_state` | 28 |
+| `test_req107_track_manifest` | 2 | `test_db` | 11 |
+| `test_req107_static_texts` | 3 | `test_extracted_by_provenance` | 9 |
+| `test_req107_red_lines` | 2 | `test_review_provenance` | 17 |
+| `test_property_filter` | 10 | `test_concept_proposal` | 19 |
+| `test_exit_ordering_req106` | 7 | `test_diff` | 13 |
+| `test_binary_output_guard` | 7 | `test_no_write_path` | 4 |
+| `test_graph_server` | 9 | `test_provenance_source` | 5 |
+| `test_guard_manifest_req081` | 6 | `test_overview` | 17 |
+| `test_apply` | 21 | `test_req108_live`（需 `SRC_URL`） | 5 |
+| `test_snapshot` | 10 | `test_req108_confidence` | 10 |
+| `test_snapshot_write_paths` | 8 | `test_req107_source_enumeration` | 10 |
+| **合计** | **313**（= 基线，未退化） | | |
+
+> 另：新增 3 套件 22 + 6 + 3 = **31**；lib **230** + doc **4**；合计 **35 套件 344 + 230 + 4 = 578**（与 §0 一致）。
+
 ---
 
 ## 7 · 偏差 / AC 缺陷 / 已知限制
@@ -443,6 +511,8 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 | D-3 | 新增两个**只截断**的运维闸 | `--llm-only` / `--llm-limit`，为满足「先 5 条小样本再全量」。不参与判据 |
 | D-4 | `ai_cache.tokens_used` 允许 NULL | 历史行/缺 usage 的回放记 0（不编数）。报告里 token 总量会偏低，这是唯一诚实的表示 |
 | D-5 | **作废答案也进缓存** | 否则每条被协议作废的关系每次重跑都要再付一次钱，且「第二次 0 调用」永远不成立。回放时**照样作废**（`judgement=None`），不会被当成「AI 说不成立」 |
+| D-6 | **设计概要漏写 `ONTOK_DATABASE_URL`**（A-9 · N-4） | `--llm` 除三件 `ONTOK_LLM_*` 外**还要求 `ONTOK_DATABASE_URL`**：AI 缓存要落库（`ai_cache` 表与其余 DDL 编在同一条取了咨询锁的迁移 batch 里，见 §1.2 `src/db/pg.rs`），没有库就没有缓存 ⇒ 每次全量重付费、AC-003 的「第二次 0 调用」根本不成立。**补丁待 BA 落库**（`design-summary.md` 在 `BA/`，本轮 Dev 不改）：§五 开关表 `--llm` 行的「开 ⇒ 必须有三件环境变量，否则 exit≠0」改为「**开 ⇒ 必须有三件 `ONTOK_LLM_*` 且 `ONTOK_DATABASE_URL` 可用（AI 缓存落库），否则 exit≠0**」 |
+| D-7 | **测试模块头的失效引用**（A-9 · N-2②） | `tests/test_req109_ai_semantic.rs:23` 的模块头仍写「真库用例在 `tests/test_req109_ai_cache_pg.rs`」，**该文件不存在**；真实文件是 `tests/test_req109_e2e_fake_llm.rs`（真进程 + 本地假端点 + 真 `ai_cache` 表）。本轮是**文档轮、不碰 `tests/`**，故只登记：下一轮改这一行注释即可（1 行、零逻辑） |
 | L-1 | G1 不变 | AI 只能在候选集合内选择；跨表 retarget 无能为力 ⇒ `model_id` 根因修不了 |
 | L-2 | G2 不变 | 供应商静默升级模型时缓存仍返回旧结果（`model_id` 只防显式切换） |
 | L-3 | 成本 | 全量 82 条 ≈ 101k token（≈1.2k/条，含推理）；83 表全量靠缓存与预算闸控制 |
@@ -464,5 +534,5 @@ BA 裁定：私有化部署模型只用于验证流程，准确率不是本轮�
 
 第二可能被打回的是 **D-2（`ai` 在 `confidence` 内而不是条目顶格）** —— 同上，给了结构性理由。
 
-第三是 **§5.2 的三条误判**：那 3 条 5/5 采样的正确关系被 AI 扣了 0.15 分（高→中）。
+第三是 **§5.2 的三条误判**：那 3 条采样全命中（`matched == sampled`：5/5、1/1、1/1）的正确关系被 AI 扣了 0.15 分（高→中）。
 按 BA 裁定这**不阻断交付**，但 QA 若认为「AI 降低正确关系」不可接受，需要 BA 决定是否调权重。
