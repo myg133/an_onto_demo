@@ -1,16 +1,20 @@
 {
-  "req_id": "REQ-107",
-  "title": "出口收口：把「渲染前处理」与「发布闸」收进一条统一管线",
-  "branch": "feature/REQ-107",
+  "req_id": "REQ-114",
+  "title": "页面图交互升级（可拖拽 / 防重叠 / 可用性）",
+  "branch": "feature/REQ-114",
   "base": "develop",
-  "base_commit": "b714f48",
-  "assigned_by": "ba-michael-worksta-14864-20261020-151752",
-  "assigned_at": "2026-10-20 15:40:00",
-  "plan": "BA/demands/REQ-107/demand.md",
-  "acceptance": "BA/demands/REQ-107/acceptance.md",
-  "status": "进行中",
+  "base_commit": "e9755e8",
+  "assigned_by": "BA（会话 id 见 BA/dispatch/registry.md）",
+  "assigned_at": "2026-10-21 23:42:00",
+  "plan": "BA/demands/REQ-114/demand.md",
+  "acceptance": "BA/demands/REQ-114/acceptance.md",
+  "status": "进行中（QA 首轮 FAIL → 已修探针，待复审）",
+  "scope": "只改 src/server/page.rs 的页面 JS/CSS + 该页 golden 重锚 + tests/fixtures/req114/layout_probe.js",
   "notes": [
-    "从 REQ-106 拆出：REQ-106 只修两个具体洞（JSON 先写后判 / 首页零闸），不含重构。",
-    "AC 在 explore 枚举全部出口之后才写（纪律 S：AC 自己也会是错的）。"
+    "用户原话：「html ui 有问题，太简陋了，graph 的点也无法拖动，导致重叠遮挡。」",
+    "零外部依赖：页面内 <script src= / <link href= 各 0 处；页面 32396 字节（上限 60KB）。",
+    "golden 重锚：H1_index.html 96eb5f…（12479 字节）→ d8bd4581…（32396 字节），PROVENANCE 写明原因。",
+    "AC-002 的数据级判据已入库：node tests/fixtures/req114/layout_probe.js（失败 exit 1，五种变异实测全红）。",
+    "本机无 headless 浏览器 ⇒ 未做真浏览器手测，只有源码级 + 纯函数级 + 真 HTTP 级判据。"
   ]
 }

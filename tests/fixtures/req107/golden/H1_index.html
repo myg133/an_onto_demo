@@ -120,9 +120,10 @@ $("#fit").onclick = fitView;
 $("#reset").onclick = resetView;
 
 // ─── 布局内核（纯函数、不碰 DOM）─────────────────────────────
-// 这一段被 `.review-workspace/req114/layout_probe.js` **原样抽出**在 Node 里跑：
+// 这一段被 `tests/fixtures/req114/layout_probe.js` **原样抽出**在 Node 里跑：
 // 83 个节点全部放在同一坐标、推进 300 帧，断言「任意两节点中心距 ≥ 半径和」
-// （AC-002 的数据级判据）。改这一段就要重跑那个探针。
+// （AC-002 的数据级判据）；另有一个把 `REP` 置 0 的**无斥力**场景，
+// 专门证明「不重叠」这件事确实是 collide 兑现的。改这一段就要重跑那个探针。
 var GAP = 6;             // 碰撞消解的最小间隙（世界单位）
 var SIM_FRAMES = 300;    // 力导向最多 300 帧 —— 必须收敛，不许永远满帧
 var ALPHA_MIN = 0.006;   // alpha 掉到它以下就停帧
