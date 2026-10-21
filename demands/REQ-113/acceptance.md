@@ -8,7 +8,9 @@
 ### AC-001 · 排除由产品执行，不是预处理
 
 - `ontok-propose --exclude exclusions.json` 产出的提案里，被排除的表**不产生任何实体/属性/关系**
-- 判据：`proposal.json` 里 grep 被排除的表名 = **0**；实体数 = `tables_extracted`
+- 判据①：`items` 段里 grep 被排除的表名 = **0**（「不建实体」的真正判据）；实体数 = `tables_extracted`
+- 判据②（更强）：**把 `inputs.exclusions` 整段删掉后**，剩余文本 grep 被排除表名 = **0**
+  ⇒ 允许审计段记录表名，但不允许它出现在别处
 
 ### AC-002 · 三个计数必须闭合
 
@@ -24,7 +26,8 @@
 
 ### AC-004 · 溯源可查
 
-- 提案元信息记 `inputs.exclusions = {file, version, sha256}`
+- 提案记**完整审计段** `inputs.exclusions = {file, version, sha256, declared_by, reviewed_by, counts, excluded[], flagged[], stale[]}`
+- **单一文件**：明细必须在 `proposal.json` 里，⛔ 不许放侧车（搬运/丢失风险）
 - 判据：改一个字节的 exclusions ⇒ sha256 变；同一文件两次运行 ⇒ sha 相同
 
 ### AC-005 · 陈旧排除被检测
