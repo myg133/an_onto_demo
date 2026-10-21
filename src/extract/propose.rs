@@ -1458,11 +1458,45 @@ pub fn link_candidates(
 ///
 /// `evidence` 的键是 `item_index`：**没有条目** ⇒ 该关系没采（`--no-sample` 或
 /// 没有键列），评分卡会标 `data_evidence: none`。**这不会被当成有证据**。
+///
+/// ⚠️ REQ-109：这是 **AI 关**的入口，走 `evidence-scorecard-v1`。
+/// 开了 AI 请用 [`score_links_with_ai`] —— 两个入口共用下面同一份实现，
+/// 不许有第二份评分逻辑（v1/v2 的分数**必须可比**，否则对照表就是假的）。
 pub fn score_links(
     items: &[serde_json::Value],
     report: &SchemaReport,
     keys: &crate::extract::introspect::KeyCatalog,
     evidence: &std::collections::HashMap<usize, crate::extract::sample::SampleEvidence>,
+) -> Vec<(usize, crate::domain::confidence::Confidence)> {
+    score_links_inner(items, report, keys, evidence, None)
+}
+
+/// REQ-109 · **AI 开**的评分入口：走 `evidence-scorecard-v2`。
+///
+/// `ai`：
+/// - `None` ⇒ AI 关，行为与 REQ-108 **逐字节相同**（AC-001）；
+/// - `Some(map)` ⇒ AI 开；`map` 里**没有**这条关系 ⇒ 语义项**缺失**
+///   （不参与归一化、**不记 0**，R6），但方法仍是 v2 ——
+///   「这一轮开了 AI」是运行事实，不该因为某条没判出来就退回 v1 的权重表。
+///
+/// 语义分只影响 `semantic_fit` 那 0.15；veto 在 `confidence::score_with_semantic`
+/// 里照旧压顶，所以「AI 给 1.0 也翻不了 0 命中」是**评分卡**保证的，不是靠这里小心。
+pub fn score_links_with_ai(
+    items: &[serde_json::Value],
+    report: &SchemaReport,
+    keys: &crate::extract::introspect::KeyCatalog,
+    evidence: &std::collections::HashMap<usize, crate::extract::sample::SampleEvidence>,
+    ai: Option<&std::collections::HashMap<usize, crate::extract::ai_semantic::Judgement>>,
+) -> Vec<(usize, crate::domain::confidence::Confidence)> {
+    score_links_inner(items, report, keys, evidence, ai)
+}
+
+fn score_links_inner(
+    items: &[serde_json::Value],
+    report: &SchemaReport,
+    keys: &crate::extract::introspect::KeyCatalog,
+    evidence: &std::collections::HashMap<usize, crate::extract::sample::SampleEvidence>,
+    ai: Option<&std::collections::HashMap<usize, crate::extract::ai_semantic::Judgement>>,
 ) -> Vec<(usize, crate::domain::confidence::Confidence)> {
     use crate::domain::confidence as cf;
 
@@ -1512,7 +1546,106 @@ pub fn score_links(
             polymorphic: cf::is_polymorphic_column(&from_columns, &cand.from_column),
             self_ref: cand.from_table == cand.to_table,
         };
-        out.push((cand.item_index, cf::score(&input)));
+        let judgement = ai.and_then(|m| m.get(&cand.item_index));
+        let mut c = match ai {
+            // AI 开 ⇒ v2（语义缺失时 v2 的权重会把前五项等比归一，等价于 v1 的比例）
+            Some(_) => cf::score_with_semantic(&input, judgement.map(|j| j.semantic_fit)),
+            // AI 关 ⇒ v1，与 REQ-108 逐字节相同
+            None => cf::score(&input),
+        };
+        // 溯源贴在**有判断**的条目上：没有判断就没有 `ai` 键（不是 `ai: null`）。
+        if let Some(j) = judgement {
+            c.ai = Some(j.provenance());
+        }
+        out.push((cand.item_index, c));
+    }
+    out
+}
+
+/// REQ-109 · 把候选关系转成 AI 语义请求。
+///
+/// # 只给两张表（设计概要 §4.3）
+///
+/// `schema_slice` = 源表 + 目标表（自引用时只有一张）。⛔ 不许把整份 schema
+/// 塞进 prompt：83 表会撑爆上下文，而 AI 要判断的只是这两张表之间的关系。
+///
+/// # `to_candidates` 是什么
+///
+/// **目标表的列名**，提案选中的那一列排在最前面。它是协议里 `choice` 的合法取值域
+/// （设计概要 §4.2：「`choice` 必须在候选集合内」）。给全表而不是只给键列：
+/// 业务键常常不是主键（`llm_model.model_id` 就是这种），只给键列等于
+/// 把 AI 唯一能看见的那个候选锁死成规则的答案。
+///
+/// # `only`：分阶段上线的闸（REQ-109 阶段 1 的「先小样本」）
+///
+/// 关系键包含该子串才送 AI（例如 `llm_model`）。其余关系**不判** ⇒
+/// 语义缺失（不是 0）。它是**运维闸**，不改变任何判据。
+///
+/// # 没有目标键列的关系**不送 AI**
+///
+/// 「目标表是复合主键 / 没有单列键」时规则没给出具体目标列，协议里的
+/// `relation.to` 就写不出来（不能编一列）。这类关系在评分卡上本来就走
+/// `composite_key_unsupported` 上限，AI 无从改变结论。
+pub fn ai_requests(
+    candidates: &[LinkCandidate],
+    report: &SchemaReport,
+    only: Option<&str>,
+) -> Vec<crate::extract::ai_semantic::JudgeRequest> {
+    use crate::extract::ai_semantic::{JudgeRequest, SliceColumn, SliceTable};
+
+    let slice_of = |name: &str| -> Option<SliceTable> {
+        report
+            .tables
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| SliceTable {
+                table: t.name.clone(),
+                columns: t
+                    .columns
+                    .iter()
+                    .map(|c| SliceColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        comment: c.comment.clone(),
+                    })
+                    .collect(),
+            })
+    };
+
+    let mut out = Vec::new();
+    for cand in candidates {
+        let Some(to_column) = cand.to_key_column.clone() else { continue };
+        let Some(from) = slice_of(&cand.from_table) else { continue };
+        let Some(to) = slice_of(&cand.to_table) else { continue };
+
+        // 候选：提案列在前，其余按 report 的列序补在后面。
+        let mut to_candidates: Vec<String> = vec![to_column.clone()];
+        for c in &to.columns {
+            if c.name != to_column && !to_candidates.contains(&c.name) {
+                to_candidates.push(c.name.clone());
+            }
+        }
+
+        let schema_slice = if cand.from_table == cand.to_table {
+            vec![to]
+        } else {
+            vec![from, to]
+        };
+        let req = JudgeRequest {
+            item_index: cand.item_index,
+            from_table: cand.from_table.clone(),
+            from_column: cand.from_column.clone(),
+            to_table: cand.to_table.clone(),
+            to_column,
+            to_candidates,
+            schema_slice,
+        };
+        if let Some(pat) = only {
+            if !req.relation_key().contains(pat) {
+                continue;
+            }
+        }
+        out.push(req);
     }
     out
 }

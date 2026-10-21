@@ -544,9 +544,14 @@ pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -
     struct Row {
         band: Band,
         score: f64,
+        method: String,
         target: String,
         evidence: Option<(u32, u32)>,
         veto: Option<String>,
+        /// REQ-109 · AI 语义判断的那一行（`fit` / `model` / `cache_hit` / `tokens`）。
+        /// `None` = 这条关系**没被 AI 判断过**（AI 关 / 判失败），不打印 ——
+        /// 「没判」不冒充「判了 0 分」。
+        ai: Option<String>,
     }
     let mut rows: Vec<Row> = Vec::new();
     for it in items {
@@ -557,12 +562,33 @@ pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -
             .iter()
             .find(|s| s.name == "sample_hit_rate")
             .and_then(|s| Some((s.sampled?, s.matched?)));
+        // REQ-109 · 语义分与溯源一起打：只有分数没有溯源，审核人无从复核；
+        // 只有溯源没有分数，看不出 AI 到底说了什么。
+        let ai = c.ai.as_ref().map(|a| {
+            let fit = c
+                .signals
+                .iter()
+                .find(|s| s.name == crate::domain::confidence::SIGNAL_SEMANTIC_FIT)
+                .map(|s| format!("{:.2}", s.value))
+                .unwrap_or_else(|| "—".to_string());
+            let why = a
+                .rationale
+                .as_deref()
+                .map(|r| format!("「{r}」"))
+                .unwrap_or_default();
+            format!(
+                "ai {} · fit {} · cache_hit {} · tokens {} {}",
+                a.model, fit, a.cache_hit, a.tokens, why
+            )
+        });
         rows.push(Row {
             band: c.band,
             score: c.score,
+            method: c.method.clone(),
             target: it.target_key.clone(),
             evidence: ev,
             veto: c.veto.as_ref().map(|v| format!("{}：{}", v.signal, v.reason)),
+            ai,
         });
     }
     if rows.is_empty() {
@@ -575,10 +601,16 @@ pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -
             .then_with(|| a.target.cmp(&b.target))
     });
     let counts = crate::domain::confidence::BandCounts::of(rows.iter().map(|r| &r.band));
+    // 抬头写**这一份提案实际用的方法**。AI 关时仍逐个字是 `evidence-scorecard-v1`
+    // （REQ-108 的字节契约），AI 开时是 v2 —— 不写死，免得报告说假话。
+    let mut methods: Vec<&str> = rows.iter().map(|r| r.method.as_str()).collect();
+    methods.sort_unstable();
+    methods.dedup();
+    let method_label = methods.join(" / ");
     let mut out = String::new();
     out.push_str(&format!(
         "置信度（{}）：高 {} · 中 {} · 低 {} · 拒绝 {}（共 {} 条关系）\n",
-        crate::domain::confidence::METHOD,
+        method_label,
         counts.high,
         counts.middle,
         counts.low,
@@ -591,13 +623,15 @@ pub fn render_confidence_table(items: &[crate::db::proposal::ProposalItemRow]) -
             None => " · 证据 无（data_evidence=none）".to_string(),
         };
         let veto = r.veto.as_deref().map(|v| format!("\n             veto {v}")).unwrap_or_default();
+        let ai = r.ai.as_deref().map(|a| format!("\n             {a}")).unwrap_or_default();
         out.push_str(&format!(
-            "  [{}] {:.2} {}{}{}\n",
+            "  [{}] {:.2} {}{}{}{}\n",
             r.band.label_zh(),
             r.score,
             r.target,
             ev,
-            veto
+            veto,
+            ai
         ));
     }
     out.trim_end().to_string()

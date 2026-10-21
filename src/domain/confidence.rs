@@ -40,23 +40,38 @@
 //!
 //! 数据证据合计 0.60、结构证据 0.40 —— 与设计概要 §3.2 一致。
 //!
-//! # 语义项 `semantic_fit` 留了位，但 v1 不接
+//! # 语义项 `semantic_fit`：v1 不接，v2 接（REQ-109）
 //!
-//! [`SIGNAL_SEMANTIC_FIT`] 这个常量存在、**权重表里没有它**（因此不参与归一化），
-//! 目的只是把「将来要加什么」写死在一个地方 —— REQ-109 接 AI 时改权重表，
-//! 不改这一段算法。
+//! [`SIGNAL_SEMANTIC_FIT`] 在 v1 的权重表里**没有**（因此不参与归一化）；
+//! REQ-109 新增 [`METHOD_V2`] + [`WEIGHTS_V2`]，语义项权重 **0.15**，
+//! 其余五项**等比压缩 0.85**（0.45→0.3825 等）。
+//!
+//! 为什么是「等比压缩」而不是「加一项再归一化」：等比压缩保证**语义缺失时**
+//! 重归一化后的相对比例与 v1 **完全一致** ⇒ AI 关（仍走 v1）的产物逐字节不变
+//! （AC-001），AI 开但某条没判（语义缺失）时也不会被这一次缺失改变相对权重。
+//!
+//! ★ 语义缺失 ≠ 0：`None` 表示「没判断」，`0.0` 表示「判断为不成立」。
+//! `ScoreInput` 之外的这一位用 [`score_with_semantic`] 的 `Option<f64>` 表达，
+//! `None` 直接**不进** `signals`（不参与归一化），绝不当成 0 分参与加权。
 
 use serde::{Deserialize, Serialize};
 
 /// 评分方法标识 —— **必填**（AC-008：没有 method 的分数不可复核）。
 pub const METHOD: &str = "evidence-scorecard-v1";
 
-/// AI 语义项的预留位（v1 **不接**，不参与归一化，见模块头）。
+/// REQ-109 · 接了 AI 语义项的评分方法（`semantic_fit` 权重 0.15）。
+///
+/// 与 [`METHOD`] **并列**而不是替换：AI 关时仍然产出 v1，
+/// 「AI 关时行为完全不变」（AC-001）因此是**选哪个方法**的事，不是算术巧合。
+pub const METHOD_V2: &str = "evidence-scorecard-v2";
+
+/// AI 语义项的信号名。
 pub const SIGNAL_SEMANTIC_FIT: &str = "semantic_fit";
 
 /// 五个信号的权重（**顺序即信号在输出里的顺序**，确定性的一部分）。
 ///
-/// 合计必须 = 1.0（[`tests::weights_sum_to_one`] 钉住）；改这里 = 升 method 版本。
+/// 合计必须 = 1.0（[`tests::weights_sum_to_one_and_match_the_design_table`] 钉住）；
+/// 改这里 = 升 method 版本。
 pub const WEIGHTS: [(&str, f64); 5] = [
     ("sample_hit_rate", 0.45),
     ("name_match", 0.20),
@@ -64,6 +79,41 @@ pub const WEIGHTS: [(&str, f64); 5] = [
     ("type_compatible", 0.10),
     ("target_is_key", 0.10),
 ];
+
+/// REQ-109 · v2 权重（设计概要 §3.1）：v1 五项**等比 ×0.85** + 语义 0.15。
+///
+/// | 信号 | v1 | v2 |
+/// | --- | --- | --- |
+/// | `sample_hit_rate` | 0.45 | **0.3825** |
+/// | `name_match` | 0.20 | **0.17** |
+/// | `not_all_null` | 0.15 | **0.1275** |
+/// | `type_compatible` | 0.10 | **0.085** |
+/// | `target_is_key` | 0.10 | **0.085** |
+/// | `semantic_fit` | — | **0.15** |
+///
+/// 合计 = 1.0（单元测试钉住）。语义项在**最后** —— 与 v1 五项的相对顺序一致，
+/// 于是「语义缺失 ⇒ 前五项按原顺序、原比例求和」这条性质不用额外约定。
+pub const WEIGHTS_V2: [(&str, f64); 6] = [
+    ("sample_hit_rate", 0.3825),
+    ("name_match", 0.17),
+    ("not_all_null", 0.1275),
+    ("type_compatible", 0.085),
+    ("target_is_key", 0.085),
+    (SIGNAL_SEMANTIC_FIT, 0.15),
+];
+
+/// `method` → 它的权重表。**没有第二份**：`score` 与 `from_untrusted` 都从这里取。
+///
+/// 未知 method ⇒ `None`（调用方决定是「拒绝」还是「不可能」）。
+/// 这是 AC-014「权重逐项相等」能覆盖两个版本的方式 ——
+/// 校验拿的永远是**这个方法自己的**那张表，而不是「当前最新的那张」。
+pub fn weights_for(method: &str) -> Option<&'static [(&'static str, f64)]> {
+    match method {
+        METHOD => Some(&WEIGHTS[..]),
+        METHOD_V2 => Some(&WEIGHTS_V2[..]),
+        _ => None,
+    }
+}
 
 // ── veto 上限（**数值只在这里写一次**）────────────────────────────
 //
@@ -343,6 +393,42 @@ pub struct Veto {
     pub reason: String,
 }
 
+/// REQ-109 · **AI 语义判断的溯源**（AC-010 / demand 交付物 6）。
+///
+/// 四个必填项就是 demand 里点名的 `{model, prompt_sha, tokens, cache_hit}`，
+/// 一个字都没改。另外两项（`rationale` / `cites`）是**判断本身**的可复核内容：
+/// 没有它们，「AI 说这条不成立」在审核界面里就只是一句话，人无从复核。
+///
+/// # 为什么只有一份、挂在 `Confidence` 里
+///
+/// 顶层 item 上再加一个 `ai` 键的话，`propose import` 把它搬进 `payload`
+/// 之后就没有任何东西读它了（快照层 `LinkType` 只认 `confidence`）——
+/// 于是文件里有一份、库里没有，两份迟早不一致。
+/// 挂在 `Confidence` 里则**同一次写入**穿到提案、审核界面、快照与建模轨，
+/// 所以「被 AI 判断过的关系在建模轨里看得见」是结构保证。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AiProvenance {
+    /// 具体模型（从 `ONTOK_LLM_MODEL` 来，进指纹）
+    pub model: String,
+    /// 提示词内容哈希（进指纹 —— R1：缺它等于静默错）
+    pub prompt_sha: String,
+    /// 这一次判断花的 token（缓存命中时是**当初那次**的用量，不重复计费）
+    pub tokens: u64,
+    /// 这一次是否命中缓存（AC-003 的判据之一）
+    pub cache_hit: bool,
+    /// AI 给的理由（1–60 字，已校验）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// AI 引用的真实坐标（`表.列`，已校验存在）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cites: Option<Vec<String>>,
+    /// AI 认为最合理的目标（`表.列`）。**只记录，不改变结构** ——
+    /// 提案的 from/to 仍是规则抽出来的（设计概要开篇：「AI 只回答这次关系说-
+    /// 得通吗」）。它在这里的唯一用途是让人复核「模型是不是想到了别的目标」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<String>,
+}
+
 /// 评分结果 —— 内嵌在提案条目里（设计概要 §2.1）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Confidence {
@@ -356,6 +442,15 @@ pub struct Confidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub veto: Option<Veto>,
     pub data_evidence: DataEvidence,
+    /// REQ-109 · AI 语义判断的溯源。
+    ///
+    /// `None` = 这条关系**没被 AI 判断过**（AI 关 / 缓存未命中且调用失败 /
+    /// 预算用尽）。与 `semantic_fit: 0.0` 是两件事 —— 后者是「判断为不成立」。
+    ///
+    /// ⚠️ 用 `skip_serializing_if` 而不是恒有键：AI 关时产物必须与 REQ-108
+    /// **逐字节相同**（AC-001），多一个 `"ai": null` 就是多一个字节。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai: Option<AiProvenance>,
 }
 
 /// 评分输入 —— **只有事实，没有 I/O**。
@@ -444,8 +539,35 @@ pub fn hit_rate_value(sampled: u32, matched: u32) -> f64 {
     HIT_RATE_TABLE[idx.min(5)]
 }
 
-/// **评分卡入口**（纯函数）。
+/// **评分卡入口**（纯函数）—— v1，**AI 关**走这里。
 pub fn score(input: &ScoreInput) -> Confidence {
+    score_with_weights(input, METHOD, &WEIGHTS, None)
+}
+
+/// **评分卡入口 v2**（REQ-109）—— 接了 AI 语义项。
+///
+/// `semantic_fit`：
+/// - `Some(v)` ⇒ 作为 `semantic_fit` 信号参与归一化（`v ∉ [0,1]` 当缺失处理，
+///   因为那种值已被 [`crate::extract::ai_semantic`] 判作废，这里只是二次防线）；
+/// - `None` ⇒ **不进 `signals`，不参与归一化** —— 缺的语义项不是 0 分。
+///
+/// ★ veto 完全不受语义项影响：本函数的压顶段一个字节都没因 v2 改过（AC-007）。
+/// 语义分再高，`zero_hit` 仍是 ≤0.20、`type_incompatible` 仍是 ≤0.15。
+pub fn score_with_semantic(input: &ScoreInput, semantic_fit: Option<f64>) -> Confidence {
+    score_with_weights(input, METHOD_V2, &WEIGHTS_V2, semantic_fit)
+}
+
+/// 一个评分入口，两个版本的唯一差别是**权重表与方法名**（以及语义项有没有值）。
+///
+/// 为什么不做成两份函数：veto 段、命中率段、排序段都是「不许有第二份判据」的地方
+/// （REQ-108 的纪律 H）。抄一份出来以后，改一处忘另一处就会让两个 method
+/// 的分数不可比 —— 而 v1/v2 的分数**必须**可比（这就是对照表存在的意义）。
+fn score_with_weights(
+    input: &ScoreInput,
+    method: &str,
+    weights: &[(&str, f64)],
+    semantic_fit: Option<f64>,
+) -> Confidence {
     // ── ① 信号取值 ───────────────────────────────────────
     let name_match = name_match_value(&input.column, &input.to_table);
     let type_compatible = input
@@ -460,15 +582,17 @@ pub fn score(input: &ScoreInput) -> Confidence {
 
     // ── ② 基线分：只对**可用**信号归一化 ─────────────────
     //
-    // 顺序严格照 [`WEIGHTS`]（浮点加法的结果依赖顺序 ⇒ 顺序也是确定性的一部分）。
-    let mut signals: Vec<Signal> = Vec::with_capacity(WEIGHTS.len());
-    for (name, weight) in WEIGHTS {
+    // 顺序严格照权重表（浮点加法的结果依赖顺序 ⇒ 顺序也是确定性的一部分）。
+    let mut signals: Vec<Signal> = Vec::with_capacity(weights.len());
+    for &(name, weight) in weights {
         let value = match name {
             "sample_hit_rate" => hit_rate,
             "name_match" => Some(name_match),
             "not_all_null" => not_all_null,
             "type_compatible" => type_compatible,
             "target_is_key" => Some(target_is_key),
+            // ★ 语义缺失 ⇒ None ⇒ 这一项**不进 signals**（不参与归一化）。
+            SIGNAL_SEMANTIC_FIT => semantic_fit.filter(|v| (0.0..=1.0).contains(v)),
             _ => None,
         };
         let Some(value) = value else { continue };
@@ -605,7 +729,7 @@ pub fn score(input: &ScoreInput) -> Confidence {
 
     Confidence {
         score,
-        method: METHOD.to_string(),
+        method: method.to_string(),
         band: Band::of(score),
         signals,
         veto,
@@ -614,6 +738,9 @@ pub fn score(input: &ScoreInput) -> Confidence {
         } else {
             DataEvidence::None
         },
+        // 溯源由接缝层贴（`extract::propose::score_links_with_ai`）——
+        // 评分函数只算分，不知道「谁判的、花了几块钱」。
+        ai: None,
     }
 }
 
@@ -714,37 +841,72 @@ fn evidence_hint(name: &str, signals: &[Signal]) -> String {
 /// 第 1 条的「触发」由**证据**决定（[`evidence_vetoes`]），不由文件里的
 /// `veto` 字段决定 —— 这一条是这三条校验的关键：只要 `signals` 说
 /// 「5 行 0 命中」，`score` 就**不可能**是 0.99，写 `veto` 或删 `veto` 都一样。
+///
+/// # REQ-109 追加：按 `method` 取**它自己**那张权重表
+///
+/// 权重表从 [`weights_for`] 取（v1 / v2 各一张），不是「永远拿 v1 那张」——
+/// 后者会让 v2 的产物一律被判「权重表之外」。语义项另加两条：
+///
+/// | # | 校验 | 为什么 |
+/// | --- | --- | --- |
+/// | S-1 | `semantic_fit` 信号的值 ∈ [0,1] | 它是概率式的判断，越界值是编的 |
+/// | S-2 | 有 `semantic_fit` ⇔ 有 `ai` 溯源 | 「谁判的、缓存命没命中」必须和判断一起在，否则语义分无从审计 |
 fn validate_self_evidence(
     method: &str,
     score: f64,
     signals: &[Signal],
     veto: Option<&Veto>,
     data_evidence: DataEvidence,
+    ai: Option<&AiProvenance>,
 ) -> Result<(), String> {
     // ── 0. method 必须是有权重表的那一个 ─────────────────────────
     //
     // 若不拦，「把 method 改成 foo 再随便写权重」就能绕过第 2 条。
-    if method != METHOD {
+    let Some(table) = weights_for(method) else {
         return Err(format!(
-            "confidence.method = {method:?} 没有对应的权重表（本实现只有 {METHOD}）—— 分数无法复核"
+            "confidence.method = {method:?} 没有对应的权重表（本实现只有 {METHOD} / {METHOD_V2}）—— \
+             分数无法复核"
         ));
-    }
+    };
 
     // ── 1. AC-014 #2：权重逐项相等 ───────────────────────────────
     for s in signals {
-        let Some((_, want)) = WEIGHTS.iter().find(|(n, _)| *n == s.name) else {
+        let Some((_, want)) = table.iter().find(|(n, _)| *n == s.name) else {
             return Err(format!(
-                "confidence.signals 里出现了权重表之外的信号 {:?} —— {METHOD} 只有 5 个信号；\
+                "confidence.signals 里出现了权重表之外的信号 {:?} —— {method} 只有 {} 个信号；\
                  veto 名（如 zero_hit）不是信号名，写进 signals 无从复核",
-                s.name
+                s.name,
+                table.len()
             ));
         };
         if s.weight != *want {
             return Err(format!(
-                "signals 权重与 {METHOD} 的权重表不一致：{} 的 weight = {}，权重表是 {:.2} —— 分数不可复核",
+                "signals 权重与 {method} 的权重表不一致：{} 的 weight = {}，权重表是 {:.2} —— 分数不可复核",
                 s.name, s.weight, want
             ));
         }
+    }
+
+    // ── 1b. REQ-109 · 语义项的两条（S-1 / S-2）────────────────────
+    let semantic = signals.iter().find(|s| s.name == SIGNAL_SEMANTIC_FIT);
+    if let Some(s) = semantic {
+        if !(0.0..=1.0).contains(&s.value) {
+            return Err(format!(
+                "signals 里 {SIGNAL_SEMANTIC_FIT} 的 value = {} 越界（必须在 0.0–1.0）",
+                s.value
+            ));
+        }
+        if ai.is_none() {
+            return Err(format!(
+                "信号里有 {SIGNAL_SEMANTIC_FIT}，但 confidence.ai 缺失 —— 语义分必须带溯源\
+                 （model / prompt_sha / tokens / cache_hit），否则无从审计它是谁判的"
+            ));
+        }
+    } else if ai.is_some() {
+        return Err(format!(
+            "confidence.ai 存在，但 signals 里没有 {SIGNAL_SEMANTIC_FIT} —— \
+             有溯源却没有对应的语义信号，二者必须成对出现"
+        ));
     }
 
     // ── 2. `sample_hit_rate` 的聚合量与取值必须自洽 ───────────────
@@ -769,18 +931,21 @@ fn validate_self_evidence(
     }
 
     // ── 3. AC-014 #3：声明的 veto 必须有证据 ─────────────────────
+    //
+    // ⚠️ veto 表与 `method` **无关**（REQ-109 没有动任何上限，R7）：
+    // 上限是「证据能推翻什么」的判据，不是权重的一部分。
     let derived = evidence_vetoes(signals, data_evidence);
     if let Some(v) = veto {
         let Some(canonical) = veto_cap(&v.signal) else {
             return Err(format!(
-                "confidence.veto.signal = {:?} 不在 {METHOD} 的 veto 表里 —— 无上限可核",
+                "confidence.veto.signal = {:?} 不在 {method} 的 veto 表里 —— 无上限可核",
                 v.signal
             ));
         };
         // 上限表是**代码里的常量**，不是文件里写的那个数。
         if v.cap != canonical {
             return Err(format!(
-                "confidence.veto.cap = {} 与 {METHOD} 的记录不符（{} 应为 {:.2}）—— 上限表被改过",
+                "confidence.veto.cap = {} 与 {method} 的记录不符（{} 应为 {:.2}）—— 上限表被改过",
                 v.cap, v.signal, canonical
             ));
         }
@@ -961,9 +1126,27 @@ pub fn from_untrusted(v: &serde_json::Value) -> Result<Confidence, String> {
         Some("none") => DataEvidence::None,
         Some(other) => return Err(format!("confidence.data_evidence = {other:?} 不是 sampled/none")),
     };
+    // REQ-109 · AI 溯源。可缺省（AI 关的产物根本没有这个键），
+    // 但**给了就必须读得懂** —— 形状不合法不静默丢弃（那等于把溯源当可选装饰）。
+    let ai: Option<AiProvenance> = match v.get("ai") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(x) => {
+            let p: AiProvenance = serde_json::from_value(x.clone())
+                .map_err(|e| format!("confidence.ai 形状不合法：{e}"))?;
+            if p.model.trim().is_empty() {
+                return Err("confidence.ai.model 是空的 —— 溯源必须记具体模型".to_string());
+            }
+            if p.prompt_sha.trim().is_empty() {
+                return Err(
+                    "confidence.ai.prompt_sha 是空的 —— 缺 prompt 项等于静默错（R1）".to_string(),
+                );
+            }
+            Some(p)
+        }
+    };
     // ★ AC-014：分数必须与**证据**自洽（三条，见 `validate_self_evidence`）。
-    validate_self_evidence(method, score, &signals, veto.as_ref(), data_evidence)?;
-    Ok(Confidence { score, method: method.to_string(), band, signals, veto, data_evidence })
+    validate_self_evidence(method, score, &signals, veto.as_ref(), data_evidence, ai.as_ref())?;
+    Ok(Confidence { score, method: method.to_string(), band, signals, veto, data_evidence, ai })
 }
 
 /// 校准分箱（AC-011）—— 一个分数区间里「多少条 / 人工接受多少」。

@@ -112,6 +112,9 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
     batch.push_str(BACKFILL_PATCH);
     batch.push_str(SCHEMA_AGENT_REGISTRY_PATCH);
+    // REQ-109 · `ai_cache` 与 agent-registry 同一条 batch（同一把交易级咨询锁）。
+    // 新表、无外键、无历史遗留 ⇒ 不需要 ALTER 补列那条路径。
+    batch.push_str(crate::db::ai_cache::SCHEMA_AI_CACHE);
     batch.push_str(MIGRATE_COMMIT);
     sqlx::raw_sql(batch.as_str()).execute(pool).await?;
     Ok(())
