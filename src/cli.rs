@@ -58,6 +58,24 @@ pub enum Cmd {
     /// 把「分数」与「人工最终决定」对起来，输出**分箱命中率**。
     /// 样本不足时**明确说样本不足**，不输出 0% / 100% 冒充结论。
     Confidence { #[command(subcommand)] cmd: ConfidenceCmd },
+    /// REQ-116 · **文档摄取与断言抽取**（第一步：非结构化文档 → 带证据的断言）
+    ///
+    /// 当前本体的关系只有归属（79/82 条 `belongs_to`），因为源库没有外键、
+    /// 只能按 `*_id` 推断。**关系语义在文档里，不在 DDL 里。**
+    /// 本命令只做第一步：`.md` / `.txt` → 带证据片段的 concept / relation 断言。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok doc ingest --input docs/ --out out/assertions.jsonl --stats out/stats.json
+    ///
+    /// ⚠️ 只吃 `.md` / `.txt`（UTF-8）。`.pdf` / `.docx` / `.doc` **直接报错并点名格式**，
+    /// 请先用外部工具转成文本（转换后请记下 hash）。⛔ 不静默跳过。
+    /// ⚠️ 每条断言都带 `evidence.quote`，它必须能在对应块的原文里**逐字**找到；
+    /// 找不到的断言**丢弃并计数**（⛔ 不修正 quote）。
+    /// ⚠️ 本命令**不连产品库、不写本体、不出图**：输入是本地文件、产物是本地文件，
+    /// 指纹缓存也是本地文件（默认 `<out>.cache.json`）。
+    #[command(verbatim_doc_comment)]
+    Doc { #[command(subcommand)] cmd: DocCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -168,6 +186,47 @@ pub enum ConceptCmd {
         /// 输出路径。省略则把声明 JSON 打到标准输出（两次运行逐字节相同）
         #[arg(short, long)]
         out: Option<PathBuf>,
+    },
+}
+
+/// REQ-116 · 文档摄取（`ontok doc <子命令>`）。
+///
+/// 与 `serve` / `review serve` 那种「一个命令 + 开关」的取舍同理：
+/// 将来还会有「文档概念 ↔ 表/字段」的对齐（REQ-117），那是**另一件事**，
+/// 所以从第一天就分成子命令，而不是给 `ingest` 加一个 `--align` 开关。
+#[derive(Subcommand)]
+pub enum DocCmd {
+    /// 从 `.md` / `.txt` 抽**带证据**的断言，产出 JSONL（+ stats.json）
+    ///
+    /// 分块是确定性的（标题层级 + 段落）；抽取靠指纹缓存：
+    /// 同一份输入第二次运行 **0 token**、JSONL **逐字节相同**。
+    Ingest {
+        /// 输入：一个 `.md`/`.txt` 文件，或一个目录（递归）。
+        /// ⛔ `.pdf` / `.docx` / `.doc` 直接报错并点名格式。
+        #[arg(long)]
+        input: PathBuf,
+        /// 产物：断言 JSONL（带 `--chunks-only` 时是块清单 JSONL）
+        #[arg(long)]
+        out: PathBuf,
+        /// 统计：`stats.json` 的落点。省略则不写（屏幕上报的同一批数字）
+        #[arg(long)]
+        stats: Option<PathBuf>,
+        /// 预算闸（token）。越限即**停**并按「已用 / 上限 / 停在第几块」报告，
+        /// 且**不产出断言文件**（AC-007 选的是「不产出半份 JSONL」）。
+        /// 省略时用默认上限（`doc_ingest::DEFAULT_BUDGET_TOKENS`）。
+        #[arg(long)]
+        budget_tokens: Option<u64>,
+        /// 只跑前 N 块（分阶段上线用）。`stats.truncated` 会标 true。
+        #[arg(long)]
+        limit_chunks: Option<usize>,
+        /// 指纹缓存的落点。默认 `<out>.cache.json`。
+        /// 删掉它 ⇒ 下次重新调用模型（重新计费）；保留它 ⇒ 同输入 0 token。
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// **只分块、不调用模型**：把块清单写成 JSONL（判 AC-002 的确定性用）。
+        /// 不需要 LLM 三件套、不需要预算。
+        #[arg(long)]
+        chunks_only: bool,
     },
 }
 
@@ -987,12 +1046,24 @@ fn publish_customer(
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     install_broken_pipe_guard();
 
+    // ⭐ REQ-116 · `doc ingest` **在连库之前**分派。
+    //
+    // 为什么把它提到连接池前面：这条命令**一处都不碰产品库**（AC-008：不写库）。
+    // 输入是本地文件、产物是本地文件、指纹缓存也是本地文件（`<out>.cache.json`）。
+    // 若仍先建连接池，`ONTOK_DATABASE_URL` 没配就**跑不了格式闸**（AC-001 的
+    // `.pdf` 用例会先被「连不上库」挡住），而「这个格式不能吃」与「库连不上」
+    // 是两件完全不相干的事 —— 报错必须指向真原因。
+    let cmd = match cli.cmd {
+        Cmd::Doc { cmd } => return doc_cmd(cmd).await,
+        cmd => cmd,
+    };
+
     let url = crate::config::require_env(crate::config::DATABASE_URL_ENV)
         .or_else(|_| crate::config::require_env(crate::config::TEST_DATABASE_URL_ENV))?;
     let pool: PgPool = crate::db::pool::connect(&url).await?;
     crate::db::pg::migrate(&pool).await?;
 
-    match cli.cmd {
+    match cmd {
         Cmd::Project { cmd } => project_cmd(&pool, cmd).await,
         Cmd::Version { cmd } => version_cmd(&pool, cmd).await,
         Cmd::Propose { cmd } => propose_cmd(&pool, cmd).await,
@@ -1002,6 +1073,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
+        // ⛔ 不可达：`Cmd::Doc` 在函数开头就已返回（不连库）。这里**不**写
+        //    `unreachable!()`，而是报一句人话 —— 万一将来有人把上面的提前返回
+        //    删掉，得到的是一条「内部错误」而不是一个 panic 栈。
+        Cmd::Doc { .. } => anyhow::bail!(
+            "内部错误：`doc` 子命令应当在连库之前处理（它不需要产品库）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
         Cmd::McpServer { project, version } => {
             // 冻结闸门在 `mcp::prepare` 里：未冻结就 Err ⇒ 这里退出码非零。
             //
@@ -1037,6 +1115,260 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             crate::server::http::serve(&pool, args).await
         }
     }
+}
+
+/// REQ-116 · **文档摄取**（`ontok doc ingest`）—— 唯一一个**不连产品库**的子命令。
+///
+/// # 它为什么在 `run()` 的连库之前就被分派
+///
+/// 见 [`run`] 开头的注释：输入/产物/缓存全是本地文件，格式闸（AC-001）
+/// 必须能在「没配库」的机器上照常给出**真原因**（格式不支持），
+/// 而不是被「连不上库」抢先盖住。
+///
+/// # 顺序是刻意的
+///
+/// | 步骤 | 为什么在这个位置 |
+/// | --- | --- |
+/// | 读文件 + 格式闸 | 最便宜的失败先报（`.pdf` ⇒ 立刻点名格式） |
+/// | `--chunks-only` | 不碰模型、不需要凭据与预算（AC-002 的判据用它） |
+/// | 预算 → LLM 三件套 | 缺口必须在**干活之前**报出来（不白跑一趟） |
+/// | 读缓存 → 抽取 → **先写缓存** | 花掉的钱对应的回答必须落盘，否则越预算后重跑要再付一次 |
+/// | 预算闸 → 产物 | 越预算 ⇒ **不产出任何断言文件**（AC-007 的裁定，见下） |
+///
+/// # 越预算时为什么**一个产物文件都不写**
+///
+/// AC-007 允许二选一：「不产出半份 JSONL」或「产出但标 `truncated: true`」。
+/// 这里选**前者**：主产物 `assertions.jsonl` 的契约里没有 `truncated` 这一栏，
+/// 一份「只跑了前 K 块」的 JSONL 与完整的那份**长得一模一样**，下游（REQ-117）
+/// 会把它当全量来对齐。宁可什么都不出，也不要出一份看起来完整的一半。
+/// （`--limit-chunks` 是**显式**截断，那种情况允许出产物，并在 `stats.truncated`
+/// 里标 true —— 人知道自己只要前 N 块。）
+async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
+    use crate::extract::doc_ingest as di;
+
+    let DocCmd::Ingest {
+        input,
+        out,
+        stats: stats_path,
+        budget_tokens,
+        limit_chunks,
+        cache,
+        chunks_only,
+    } = cmd;
+
+    if limit_chunks == Some(0) {
+        anyhow::bail!("--limit-chunks 是 0：0 块等于「什么都没跑」，那与「不跑」混淆。要跑就给 ≥1。");
+    }
+
+    // ① 输入 + 格式闸（AC-001）。`load_docs` 是**唯一**判「这个扩展名能不能吃」的地方。
+    let docs = di::load_docs(&input)?;
+    let all_chunks = di::chunk_all(&docs);
+
+    // ② `--chunks-only`：只产块清单，一次模型都不调（AC-002 的确定性判据用它比对）。
+    if chunks_only {
+        let manifest = di::render_chunks_jsonl(&all_chunks)?;
+        write_local(&out, manifest.as_bytes())?;
+        eprintln!("✓ 只分块（--chunks-only）：{} 个文件 → {} 块", docs.len(), all_chunks.len());
+        eprintln!("  产物：{}（同一份输入两次运行必须逐字节相同）", out.display());
+        return Ok(());
+    }
+
+    // ③ 预算 + LLM 三件套（**在干活之前**判完）。
+    //
+    // 三件套的校验**复用 REQ-109 的 `LlmSettings::from_env`**（不抄第二份判据）：
+    // 它缺哪个变量就点名哪个，且绝不回显凭据。
+    let budget = di::require_budget(budget_tokens)?;
+    if budget_tokens.is_none() {
+        eprintln!(
+            "· 未给 --budget-tokens，用默认上限 {budget}（超过即停，且不产出断言文件）"
+        );
+    }
+    let settings = crate::extract::ai_semantic::LlmSettings::from_env()?;
+    let mut transport = settings.transport()?;
+    let model = settings.config.model.clone();
+    // 输出上限：本通道的默认值比 REQ-109 的单条判定大得多（理由见
+    // `doc_ingest::DEFAULT_MAX_TOKENS`）。运维显式设了 ONTOK_LLM_MAX_TOKENS 就以它为准。
+    let max_tokens_set = std::env::var(crate::agent::llm::MAX_TOKENS_ENV)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    let max_tokens = di::resolve_max_tokens(settings.config.max_tokens, max_tokens_set);
+
+    // ④ 指纹缓存：**本地 JSON 文件**（⛔ 不是 `ai_cache` 表 —— 本命令不写库）。
+    let cache_path = cache.unwrap_or_else(|| {
+        let mut s = out.clone().into_os_string();
+        s.push(".cache.json");
+        PathBuf::from(s)
+    });
+    let mut mem_cache = match std::fs::read_to_string(&cache_path) {
+        Ok(text) => di::cache_from_json(&text)
+            .with_context(|| format!("指纹缓存读不懂：{}", cache_path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => di::MemoryDocCache::new(),
+        Err(e) => {
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("读不到指纹缓存 {}", cache_path.display()))
+        }
+    };
+
+    // ⑤ 分阶段上线：只跑前 N 块（**显式**截断，stats.truncated 会标 true）。
+    let chunks: Vec<di::Chunk> = match limit_chunks {
+        Some(n) if n < all_chunks.len() => all_chunks[..n].to_vec(),
+        _ => all_chunks.clone(),
+    };
+    let prompts = di::Prompts::standard();
+    let (assertions, stats) = di::ingest_all(
+        transport.as_mut(),
+        &mut mem_cache,
+        &chunks,
+        &model,
+        &prompts,
+        budget,
+        max_tokens,
+    );
+
+    // ⑥ **先落缓存、再判预算**：已经花掉的钱对应的回答必须留在盘上，
+    //    否则一次越预算的终止会让这一轮所有调用白花（下次重跑再付一次）。
+    let cache_json = di::cache_to_json(&mem_cache)?;
+    write_local(&cache_path, cache_json.as_bytes())?;
+
+    // ⑦ 预算闸（AC-007）。
+    if stats.over_budget() {
+        let stop_where = match stats.budget_stopped {
+            Some(n) => format!("停在第 {n} 块（共 {} 块）", chunks.len()),
+            None => format!(
+                "停在第 {} 块之后（{} 块已全部跑完，用量越过了上限）",
+                chunks.len(),
+                chunks.len()
+            ),
+        };
+        eprintln!(
+            "✗ 预算超限：已用 {} / 上限 {} token，{}",
+            stats.tokens_spent, budget, stop_where
+        );
+        anyhow::bail!(
+            "doc ingest 预算超限 —— 本轮**不产出任何断言文件**（AC-007：不产出半份 JSONL）。\n\
+             \n\
+             已用 / 上限 / 停在第几块：{} / {} / {}。\n\
+             \n\
+             为什么越预算时一个产物都不写：`assertions.jsonl` 没有「这只是前 K 块」这一栏，\
+             一份半份的 JSONL 与完整的那份**长得一模一样** —— 下游对齐会把残缺当全量。\n\
+             已经花掉的那些回答**已经写进本地缓存**（{}），放宽预算重跑会直接命中、\
+             不重复计费。",
+            stats.tokens_spent,
+            budget,
+            stop_where,
+            cache_path.display()
+        );
+    }
+
+    // ⑧ 产物：断言 JSONL（稳定排序）+ stats.json。
+    let jsonl = di::render_jsonl(&assertions)?;
+    let stats_json = di::render_stats(
+        &input.display().to_string(),
+        &docs,
+        &all_chunks,
+        &stats,
+        limit_chunks,
+        &model,
+        &prompts.sha256,
+    )?;
+    write_local(&out, jsonl.as_bytes())?;
+    if let Some(p) = &stats_path {
+        write_local(p, stats_json.as_bytes())?;
+    }
+
+    // ⑨ 屏幕报告（走 stderr：stdout 留给「要不要接管道」的选择，本命令默认不写 stdout）。
+    let mut future = 0usize;
+    let mut example = 0usize;
+    for a in &assertions {
+        match a.modality() {
+            di::Modality::Future => future += 1,
+            di::Modality::Example => example += 1,
+            _ => {}
+        }
+    }
+    let relations_total = stats.relations;
+    let belongs_to = stats.predicate_counts.get("belongs_to").copied().unwrap_or(0);
+    let share = if relations_total == 0 {
+        "—".to_string()
+    } else {
+        format!("{:.1}%", belongs_to as f64 * 100.0 / relations_total as f64)
+    };
+    let preds: Vec<String> = stats
+        .predicate_counts
+        .iter()
+        .map(|(p, n)| format!("{p} {n}"))
+        .collect();
+
+    eprintln!("✓ 文档摄取");
+    eprintln!(
+        "  输入        : {}（{} 个文件 / {} 块{}）",
+        input.display(),
+        docs.len(),
+        chunks.len(),
+        match limit_chunks {
+            Some(n) if n < all_chunks.len() => format!("，--limit-chunks {n} ⇒ 截断（truncated）"),
+            _ => String::new(),
+        }
+    );
+    eprintln!(
+        "  断言        : {} 条（概念 {} · 关系 {}）",
+        stats.assertions, stats.concepts, stats.relations
+    );
+    eprintln!(
+        "  ⚠ 丢弃      : {} 条（证据对不上 {} · 模态 {} · 谓词 {} · 字段空 {} · 解析 {}）",
+        stats.rejected(),
+        stats.rejected_no_evidence,
+        stats.rejected_modality,
+        stats.rejected_predicate,
+        stats.rejected_empty,
+        stats.rejected_parse
+    );
+    for s in stats.rejection_samples.iter().take(3) {
+        eprintln!("                {s}");
+    }
+    eprintln!(
+        "  缓存        : 命中 {} / {} 块（实际调用 {} 次 · 强制失败 {} 次）",
+        stats.cache_hits, chunks.len(), stats.calls, stats.failed_calls
+    );
+    eprintln!(
+        "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {max_tokens}",
+        stats.tokens_spent, budget, stats.tokens_replayed
+    );
+    eprintln!("  概念（去重）: {} 个（⛔ 不合并别名 —— 实体消解留到对齐轮）", stats.distinct_concepts());
+    eprintln!(
+        "  谓词        : {}（{} 条关系，belongs_to 占比 {share}）",
+        if preds.is_empty() { "（无）".to_string() } else { preds.join(" · ") },
+        relations_total
+    );
+    eprintln!(
+        "  未对齐      : future {future} · example {example}（JSONL 里保留，alignable=false）"
+    );
+    eprintln!("  产物        : {}", out.display());
+    if let Some(p) = &stats_path {
+        eprintln!("  统计        : {}", p.display());
+    }
+    eprintln!("  缓存文件    : {}", cache_path.display());
+    eprintln!(
+        "  提示        : 本命令不写库、不改本体、不出图；产物供下一轮「断言 ↔ 表/字段」对齐使用"
+    );
+    Ok(())
+}
+
+/// 本地产物的**唯一写出点**（REQ-116）。
+///
+/// 三份文件共用它：断言 JSONL（主产物）、`stats.json`、本地指纹缓存。
+/// 收在一个函数里是刻意的 —— 出口登记表（`domain::pipeline::OUTLETS`）里
+/// 「一处写点」对应的是「这条命令会往盘上写东西」这个事实，而不是三份文件各一条。
+/// `path.parent()` 不存在时先建目录（否则第一次跑 `--out out/x.jsonl` 会 ENOENT）。
+fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("建不出产物目录 {}", dir.display()))?;
+        }
+    }
+    std::fs::write(path, bytes).with_context(|| format!("写不出去：{}", path.display()))?;
+    Ok(())
 }
 
 /// REQ-010 · 概念声明通道。

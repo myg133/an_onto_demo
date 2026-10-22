@@ -1692,6 +1692,19 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/mcp/serve.rs", "handle_line", "MCP 分发/装配"),
     ("src/mcp/serve.rs", "dispatch", "MCP 分发/装配"),
     ("src/mcp/serve.rs", "write_mcp_line", "MCP **传输层**的 fd 写出（F3 的唯一豁免，精确到函数）"),
+    // ⭐ REQ-116 · 文档摄取（`ontok doc ingest`）：**不连库**的本地子命令。
+    // 判据要求「出口文件里每一个 fn 都必须显式登记用途」—— 新加的两个函数
+    // 一个负责编排/报告、一个是本地产物的唯一写出点。
+    (
+        "src/cli.rs",
+        "doc_cmd",
+        "子命令 handler（`doc ingest`：文档 → 带证据的断言；**不连产品库**，产物/缓存全在本地）",
+    ),
+    (
+        "src/cli.rs",
+        "write_local",
+        "写出机制（REQ-116 的本地产物：断言 JSONL / stats.json / 本地指纹缓存 共用这一个 `fs::write` 写点）",
+    ),
 
 ];
 
@@ -1861,6 +1874,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "ai_semantic"),
     // REQ-113 · 排除表（**判定只有这一个实现**：解析 / 校验 / 剔除 / 记录 / 闭合断言）
     ("src/extract/mod.rs", "exclusions"),
+    // ⭐ REQ-116 · 文档摄取与断言抽取（格式闸 / 分块 / 证据校验 / 指纹缓存 / 预算）
+    ("src/extract/mod.rs", "doc_ingest"),
     ("src/extract/mod.rs", "introspect"),
     ("src/extract/mod.rs", "names"),
     ("src/extract/mod.rs", "propose"),
