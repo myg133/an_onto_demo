@@ -152,6 +152,18 @@ fn exclude_answer(tables: &[Value]) -> String {
 }
 
 fn spawn_fake(mode: Mode, total_tokens: u64) -> FakeLlm {
+    spawn_fake_with(mode, total_tokens, None)
+}
+
+/// 假端点（可注入失败）：第 `fail_after + 1` 次起一律回 HTTP 500。
+///
+/// 用来验 N-1 的「部分批次失败」：前面的批次正常、后面的批次全失败，
+/// 命令必须 `complete:false` + exit≠0，而不是安静地落一份半成品。
+fn spawn_fake_fail_after(mode: Mode, total_tokens: u64, fail_after: usize) -> FakeLlm {
+    spawn_fake_with(mode, total_tokens, Some(fail_after))
+}
+
+fn spawn_fake_with(mode: Mode, total_tokens: u64, fail_after: Option<usize>) -> FakeLlm {
     let listener = TcpListener::bind("127.0.0.1:0").expect("绑定本地假端点");
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
@@ -188,7 +200,20 @@ fn spawn_fake(mode: Mode, total_tokens: u64) -> FakeLlm {
                     }
                 }
             }
-            counter.fetch_add(1, Ordering::SeqCst);
+            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(k) = fail_after {
+                if n > k {
+                    let body = "{\"error\":\"injected failure\"}";
+                    let resp = format!(
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = s.write_all(resp.as_bytes());
+                    let _ = s.flush();
+                    continue;
+                }
+            }
             let body = match header_end {
                 Some(pos) => {
                     let end = (pos + 4 + content_len).min(data.len());
@@ -352,6 +377,9 @@ fn name_suggest_produces_adr_proposal_shape_with_null_reviewed_by() {
     // AC-005 的另一半：运行经济学**不进文件**（否则第二次不可能逐字节相同）
     assert!(v["stats"].get("tokens_spent").is_none(), "token 不该进提案文件");
     assert!(v["stats"].get("cache_hits").is_none());
+    // N-1：全成功 ⇒ complete: true / failed_batches: 0
+    assert_eq!(v["stats"]["complete"], true);
+    assert_eq!(v["stats"]["failed_batches"], 0);
 }
 
 #[test]
@@ -393,6 +421,9 @@ fn exclude_suggest_decisions_use_the_seven_categories_and_null_reviewed_by() {
     assert_eq!(v["counts"]["judged"], 4);
     assert_eq!(v["counts"]["excluded"], 2);
     assert_eq!(v["counts"]["kept"], 2);
+    // N-1：全成功 ⇒ complete: true / failed_batches: 0
+    assert_eq!(v["stats"]["complete"], true);
+    assert_eq!(v["stats"]["failed_batches"], 0);
 }
 
 // ──────────────────────────────────────────────────────────
@@ -490,7 +521,9 @@ fn as_names_is_consumable_by_ontok_propose_names() {
     let out = d.join("names.proposal.json");
     let names = d.join("table_names.json");
     let mut args = name_args(&out);
+    // 夹具只有 4 张表：强制每批 1 张，才有「第 1 批成功、其余失败」的部分失败。
     args.extend(["--as-names".into(), names.to_string_lossy().into_owned()]);
+    args.extend(["--batch-size".into(), "1".into()]);
     let r = run(&args, Some(&fake));
     assert_eq!(r.code, 0, "{}", r.all());
 
@@ -640,4 +673,80 @@ fn help_lists_the_three_decision_commands() {
     assert!(r.all().contains("--ai"), "concept suggest 的 help 必须写出 --ai");
     assert!(r.all().contains("source = \"rule\"") || r.all().contains("算法版"), "要写清降级标注");
 }
+
+// ──────────────────────────────────────────────────────────
+// N-1 · 失败批次：⛔ 不许用空提案/半成品冒充成功
+// ──────────────────────────────────────────────────────────
+
+/// 端点连不上（127.0.0.1:9 = discard）—— 每一批都失败的最简造法。
+fn run_with_dead_endpoint(args: &[String]) -> Run {
+    let fake = FakeLlm {
+        base_url: "http://127.0.0.1:9/v1".to_string(),
+        hits: Arc::new(AtomicUsize::new(0)),
+        _handle: None,
+    };
+    run(args, Some(&fake))
+}
+
+#[test]
+fn all_batches_failing_exits_nonzero_and_writes_no_proposal() {
+    let d = out_dir("n1_allfail");
+    let out = d.join("names.proposal.json");
+    let names = d.join("table_names.json");
+    let mut args = name_args(&out);
+    args.extend(["--as-names".into(), names.to_string_lossy().into_owned()]);
+    let r = run_with_dead_endpoint(&args);
+    assert_ne!(r.code, 0, "全部批次失败必须 exit≠0：{}", r.all());
+    assert!(!out.exists(), "N-1：全部失败**不产出**提案文件");
+    assert!(!names.exists(), "N-1：全部失败也不产出 --as-names");
+    let all = r.all();
+    assert!(all.contains("未产出任何提案文件"), "要明说没有产物：{all}");
+    assert!(!all.contains("可直接 import"), "⛔ 空提案不许提示可导入");
+
+    let eout = d.join("excl.proposal.json");
+    let r = run_with_dead_endpoint(&exclude_args(&eout));
+    assert_ne!(r.code, 0, "exclude 全部失败必须 exit≠0：{}", r.all());
+    assert!(!eout.exists());
+    assert!(r.all().contains("未产出任何提案文件"));
+}
+
+#[test]
+fn partial_batch_failure_is_incomplete_and_exits_nonzero() {
+    // 第 1 批成功（12 张表），第 2 批起全部 HTTP 500。
+    let fake = spawn_fake_fail_after(Mode::Name, 37, 1);
+    let d = out_dir("n1_partial_name");
+    let out = d.join("names.proposal.json");
+    let names = d.join("table_names.json");
+    let mut args = name_args(&out);
+    // 夹具只有 4 张表：强制每批 1 张，才有「第 1 批成功、其余失败」的部分失败。
+    args.extend(["--as-names".into(), names.to_string_lossy().into_owned()]);
+    args.extend(["--batch-size".into(), "1".into()]);
+    let r = run(&args, Some(&fake));
+    assert_ne!(r.code, 0, "部分失败必须 exit≠0：{}", r.all());
+    assert!(out.exists(), "部分失败允许留文件（里面 complete:false）");
+    assert!(!names.exists(), "部分失败**不写** --as-names（缺批会被下游静默丢表）");
+    let v = read_json(&out);
+    assert_eq!(v["stats"]["complete"], false, "N-1：complete 必须是 false");
+    let failed = v["stats"]["failed_batches"].as_u64().unwrap();
+    assert!(failed >= 1, "N-1：failed_batches ≥ 1，实际 {failed}");
+    assert!(v["stats"]["requested"].as_u64().unwrap() > failed, "这部分失败而不是全失败");
+    let all = r.all();
+    assert!(all.contains("不完整"), "要明说不完整：{all}");
+    assert!(!all.contains("可直接 import"), "⛔ 半成品不许提示可导入");
+
+    // exclude：第 1 批成功（10 张），其余 9 批失败。
+    let fake = spawn_fake_fail_after(Mode::Exclude, 41, 1);
+    let d = out_dir("n1_partial_excl");
+    let eout = d.join("excl.proposal.json");
+    let mut eargs = exclude_args(&eout);
+    eargs.extend(["--batch-size".into(), "1".into()]);
+    let r = run(&eargs, Some(&fake));
+    assert_ne!(r.code, 0, "exclude 部分失败必须 exit≠0：{}", r.all());
+    let v = read_json(&eout);
+    assert_eq!(v["stats"]["complete"], false);
+    assert!(v["stats"]["failed_batches"].as_u64().unwrap() >= 1);
+}
+
+
+
 

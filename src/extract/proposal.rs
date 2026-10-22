@@ -60,6 +60,21 @@
 //! 传输（[`LlmTransport`]）与缓存（[`ProposalCache`]）都是注入的 trait；
 //! 读写文件由 `cli` 负责。所以全部 AC 都能用 `ScriptedTransport` + 内存缓存跑。
 //!
+//! # N-1 · 失败批次**不许** fail-open
+//!
+//! 「模型超时 ⇒ exit 0 + 落一份空提案」是最坏的一类失败：空提案的 JSON 完全合法，
+//! 用户导入后**以为成功了**。所以 [`run_batches`] 把「超时 / 无 usage / 截断 / 整份解析失败」
+//! 记进 [`ProposalStats::failed_batches`]，由 [`Completeness`] 三态决定结局：
+//!
+//! | 情形 | 文件 | 退出码 | 文件里的字段 |
+//! | --- | --- | --- | --- |
+//! | 全成功 | 写 | **0** | `stats.complete = true`，`failed_batches = 0` |
+//! | 部分失败 | 写（可以留） | **≠0** | `complete = false`，`failed_batches = N ≥ 1` |
+//! | 全部失败 | **不写**（一个字节都不落） | **≠0** | —（没有文件可读） |
+//!
+//! ⛔ 全部失败时**不产出文件**是刻意的：一份 `proposals: []` 的提案会被下游当成
+//! 「真的、恰好 0 条」。这与 REQ-116 的「`.pdf` 不静默跳过」同一条纪律。
+//!
 //! # AC-001 的判据范围（BA 裁定 A-3）
 //!
 //! 六字段（`claim / evidence / confidence / reason / decided_by / reviewed_by`）
@@ -70,10 +85,21 @@
 //!
 //! # 已知限制（登记，不声称已验证）
 //!
-//! - **R4 的低置信分支在真实数据上未触发**：qwen36-27B 对 96 张表 / 9 个组给出的
-//!   最低置信度都 ≥ 0.6，所以 `low_confidence: true` 在真实产物里是 **0 条**；
-//!   分支本身由单测 [`tests::low_confidence_is_marked_not_dropped`] 覆盖，
-//!   但 ⛔ 不许据此说「低置信标注已在真实数据上验证」。
+//! - **R4 的低置信分支在真实数据上未触发**：最终口径两轮里 name 最低 0.60（run1）/
+//!   0.70（run2）、exclude 最低 0.60、concept 最低 0.70 —— `< 0.60` 的条目 **0 条**
+//!   （跨两轮的最低值是 0.60 / 0.60，QA 实测一致）。分支本身由单测
+//!   [`tests::low_confidence_is_marked_not_dropped`] 覆盖，但 ⛔ 不许据此说
+//!   「低置信标注已在真实数据上验证」。
+//! - **P3 的「可复现」只在有缓存时成立（N-4）**：同一份缓存重跑 ⇒ 0 token + 逐字节相同；
+//!   **冷跑（无缓存）不保证** —— 模型采样会让两次独立调用给出不同名字/排除项
+//!   （实测两轮排除 21 / 24 条）。ADR-005 的 P3 原文是「指纹缓存」，
+//!   ⛔ 不要写成「永远可复现」。
+//! - **P2 的结构保证有一个已知缺口**：`ProposalItem` 的 `reviewed_by` 是私有字段、
+//!   生产路径只有 [`finalize_item`] 能构造（恒 `None`）；但 `derive(Deserialize)`
+//!   仍能把一份 JSON 反序列化成 `Some(...)`。当前**没有任何生产代码反序列化
+//!   `ProposalItem`**，所以不构成路径；但**没有测试钉住「不可写」**
+//!   （给结构体加一个 pub setter 后，351 + 11 + 3 条测试仍全绿）。
+//!   若将来出现读回路径，必须补一条「签名只能由评审流程写入」的判据。
 //! - **运行经济学不进文件**（见 [`ProposalStats::content_json`]）：token / 缓存命中数
 //!   只出现在 stderr 报告里，否则 AC-005 的「第二次逐字节相同」永远不成立。
 
@@ -590,6 +616,12 @@ pub struct ProposalStats {
     /// 真正调用模型几次。
     pub calls: usize,
     pub failed_calls: usize,
+    /// **失败的批次数**（N-1）：超时 / 无 usage / 截断 / 整份解析失败。
+    ///
+    /// 与 `failed_calls` 的区别：`failed_calls` 是**调用次数**的记账，
+    /// 这个数是**产不出可用回答的批次**——它决定 `complete` 与退出码。
+    /// 单条被丢弃（evidence 缺失等）**不算**失败批次：那份回答本身是成功的。
+    pub failed_batches: usize,
     /// **本轮**花掉的 token（命中缓存的批次不计 —— 那是上一次的钱）。
     pub tokens_spent: u64,
     /// 命中缓存里**历史用量**之和（溯源用，不进本轮预算）。
@@ -597,6 +629,20 @@ pub struct ProposalStats {
     pub budget: u64,
     /// 因预算停止：停在第几批（1-based）。
     pub budget_stopped_at: Option<usize>,
+}
+
+/// 提案的完整性（N-1）—— **由失败批次数决定**，不由「产出了几条」决定。
+///
+/// 「0 条提案但 0 批失败」是**完整**的（可能只是这一轮全部沿用/全部被丢弃），
+/// 「8 批失败 7 批」是**部分**的：文件可以留，但必须 `complete: false` + 非零退出码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completeness {
+    /// 所有批次都产出了可用回答（`complete: true`，exit 0）。
+    Complete,
+    /// 有失败批次、但不是全部（文件可留，`complete: false`，exit≠0）。
+    Partial,
+    /// 全部批次都失败（**不产出文件**，exit≠0）。
+    AllFailed,
 }
 
 impl ProposalStats {
@@ -637,6 +683,26 @@ impl ProposalStats {
         self.low_confidence += items.iter().filter(|i| i.is_low_confidence()).count();
     }
 
+    /// 这份提案是否**完整**（N-1）：没有失败批次、也没有被预算截断。
+    pub fn is_complete(&self) -> bool {
+        self.failed_batches == 0 && !self.over_budget()
+    }
+
+    /// 三态：完整 / 部分失败 / **全部失败**。
+    ///
+    /// 全部失败时调用方**不许落一份空提案**——空提案导入后会显示成功，
+    /// 那正是「装作处理过」。部分失败允许落盘（文件里 `complete: false`），
+    /// 但调用方必须以非零退出码收尾。
+    pub fn completeness(&self) -> Completeness {
+        if self.failed_batches == 0 {
+            Completeness::Complete
+        } else if self.failed_batches >= self.requested.max(1) {
+            Completeness::AllFailed
+        } else {
+            Completeness::Partial
+        }
+    }
+
     /// 进**文件**的那部分统计（**只含内容属性**）。
     ///
     /// # 为什么 token / 缓存命中数**不进文件**
@@ -652,6 +718,10 @@ impl ProposalStats {
     /// 所以它们逐字节稳定。运行经济学只出现在 stderr 报告里。
     pub fn content_json(&self) -> serde_json::Value {
         serde_json::json!({
+            // N-1：`complete` / `failed_batches` 是**内容**（同一份输入 + 同一份缓存
+            // ⇒ 同值），不是运行经济学。导入方必须据此拒绝「看起来完整」的半份提案。
+            "complete": self.is_complete(),
+            "failed_batches": self.failed_batches,
             "requested": self.requested,
             "requested_items": self.requested_items,
             "proposed": self.proposed,
@@ -760,10 +830,13 @@ where
             stats.tokens_replayed += entry.tokens;
             match consume(i, &entry.response, &mut stats) {
                 Ok(mut got) => items.append(&mut got),
-                Err(detail) => stats.reject(
-                    Drop::ResponseParse,
-                    format!("{}（缓存回放）{detail}", req.key),
-                ),
+                Err(detail) => {
+                    stats.failed_batches += 1;
+                    stats.reject(
+                        Drop::ResponseParse,
+                        format!("{}（缓存回放）{detail}", req.key),
+                    );
+                }
             }
             continue;
         }
@@ -781,6 +854,7 @@ where
             Ok(r) => r,
             Err(e) => {
                 stats.failed_calls += 1;
+                stats.failed_batches += 1;
                 stats.reject(Drop::CallFailed, format!("{}：{e:#}", req.key));
                 continue;
             }
@@ -789,6 +863,7 @@ where
         // ── 先记账，再解析（钱已经花了）──
         let Some(usage) = resp.usage.as_ref() else {
             stats.failed_calls += 1;
+            stats.failed_batches += 1;
             stats.reject(
                 Drop::NoUsage,
                 format!("{} 的响应没有 usage —— 无法记账，这一批作废", req.key),
@@ -802,6 +877,7 @@ where
             Ok(t) => t,
             Err(e) => {
                 stats.failed_calls += 1;
+                stats.failed_batches += 1;
                 stats.reject(Drop::Truncated, format!("{} 正文不可用：{e:#}", req.key));
                 continue;
             }
@@ -819,7 +895,10 @@ where
         );
         match consume(i, &text, &mut stats) {
             Ok(mut got) => items.append(&mut got),
-            Err(detail) => stats.reject(Drop::ResponseParse, format!("{} {detail}", req.key)),
+            Err(detail) => {
+                stats.failed_batches += 1;
+                stats.reject(Drop::ResponseParse, format!("{} {detail}", req.key));
+            }
         }
     }
 
@@ -1063,6 +1142,102 @@ pub fn require_out_is_file(path: &std::path::Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+// ──────────────────────────────────────────────────────────
+// N-1 · 失败批次闸（**不允许用空提案冒充成功**）
+// ──────────────────────────────────────────────────────────
+
+/// **全部批次失败**的唯一报错：不产出任何提案文件。
+///
+/// # 为什么这是硬失败而不是「产一份空提案」
+///
+/// 一份 `proposals: []` 的文件**长得完全合法**：`ontok-propose --names` 照吃、
+/// `concept import` 照吃（0 个组），用户会以为成功 —— 这就是「装作处理过」。
+/// 与 REQ-116 的「`.pdf` 不静默跳过」、REQ-107 的「闸写好没接线」同一类缺陷。
+pub fn all_batches_failed_error(
+    what: &str,
+    stats: &ProposalStats,
+    cache_path: &std::path::Path,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{what}：**全部 {n} 批调用都失败**（超时 / 截断 / 整份解析失败）——\
+         **未产出任何提案文件**（N-1）。\n\
+         \n\
+         失败批次：{f} / {n}（缓存命中 {h} 批；本轮调用 {c} 次）\n\
+         丢弃分类：{r}\n\
+         已落盘的回答：{}（重跑会命中已成功的批次，不重复计费）\n\
+         \n\
+         为什么不是「产一份空提案 + exit 0」：空提案的 JSON 完全合法，\
+         导入方会当成一份**真的、但恰好 0 条**的提案 —— 用户以为成功了，\
+         而事实是模型一次都没答上来。这和「跳过不支持的格式」是同一类 fail-open。\n\
+         ⛔ 请先修模型端点/网络，再重跑。",
+        cache_path.display(),
+        n = stats.requested,
+        f = stats.failed_batches,
+        h = stats.cache_hits,
+        c = stats.calls,
+        r = format_rejected(&stats.rejected),
+    )
+}
+
+/// **部分批次失败**的报错：文件已经写出（`complete: false`），但退出码必须非零。
+///
+/// 文件里带 `complete: false` / `failed_batches: N` —— 导入方据此拒绝，
+/// 或者人明确知道「这份不完整」。⛔ 不许在这一步之后打印「可直接 import」。
+pub fn partial_failure_error(
+    what: &str,
+    stats: &ProposalStats,
+    out: &std::path::Path,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{what}：提案**不完整**（complete: false）—— 已写出但**退出码非零**（N-1）。\n\
+         \n\
+         失败批次：{f} / {n}（缓存命中 {h} 批）\n\
+         丢弃分类：{r}\n\
+         文件：{}（文件里的 `stats.complete = false`、`stats.failed_batches = {f}`）\n\
+         \n\
+         ⛔ 不要直接导入/喂给下游：失败批次里的对象在这份文件里**不存在**，\
+         下游会当成「本来就没有这些对象」而静默丢表。\n\
+         处置：先修端点/网络后重跑（已成功的批次会命中缓存，不重复计费），\
+         拿到 `complete: true` 再导入。",
+        out.display(),
+        n = stats.requested,
+        f = stats.failed_batches,
+        h = stats.cache_hits,
+        r = format_rejected(&stats.rejected),
+    )
+}
+
+/// 丢弃分类的人读摘要（`key n · key n`；空 ⇒ `（无）`）。
+fn format_rejected(rejected: &BTreeMap<String, usize>) -> String {
+    if rejected.is_empty() {
+        "（无）".to_string()
+    } else {
+        rejected
+            .iter()
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+}
+
+/// **完整性闸的唯一装配点**：
+///
+/// - `Complete` ⇒ `Ok(())`；
+/// - `AllFailed` ⇒ `Err`（调用方必须在**写文件之前**调它，保证一个字节都不落）；
+/// - `Partial` ⇒ `Err`（调用方在**写文件之后**调它，保证文件里 `complete: false` 且 exit≠0）。
+pub fn ensure_completeness(
+    what: &str,
+    stats: &ProposalStats,
+    out: &std::path::Path,
+    cache_path: &std::path::Path,
+) -> Result<()> {
+    match stats.completeness() {
+        Completeness::Complete => Ok(()),
+        Completeness::AllFailed => Err(all_batches_failed_error(what, stats, cache_path)),
+        Completeness::Partial => Err(partial_failure_error(what, stats, out)),
+    }
 }
 
 #[cfg(test)]
@@ -1358,6 +1533,7 @@ mod tests {
             cache_hits: 0,
             calls: 8,
             failed_calls: 0,
+            failed_batches: 0,
             tokens_spent: 41100,
             tokens_replayed: 0,
             budget: 200_000,
@@ -1378,6 +1554,174 @@ mod tests {
         assert_eq!(v["proposed"], 95);
         assert_eq!(v["rejected"]["no_evidence"], 1);
         assert_eq!(v["rejected_total"], 1);
+        // N-1：完整性是**内容**，必须进文件（导入方据此拒绝半份提案）
+        assert_eq!(v["complete"], true);
+        assert_eq!(v["failed_batches"], 0);
+    }
+
+    // ── N-1：失败批次 ──────────────────────────────────────
+
+    fn req2(key: &str) -> BatchRequest {
+        req(key, &format!("输入-{key}"))
+    }
+
+    /// 三态里的两态：全成功 ⇒ `complete: true`；全失败 ⇒ `AllFailed`。
+    #[test]
+    fn completeness_is_derived_from_failed_batches() {
+        let prompts = Prompts::from_system("系统提示");
+        let ok = one_answer_proposals();
+        let consume = |_i: usize, body: &str, stats: &mut ProposalStats| {
+            let parsed = parse_proposals(body)?;
+            let mut out = Vec::new();
+            for r in parsed.proposals {
+                match finalize_item(&r, "ai:m") {
+                    Ok(i) => out.push(i),
+                    Err(d) => stats.reject(d, "x".into()),
+                }
+            }
+            Ok(out)
+        };
+
+        // 全成功（两条请求都有回答）
+        let mut transport = ScriptedTransport::new(vec![
+            Ok(reply(&ok, 10)),
+            Ok(reply(&ok, 10)),
+        ]);
+        let mut cache = MemoryProposalCache::new();
+        let (_, s_ok) = run_batches(
+            &mut transport,
+            &mut cache,
+            &[req2("a"), req2("b")],
+            "m",
+            &prompts,
+            "v1",
+            10_000,
+            300,
+            consume,
+        );
+        assert_eq!(s_ok.failed_batches, 0);
+        assert_eq!(s_ok.completeness(), Completeness::Complete);
+        assert!(s_ok.is_complete());
+        assert_eq!(s_ok.content_json()["complete"], true);
+
+        // 全失败（两条请求都传输出错）
+        let mut transport = ScriptedTransport::new(vec![
+            Err(anyhow::anyhow!("timeout")),
+            Err(anyhow::anyhow!("timeout")),
+        ]);
+        let mut cache = MemoryProposalCache::new();
+        let (_, s_all) = run_batches(
+            &mut transport,
+            &mut cache,
+            &[req2("a"), req2("b")],
+            "m",
+            &prompts,
+            "v1",
+            10_000,
+            300,
+            consume,
+        );
+        assert_eq!(s_all.failed_batches, 2);
+        assert_eq!(s_all.completeness(), Completeness::AllFailed);
+        assert!(!s_all.is_complete());
+        assert_eq!(s_all.content_json()["complete"], false);
+        assert_eq!(s_all.content_json()["failed_batches"], 2);
+
+        // 部分失败（一成一败）⇒ Partial，且**已经拿到的条目要留下**
+        let mut transport = ScriptedTransport::new(vec![
+            Ok(reply(&ok, 10)),
+            Err(anyhow::anyhow!("timeout")),
+        ]);
+        let mut cache = MemoryProposalCache::new();
+        let (items, s_part) = run_batches(
+            &mut transport,
+            &mut cache,
+            &[req2("a"), req2("b")],
+            "m",
+            &prompts,
+            "v1",
+            10_000,
+            300,
+            consume,
+        );
+        assert_eq!(items.len(), 1, "成功的批次产出的条目必须留下");
+        assert_eq!(s_part.failed_batches, 1);
+        assert_eq!(s_part.completeness(), Completeness::Partial);
+        assert!(!s_part.is_complete());
+        assert_eq!(s_part.content_json()["failed_batches"], 1);
+    }
+
+    /// 截断 / 无 usage 也算失败批次（不只是传输超时）。
+    #[test]
+    fn truncated_and_missing_usage_count_as_failed_batches() {
+        let prompts = Prompts::from_system("系统提示");
+        let consume = |_i: usize, _body: &str, _s: &mut ProposalStats| {
+            Ok(Vec::<ProposalItem>::new())
+        };
+        // 没有 usage 的成功响应
+        let no_usage = ChatResponse {
+            choices: reply(&one_answer_proposals(), 10).choices,
+            usage: None,
+        };
+        // finish_reason = length（正文被截断）
+        let mut truncated = reply(&one_answer_proposals(), 10);
+        truncated.choices[0].finish_reason = Some("length".to_string());
+        let mut transport = ScriptedTransport::new(vec![Ok(no_usage), Ok(truncated)]);
+        let mut cache = MemoryProposalCache::new();
+        let (_, stats) = run_batches(
+            &mut transport,
+            &mut cache,
+            &[req2("a"), req2("b")],
+            "m",
+            &prompts,
+            "v1",
+            10_000,
+            300,
+            consume,
+        );
+        assert_eq!(stats.failed_batches, 2, "无 usage 与截断都必须算失败批次");
+        assert_eq!(stats.completeness(), Completeness::AllFailed);
+    }
+
+    /// N-1 的报错文案：必须说「未产出任何提案文件」，且**不许**出现「可直接 import」。
+    #[test]
+    fn all_failed_error_never_suggests_importing() {
+        let stats = ProposalStats {
+            requested: 3,
+            failed_batches: 3,
+            ..Default::default()
+        };
+        let err = all_batches_failed_error(
+            "name suggest",
+            &stats,
+            std::path::Path::new("out/x.cache.json"),
+        );
+        let msg = format!("{err:#}");
+        assert!(msg.contains("未产出任何提案文件"));
+        assert!(msg.contains("失败批次：3 / 3"));
+        assert!(!msg.contains("可直接 import"), "空提案不许提示可导入");
+        assert_eq!(stats.completeness(), Completeness::AllFailed);
+    }
+
+    /// 部分失败：文件可留，但 `complete:false` + 非零退出码，且报错明确说「不完整」。
+    #[test]
+    fn partial_failure_error_says_incomplete() {
+        let stats = ProposalStats {
+            requested: 8,
+            failed_batches: 2,
+            ..Default::default()
+        };
+        let err = partial_failure_error(
+            "exclude suggest",
+            &stats,
+            std::path::Path::new("out/excl.proposal.json"),
+        );
+        let msg = format!("{err:#}");
+        assert!(msg.contains("不完整"));
+        assert!(msg.contains("complete: false"));
+        assert!(msg.contains("失败批次：2 / 8"));
+        assert!(!msg.contains("可直接 import"));
+        assert_eq!(stats.completeness(), Completeness::Partial);
     }
 
     /// R4 的分箱边界：左闭右开，只有最后一箱含 1.0。
@@ -1394,6 +1738,7 @@ mod tests {
         assert!(confidence_histogram(&[]).iter().all(|(_, n)| *n == 0));
     }
 }
+
 
 
 

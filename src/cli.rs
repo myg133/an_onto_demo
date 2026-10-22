@@ -1639,11 +1639,29 @@ async fn name_cmd(cmd: NameCmd) -> anyhow::Result<()> {
     // ② 预算闸：越限 ⇒ **不产出任何提案文件**（AC-006）。
     prop::ensure_within_budget("name suggest", &stats, budget, &cache_path)?;
 
+    // ②' N-1 失败闸（全部批次失败）：**一个字节都不写**。
+    // 空提案的 JSON 完全合法，导入方会当成「真的、恰好 0 条」—— 那是装作处理过。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "name suggest",
+            &stats,
+            &cache_path,
+        ));
+    }
+
     // ③ 产物：提案（主）+ `--as-names`（可选，AC-002）。
     let header = ns::header(&report, &llm.model, &prompts.sha256)?;
     let text = ns::render_proposal(&suggestions, &report, &header, &stats)?;
     let proposal_sha = prop::sha256_text(&text);
     write_local(&out, text.as_bytes())?;
+
+    // ③' N-1 失败闸（部分批次失败）：文件可留（里面 `complete: false`），但退出码非零，
+    // 且 **`--as-names` 不落盘** —— 一份缺了 N 批的名字表喂给 `ontok-propose`
+    // 会让那些表被静默丢弃（REQ-090 的老毛病），正是 N-1 要堵的 fail-open。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("name suggest", &stats, &out));
+    }
+
     let mut names_written: Option<PathBuf> = None;
     if let Some(p) = &as_names {
         let names_text = ns::as_names(
@@ -1705,6 +1723,10 @@ async fn name_cmd(cmd: NameCmd) -> anyhow::Result<()> {
     eprintln!(
         "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {}",
         stats.tokens_spent, budget, stats.tokens_replayed, llm.max_tokens
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
     );
     eprintln!("  模型        : {}（decided_by = ai:{}）", llm.model, llm.model);
     if !missing.is_empty() {
@@ -1829,9 +1851,24 @@ async fn exclude_cmd(cmd: ExcludeCmd) -> anyhow::Result<()> {
             decided_by: prop::RULE_DECIDED_BY.to_string(),
         },
     };
+
+    // N-1：全部批次失败 ⇒ **一个字节都不写**。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "exclude suggest",
+            &stats,
+            &cache_path,
+        ));
+    }
+
     let text = es::render_proposal(&decisions, &carried, &stale, &header, &stats)?;
     let proposal_sha = prop::sha256_text(&text);
     write_local(&out, text.as_bytes())?;
+
+    // N-1：部分批次失败 ⇒ 文件可留（`complete: false`），但退出码非零。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("exclude suggest", &stats, &out));
+    }
 
     let excluded = es::excluded_tables(&decisions);
     let kept = es::kept_tables(&decisions);
@@ -1902,6 +1939,10 @@ async fn exclude_cmd(cmd: ExcludeCmd) -> anyhow::Result<()> {
     eprintln!(
         "  token       : 本轮 {} / 上限 {}（回放历史 {}）",
         stats.tokens_spent, budget, stats.tokens_replayed
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
     );
     eprintln!("  模型        : {model_text}");
     eprintln!("  产物        : {}", out.display());
@@ -2405,10 +2446,24 @@ async fn concept_suggest_ai(
     write_local(&cache_path, cache_json.as_bytes())?;
     prop::ensure_within_budget("concept suggest --ai", &stats, budget, &cache_path)?;
 
+    // N-1：全部批次失败 ⇒ 不写声明（空声明 = 0 个组，导入后会显示成功）。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "concept suggest --ai",
+            &stats,
+            &cache_path,
+        ));
+    }
+
     let decl = ag::build_declaration(&groups, &llm.model);
     let header = ag::header(&llm.model, &prompts.sha256, input.digest());
     let text = ag::render_proposal(&decl, &groups, &header, &stats)?;
     write_local(out, text.as_bytes())?;
+
+    // N-1：部分失败 ⇒ 文件留、退出码非零；⛔ 下面「可直接 import」的提示也不会打印。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("concept suggest --ai", &stats, out));
+    }
 
     let members_total: usize = groups.iter().map(|g| g.members.len()).sum();
     let values: Vec<f64> = groups.iter().map(|g| g.item.confidence).collect();
@@ -2475,6 +2530,10 @@ async fn concept_suggest_ai(
     eprintln!(
         "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {}",
         stats.tokens_spent, budget, stats.tokens_replayed, llm.max_tokens
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
     );
     eprintln!(
         "  模型        : {}（source = ai · decided_by = ai:{} · reviewed_by = null）",
@@ -3367,4 +3426,5 @@ pub fn snapshot_to_view(
             .collect(),
     }
 }
+
 
