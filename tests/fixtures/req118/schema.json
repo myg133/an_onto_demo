@@ -1,0 +1,53 @@
+{
+  "server_version": "PostgreSQL 16.0 (fixture req118)",
+  "transaction_read_only": "on",
+  "schema": "public",
+  "table_count": 4,
+  "column_count": 8,
+  "commented_column_count": 5,
+  "foreign_key_count": 0,
+  "introspected_at": "2026-10-22T00:00:00+00:00",
+  "tables": [
+    {
+      "name": "customers",
+      "comment": "客户主档",
+      "column_count": 2,
+      "commented_count": 2,
+      "columns": [
+        {"name": "id", "data_type": "bigint", "nullable": false, "comment": "客户标识", "is_primary_key": true},
+        {"name": "name", "data_type": "character varying", "nullable": true, "comment": "客户名称", "is_primary_key": false}
+      ]
+    },
+    {
+      "name": "orders",
+      "comment": "订单主表",
+      "column_count": 3,
+      "commented_count": 3,
+      "columns": [
+        {"name": "id", "data_type": "bigint", "nullable": false, "comment": "订单标识", "is_primary_key": true},
+        {"name": "customer_id", "data_type": "bigint", "nullable": false, "comment": "客户标识", "is_primary_key": false},
+        {"name": "amount", "data_type": "numeric", "nullable": true, "comment": "订单金额", "is_primary_key": false}
+      ]
+    },
+    {
+      "name": "alembic_version",
+      "comment": null,
+      "column_count": 1,
+      "commented_count": 1,
+      "columns": [
+        {"name": "version_num", "data_type": "character varying", "nullable": false, "comment": "迁移版本号", "is_primary_key": true}
+      ]
+    },
+    {
+      "name": "_volc_dts_pg_ddl_abc",
+      "comment": null,
+      "column_count": 3,
+      "commented_count": 0,
+      "columns": [
+        {"name": "tag", "data_type": "character varying", "nullable": true, "comment": null, "is_primary_key": false},
+        {"name": "ddl", "data_type": "text", "nullable": true, "comment": null, "is_primary_key": false},
+        {"name": "txid", "data_type": "character varying", "nullable": true, "comment": null, "is_primary_key": false}
+      ]
+    }
+  ]
+}

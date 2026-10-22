@@ -85,8 +85,16 @@ pub const RULE: &str = "按关系拓扑做确定性贪心模块度分组（整�
 /// 声明版本。**规则不变就固定**：它记录的是「这一份建议」，不是「第几次跑」。
 pub const DECLARATION_VERSION: &str = "1.0.0";
 
-/// `source` 的取值（AC-010）：这份声明是**算法建议**，不是人签的结论。
-pub const SOURCE_ALGORITHM: &str = "algorithm-suggest";
+/// `source` 的取值（AC-007 / AC-010）：这份声明是**规则算的**，不是 AI 提的。
+///
+/// # 为什么是 `rule` 而不是 REQ-115 时期的 `algorithm-suggest`
+///
+/// REQ-118 · AC-007 把降级路径的标注统一成两个值：`rule`（规则兜底）与 `ai`
+/// （模型提案）。`algorithm-suggest` 是「怎么算的」的细粒度描述，那一栏现在由
+/// [`DECLARED_BY`] 承担（`concept-suggest/greedy-modularity-v1`）。
+/// 两个值分工：`source` 给机器分流（「这条能不能信」），`declared_by` 给人追溯。
+/// ⛔ 算法版**不得**标成 `ai` —— 那正是 AC-007 要抓的冒充。
+pub const SOURCE_RULE: &str = "rule";
 
 // ⭐ C-2：本模块**不写** `scope_hint`（见 `suggest` 的组构造处）。
 //
@@ -217,7 +225,7 @@ pub fn suggest(input: &SuggestInput<'_>) -> ConceptDeclaration {
         // ⛔ 没有人签过 —— 这一个 `None` 就是「建议」与「结论」的分界。
         confirmed_by: None,
         // ⭐ AC-010：来源可辨识。
-        source: Some(SOURCE_ALGORITHM.to_string()),
+        source: Some(SOURCE_RULE.to_string()),
         reviewed_by: None,
         history: vec![DeclarationRevision {
             version: DECLARATION_VERSION.to_string(),
@@ -454,13 +462,13 @@ mod tests {
     fn test_declaration_says_it_is_an_algorithm_suggestion() {
         let (ent, ln) = two_triangles();
         let d = run(&ent, &ln);
-        assert_eq!(d.source.as_deref(), Some(SOURCE_ALGORITHM));
+        assert_eq!(d.source.as_deref(), Some(SOURCE_RULE));
         assert_eq!(d.reviewed_by, None, "还没人审过");
         assert_eq!(d.confirmed_by, None, "没人确认过");
         assert_eq!(d.declared_by, DECLARED_BY);
         let text = render(&d).expect("序列化");
         let v: serde_json::Value = serde_json::from_str(&text).expect("必须是合法 JSON");
-        assert_eq!(v["source"], "algorithm-suggest");
+        assert_eq!(v["source"], "rule");
         assert_eq!(v["reviewed_by"], serde_json::Value::Null);
         assert_eq!(v["confirmed_by"], serde_json::Value::Null);
         assert!(v["history"].is_array(), "契约字段必须写出来");
@@ -510,3 +518,4 @@ mod tests {
         assert_eq!(d.groups[0].display_name, "x", "展示名空白时退回实体 key，而不是造一个名字");
     }
 }
+

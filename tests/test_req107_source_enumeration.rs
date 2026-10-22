@@ -1705,6 +1705,49 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "write_local",
         "写出机制（REQ-116 的本地产物：断言 JSONL / stats.json / 本地指纹缓存 共用这一个 `fs::write` 写点）",
     ),
+    // ⭐ REQ-118 · AI 提案（ADR-005）：两条**不连库**的本地子命令 + 共用的装配辅助。
+    // 依据 T5「出口文件里每一个 fn 都必须显式登记用途」逐条登记；
+    // 其中写盘仍只经 `write_local` 这一处（提案文件与缓存都走它）。
+    (
+        "src/cli.rs",
+        "load_schema_report",
+        "运维辅助（REQ-118：两条提案命令共用的 `schema.json` 读取入口）",
+    ),
+    (
+        "src/cli.rs",
+        "default_cache_path",
+        "运维辅助（REQ-118：`<out>.cache.json` 的默认落点，两条命令共用同一命名规则）",
+    ),
+    (
+        "src/cli.rs",
+        "proposal_max_tokens",
+        "运维辅助（REQ-118：提案通道的输出上限，复用 `doc_ingest::resolve_max_tokens`）",
+    ),
+    (
+        "src/cli.rs",
+        "open_proposal_llm",
+        "运维辅助（REQ-118：LLM 三件套 + 传输的唯一装配点）",
+    ),
+    (
+        "src/cli.rs",
+        "confidence_line",
+        "运维辅助（REQ-118：置信度分箱一行，唯一实现在 `extract::proposal`）",
+    ),
+    (
+        "src/cli.rs",
+        "name_cmd",
+        "子命令 handler（`name suggest`：AI 中文名提案；**不连产品库**，产物/缓存全在本地）",
+    ),
+    (
+        "src/cli.rs",
+        "exclude_cmd",
+        "子命令 handler（`exclude suggest`：AI 逐表判作用域；**不连产品库**，产物/缓存全在本地）",
+    ),
+    (
+        "src/cli.rs",
+        "concept_suggest_ai",
+        "子命令 handler（`concept suggest --ai`：AI 语义分组；只读快照、只写声明文件）",
+    ),
 
 ];
 
@@ -1876,6 +1919,14 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "exclusions"),
     // ⭐ REQ-116 · 文档摄取与断言抽取（格式闸 / 分块 / 证据校验 / 指纹缓存 / 预算）
     ("src/extract/mod.rs", "doc_ingest"),
+    // ⭐ REQ-118 · AI 提案框架（ADR-005：提案形状 / 校验 / 指纹缓存 / 预算 / 渲染；三命令共用）
+    ("src/extract/mod.rs", "proposal"),
+    // REQ-118 · 决策点一：中文名提案（`ontok name suggest`）
+    ("src/extract/mod.rs", "name_suggest"),
+    // REQ-118 · 决策点二：排除提案（`ontok exclude suggest`）
+    ("src/extract/mod.rs", "exclude_suggest"),
+    // REQ-118 · 决策点三：AI 语义分组（`ontok concept suggest --ai`）
+    ("src/extract/mod.rs", "ai_group"),
     ("src/extract/mod.rs", "introspect"),
     ("src/extract/mod.rs", "names"),
     ("src/extract/mod.rs", "propose"),

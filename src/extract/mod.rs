@@ -9,6 +9,16 @@ pub mod doc_ingest;
 // REQ-113 · 排除表（**一个实现**：解析 / 校验 / 剔除 / 记录都在这一个文件里）。
 // 不放 `domain/`：它判的是「这一轮抽取的作用域」，与 `extract::propose` 同层。
 pub mod exclusions;
+// ⭐ REQ-118 · **AI 提案框架**（ADR-005）：提案形状 / 校验 / 指纹缓存 / 预算 / 渲染。
+// **三命令共用这一处**（纪律 H）；不放 `domain/`：缓存与传输是注入的 trait，
+// 而真正落盘由 `cli` 负责 —— 与 `doc_ingest` 同一条分层理由。
+pub mod proposal;
+// REQ-118 · 决策点一：中文名提案（`ontok name suggest`）。
+pub mod name_suggest;
+// REQ-118 · 决策点二：排除提案（`ontok exclude suggest`）。
+pub mod exclude_suggest;
+// REQ-118 · 决策点三：AI 语义分组（`ontok concept suggest --ai`）。
+pub mod ai_group;
 pub mod introspect;
 pub mod names;
 pub mod propose;
