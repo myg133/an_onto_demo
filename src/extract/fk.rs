@@ -160,11 +160,12 @@ impl MatchKind {
 /// 一个候选表。
 /// **候选目标列的档次**（E-1：join 目标不只是主键）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     /// 单列主键。
+    #[serde(rename = "primary_key")]
     Primary,
     /// 单列**唯一列**（业务键，如 `llm_model.model_id`）。
+    #[serde(rename = "unique_column")]
     Unique,
 }
 
@@ -1260,7 +1261,7 @@ pub fn decide_column(
             "基数依据：扫描窗口 {} 行 / 去重 {} 个 / 源列 unique_columns={} ⇒ {}",
             sample.window_rows, sample.window_distinct, unique_column, cardinality
         ),
-        format!("候选 {} 个：{}", candidates.len(), candidates.iter().map(|c| c.table.as_str()).collect::<Vec<_>>().join(", ")),
+        format!("候选 {} 个：{}", candidates.len(), candidate_list(candidates)),
     ];
     Verdict::Propose(Box::new(FkProposal::new(
         subject,
@@ -1272,6 +1273,21 @@ pub fn decide_column(
         cardinality,
         reason,
     )))
+}
+
+/// 候选清单的人话形式：`llm_model.id, llm_model.model_id, llm_model.model_name`。
+///
+/// 为什么要带目标列：E-1 之后**一张表可能出多个候选**（主键 + 每个唯一列）。
+/// 只列表名会打印成「llm_model, llm_model, llm_model」—— 读的人会以为候选算错了。
+fn candidate_list(candidates: &[Candidate]) -> String {
+    candidates
+        .iter()
+        .map(|c| match c.key_column.as_deref() {
+            Some(k) => format!("{}.{}", c.table, k),
+            None => format!("{}（无键列）", c.table),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn truncate_chars(s: &str, n: usize) -> String {
@@ -1695,7 +1711,7 @@ pub fn plan_inherit(
         format!(
             "候选 {} 个：{}",
             candidates.len(),
-            candidates.iter().map(|c| c.table.as_str()).collect::<Vec<_>>().join(", ")
+            candidate_list(candidates)
         ),
     ];
     InheritPlan::Propose(Box::new(FkProposal::new(
