@@ -215,3 +215,12 @@
 - 新规程两条（写进 `dispatch/rules.md`）：
   1. **失败路径三态**：complete / partial(exit≠0) / all-failed(不产产物)，⛔ 禁止结论式提示
   2. **测试库必须独立**：测试不得指向演示库
+
+## 2026-10-22 — REQ-119 合并与回收
+
+- 合并：`feature/REQ-119` → `develop` **`bf5f89f`**（3 个提交）
+- `http.rs` +6 行（测试夹具），四红线 / `tools.rs` / `property_filter.rs` / `Cargo.*` 零 diff
+- 回收：feature worktree + 分支
+- 最终能力：**104 对象属性（52 正 + 52 反，方向已修正）** / **952 条 xsd range 与真实列类型全等** / **84 主键** / **104 枚举值域（QA 逐条反查 0 编造）** / **54 租户标注**
+- ⚠️ 规程订正：**「挪开 preflight 再跑测试」在本仓不成立**（`retained_names` 对它 `include_str!`），改用 `#[cfg]` shim 或跳过并写明。这条错误规程被 Dev/QA 各自重新发明 ≥4 次
+- 后续：REQ-120（FK 边补全 + 1:1 基数修正）→ REQ-121（R2RML）→ REQ-122（SPARQL 端点 + 租户注入）→ REQ-123（Agent 契约）
