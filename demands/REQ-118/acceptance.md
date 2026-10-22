@@ -117,3 +117,39 @@ AC-001 的六字段按 `proposals[]` 判；`groups[]` 不叠加 claim/confidence
 
 1. **缓存有效**：name 40,905 → **0 token**（8/8 命中）；exclude 41,430 → 0；concept 7,842 → 0。三份文件 sha256 两次逐字节相同。
 2. **P2 结构保证**：`ProposalItem.reviewed_by` 是**私有字段、无 setter**，唯一构造器恒写 `None`；三条 suggest 模块零 `sqlx/PgPool`；`propose import` 需要 `project/items`，提案文件里没有 ⇒ **物理上进不去**。比「纪律上不许」强。
+
+---
+
+## 四 · QA 首轮裁定（PASS 带 7 条非阻断 → 1 条改判阻断）
+
+### A-7 · N-1 **改判阻断**：失败批次 fail-open
+
+QA 实测：模型**超时**时三命令 **exit 0 + 落一份可导入的空提案**，concept 还打印「可直接 import」。
+
+**为什么阻断**：
+
+> **一份空提案，用户导入后会以为成功。** 这与「隐藏 .pdf 静默跳过」「闸写好没接线」是同一类——**装作处理过**。
+> 且与本需求 A-5 登记的「truncated ⇒ 不产出」**自相矛盾**。
+
+要求：任何批次失败 ⇒ `complete: false` + `failed_batches` + **exit≠0**；全部失败不得打印「可直接 import」；A-5 的限制说明改成实际行为。
+
+### A-8 · 三条文档/一致性（必须清）
+
+| # | 问题 |
+| --- | --- |
+| N-2 | `comparison.md` name 段只有 87/96 行，缺的正是「一致 9」 |
+| N-3 | 交付目录混多轮产物（顶层 24 条 vs comparison 21 条） |
+| N-7 | A-4 的最低置信度写 0.65/0.70，实测 **0.60/0.60** |
+
+### A-9 · 两条登记（不改）
+
+| # | 项 | 登记要求 |
+| --- | --- | --- |
+| **N-4** | 同输入**冷跑不复现**（21 vs 24 条） | 写清「只有缓存重跑逐字节相同；冷跑因采样会不同」——ADR-005 的 P3 指**有缓存时可复现**，⛔ 不写成「永远可复现」 |
+| **P2 旁路** | `derive(Deserialize)` 可反序列化出 `Some(reviewed_by)`（无消费路径）；加 pub setter 后全部测试仍绿 | 登记：**没有测试钉住「不可写」这一层** |
+
+### A-10 · QA 这轮最有价值的三条证据
+
+1. **P4 真进库**：真跑 CLI + psycopg2 直读 PG + `Get-FileHash` 独立算 sha ⇒ 三个 `inputs.*.sha256` 全部与文件实际 sha 一致；`inputs` 顶层两键共存（旧实现吞 names 的 bug 已修）。
+2. **P2 是结构性的**：`reviewed_by` 私有 + 只读 getter + 全仓无 setter + 唯一构造器恒写 `None`；三份提案喂 `propose import` **全部 exit 1**（提案缺 project）。
+3. **没偷调提示词**：提示词里无那 9 张表名；交付的三份提案能被**当前二进制 0 token 逐字节复现**（⇒ prompt_sha 未变）。
