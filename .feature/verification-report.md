@@ -1,4 +1,313 @@
-# REQ-115 · 概念分组与图上的归并 —— 验证报告（**第 2 轮 · QA 阻断修复：BA 裁定 C**）
+# REQ-116 · 文档摄取与断言抽取 —— 验证报告（**第 2 轮 · QA 6 条非阻断：N-2 / N-5 改判阻断已修**）
+
+> **被测**：worktree `feature-REQ-116` / 分支 `feature/REQ-116` · 基线 `develop` `a85383a` · **未 push**
+> **本轮范围**：QA 判 PASS 带 6 条非阻断，BA 把 **N-2 / N-5 改判阻断**。本轮修 N-2 / N-5，补齐 N-1 / N-4 / N-6；N-3 只登记不修。
+> **不碰**：`BA/` / `code/` / `Deploy/`；四红线 + `tools.rs` + `guard()` + `property_filter.rs` G1–G4；`/api` 鉴权与路由；`Cargo.*`（零新依赖）。
+> **日期**：2026-10-22 · Windows · PG `postgresql://***@172.17.0.87:5432/anspire_real`（**只读**指纹）
+
+---
+
+## ⚠️ 三条必须先读的结论
+
+1. **N-2 是真 bug，不是文档问题**：`belongs_to` 在**计数之前**就被谓词闸 `continue` 掉，
+   所以「活下来的谓词分布」里永远没有它 ⇒ AC-004 的「< 20%」**结构性恒真**。
+   修法不是改判据，而是**先记原始分布、再过闸**（`raw_predicate_counts`），
+   并让 `belongs_to` 占比按**原始输出**算（`belongs_to_share.raw`）。
+2. **N-5 也是真 bug**：`walk_docs` 里 `if name.starts_with('.') { continue; }`，
+   注释却写「跳过并在 stderr 说明」——实际一声不吭，隐藏目录里的 `.pdf` 让整条命令 **exit 0**。
+   本轮按 **(a)** 修：隐藏项**照常处理、照常报错**（`.md` 照常读）。
+3. **N-4 的漏洞在判据层**：QA 把 `locate_quote` 改成前缀匹配时 lib 红 4、集成 8 条全绿。
+   本轮给假端点加了一种回答：**原文前缀 + 原文没有的尾巴** —— 逐字匹配必拒，
+   任何「前缀/半句/starts_with」放宽都会放行它。变异实测：集成层**立刻红**。
+
+---
+
+## 0 · 结论先行（对应 QA 的 6 条）
+
+| QA 项 | 交付 | 实测 |
+| --- | --- | --- |
+| **N-2** 两个新计数 + 原始占比 | ✅ `raw_predicate_counts` / `rejected_by_predicate_gate{total,by_predicate}` / `belongs_to_share{raw,alive}`；屏幕同时打两个占比 | ✅ 构造含 `belongs_to` 的输出：**raw 14/28 = 50.0%**（alive 0/14 = 0.0%）；真语料 raw 0/51（真 0，分母非 0） |
+| **N-5** 选 (a) 还是 (b) + 实测 | ✅ 选 **(a) 照常处理**；注释与行为一致 | ✅ 隐藏目录 `.pdf` ⇒ exit 1 + 点名 + 不产文件；隐藏 `.md` ⇒ exit 0 + 1 块 |
+| **N-4** 新集成用例 + 变异必须红 | ✅ `ac003_prefix_plus_invented_tail_is_dropped` | ✅ 变异后：lib 3 红 · **集成该用例红**（修前同变异下集成全绿） |
+| **N-6** 文案 | ✅ 报错用实际后缀 | ✅ `.PDF` 显示 `.PDF`、`.pdf` 显示 `.pdf` |
+| **N-1** 三份文档 | ✅ `status.md` / `verification-report.md` / `manifest.json` | ✅ 数字全部来自本轮实测（见 §7） |
+| **N-3** 只登记 | ✅ 写进已知限制 | ✅ 「语料过拟合，只能当冒烟夹具；AC-004 等业务文档」 |
+
+### AC 对照（本轮复核）
+
+| AC | 判据 | 实测 |
+| --- | --- | --- |
+| 001 | 只吃 `.md/.txt`；`.pdf/.docx/.doc` exit≠0 点名 + 提示转文本；⛔ 不静默跳过 | ✅ 三种格式各一例 + **`.PDF` 原样后缀** + **隐藏项**（N-5）；格式被拒时不出产物 |
+| 002 | 同参数两次分块逐字节相同 | ✅ `--chunks-only` 两次 sha256 `8DAD2AC0…5CEA2` 相同（14 块） |
+| 003 | `quote` 必须在该块原文里逐字找到，否则丢弃 + 计数；⛔ 不修正 | ✅ 真语料 101 条 span **独立复核 `bad=0`**；伪造 / **前缀+尾巴** 两种 e2e 全丢弃 |
+| 004 | 谓词是文档里的动词；`belongs_to` 占比 < 20% | ✅ **原始 0/51 = 0.0%**（可测）；结构词被硬拒且**计入原始分布** |
+| 005 | `modality ∈ {fact,spec,future,example}`；future/example 不可对齐 | ✅ fact 86 · spec 11 · future 3 · example 1；4 条 `alignable=false` |
+| 006 | 第二次运行 **0 token**、JSONL 逐字节相同 | ✅ 0 token / 14 命中 / 同 sha256 `A55FE9CD…99056` |
+| 007 | 越预算 ⇒ 停 + 报「已用/上限/停在第几块」+ 不产半份 JSONL | ✅ `--budget-tokens 1` ⇒ exit 1、`已用 636 / 上限 1 / 停在第 2 块`、无断言文件、缓存落盘 |
+| 008 | 不写库 | ✅ 7 张表（含 `ai_cache`）内容 sha256 前后一致；模块内无 `sqlx`/`PgPool`/`db::` |
+| 009 | 产物登记进 `OUTLETS`（内部轨，不过客户闸） | ✅ `I10`（`InternalOnly` / `Track::Internal`），客户出口零引用 |
+| 010 | 零新依赖 / 不退化 | ✅ `Cargo.*` 无 diff；四红线无 diff；无删测试 / 无 `#[ignore]` |
+| 011 | 限制如实登记 | ✅ 见 §8（含 N-3 语料过拟合） |
+
+---
+
+## 1 · N-2：把「恒真判据」改成「可测判据」
+
+### 1.1 病在哪
+
+```rust
+// 旧：谓词闸在计数之前
+if predicate.is_empty() || is_structural_predicate(&predicate) {
+    stats.reject(Rejection::Predicate, ...);
+    continue;                        // ← 这里之后才会 predicate_counts += 1
+}
+...
+*stats.predicate_counts.entry(predicate.clone()).or_insert(0) += 1;
+```
+
+`belongs_to` 永远到不了第二行 ⇒ `predicate_counts` 里没有它 ⇒ 占比 **0/49 = 0%** 恒成立。
+
+### 1.2 改法
+
+| 落点 | 改了什么 |
+| --- | --- |
+| `src/extract/doc_ingest.rs:998` | **先记原始分布**（`raw_predicate_counts`，空谓词记 `(空谓词)`），**再过闸** |
+| `:1290-1294` | `DocStats` 新增 `raw_predicate_counts` / `rejected_by_predicate_gate` / `rejected_predicate_counts` |
+| `:1301-1319` | `PredicateShare { count, total, share: Option<f64> }` —— 分母为 0 时 `null`，**不冒充 0%** |
+| `:1336-1356` | `predicate_share()`（活下来）与 `raw_predicate_share()`（原始）**两个函数**，分母分别是 `relations` 与 `raw_relations()` |
+| `:1570-1611` | `stats.json` 新增 `raw_relations` / `raw_predicate_counts` / `rejected_by_predicate_gate` / `belongs_to_share` |
+| `src/cli.rs:1351-1375` | 屏幕同时打：`谓词（原始）`、`belongs_to : 原始 … ← AC-004 判据 · 活下来 …`、`谓词闸丢弃 N 条（分布）` |
+
+### 1.3 实测
+
+**A · 构造含 `belongs_to` 的模型输出**（假端点，14 块，每块 2 条关系：`下单` + `belongs_to`）：
+
+```json
+"raw_relations": 28,
+"raw_predicate_counts": {"belongs_to": 14, "下单": 14},
+"rejected_by_predicate_gate": {"total": 14, "by_predicate": {"belongs_to": 14}},
+"belongs_to_share": {
+  "alive": {"count": 0, "total": 14, "share": 0.0},
+  "raw":   {"count": 14, "total": 28, "share": 0.5}
+}
+```
+
+⇒ **原始占比 50%（非 0）**，活下来 0%。这正是 N-2 要的那条：判据不再恒真。
+
+**B · 真语料（qwen36-27B，14 块）**：
+
+```
+谓词（原始）: … （51 条关系，含被谓词闸丢掉的 0 条）
+belongs_to  : 原始 0/51=0.0% ← **AC-004 判据** · 活下来 0/49=0.0%
+```
+
+⇒ 真语料里 `belongs_to` **确实是 0**，但这是**测出来的 0**：原始分母是 51（比活下来的 49 多 2，
+那 2 条是「保存 / 说明」因**证据**被丢，不是谓词闸）。**分母非 0** 才说明判据有判别力。
+
+单测：`raw_belongs_to_share_is_not_structurally_zero`（50% vs 0%）、
+`structural_predicates_are_rejected_but_counted_raw`（原始有、活下来没有）。
+
+---
+
+## 2 · N-5：隐藏项不再静默跳过（裁定 **(a)**）
+
+**选 (a) 的理由**：(b)「跳过但逐个点名 + 计数」会引入两套口径（哪些隐藏项算文档？谁决定？），
+而 AC-001 的原话是「跳过等于装作处理过」。最省歧义的规则是**没有例外**：
+`.md`/`.txt` 照常读，其它格式照常报错 —— 隐藏与否不参与判断。
+
+```rust
+// 旧（fail-open）
+let name = p.file_name()...;
+if name.starts_with('.') { continue; }   // ← 注释说「会在 stderr 说明」，其实没有
+
+// 新：没有第三条路
+if p.is_dir() { walk_docs(root, &p, acc)?; continue; }
+check_ext(&p)?;                          // 隐藏项也走同一道格式闸
+```
+
+**实测**：
+
+```text
+# 隐藏目录里的 .pdf
+✗ 不支持的文件格式：.pdf（out\req116\demo-hidden\in\.hidden\x.pdf）
+… ⛔ 不会静默跳过 —— 跳过等于装作处理过（AC-001）。
+exit=1  assertions存在=False
+
+# 隐藏的 .md
+✓ 只分块（--chunks-only）：1 个文件 → 1 块
+file=.secret.md chunks=fec141d13b87:0-25
+```
+
+**代价（已登记）**：别把仓库根 / 家目录当 `--input` —— `.git` 里的非文档文件会按 AC-001 报错。
+
+---
+
+## 3 · N-4：集成层对「放宽为前缀匹配」有牙（M2 变异实测）
+
+新增假端点回答方式（`tests/test_req116_doc_ingest.rs:573`）：
+
+```text
+quote = 该块原文的前 40 个字 + "（原文没有的后半句）"
+逐字匹配 ⇒ 拒；前缀 / 半句 / starts_with ⇒ 放行（用例立刻红）
+```
+
+**变异**（临时把 `locate_quote` 改成「quote 的前一半能在原文里找到就放行」）：
+
+```text
+=== 变异后：lib ===
+failures:
+    extract::doc_ingest::tests::forged_quote_is_rejected
+    extract::doc_ingest::tests::forged_quotes_are_dropped_and_counted
+    extract::doc_ingest::tests::prefix_only_match_is_not_accepted
+test result: FAILED. 21 passed; 3 failed
+
+=== 变异后：集成 ===
+test ac003_prefix_plus_invented_tail_is_dropped ... FAILED
+test result: FAILED. 9 passed; 1 failed
+```
+
+**还原**：`RESTORE doc_ingest: before=87A7E9BC… after=87A7E9BC… match=True`。
+
+> ⚠️ 一个必须记下来的坑：`Copy-Item` 还原会**保留旧 mtime**，cargo 因此认为「无需重编」，
+> 我一度跑的是**变异版产物**（一批假红）。现在还原后一律 `touch`（或 `cargo clean -p ontok`）再跑；
+> 报告里的数字全部来自**重编后**的那一次。
+
+---
+
+## 4 · N-6：报错显示**实际后缀**
+
+```text
+# 旧：extension_of() 先 to_ascii_lowercase()
+✗ 不支持的文件格式：.pdf（…\sample.PDF）      ← 用户写的是 .PDF
+
+# 新：raw_extension() 报错 / lower_extension() 判能不能吃
+✗ 不支持的文件格式：.PDF（out\req116\demo-upper\SAMPLE.PDF）
+exit=1
+```
+
+判据：`unsupported_formats_are_named` 里加 `.PDF` 用例，断言「必须含 `.PDF`」「不许含 `.pdf（`」。
+
+---
+
+## 5 · 真语料实测（第 1 轮的数字，本轮重放仍逐字节一致）
+
+| 项 | 值 |
+| --- | --- |
+| 文件 / 块 | 4 / 14（1 份 `.txt` + 3 份 `.md`） |
+| 断言 | **101**（概念 52 · 关系 49）；丢弃 2（都是模型把 quote 写成带「…」的省略句 ⇒ 证据校验抓住） |
+| span 独立复核 | **checked=101 bad=0**（Python 按 UTF-8 字节切片，**不复用**被测 `locate_quote`） |
+| 谓词 | 活下来 49 条 / 37 个不同谓词；**原始 51 条**；`belongs_to` 原始 **0/51 = 0.0%** |
+| 模态 | fact 86 · spec 11 · future 3 · example 1（future/example 共 4 条 `alignable=false`） |
+| token | 首跑 13643（含 1 次端点 502，失败**不缓存**）→ 补跑 1804 → 第三次 **0** |
+| 缓存 | 14/14 命中；JSONL sha256 `A55FE9CD…99056` 两次一致 |
+
+---
+
+## 6 · 格式闸 / 预算闸 / 不写库（回归复核）
+
+```text
+# .pdf
+✗ 不支持的文件格式：.pdf（…sample.pdf）
+本命令只吃 .md / .txt（UTF-8 纯文本）。
+请先把它转成 .md/.txt 再跑（转换后请记下 hash）：pandoc …
+⛔ 不会静默跳过 —— 跳过等于装作处理过（AC-001）。
+exit=1
+
+# --budget-tokens 1（全新缓存）
+✗ 预算超限：已用 636 / 上限 1 token，停在第 2 块（共 14 块）
+exit=1 · assertions=False · stats=False · cache=True
+
+# 跑前 / 跑后（只读会话）——7 张表内容 sha256 全部相同
+object_types 2151 / link_types 836 / proposals 764 / proposal_items 2507
+ontology_versions 1901 / concept_groups 403 / ai_cache 82（⛔ 没碰 REQ-109 的表）
+```
+
+---
+
+## 7 · 测试数字 + 绕行双证（**本轮实测**）
+
+```text
+lib       : 315 passed / 0 failed        （基线 291 + 本需求 24 条单测）
+doc-tests : 4 passed
+bin 单测  : 3 个目标 / 14 passed
+tests/*.rs: 77 个目标 / 813 passed / 8 failed（5 个用例）
+合计      : 1146 passed / 8 failed
+新增套件  : tests/test_req116_doc_ingest.rs —— 10 passed（含 N-4 / N-5 两条新判据）
+```
+
+**8 个失败全部既有 / 环境，与本需求无关**（5 个用例）：
+
+| 用例 | 原因 | 证据 |
+| --- | --- | --- |
+| `drop_rate` | 本机没有 `.review-workspace/fix-props/schema.json`（fail-closed 门禁，缺输入必红） | 报错原文「读不到脱敏 schema.json」 |
+| `test_fk_naming` | 同上 | 同上 |
+| `test_agent_orchestration::test_cli_end_to_end_…` | REQ-108 的置信度路由把「无数据证据」的关系挪进 `proposal-pending.json`，而这条 REQ-015 老用例拿 `proposal.json` 的 items 逐字节比 | 该用例目录里 `proposal-pending.json` 恰好只有 `add_link_type 设备→客户` |
+| `test_req084_…at_its_line` / `…no_unregistered…` | 登记表在 **develop 上就已过期** | `git show develop:src/extract/propose.rs` 第 280 行是 `/// 真正的 agent 抽象…`，登记表说那里是 `customer_rebate`；`git diff develop -- src/extract/propose.rs src/domain/concept.rs tests/retained_names.req084.tsv` 为空 |
+| `test_provenance_source`（3 条） | 共享库里**项目名撞名**（该测试自己在 `tests/common/mod.rs:457` 说明「pid 会被回收复用 ⇒ 会真的撞名」） | 单跑 **5 passed / 0 failed**；本轮全量刚好撞上 |
+
+> 📌 与 BA 给的口径对账：BA 说 QA 实测「813/4」。本轮 **813 passed / 4 个目标**（drop_rate + fk_naming +
+> agent_orchestration + retained），第 5 个目标 `test_provenance_source` 是本轮新撞上的（单跑绿）。
+> 上一轮我报的「802/75」确实是 **REQ-115 的数字**（N-1 的批评成立）。
+
+**绕行双证**（Windows 上 `src/bin/ontok-gate-preflight.rs` 是 unix-only，且被
+`tests/test_retained_names_req084.rs` 用 `include_str!` 编进来）：
+
+1. `src/bin/ontok-gate-preflight.rs` 挪成 `.moved`（cargo 只编 `*.rs`）；
+2. retained 用例里**只改那一行** `include_str!` 指向 `.moved`（它按逻辑路径查 content，内容没变 ⇒ 判据不变）；
+3. `finally` **逐字节还原**：
+
+```text
+RESTORE preflight: before=C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D
+                   after =C7CF95E2A73B8C75BB44B1970396ACA40F9146992D0C7DCCB3636B3BA571322D match=True exists=True
+RESTORE retained : before=2DB7D22C67DAB4C628DB927D5CC65EBB37CC15A72928196C5F83731980904CF9
+                   after =2DB7D22C67DAB4C628DB927D5CC65EBB37CC15A72928196C5F83731980904CF9 match=True exists=True
+GIT-STATUS: （只有本轮改动的三个文件 + 无 D 行）
+```
+
+---
+
+## 8 · 如实登记（AC-011）
+
+1. **N-3 语料过拟合（QA 判定，接受）**：4 份自造语料是**看过提示词之后**写的 ——
+   `04` 的「术语对照」恰好是规则 2 的示例、`03` 逐字复刻规则 4 的「计划/将/待定/尚未」、
+   `01` 首段先把要抽的概念列出来。⇒ **只能当冒烟夹具**；AC-004 的真实分布**等业务文档**。
+   本轮**没有**为此改语料（改了就是掩盖），只把这条写进模块头与三份文档。
+2. **缓存是本地文件**（`<out>.cache.json`），不是 `ai_cache` 表：为了让「不写库」是**结构性事实**。
+   与 REQ-109 同的是**指纹口径**，不同是存储介质。若要复用表：`DocCache` 是注入式 trait，改动面只在存储层。
+3. **`.txt` 没有标题层级**（只按段落 + 1200 字符上限分组，绝不切句）。
+4. **隐藏项照常处理** ⇒ 别把仓库根 / 家目录当 `--input`。
+5. **`--budget-tokens` 省略时默认 500000**（stderr 明说）。
+6. **`stats.truncated` 只在 `--limit-chunks` 时可能为 true**；越预算那条路径是 `bail!` + 不写产物，
+   所以文件里的 `budget_stopped_at` 实际恒为 `null`（字段在，走不到）。
+7. **谓词质量**：49 条里有「有 / 针对 / 说明 / 走」这类弱谓词（模型从原文取的字）。
+   AC-004 的可测判据（`belongs_to` 原始占比 < 20%）是 **0%**，但「像不像动词」需要真实业务文档再调提示词。
+8. **粒度未调优**：14 块 / 101 条是冒烟规模；真实文档的块大小与断言密度未验证。
+
+---
+
+## 附 · 本轮改动（path:line）
+
+| 文件 | 落点 | 改了什么 |
+| --- | --- | --- |
+| `src/extract/doc_ingest.rs` | `:80` | 模块头：隐藏项照常处理 + N-3 过拟合登记 |
+| 同上 | `:217-236` | `unsupported_format_error` 文档：`ext` 是**原样后缀**（N-6） |
+| 同上 | `:294-309` | `raw_extension` / `lower_extension` 拆开（判据 vs 文案） |
+| 同上 | `:365-424` | `walk_docs` 不再跳过隐藏项；`check_ext` 用原样后缀报错（N-5 / N-6） |
+| 同上 | `:998-1030` | **N-2**：先记 `raw_predicate_counts`，再过谓词闸并记 `rejected_by_predicate_gate` / `rejected_predicate_counts` |
+| 同上 | `:1282-1319` | `DocStats` 三个新字段 + `PredicateShare` + `EMPTY_PREDICATE_KEY` |
+| 同上 | `:1336-1356` | `predicate_share` / `raw_predicate_share` / `raw_relations` |
+| 同上 | `:1570-1650` | `GateStats` / `BelongsToShare`；`StatsReport` 新字段 + `render_stats` 填充 |
+| 同上 | `:1924` / `:1952` | 单测：结构词被拒**但计入原始**；原始占比 50% vs 活下来 0% |
+| 同上 | `:2162` / `:2181` | 单测：`.PDF` 原样后缀；stats.json 的 N-2 四个字段 |
+| `src/cli.rs` | `:1289-1375` | 两个占比 + 原始分布 + 谓词闸丢弃进屏幕报告 |
+| `tests/test_req116_doc_ingest.rs` | `:311/332` | N-6 `.PDF` 用例 + **N-5** 隐藏项两条用例 |
+| 同上 | `:494-525` | N-2：原始分布 / 谓词闸 / 两个占比的断言（`raw_share > 0`） |
+| 同上 | `:573` | **N-4**：前缀 + 原文没有的尾巴 ⇒ 必须丢弃（`PrefixForged` 模式） |
+| `.feature/manifest.json` / `status.md` / `verification-report.md` | 全篇 | **N-1**：写成本需求，数字用本轮实测 |
+
+---
+
+# 历史：REQ-115 · 概念分组与图上的归并 —— 验证报告（第 2 轮 · BA 裁定 C 修复）
 
 > **被测**：worktree `feature-REQ-115` / 分支 `feature/REQ-115` · 基线 `develop` `71ae770` · **未 push**
 > **本轮范围**：QA 判 FAIL（1 阻断）后的修复。BA 纠正了「`scope_hint` 是评审注解」这个前提 ——

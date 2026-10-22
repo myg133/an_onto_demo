@@ -69,6 +69,11 @@ enum Mode {
     Valid,
     /// 回一句原文里**没有**的 quote（AC-003 的伪造用例）。
     Forged,
+    /// ⭐ N-4：quote = 块原文前缀 + **原文里没有的尾巴**。
+    ///
+    /// 逐字匹配必须拒；任何「前缀 / 半句 / starts_with 就算过」的放宽都会放行它
+    /// ⇒ 这条判据在**集成层**也有牙（QA 的 M2 变异：lib 红 4 条、集成 8 条全绿）。
+    PrefixForged,
 }
 
 struct FakeLlm {
@@ -149,6 +154,12 @@ fn spawn_fake(mode: Mode, total_tokens: u64) -> FakeLlm {
             let quote = match mode {
                 Mode::Valid => text.chars().take(24).collect::<String>(),
                 Mode::Forged => "模型编造的原文片段：客户向供应商采购".to_string(),
+                Mode::PrefixForged => {
+                    // 前 40 字是**真的**（原文前缀），尾巴是模型补的 —— 逐字匹配必须拒。
+                    let mut q: String = text.chars().take(40).collect();
+                    q.push_str("（原文没有的后半句）");
+                    q
+                }
             };
             let content = serde_json::json!({
                 "concepts": [
@@ -274,6 +285,7 @@ fn lines_of(p: &Path) -> Vec<Value> {
 // ──────────────────────────────────────────────────────────
 
 /// `.pdf` / `.docx` / `.doc` 各跑一次：exit≠0、**点名格式**、提示先转文本、**不出产物**。
+/// 另加 `.PDF`（N-6：报错显示**实际后缀**，不折成小写）。
 #[test]
 fn ac001_unsupported_formats_are_rejected_by_name() {
     for ext in ["pdf", "docx", "doc"] {
@@ -295,6 +307,58 @@ fn ac001_unsupported_formats_are_rejected_by_name() {
         );
         assert!(!out.exists(), "({ext}) 格式被拒时不许产出断言文件");
     }
+
+    // ⭐ N-6：后缀是大写 `.PDF` 时，报错必须显示 `.PDF`（折成小写会让人以为程序认错了）。
+    let d = out_dir("format-upper");
+    let upper = d.join("sample.PDF");
+    std::fs::copy(formats_dir().join("sample.pdf"), &upper).expect("复制大写后缀夹具");
+    let out = d.join("assertions.jsonl");
+    let r = run_doc(&ingest_args(&upper, &out, &d.join("stats.json")), None);
+    assert_ne!(r.code, 0);
+    assert!(r.stderr.contains(".PDF"), "必须显示实际后缀 `.PDF`：{}", r.stderr);
+    assert!(
+        !r.stderr.contains(".pdf（"),
+        "不许把 `.PDF` 折成 `.pdf` 再报：{}",
+        r.stderr
+    );
+}
+
+/// ⭐ N-5：隐藏文件**不许静默跳过**（QA 判 fail-open）。
+///
+/// 裁定 (a)：隐藏项**照常处理、照常报错**。
+/// - 隐藏目录里的 `.pdf` ⇒ 非 0 退出并点名格式（⛔ 不能 exit 0 装作跑过）；
+/// - 隐藏的 `.md` ⇒ **照常读**（隐藏 ≠ 不是文档）。
+#[test]
+fn ac001_hidden_files_are_processed_not_silently_skipped() {
+    // (a) 隐藏目录里的 `.pdf`
+    let d = out_dir("hidden");
+    let input = d.join("in");
+    std::fs::create_dir_all(input.join(".hidden")).expect("建隐藏目录");
+    std::fs::write(input.join(".hidden").join("x.pdf"), b"%PDF-1.4\n").expect("写隐藏 pdf");
+    std::fs::write(input.join("visible.md"), "# 可见\n\n客户下单。\n").expect("写可见 md");
+    let out = d.join("assertions.jsonl");
+    let r = run_doc(&ingest_args(&input, &out, &d.join("stats.json")), None);
+    assert_ne!(
+        r.code,
+        0,
+        "隐藏目录里的 .pdf 被静默跳过了（exit 0）—— 那正是 AC-001 禁止的 fail-open：\n{}",
+        r.all()
+    );
+    assert!(r.stderr.contains(".pdf"), "必须点名格式：{}", r.stderr);
+
+    // (b) 隐藏的 `.md` 照常读
+    let d2 = out_dir("hidden-md");
+    let input2 = d2.join("in");
+    std::fs::create_dir_all(&input2).expect("建输入目录");
+    std::fs::write(input2.join(".secret.md"), "# 秘密\n\n平台扣费。\n").expect("写隐藏 md");
+    let out2 = d2.join("chunks.jsonl");
+    let mut args = ingest_args(&input2, &out2, &d2.join("stats.json"));
+    args.push("--chunks-only".into());
+    let r2 = run_doc(&args, None);
+    assert_eq!(r2.code, 0, "隐藏的 .md 必须照常读：{}", r2.stderr);
+    let rows = lines_of(&out2);
+    assert_eq!(rows.len(), 1, "隐藏的 .md 应产出 1 块：{rows:?}");
+    assert_eq!(rows[0]["file"], ".secret.md", "隐藏文件也是文档：{rows:?}");
 }
 
 // ──────────────────────────────────────────────────────────
@@ -426,6 +490,40 @@ fn ac003_ac004_ac005_evidence_spans_are_verbatim() {
         "每块一条 belongs_to 必须被拒：{s}"
     );
     assert_eq!(s["rejected"]["no_evidence"].as_u64().unwrap(), 0);
+
+    // ⭐ N-2：模型**原始输出**里必须看得见 `belongs_to`（过闸之前），
+    // 且「原始占比」不是 0 —— 否则 AC-004 是一条恒真判据（QA 判的就是这个）。
+    let n = s["chunks"].as_u64().unwrap() as usize;
+    assert_eq!(
+        s["raw_predicate_counts"]["belongs_to"].as_u64().unwrap() as usize,
+        n,
+        "每块一条 belongs_to 必须在原始分布里：{s}"
+    );
+    assert_eq!(
+        s["raw_predicate_counts"]["下单"].as_u64().unwrap() as usize,
+        n,
+        "{s}"
+    );
+    assert_eq!(s["raw_relations"].as_u64().unwrap() as usize, n * 2, "{s}");
+    assert_eq!(
+        s["rejected_by_predicate_gate"]["total"].as_u64().unwrap() as usize,
+        n,
+        "谓词闸丢弃的条数要单独记：{s}"
+    );
+    assert_eq!(
+        s["rejected_by_predicate_gate"]["by_predicate"]["belongs_to"].as_u64().unwrap() as usize,
+        n,
+        "{s}"
+    );
+    let raw_share = s["belongs_to_share"]["raw"]["share"].as_f64().unwrap();
+    assert!(raw_share > 0.0, "★ N-2：原始占比必须非 0（否则恒真）：{s}");
+    assert_eq!(s["belongs_to_share"]["raw"]["count"].as_u64().unwrap() as usize, n);
+    assert_eq!(s["belongs_to_share"]["raw"]["total"].as_u64().unwrap() as usize, n * 2);
+    assert_eq!(s["belongs_to_share"]["alive"]["count"].as_u64().unwrap(), 0);
+    assert_eq!(s["belongs_to_share"]["alive"]["total"].as_u64().unwrap() as usize, n);
+    // 报告里两个数都要打出来
+    assert!(r.stderr.contains("belongs_to  : 原始"), "屏幕要同时报两个占比：{}", r.stderr);
+    assert!(r.stderr.contains("活下来"), "{}", r.stderr);
 }
 
 /// ★ 伪造 quote：**丢弃 + 计数**，JSONL 里一条都不留，且绝不「修正 quote 让它对上」。
@@ -460,6 +558,46 @@ fn ac003_forged_quote_is_dropped_not_fixed() {
     // 屏幕上必须看得见（fail-closed 不等于沉默）
     assert!(r.stderr.contains("证据对不上"), "丢弃必须在报告里看得见：{}", r.stderr);
     assert!(r.stderr.contains("alignable=false"), "报告要说清 future/example 不可对齐：{}", r.stderr);
+}
+
+/// ⭐ N-4：**前缀 + 原文没有的尾巴** ⇒ 必须丢弃。
+///
+/// QA 变异 `locate_quote → 前缀匹配` 时，lib 抓到了 4 红、**集成 8 条全绿**——
+/// 说明集成层对「放宽为前缀匹配」没有牙。这条就是补那一格的：
+///
+/// ```text
+/// quote = 该块原文的前 40 个字 + "（原文没有的后半句）"
+/// 逐字匹配 ⇒ 拒（本条判据）；前缀/半句/starts_with ⇒ 放行（这条立刻红）
+/// ```
+#[test]
+fn ac003_prefix_plus_invented_tail_is_dropped() {
+    let fake = spawn_fake(Mode::PrefixForged, 7);
+    let d = out_dir("prefix-forged");
+    let out = d.join("assertions.jsonl");
+    let stats = d.join("stats.json");
+    let r = run_doc(&ingest_args(&docs_dir(), &out, &stats), Some(&fake));
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+
+    let body = std::fs::read_to_string(&out).expect("断言文件必须写出（哪怕是空的）");
+    assert_eq!(
+        body, "",
+        "「原文前缀 + 原文没有的尾巴」必须整条丢弃 —— 前半句对不是证据（⛔ 不许前缀匹配）"
+    );
+    let s = read_json(&stats);
+    assert_eq!(s["assertions"].as_u64().unwrap(), 0, "{s}");
+    // 每块 3 concept + 1 relation 栽在证据上；belongs_to 先被谓词闸拒。
+    assert_eq!(
+        s["rejected"]["no_evidence"].as_u64().unwrap() as usize,
+        s["chunks"].as_u64().unwrap() as usize * 4,
+        "{s}"
+    );
+    // N-2 顺带：被谓词闸拒掉的那条仍然在原始分布里
+    assert_eq!(
+        s["rejected_by_predicate_gate"]["total"].as_u64().unwrap() as usize,
+        s["chunks"].as_u64().unwrap() as usize,
+        "{s}"
+    );
+    assert!(r.stderr.contains("证据对不上"), "{}", r.stderr);
 }
 
 // ──────────────────────────────────────────────────────────

@@ -1287,14 +1287,20 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
         }
     }
     let relations_total = stats.relations;
-    let belongs_to = stats.predicate_counts.get("belongs_to").copied().unwrap_or(0);
-    let share = if relations_total == 0 {
-        "—".to_string()
-    } else {
-        format!("{:.1}%", belongs_to as f64 * 100.0 / relations_total as f64)
+    // ⭐ N-2：两个占比都要报 —— 只看「活下来的」那个会恒为 0%（恒真判据）。
+    let alive = stats.predicate_share("belongs_to");
+    let raw = stats.raw_predicate_share("belongs_to");
+    let fmt_share = |s: di::PredicateShare| match s.share {
+        Some(v) => format!("{}/{}={:.1}%", s.count, s.total, v * 100.0),
+        None => format!("{}/{}（分母 0）", s.count, s.total),
     };
     let preds: Vec<String> = stats
         .predicate_counts
+        .iter()
+        .map(|(p, n)| format!("{p} {n}"))
+        .collect();
+    let raw_preds: Vec<String> = stats
+        .raw_predicate_counts
         .iter()
         .map(|(p, n)| format!("{p} {n}"))
         .collect();
@@ -1336,10 +1342,34 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
     );
     eprintln!("  概念（去重）: {} 个（⛔ 不合并别名 —— 实体消解留到对齐轮）", stats.distinct_concepts());
     eprintln!(
-        "  谓词        : {}（{} 条关系，belongs_to 占比 {share}）",
+        "  谓词        : 活下来 {}（{} 条关系）",
         if preds.is_empty() { "（无）".to_string() } else { preds.join(" · ") },
         relations_total
     );
+    // ⭐ N-2：原始分布 + 谓词闸的丢弃 + 两个 belongs_to 占比（AC-004 看 raw）。
+    eprintln!(
+        "  谓词（原始）: {}（{} 条关系，含被谓词闸丢掉的 {} 条）",
+        if raw_preds.is_empty() { "（无）".to_string() } else { raw_preds.join(" · ") },
+        stats.raw_relations(),
+        stats.rejected_by_predicate_gate
+    );
+    eprintln!(
+        "  belongs_to  : 原始 {} ← **AC-004 判据** · 活下来 {}",
+        fmt_share(raw),
+        fmt_share(alive)
+    );
+    if !stats.rejected_predicate_counts.is_empty() {
+        let rej: Vec<String> = stats
+            .rejected_predicate_counts
+            .iter()
+            .map(|(p, n)| format!("{p} {n}"))
+            .collect();
+        eprintln!(
+            "  谓词闸丢弃  : {} 条（{}）",
+            stats.rejected_by_predicate_gate,
+            rej.join(" · ")
+        );
+    }
     eprintln!(
         "  未对齐      : future {future} · example {example}（JSONL 里保留，alignable=false）"
     );

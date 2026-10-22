@@ -36,6 +36,17 @@
 //! | R5 | 不猜 | 提示词明令「文档没写的关系不要产出”，且本模块**没有任何 schema 输入** |
 //! | R6 | 中文友好 | 分块只在标题/段落/超长单元之后断开，⛔ 不按字符数切句 |
 //!
+//! # AC-004 的判据为什么看**原始**谓词分布（QA N-2）
+//!
+//! `belongs_to` 在**计数之前**就被谓词闸丢掉了 ⇒ 若只统计「活下来的」谓词，
+//! 它的占比结构性恒为 0%，AC-004（< 20%）**永远成立** —— 那是一条恒真判据。
+//! 所以 [`DocStats`] 先记 [`DocStats::raw_predicate_counts`]（模型原文，**过闸之前**），
+//! 再记 [`DocStats::predicate_counts`]（产物）：
+//!
+//! - `belongs_to_share.raw` = 原始占比 ← **AC-004 用它**；
+//! - `belongs_to_share.alive` = 活下来的占比 ← 产物的真相；
+//! - `rejected_by_predicate_gate` = 被谓词闸丢掉的条数 + 谓词分布。
+//!
 //! # 证据校验只有一处实现（纪律 H）
 //!
 //! [`normalize_newlines`] + [`locate_quote`] 是**唯一**的判据。它的容忍面
@@ -66,10 +77,15 @@
 //!
 //! - 只吃 `.md` / `.txt`（UTF-8）。`.pdf` / `.docx` / `.doc` **显式拒绝**，
 //!   PDF/Word 解析由外部转换负责。
+//! - 🔴 **隐藏项照常处理、照常报错**（N-5 裁定 (a)）：`.md` / `.txt` 照常读，
+//!   其它格式照常拒绝。**代价**：别把仓库根 / 家目录当 `--input`（那里有 `.git`
+//!   之类非文档文件，会按 AC-001 报错）。第一版曾静默跳过隐藏项 —— 那是 fail-open。
 //! - 标题层级只认 Markdown ATX（`#`…`######`）；纯 `.txt` 没有标题层级，
 //!   只按段落 + 字符上限分组。
 //! - 多叫法**不去重**（`stats.distinct_concepts` 只是计数，不是实体消解）。
 //! - 粒度未经真实业务文档调优（demand 风险 4：先看分布，再调提示词）。
+//!   ⚠️ 自造的 4 份夹具**过度贴合提示词**（QA N-3）⇒ 只能当冒烟夹具，
+//!   AC-004 的真实验证**等业务文档**。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -197,6 +213,9 @@ impl Default for Prompts {
 /// 不支持的格式 —— **显式拒绝**，⛔ 不静默跳过。
 ///
 /// 「跳过」等于装作处理过：产物里少一份文档，读的人无从知道少了什么。
+///
+/// ⚠️ `ext` 是**实际后缀的原样**（含大小写，N-6）：用户写 `.PDF` 就该看到 `.PDF`，
+/// 报错里显示小写 `.pdf` 会让人以为「我给的其实是 pdf，程序认错了」。
 pub fn unsupported_format_error(ext: &str, path: &Path) -> anyhow::Error {
     anyhow::anyhow!(
         "不支持的文件格式：.{ext}（{path}）\n\
@@ -272,10 +291,16 @@ pub fn normalize_newlines(text: &str) -> String {
     out
 }
 
-fn extension_of(path: &Path) -> Option<String> {
+/// 扩展名的**原样**（不折大小写）—— 报错要显示用户实际写的那一个（N-6）。
+fn raw_extension(path: &Path) -> Option<String> {
     path.extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .map(|e| e.to_string_lossy().into_owned())
         .filter(|e| !e.trim().is_empty())
+}
+
+/// 判「能不能吃」时用的小写形式（扩展名大小写不敏感）。
+fn lower_extension(path: &Path) -> Option<String> {
+    raw_extension(path).map(|e| e.to_ascii_lowercase())
 }
 
 /// 读入输入（文件或目录），**先判格式再读内容**。
@@ -337,8 +362,15 @@ pub fn load_docs(input: &Path) -> Result<Vec<SourceDoc>> {
 
 /// 目录递归收集 `.md` / `.txt`。**任何不支持的格式都当场报错**（AC-001）。
 ///
-/// 隐藏文件 / 隐藏目录（`.` 开头，如 `.git` / `.DS_Store`）跳过并在 stderr 说明 ——
-/// 它们不是「用户以为会被处理的文档」；但 `.pdf` 这类**显式点名**的格式不会被跳过。
+/// # 隐藏文件 / 隐藏目录：**照常处理，照常报错**（QA N-5 裁定 (a)）
+///
+/// 第一版在这里 `continue` 掉了 `.` 开头的项，注释却写「跳过并在 stderr 说明」——
+/// 实际**一声不吭**，而隐藏目录里的 `.pdf` 会让整条命令 exit 0 装作跑过。
+/// 那正是 AC-001 点名的 fail-open，⛔ 不许「注释说会说，实际不说」。
+///
+/// 现在没有第三条路：`.md` / `.txt` **照常读**（隐藏文件也是文档），
+/// 其它格式**照常报错**（含隐藏目录里的）。代价是「别把仓库根当输入」
+/// （那里有 `.git` 之类的非文档文件）—— 这条已登记在模块头的已知限制里。
 fn walk_docs(root: &Path, dir: &Path, acc: &mut Vec<(PathBuf, String)>) -> Result<()> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("读不了目录 {}", dir.display()))?
@@ -347,10 +379,6 @@ fn walk_docs(root: &Path, dir: &Path, acc: &mut Vec<(PathBuf, String)>) -> Resul
         .with_context(|| format!("遍历目录 {} 失败", dir.display()))?;
     entries.sort();
     for p in entries {
-        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        if name.starts_with('.') {
-            continue;
-        }
         if p.is_dir() {
             walk_docs(root, &p, acc)?;
             continue;
@@ -368,10 +396,13 @@ fn walk_docs(root: &Path, dir: &Path, acc: &mut Vec<(PathBuf, String)>) -> Resul
 
 /// 单个文件的格式闸（AC-001）。**唯一**一处判「这个扩展名能不能吃」。
 fn check_ext(path: &Path) -> Result<()> {
-    match extension_of(path) {
-        Some(ext) if ACCEPTED_EXTENSIONS.contains(&ext.as_str()) => Ok(()),
-        Some(ext) => Err(unsupported_format_error(&ext, path)),
-        None => Err(anyhow::anyhow!(
+    let lower = lower_extension(path);
+    let raw = raw_extension(path);
+    match (raw, lower) {
+        (Some(_), Some(lower)) if ACCEPTED_EXTENSIONS.contains(&lower.as_str()) => Ok(()),
+        // 报错用**原样后缀**（N-6）：`.PDF` 就显示 `.PDF`。
+        (Some(raw), _) => Err(unsupported_format_error(&raw, path)),
+        (None, _) => Err(anyhow::anyhow!(
             "无法判断格式（没有扩展名）：{}\n\
              本命令只吃 .md / .txt（UTF-8 纯文本）—— 没有扩展名时无从判断，宁可报错也不猜。",
             path.display()
@@ -964,6 +995,16 @@ pub fn validate(chunk: &Chunk, raw: RawExtraction, stats: &mut DocStats) -> Vec<
     }
 
     for r in raw.relations {
+        // ⭐ N-2：**先记原始分布，再过闸**。
+        //
+        // 顺序是这条判据的全部意义：谓词闸会把 `belongs_to` 丢掉，若等丢掉之后再统计，
+        // 「原始占比」就永远算不出非 0 —— AC-004 变成「恒真」。这里记的是模型的原文。
+        let raw_predicate = {
+            let p = r.predicate.trim();
+            if p.is_empty() { EMPTY_PREDICATE_KEY.to_string() } else { p.to_string() }
+        };
+        *stats.raw_predicate_counts.entry(raw_predicate.clone()).or_insert(0) += 1;
+
         let subject = r.subject.trim().to_string();
         let object = r.object.trim().to_string();
         if subject.is_empty() || object.is_empty() {
@@ -975,6 +1016,8 @@ pub fn validate(chunk: &Chunk, raw: RawExtraction, stats: &mut DocStats) -> Vec<
         }
         let predicate = r.predicate.trim().to_string();
         if predicate.is_empty() || is_structural_predicate(&predicate) {
+            stats.rejected_by_predicate_gate += 1;
+            *stats.rejected_predicate_counts.entry(raw_predicate.clone()).or_insert(0) += 1;
             stats.reject(
                 Rejection::Predicate,
                 format!(
@@ -1232,11 +1275,48 @@ pub struct DocStats {
     pub budget_stopped: Option<usize>,
     /// 去重后的概念名集合（只计数；⛔ 不做实体消解）
     pub concept_names: BTreeSet<String>,
-    /// 谓词分布（BTreeMap ⇒ 输出顺序确定）
+    /// 谓词分布（**活下来的**关系；BTreeMap ⇒ 输出顺序确定）
     pub predicate_counts: BTreeMap<String, usize>,
+    /// ⭐ **模型原始输出**里的谓词分布（**过闸之前**，含被谓词闸丢掉的那些）。
+    ///
+    /// # 为什么必须单独记这一份（QA N-2：AC-004 的判据曾经恒真）
+    ///
+    /// 只看 `predicate_counts`（活下来的）时，`belongs_to` 在**计数之前**就被谓词闸
+    /// `continue` 掉了 ⇒ 它永远不会出现在分布里 ⇒ 「`belongs_to` 占比 < 20%」**结构性恒真**。
+    /// 那等于 AC-004 没有判据：不管模型退化到什么程度，占比都是 0%。
+    ///
+    /// 所以原始分布必须**先记再判**：`raw_predicate_counts` 是分母的真相，
+    /// `predicate_counts` 是产物的真相，两个数一起才说明「文档给了动词」。
+    pub raw_predicate_counts: BTreeMap<String, usize>,
+    /// 被**谓词闸**丢掉的条数（`rejected_predicate` 的子集里「谓词闸」这一格）。
+    pub rejected_by_predicate_gate: usize,
+    /// 被谓词闸丢掉的那些**谓词分布**（退化到哪个结构词上，要看得见）。
+    pub rejected_predicate_counts: BTreeMap<String, usize>,
     /// 作废样例（最多 5 条）
     pub rejection_samples: Vec<String>,
 }
+
+/// **比例 + 分子分母**（只报百分比会把「分母是 0」藏起来）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct PredicateShare {
+    pub count: usize,
+    pub total: usize,
+    /// `None` = 分母为 0（没有关系）⇒ 输出 `null`，**不冒充 0%**。
+    pub share: Option<f64>,
+}
+
+impl PredicateShare {
+    fn of(count: usize, total: usize) -> Self {
+        Self {
+            count,
+            total,
+            share: if total == 0 { None } else { Some(count as f64 / total as f64) },
+        }
+    }
+}
+
+/// 空谓词在分布里的键（不能让空串把 BTreeMap 弄成一行看不见的东西）。
+pub const EMPTY_PREDICATE_KEY: &str = "(空谓词)";
 
 impl DocStats {
     pub fn rejected(&self) -> usize {
@@ -1250,6 +1330,29 @@ impl DocStats {
     /// 去重后概念数（demand 交付物 7 明确要这个数）。
     pub fn distinct_concepts(&self) -> usize {
         self.concept_names.len()
+    }
+
+    /// **活下来的**关系里某个谓词的占比（分母 = `relations`）。
+    pub fn predicate_share(&self, predicate: &str) -> PredicateShare {
+        PredicateShare::of(
+            self.predicate_counts.get(predicate).copied().unwrap_or(0),
+            self.relations,
+        )
+    }
+
+    /// ⭐ **模型原始输出**里某个谓词的占比（分母 = 原始关系条数，含被丢掉的）。
+    ///
+    /// AC-004 的判据必须用**这一份**：用活下来的那份算，`belongs_to` 恒为 0%。
+    pub fn raw_predicate_share(&self, predicate: &str) -> PredicateShare {
+        PredicateShare::of(
+            self.raw_predicate_counts.get(predicate).copied().unwrap_or(0),
+            self.raw_relations(),
+        )
+    }
+
+    /// 模型原始输出里的关系条数（含被任何一道闸丢掉的）。
+    pub fn raw_relations(&self) -> usize {
+        self.raw_predicate_counts.values().sum()
     }
 
     /// 缓存命中率（分母 = 块数；0 块 ⇒ `None`）。
@@ -1464,8 +1567,26 @@ pub struct StatsRejected {
     pub parse: usize,
 }
 
-/// `stats.json` 的磁盘形状（字段顺序即输出顺序：确定性）。
+/// 谓词闸的统计（N-2：**过闸之前**的真相）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GateStats {
+    /// 被谓词闸丢掉的条数。
+    pub total: usize,
+    /// 被丢掉的那些谓词分布（退化到哪个结构词上）。
+    pub by_predicate: BTreeMap<String, usize>,
+}
+
+/// `belongs_to` 的两个占比（AC-004 的判据必须看 `raw`）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct BelongsToShare {
+    /// 活下来的（进了 JSONL 的）。
+    pub alive: PredicateShare,
+    /// ⭐ **模型原始输出**里的（含被谓词闸丢掉的）—— AC-004 用它。
+    pub raw: PredicateShare,
+}
+
+/// `stats.json` 的磁盘形状（字段顺序即输出顺序：确定性）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatsReport {
     pub input: String,
     pub files: usize,
@@ -1473,6 +1594,8 @@ pub struct StatsReport {
     pub assertions: usize,
     pub concepts: usize,
     pub relations: usize,
+    /// ⭐ 模型原始输出里的关系条数（N-2：含被任何一道闸丢掉的）。
+    pub raw_relations: usize,
     pub rejected: StatsRejected,
     pub cache_hits: usize,
     pub calls: usize,
@@ -1480,7 +1603,14 @@ pub struct StatsReport {
     pub tokens_spent: u64,
     pub tokens_replayed: u64,
     pub distinct_concepts: usize,
+    /// 活下来的谓词分布。
     pub predicate_counts: BTreeMap<String, usize>,
+    /// ⭐ **过闸之前**的谓词分布（N-2）。
+    pub raw_predicate_counts: BTreeMap<String, usize>,
+    /// ⭐ 谓词闸丢掉的条数 + 谓词分布（N-2）。
+    pub rejected_by_predicate_gate: GateStats,
+    /// ⭐ `belongs_to` 两个占比：`raw` 是 AC-004 的判据。
+    pub belongs_to_share: BelongsToShare,
     pub budget_limit: u64,
     pub budget_stopped_at: Option<usize>,
     pub truncated: bool,
@@ -1525,6 +1655,7 @@ pub fn render_stats(
         assertions: stats.assertions,
         concepts: stats.concepts,
         relations: stats.relations,
+        raw_relations: stats.raw_relations(),
         rejected: StatsRejected {
             total: stats.rejected(),
             no_evidence: stats.rejected_no_evidence,
@@ -1540,6 +1671,15 @@ pub fn render_stats(
         tokens_replayed: stats.tokens_replayed,
         distinct_concepts: stats.distinct_concepts(),
         predicate_counts: stats.predicate_counts.clone(),
+        raw_predicate_counts: stats.raw_predicate_counts.clone(),
+        rejected_by_predicate_gate: GateStats {
+            total: stats.rejected_by_predicate_gate,
+            by_predicate: stats.rejected_predicate_counts.clone(),
+        },
+        belongs_to_share: BelongsToShare {
+            alive: stats.predicate_share("belongs_to"),
+            raw: stats.raw_predicate_share("belongs_to"),
+        },
         budget_limit: stats.budget,
         budget_stopped_at: stats.budget_stopped,
         truncated: stats.budget_stopped.is_some()
@@ -1779,9 +1919,9 @@ mod tests {
         assert_eq!(stats.rejected(), 2);
     }
 
-    /// 谓词退化成结构词 ⇒ 丢弃（AC-004）。
+    /// 谓词退化成结构词 ⇒ 丢弃（AC-004），且**原始分布里必须留痕**（N-2）。
     #[test]
-    fn structural_predicates_are_rejected() {
+    fn structural_predicates_are_rejected_but_counted_raw() {
         let c = chunk_of("# 关系\n\n订单属于客户。\n");
         let mut stats = DocStats::default();
         let got = validate(
@@ -1794,6 +1934,44 @@ mod tests {
         );
         assert!(got.is_empty());
         assert_eq!(stats.rejected_predicate, 1);
+        // ⭐ N-2：过闸之前的原始分布里必须有它，否则 AC-004 的占比恒为 0。
+        assert_eq!(stats.rejected_by_predicate_gate, 1);
+        assert_eq!(stats.rejected_predicate_counts.get("belongs_to"), Some(&1));
+        assert_eq!(stats.raw_predicate_counts.get("belongs_to"), Some(&1));
+        assert_eq!(stats.raw_relations(), 1);
+        assert_eq!(stats.raw_predicate_share("belongs_to").share, Some(1.0));
+        // 活下来的那一份里当然没有它（两份数**必须**分得开）
+        assert_eq!(stats.predicate_counts.get("belongs_to"), None);
+        assert_eq!(stats.predicate_share("belongs_to").share, None);
+    }
+
+    /// ★ N-2 的**核心判据**：同一批回答里既有合法关系、又有 `belongs_to` ⇒
+    /// 「原始占比」**不再是 0**，而「活下来的占比」仍是 0。
+    /// （只看活下来那份时，这两个数会都是 0 ⇒ AC-004 恒真。）
+    #[test]
+    fn raw_belongs_to_share_is_not_structurally_zero() {
+        let c = chunk_of("# 关系\n\n客户下单，订单属于客户。\n");
+        let mut stats = DocStats::default();
+        let got = validate(
+            &c,
+            raw(serde_json::json!({
+                "relations": [
+                    {"subject": "客户", "predicate": "下单", "object": "订单",
+                     "quote": "客户下单", "modality": "fact"},
+                    {"subject": "订单", "predicate": "belongs_to", "object": "客户",
+                     "quote": "订单属于客户", "modality": "fact"}
+                ]
+            })),
+            &mut stats,
+        );
+        assert_eq!(got.len(), 1, "只有「下单」能活下来：{got:?}");
+        let alive = stats.predicate_share("belongs_to");
+        let raw = stats.raw_predicate_share("belongs_to");
+        assert_eq!((alive.count, alive.total), (0, 1));
+        assert_eq!(alive.share, Some(0.0));
+        assert_eq!((raw.count, raw.total), (1, 2), "原始分母是 2 条（含被丢的那条）");
+        assert_eq!(raw.share, Some(0.5), "原始占比 50% —— 非 0 才说明判据活着");
+        assert_ne!(alive.share, raw.share, "两个占比必须能分开，否则 N-2 没修");
     }
 
     /// 模态缺失/越界 ⇒ 丢弃（R4：模态不是可选项）。
@@ -1992,6 +2170,10 @@ mod tests {
         assert!(check_ext(Path::new("a.pdf")).is_err());
         assert!(check_ext(Path::new("a.docx")).is_err());
         assert!(check_ext(Path::new("a.doc")).is_err());
+        // ⭐ N-6：报错要显示**实际后缀**（`.PDF` 不能写成 `.pdf`）。
+        let err = check_ext(Path::new("a.PDF")).unwrap_err().to_string();
+        assert!(err.contains(".PDF"), "必须显示用户写的那个后缀：{err}");
+        assert!(!err.contains(".pdf（"), "折成小写会让人以为程序认错了：{err}");
     }
 
     /// 统计渲染：字段齐全、`truncated` 标得出来、键顺序稳定。
@@ -2003,15 +2185,33 @@ mod tests {
         stats.concepts = 1;
         stats.assertions = 1;
         stats.concept_names.insert("订单".into());
+        // N-2 的两个新计数也要能在 stats.json 里看到
+        stats.relations = 1;
+        *stats.predicate_counts.entry("下单".into()).or_insert(0) += 1;
+        *stats.raw_predicate_counts.entry("下单".into()).or_insert(0) += 1;
+        *stats.raw_predicate_counts.entry("belongs_to".into()).or_insert(0) += 1;
+        stats.rejected_by_predicate_gate = 1;
+        *stats.rejected_predicate_counts.entry("belongs_to".into()).or_insert(0) += 1;
         let a = render_stats("docs", &[d.clone()], &chunks, &stats, None, "m", "p").unwrap();
         let b = render_stats("docs", &[d], &chunks, &stats, None, "m", "p").unwrap();
         assert_eq!(a, b, "同输入两次渲染必须逐字节相同");
         for needle in [
             "\"files\"", "\"chunks\"", "\"assertions\"", "\"rejected\"", "\"cache_hits\"",
             "\"tokens_spent\"", "\"distinct_concepts\"", "\"predicate_counts\"", "\"truncated\": false",
+            // ⭐ N-2：原始分布 / 谓词闸 / 两个 belongs_to 占比
+            "\"raw_relations\"", "\"raw_predicate_counts\"", "\"rejected_by_predicate_gate\"",
+            "\"belongs_to_share\"", "\"alive\"", "\"raw\"",
         ] {
             assert!(a.contains(needle), "stats.json 缺 {needle}：{a}");
         }
+        let v: serde_json::Value = serde_json::from_str(&a).unwrap();
+        assert_eq!(v["raw_relations"], 2);
+        assert_eq!(v["belongs_to_share"]["raw"]["count"], 1);
+        assert_eq!(v["belongs_to_share"]["raw"]["total"], 2);
+        assert_eq!(v["belongs_to_share"]["raw"]["share"], 0.5);
+        assert_eq!(v["belongs_to_share"]["alive"]["count"], 0);
+        assert_eq!(v["rejected_by_predicate_gate"]["total"], 1);
+        assert_eq!(v["rejected_by_predicate_gate"]["by_predicate"]["belongs_to"], 1);
         // --limit-chunks 截断 ⇒ truncated: true（半份产物必须标出来）
         let c = render_stats("docs", &[], &chunks, &stats, Some(0), "m", "p").unwrap();
         assert!(c.contains("\"truncated\": true"));
