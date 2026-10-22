@@ -1,0 +1,13 @@
+{
+  "columns": [
+    "customer_id",
+    "sub_customer_id",
+    "main_customer_id",
+    "from_customer_id",
+    "to_customer_id",
+    "source_customer_id",
+    "target_customer_id",
+    "related_customer_id"
+  ],
+  "reviewed_by": "REQ-119 样例声明（非安全评审结论；上线前须由安全负责人签字）"
+}

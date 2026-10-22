@@ -1,0 +1,5 @@
+{
+  "columns": ["customer_id"],
+  "tables": ["customers", "deductions", "order", "balances"],
+  "reviewed_by": "REQ-119 tables 过滤样例"
+}

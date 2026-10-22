@@ -103,7 +103,14 @@ fn model_fixture() -> ontok::domain::model_view::ModelTrackView {
 }
 
 fn opts() -> TtlOptions<'static> {
-    TtlOptions { project: "样例项目", version: 2, base: DEFAULT_BASE, action_type_count: 0 }
+    TtlOptions {
+        project: "样例项目",
+        version: 2,
+        base: DEFAULT_BASE,
+        action_type_count: 0,
+        // REQ-119：本文件的判据不涉及租户标注。
+        tenancy: None,
+    }
 }
 
 /// 计一个块类型的条数（块头固定是 `a owl:Xxx ;`）。
@@ -134,12 +141,21 @@ fn ac001_class_property_and_link_counts_match_the_view() {
     );
     assert_eq!(
         text.matches("owl:ObjectProperty").count(),
-        view.relations.len(),
-        "ObjectProperty 条数必须等于关系数：\n{text}"
+        // REQ-119：每条关系多一条反向属性（52 → 104）。
+        view.relations.len() * 2,
+        "ObjectProperty 条数必须等于关系数 × 2（正向 + 反向）：\n{text}"
     );
     // 关系两端都要落成 domain / range（否则「对象属性」只是个空壳）。
-    assert_eq!(text.matches("rdfs:domain").count(), props + view.relations.len(), "{text}");
-    assert_eq!(text.matches("rdfs:range").count(), props + view.relations.len(), "{text}");
+    assert_eq!(
+        text.matches("rdfs:domain").count(),
+        props + view.relations.len() * 2,
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("rdfs:range").count(),
+        props + view.relations.len() * 2,
+        "{text}"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -387,7 +403,13 @@ fn a7_header_prefix_iri_must_equal_the_body_ontology_iri() {
     // 多组项目名（含 `#` / 空格 / 汉字）：IRI 的字符集不是重点，
     // 重点是两条 IRI 必须由**同一个**值派生 —— 一旦头部改从别处取 IRI，这里就红。
     for project in ["anspire_ai", "样例项目", "带 # 与 / 的项目名"] {
-        let o = TtlOptions { project, version: 2, base: DEFAULT_BASE, action_type_count: 0 };
+        let o = TtlOptions {
+            project,
+            version: 2,
+            base: DEFAULT_BASE,
+            action_type_count: 0,
+            tenancy: None,
+        };
         let doc = serialize_customer(&clean_view(), &o);
         assert_a7_invariant("C6 客户轨", project, doc.doc());
         if project == "anspire_ai" {
@@ -544,6 +566,7 @@ async fn live_anspire_ai_v2_exports_the_reference_counts_and_is_deterministic() 
         version: 2,
         base: DEFAULT_BASE,
         action_type_count: snap.action_types.len(),
+        tenancy: None,
     };
     let one = render(OutletId::D9, Product::ModelTurtle { view: &mv, opts: ttl_opts })
         .expect("建模轨不过闸")
@@ -564,8 +587,9 @@ async fn live_anspire_ai_v2_exports_the_reference_counts_and_is_deterministic() 
     );
     assert_eq!(
         one.matches("owl:ObjectProperty").count(),
-        mv.link_types.len(),
-        "ObjectProperty 条数 != 关系数"
+        // REQ-119：正向 + 反向。
+        mv.link_types.len() * 2,
+        "ObjectProperty 条数 != 关系数 × 2（正向 + 反向）"
     );
 
     // ── 客户视图：必须过闸（真实数据上也不许有守门词） ──

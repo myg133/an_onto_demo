@@ -651,6 +651,9 @@ pub struct OutletRender {
     text: String,
     report: DropReport,
     outlet: &'static str,
+    /// ⭐ REQ-119 · TTL 正文的 range 分布（非 TTL 出口为 `None`）。
+    /// 它是**从最终字节数出来的只读回执**，不参与门禁判定。
+    range_stats: Option<crate::domain::ttl::RangeStats>,
 }
 
 /// 结构化轨（HTTP / MCP）的产物：**已过发布闸**的值 + 它的序列化文本。
@@ -662,12 +665,23 @@ pub struct GuardedValue {
 
 impl OutletRender {
     fn build(spec: OutletSpec, text: String, report: DropReport) -> Self {
-        Self { text, report, outlet: spec.id }
+        Self { text, report, outlet: spec.id, range_stats: None }
+    }
+
+    /// REQ-119 · 挂上 TTL 的 range 分布（只有两条 TTL 出口调它）。
+    fn with_range_stats(mut self, stats: crate::domain::ttl::RangeStats) -> Self {
+        self.range_stats = Some(stats);
+        self
     }
 
     /// 要写出去的字节。**出口唯一被允许使用的东西**。
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    /// REQ-119 · TTL 的 range 分布（纯访问器：返回的不是字节，也不是判定）。
+    pub fn range_stats(&self) -> Option<&crate::domain::ttl::RangeStats> {
+        self.range_stats.as_ref()
     }
 
     /// 这个产物的前处理报告（只读；出口不许自己再拼一份）。
@@ -795,7 +809,8 @@ pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, Pipeli
             report.emit();
             let doc = serialize_customer(&filtered.view, &opts);
             gate_text(spec, doc.body())?;
-            Ok(OutletRender::build(spec, doc.into_doc(), report))
+            let stats = doc.stats().clone();
+            Ok(OutletRender::build(spec, doc.into_doc(), report).with_range_stats(stats))
         }
 
         // ⭐ REQ-110 · 建模视图 TTL。轨道是 `Track::Modeling` ⇒ `gate_text` 直接放行
@@ -803,7 +818,9 @@ pub fn render(id: OutletId, product: Product<'_>) -> Result<OutletRender, Pipeli
         Product::ModelTurtle { view, opts } => {
             let doc = serialize_model(view, &opts);
             gate_text(spec, doc.body())?;
-            Ok(OutletRender::build(spec, doc.into_doc(), DropReport::default()))
+            let stats = doc.stats().clone();
+            Ok(OutletRender::build(spec, doc.into_doc(), DropReport::default())
+                .with_range_stats(stats))
         }
 
         Product::ErrorText(raw) => {
