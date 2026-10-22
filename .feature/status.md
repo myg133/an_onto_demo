@@ -1,4 +1,64 @@
-# 开发状态 · REQ-115 概念分组与图上的归并
+# 开发状态 · REQ-116 文档摄取与断言抽取（第一步：文档 → 带证据的断言）
+
+> worktree `feature-REQ-116` · 分支 `feature/REQ-116` · 基线 `develop` `a85383a` · **未 push**
+> 本轮性质：**QA 判 PASS（6 条非阻断）→ BA 把 N-2 / N-5 改判阻断**；本轮修完这两条，并补齐 N-1 / N-4 / N-6
+> 日期：2026-10-22 · Windows · 共享库 `postgresql://***@172.17.0.87:5432/anspire_real`（**只读指纹**）
+
+- **需求**：REQ-116（R1–R6 / AC-001~AC-011）
+- **状态**：进行中（2 条阻断已修，3 条非阻断已补，待复核/合并）
+
+## 一句话
+
+`ontok doc ingest`：`.md` / `.txt` → **确定性分块** → 模型抽 概念/关系 + `quote` → **逐字证据校验**（对不上就丢 + 计数）→ JSONL + `stats.json`。
+⛔ 不写库、不改本体、不出图；指纹缓存是**本地文件**（`<out>.cache.json`），不是 `ai_cache` 表。
+
+## 本轮（第 2 轮）的 6 条
+
+| # | QA 判定 | 项 | 落点 | 一句话 |
+| --- | --- | --- | --- | --- |
+| **N-2** | **改判阻断** | AC-004 的判据**恒真** | `src/extract/doc_ingest.rs:998`（先记原始分布再过闸）、`:1282-1354`（新计数 / 占比）、`:1609`（stats.json 字段）、`src/cli.rs:1351` | 新增 `raw_predicate_counts` / `rejected_by_predicate_gate` / `belongs_to_share{raw,alive}`；`belongs_to` 在**过闸之前**就记，占比按**原始输出**算 |
+| **N-5** | **改判阻断** | 隐藏项被**静默跳过**（fail-open） | `src/extract/doc_ingest.rs:365`（注释）/ `:374`（`walk_docs` 不再 `continue`） | 裁定 **(a)**：隐藏项**照常处理、照常报错**；隐藏 `.md` 照常读，隐藏 `.pdf` / 隐藏目录里的 `.pdf` ⇒ exit≠0 |
+| **N-1** | 非阻断 | `.feature/` 三份还是 REQ-115 | 本文件 / `verification-report.md` / `manifest.json` | 全部写成本需求，数字用**本轮实测** |
+| **N-4** | 非阻断 | M2 变异在集成层漏网 | `tests/test_req116_doc_ingest.rs:573` | 假端点新增「原文前缀 + 原文没有的尾巴」；变异后该用例**红**（已实测，见下） |
+| **N-6** | 非阻断 | `.PDF` 报错里显示 `.pdf` | `src/extract/doc_ingest.rs:294-309` / `:398` | 报错用**实际后缀**（`raw_extension`），判「能不能吃」仍用 `lower_extension` |
+| **N-3** | **只登记** | 语料过拟合 | — | 4 份自造语料**过度贴合提示词** ⇒ 只能当冒烟夹具；AC-004 的真实验证**等业务文档** |
+
+## 判据实测（摘要，细节见 `verification-report.md`）
+
+| 判据 | 实测 |
+| --- | --- |
+| N-2 · 构造含 `belongs_to` 的输出 | `raw_predicate_counts={belongs_to:14, 下单:14}`、`rejected_by_predicate_gate={total:14, by_predicate:{belongs_to:14}}`、`belongs_to_share={alive:0/14=0.0%, **raw:14/28=50.0%**}` |
+| N-2 · 真语料（14 块 / 51 条原始关系） | `belongs_to` 原始 **0/51 = 0.0%** —— 这是**真 0**（分母 51 ≠ 0，说明判据测得到）；另有 2 条被**证据**丢掉的也计入原始分布（51 − 49 = 2） |
+| N-5 · 隐藏目录里的 `.pdf` | `exit=1`、点名 `.pdf`、**不出产物**（第一版是 `exit 0` 一声不吭 —— QA 判的正是这个） |
+| N-5 · 隐藏的 `.md` | `exit=0`、1 块、`file=.secret.md` |
+| N-6 · `.PDF` | 报错显示 **`.PDF`**、`exit=1` |
+| N-4 · 变异（`locate_quote` → 前缀匹配） | lib **3 红** + 集成 `ac003_prefix_plus_invented_tail_is_dropped` **红**（修之前集成 8 条全绿）；还原后 sha256 一致 |
+| 证据 / 确定性 / 预算 / 不写库 | 见上一轮实测：101 条 span 独立复核 `bad=0`；第二次 0 token + JSONL 同 sha256；`--budget-tokens 1` ⇒ exit 1 不产文件；7 张表内容 sha256 前后一致 |
+
+## 测试
+
+```text
+lib 315 / doc 4 · tests 77 个目标：813 passed / 8 failed（5 个用例，全部既有/环境，详见报告 §7）
+bin 单测 3 个目标：14 passed
+新增 tests/test_req116_doc_ingest.rs（10 passed，含 N-4 / N-5 两条新判据）
+绕行：preflight 挪开 + retained 用例 include_str 单行指到 .moved，均 finally **逐字节还原**
+      sha256 前后 C7CF95E2… / 2DB7D22C… 相同、Test-Path=True、git status 无 D 行
+      ⚠️ 教训：Copy-Item 还原会保留**旧 mtime** ⇒ cargo 认为「不用重编」，
+      本轮因此跑过一次**变异版产物**（假红）；已 touch + cargo clean -p 重跑，这才是报告里的数字
+```
+
+## 如实登记
+
+1. **N-3 语料过拟合**（QA 判定）：4 份夹具是在看过提示词之后写的（`04` 的「术语对照」恰好是规则 2 的示例；`03` 逐字复刻规则 4 的「计划/将/待定/尚未」；`01` 首段先把要抽的概念列出来）⇒ **只能当冒烟夹具**；AC-004 的真实分布**等业务文档**。
+2. **缓存是本地文件**，不是 `ai_cache` 表 —— 为了让「不写库」是**结构性事实**（本模块没有 `sqlx` / 连接池）。若要复用表：`DocCache` 是注入式 trait，改动面只在存储层。
+3. **`.txt` 没有标题层级**（只按段落 + 1200 字符上限分组，绝不切句）。
+4. **隐藏项照常处理** ⇒ 别把仓库根 / 家目录当 `--input`（`.git` 之类非文档文件会按 AC-001 报错）。
+5. `--budget-tokens` 省略时默认 **500000**（stderr 明说，不是静默）。
+6. 本机无业务文档 ⇒ 真实语料只有 4 份自造夹具；「101 条断言」是**冒烟规模**，不是业务规模。
+
+---
+
+# 历史：REQ-115 概念分组与图上的归并
 
 > worktree `feature-REQ-115` · 分支 `feature/REQ-115` · 基线 `develop` `71ae770` · **未 push**
 > 本轮性质：**QA 判 FAIL（1 阻断）→ 第 2 轮按 BA 裁定 (C) 修复**：

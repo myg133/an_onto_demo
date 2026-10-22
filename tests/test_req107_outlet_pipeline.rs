@@ -679,14 +679,15 @@ fn ctx(view: ontok::domain::view::CustomerView) -> ontok::mcp::tools::OntologyCo
 #[test]
 fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）
-    //        + 5（REQ-111 的审核界面出口 R1–R5）= 44。
+    //        + 5（REQ-111 的审核界面出口 R1–R5）+ 1（REQ-116 的文档摄取产物 I10）= 45。
     assert_eq!(
         OUTLETS.len(),
-        44,
-        "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）"
+        45,
+        "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
+         + 1（REQ-116 文档摄取产物）"
     );
 
-    // ② 分组：客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1。
+    // ② 分组：客户 17 / 建模 10 / 内部 15 / 静态 2 / 错误路径 1。
     //
     // ⚠️ 与 TC-007 用例原文的差异（**AC/用例自身缺陷**，纪律 S）：
     // 原文写 `Static == 3`（Z2,Z3,Z4）+ ErrorPath 1 ⇒ 13+8+9+3+1 = **34**，
@@ -696,9 +697,10 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-111 只动内部 9→14（R1–R5）：审核界面是**内部**工具（只绑回环 + 口令），
     // 既不是客户出口、也不是「建模视图」那 10 条 —— 改建模轨会放宽
     // `test_req107_track_manifest.rs` 的「恰好 D1–D10」不变量。
+    // REQ-116 内部 14→15（I10）：文档摄取的产物写出点，**内部轨**（不写库、不改本体、不出图）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 14);
+    assert_eq!(outlet_count(Track::Internal), 15);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -714,7 +716,7 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=5).map(|i| format!("H{i}")));
     want.extend((1..=5).map(|i| format!("M{i}")));
     want.extend((1..=10).map(|i| format!("D{i}")));
-    want.extend((1..=9).map(|i| format!("I{i}")));
+    want.extend((1..=10).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());
