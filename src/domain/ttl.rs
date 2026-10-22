@@ -1390,18 +1390,62 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
             .then_with(|| a.to_type.cmp(&b.to_type))
     });
 
-    let mut forward: Vec<(String, String)> = Vec::new();
+    // ⭐ REQ-120 · **同一对 (from, to) 有多条边时，本地名必须带列名**。
+    //
+    // 病根（本轮实测抓到的真 bug，不是假想）：
+    // `customer_account_binding` 有 `main_customer_id` 与 `sub_customer_id`
+    // **两列都指向 `customers`**，而本地名一直是 `{from}__{to}` ⇒ 两条属性
+    // 写成了**同一个 IRI** `:customer_account_binding__customers`。
+    // Turtle 会把它们**合并成一个属性**：两条 `owl:inverseOf`、两个
+    // `ontok:cardinality`、两条 `ontok:joinVerified` —— 数字员工读到的
+    // 是「一个叫『客户账号绑定 → 客户』的属性，既是主账号又是子账号」。
+    // 这比少一条关系更糟：它看起来完全正常。
+    //
+    // 修法：**只在这一对真有歧义时**给本地名追加列名（`__<column>`），
+    // 唯一的那 71 对名字一个字节不变（REQ-119 的 `<主语>__<宾语>` 契约不动）。
+    // 判据是「这一对出现几次」，不是「第几条」—— 与遍历顺序无关 ⇒ 确定性。
+    let mut pair_count: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    for l in &links {
+        *pair_count
+            .entry((l.from_type.clone(), l.to_type.clone()))
+            .or_insert(0) += 1;
+    }
+
+    let mut forward: Vec<(String, String, Option<String>)> = Vec::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for l in &links {
         let from_local = local_model(&l.from_type);
         let to_local = local_model(&l.to_type);
-        let raw = format!("{from_local}__{to_local}");
+        let ambiguous = pair_count
+            .get(&(l.from_type.clone(), l.to_type.clone()))
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        let col = ambiguous.then(|| {
+            local_model(
+                l.column
+                    .as_deref()
+                    .unwrap_or(l.key.rsplit("__").next().unwrap_or("column")),
+            )
+        });
+        let raw = match &col {
+            Some(c) => format!("{from_local}__{to_local}__{c}"),
+            None => format!("{from_local}__{to_local}"),
+        };
+        // 极端情形（同一列名出现两次）也要唯一：`taken` 在这里兜底。
+        let raw = unique_local(raw, &mut taken);
         taken.insert(raw);
-        forward.push((from_local, to_local));
+        forward.push((from_local, to_local, col));
     }
     let mut inverse_locals: Vec<String> = Vec::new();
-    for (from_local, to_local) in &forward {
-        let raw = inverse_candidate(from_local, to_local, &taken);
+    for (from_local, to_local, col) in &forward {
+        // 有歧义的那一对：反向名也带列名（`{to}__{from}__{col}`），
+        // 否则会退化成 `...__inverse` / `...__inverse2` —— 名字里看不出是哪一列。
+        let raw = match col {
+            Some(c) => unique_local(format!("{to_local}__{from_local}__{c}"), &mut taken),
+            None => inverse_candidate(from_local, to_local, &taken),
+        };
         taken.insert(raw.clone());
         inverse_locals.push(raw);
     }
@@ -1411,17 +1455,32 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
     for (i, l) in links.iter().enumerate() {
         let from_local = &forward[i].0;
         let to_local = &forward[i].1;
-        let subject = format!("{from_local}__{to_local}");
+        let subject = match &forward[i].2 {
+            Some(c) => format!("{from_local}__{to_local}__{c}"),
+            None => format!("{from_local}__{to_local}"),
+        };
         let inv = &inverse_locals[i];
         rel_blocks.push(model_object_block(l, &subject, Some(inv)));
         let features = model_cardinality(&l.cardinality).inverse();
         let label = format!("{} → {}（反向）", l.to_type, l.from_type);
         let comment =
             format!("反向属性：前向为 {} → {}（domain/range 已对调）", l.from_type, l.to_type);
-        let extra = vec![format!(
+        let mut extra = vec![format!(
             "ontok:cardinality {}",
             plain(&inverse_cardinality(&l.cardinality))
         )];
+        // REQ-120 · 反向属性**也**标连接验证。
+        //
+        // 为什么不只标正向：数字员工问「这个客户用过哪些 API」走的是
+        // **反向**边（`api_call_logs → licenses` 的反向）。只在正向标，
+        // Agent 走到反向时看到的又是一条「不知道可不可信」的边，
+        // AC-011 那条两跳查询就会重新变成猜。
+        //
+        // ⚠️ 代价如实登记：TTL 里 `ontok:joinVerified` 的**条数 = 2 ×
+        // 签过的边数**（正反各一条）。报告里两个数都写。
+        if let Some(v) = l.join_verified {
+            extra.push(format!("ontok:joinVerified {}", plain(bool_lit(v))));
+        }
         inverse_blocks.push((
             inv.clone(),
             inverse_object_block(
@@ -1908,6 +1967,24 @@ fn inverse_cardinality(cardinality: &str) -> String {
     }
 }
 
+/// 本地名去重：`base` 已被占用就连加 `_2` / `_3`…
+///
+/// 只在**同一对 (from, to) 有多条边**时才会用到（见 `model_export` 的说明）。
+/// 顺序由调用方的确定性排序决定，所以「谁先拿到 base」两次运行相同。
+fn unique_local(base: String, taken: &BTreeSet<String>) -> String {
+    if !taken.contains(&base) {
+        return base;
+    }
+    let mut n = 2usize;
+    loop {
+        let candidate = format!("{base}_{n}");
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// **反向属性名的唯一实现**（纪律 H）：`<对象>__<主语>`。
 ///
 /// 撞名（该名字已经是一条正向属性）⇒ 追加 `__inverse`；还撞 ⇒ `__inverse2`…
@@ -2104,6 +2181,27 @@ fn model_object_block(l: &ModelLinkView, subject_local: &str, inverse_of: Option
     lines.push(format!("rdfs:range :{to_local}"));
     lines.push(format!("ontok:cardinality {}", plain(&l.cardinality)));
     lines.push(format!("ontok:semantic {}", plain(&l.semantic)));
+    // ⭐ REQ-120 · 连接验证（AC-007）：**只有快照说了才写**。
+    //
+    // | 快照 | 这一行 | 为什么 |
+    // | --- | --- | --- |
+    // | `Some(true)` | `ontok:joinVerified "true"` + `ontok:joinEvidence` | 签过字的 FK 提案 |
+    // | `Some(false)` | `ontok:joinVerified "false"` | 只是列名后缀推断 |
+    // | `None` | **不写** | REQ-120 之前的版本：没说过，替它说就是编 |
+    //
+    // 值是**字符串字面量**（`"true"` / `"false"`）而不是裸布尔：
+    // AC-007 的原文写的就是 `ontok:joinVerified "true"`，判据会照着字面 grep。
+    // （`ontok:tenantKey true` 那种裸布尔是 REQ-119 的口径，两者不统一是
+    //  有意的 —— 本 REQ 不借「统一风格」去改另一个 REQ 已验收的三元组。）
+    match l.join_verified {
+        Some(v) => {
+            lines.push(format!("ontok:joinVerified {}", plain(bool_lit(v))));
+            if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
+                lines.push(format!("ontok:joinEvidence {}", plain(e)));
+            }
+        }
+        None => {}
+    }
     if !l.semantic.trim().is_empty() {
         lines.push(format!(
             "rdfs:comment {}",
@@ -2320,6 +2418,10 @@ mod tests {
                 semantic: "belongs_to".into(),
                 evidence: vec![],
                 confidence: None,
+                // REQ-120：默认 `None` = 这一版没有连接验证信息（不写 joinVerified）。
+                join_verified: None,
+                join_evidence: None,
+                column: None,
             }],
             action_types: vec![],
             functions: vec![],
@@ -2407,6 +2509,73 @@ mod tests {
         assert!(!d.contains("rdfs:range rdfs:Literal"), "不许再一律 Literal：{d}");
         // 动作层不导出（只在文件头声明数量）—— 正文里根本没有动作内容。
         assert!(!doc.body().contains("ActionType "), "动作层不该进正文");
+    }
+
+    /// ⭐ REQ-120 · **同一对 (from,to) 的两条边不许写成同一个 IRI**。
+    ///
+    /// 这是本轮在真实库上抓到的**真 bug**（不是构造的）：
+    /// `customer_account_binding` 的 `main_customer_id` 与 `sub_customer_id`
+    /// 都指向 `customers`，旧命名 `{from}__{to}` 让两条属性共用
+    /// `:customer_account_binding__customers` ⇒ Turtle 合并成一个属性，
+    /// 两条 `owl:inverseOf`、两个 `ontok:cardinality` 全挤在同一个主语上。
+    ///
+    /// 变异自证：把 `pair_count` 的歧义判定去掉（永远走 `{from}__{to}`），
+    /// 本测试立刻红（两个块变成同名）。
+    #[test]
+    fn colliding_link_pairs_get_column_qualified_local_names() {
+        let mut v = mv();
+        // `mv()` 里已有 order→customer；再加第二条同向边（同一对表、不同列）。
+        v.link_types[0].column = Some("created_by".into());
+        v.entity_types[0].properties.push(ModelPropertyView {
+            name: "客户".into(),
+            column: "customer_id".into(),
+            nullable: true,
+            note: None,
+            sample: None,
+        });
+        v.link_types.push(ModelLinkView {
+            key: "order_customer_id__customer".into(),
+            from_type: "order".into(),
+            to_type: "customer".into(),
+            cardinality: "N:1".into(),
+            semantic: "belongs_to".into(),
+            evidence: vec![crate::domain::snapshot::Evidence {
+                table: "order".into(),
+                column: "customer_id".into(),
+                claim: "列名推断".into(),
+            }],
+            confidence: None,
+            join_verified: Some(true),
+            join_evidence: Some("value-overlap 5/5 (100.00%) -> customer.id via plural".into()),
+            column: Some("customer_id".into()),
+        });
+        let d = serialize_model(&v, &opts()).into_doc();
+
+        // 两条正向各自成块，且名字里带列名区分。
+        assert!(d.contains(":order__customer__created_by a "), "{d}");
+        assert!(d.contains(":order__customer__customer_id a "), "{d}");
+        // 反向也对称地带列名，不再是 `__inverse` / `__inverse2`。
+        assert!(d.contains(":customer__order__created_by a "), "{d}");
+        assert!(d.contains(":customer__order__customer_id a "), "{d}");
+        // 关键：**没有**任何一个本地名重复出现两次。
+        for name in [
+            "order__customer",
+            "customer__order",
+            "order__customer__inverse",
+            "customer__order__inverse",
+        ] {
+            let exact = format!(":{name} a ");
+            assert_eq!(
+                d.matches(&exact).count(),
+                0,
+                "`{name}` 不该再是任何块的主语（有歧义时必须带列名）：{d}"
+            );
+        }
+        // 列名只在这一对有歧义时出现：唯一的那条关系名字不变。
+        let mut only = mv();
+        only.link_types[0].column = Some("created_by".into());
+        let solo = serialize_model(&only, &opts()).into_doc();
+        assert!(solo.contains(":order__customer a "), "唯一的一对不许多加后缀：{solo}");
     }
 
     #[test]

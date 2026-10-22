@@ -183,6 +183,8 @@ fn base_snapshot() -> Snapshot {
         semantic: "has".into(),
         evidence: vec![],
         confidence: None,
+        join_verified: None,
+        join_evidence: None,
     }];
     // 占位栏（切片 1 生产代码恒空）。这里给非空取值，是为了让
     // 「apply 不得动它们」这句话**可证伪** —— 它们也是快照的一部分，

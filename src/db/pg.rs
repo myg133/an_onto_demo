@@ -329,6 +329,11 @@ CREATE TABLE IF NOT EXISTS link_types (
   confidence          REAL,
   confidence_method   TEXT,
   confidence_signals  JSONB,
+  -- REQ-120 · 这条关系的连接是否经过**值域重叠**验证（AC-007）。
+  -- NULL = 没有这条信息（REQ-120 之前的版本 / 手写提案），
+  -- 与 false（确定只是命名推断）是两件事 —— 三态语义与 `confidence` 一致。
+  join_verified       BOOLEAN,
+  join_evidence       TEXT,
   UNIQUE (version_id, key)
 );
 
@@ -421,7 +426,7 @@ CREATE TABLE IF NOT EXISTS concept_groups (
 /// 的结果把「已存在」的列从 batch 里摘掉，一大坨字符串没法逐条摘。
 /// 元组里的 `(表名, 列名)` 同时就是探查询「查什么」的答案 ——
 /// 「改什么」与「查什么」永远同源，加第 4 条只改这一张表。
-const ALTER_PATCHES: [(&str, &str, &str); 14] = [
+const ALTER_PATCHES: [(&str, &str, &str); 16] = [
     // REQ-004 · 抽取来源（ADR-001：apply 时原样取提案的值，缺失记 NULL，
     // 不继承 base、不推断）。
     (
@@ -532,6 +537,25 @@ const ALTER_PATCHES: [(&str, &str, &str); 14] = [
         "proposals",
         "inputs",
         "ALTER TABLE proposals ADD COLUMN IF NOT EXISTS inputs JSONB;",
+    ),
+    // ── REQ-120 · 连接验证两栏（`link_types`）─────────────────────────────
+    //
+    // 为什么**必须落库**：TTL 是从**快照**导出的（`ontology export` ←
+    // `snapshot_store::load_links`），不是从提案导出的。只在 struct 上加字段，
+    // `ontok:joinVerified` 在「提案 → 快照 → TTL」这一跳上会**恒为 NULL**，
+    // 于是 AC-007 的判据（TTL 里能查到证据）结构上不可达。
+    //
+    // 无 DEFAULT 且允许 NULL：既有行读出来是 NULL =「这一版没有这条信息」，
+    // 不往历史行回填 false —— 回填等于替旧版本断言「这条关系只是命名推断」。
+    (
+        "link_types",
+        "join_verified",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_verified BOOLEAN;",
+    ),
+    (
+        "link_types",
+        "join_evidence",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_evidence TEXT;",
     ),
 ];
 

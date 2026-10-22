@@ -179,6 +179,9 @@ fn link(key: &str, from: &str, to: &str) -> ModelLinkView {
         semantic: "belongs_to".into(),
         evidence: vec![],
         confidence: None,
+        join_verified: None,
+        join_evidence: None,
+        column: None,
     }
 }
 

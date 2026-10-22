@@ -230,8 +230,9 @@ impl PgStore {
         // ⚠️ 读的是**整份评分卡**（`confidence_signals` 里存的是完整对象，
         // 含 signals / veto / band）—— score 与 method 两栏是给 SQL 查询与
         // 校准用的冗余列，不参与重建。
-        let rows: Vec<(String, String, String, String, String, Value, Option<Value>)> = sqlx::query_as(
-            "SELECT key, from_type, to_type, cardinality, semantic, evidence, confidence_signals
+        let rows: Vec<(String, String, String, String, String, Value, Option<Value>, Option<bool>, Option<String>)> = sqlx::query_as(
+            "SELECT key, from_type, to_type, cardinality, semantic, evidence, confidence_signals,
+                    join_verified, join_evidence
              FROM link_types WHERE version_id = $1 ORDER BY ordinal",
         )
         .bind(vid)
@@ -239,7 +240,7 @@ impl PgStore {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(key, f, t, c, s, ev, conf)| LinkType {
+            .map(|(key, f, t, c, s, ev, conf, jv, je)| LinkType {
                 key,
                 from_type: f,
                 to_type: t,
@@ -249,6 +250,9 @@ impl PgStore {
                 // NULL ⇒ None（REQ-108 之前的版本 / 人工修订）——
                 // **不伪造分数**：不知道就是不知道。
                 confidence: conf.and_then(|j| crate::domain::confidence::from_untrusted(&j).ok()),
+                // REQ-120 · 同上，三态：NULL = 这一版没有连接验证信息。
+                join_verified: jv,
+                join_evidence: je,
             })
             .collect())
     }
@@ -402,8 +406,8 @@ pub(crate) async fn insert_snapshot_rows(
         sqlx::query(
             "INSERT INTO link_types
                (id, version_id, key, from_type, to_type, cardinality, semantic, evidence, ordinal,
-                confidence, confidence_method, confidence_signals)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                confidence, confidence_method, confidence_signals, join_verified, join_evidence)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
         )
         .bind(Uuid::new_v4())
         .bind(snap.version_id)
@@ -421,6 +425,10 @@ pub(crate) async fn insert_snapshot_rows(
                 .as_ref()
                 .and_then(|c| serde_json::to_value(c).ok()),
         )
+        // REQ-120 · 连接验证两栏。`None` ⇒ SQL NULL（**不回填 false**：
+        // 「没有这条信息」与「确定只是命名推断」是两件事）。
+        .bind(l.join_verified)
+        .bind(l.join_evidence.as_deref())
         .execute(&mut **tx)
         .await
         .map_err(|source| SnapshotRowError {

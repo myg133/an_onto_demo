@@ -675,6 +675,8 @@ async fn live_frozen_version(prefix: &str, poisoned: bool) -> (String, i32) {
         semantic: "belongs_to".into(),
         evidence: vec![],
         confidence: None,
+        join_verified: None,
+        join_evidence: None,
     });
     store.save_snapshot(&snap).await.expect("写快照失败");
     ps.freeze(v.id).await.expect("冻结失败");

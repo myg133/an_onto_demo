@@ -112,6 +112,17 @@ async fn main() -> Result<()> {
     let mut exclude_path: Option<String> = None;
     // 陈旧排除（文件里点名、schema 里没有）默认只警告；这个开关把它变成**硬失败**。
     let mut strict_exclusions = false;
+    // ── REQ-120 · FK 边补全（三段式：提名 → 值域重叠 → 提案 → 人签 → 落库）──
+    //
+    // `--fk-out`    : 生成 `fk-proposals.json`（**未签**，不进快照）
+    // `--fk-sign`   : 读一份**签过字**的同一形状文件，把边注入本轮提案
+    // `--fk-unresolved-out`: 未解析清单落点（默认与 --fk-out 同目录）
+    //
+    // 三者都**默认不出现在命令行** ⇒ 行为与 REQ-119 逐字节相同（除了下面
+    // 那条「唯一列 ⇒ 1:1」的基数修正，它是 R4 的硬要求，不带开关）。
+    let mut fk_out: Option<String> = None;
+    let mut fk_sign: Option<String> = None;
+    let mut fk_unresolved_out: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -167,6 +178,10 @@ async fn main() -> Result<()> {
             // REQ-113 · 排除表
             "--exclude" => exclude_path = Some(val()?),
             "--strict-exclusions" => strict_exclusions = true,
+            // REQ-120 · FK 边补全
+            "--fk-out" => fk_out = Some(val()?),
+            "--fk-sign" => fk_sign = Some(val()?),
+            "--fk-unresolved-out" => fk_unresolved_out = Some(val()?),
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -197,6 +212,14 @@ async fn main() -> Result<()> {
                     base = ontok::extract::ai_semantic::BASE_URL_ENV,
                     key = ontok::agent::llm::API_KEY_ENV,
                     model = ontok::agent::llm::MODEL_ENV);
+                println!(
+                    "REQ-120 FK 边补全（**默认关**；三段式：提名 → 值域重叠 → 提案 → 人签 → 落库）:\n\
+                     \x20 --fk-out <file>          对每个 *_id 列生成候选 + 采样验命中率，写 ADR-005 提案（**未签**，不进快照）；需要 --src\n\
+                     \x20 --fk-sign <file>         读一份**签过字**（reviewed_by 非空）的同形状文件，把边注入本轮提案（未签的一条不进）\n\
+                     \x20 --fk-unresolved-out <f>  未解析清单落点（默认与 --fk-out 同目录的 fk-unresolved.json）\n\
+                     \x20 判据：命中率 ≥0.95 strong · 0.5–0.95 medium（需人签）· <0.5 **不产出**；样本 <3 条 ⇒ insufficient_sample\n\
+                     \x20 值域重叠是硬证据：⛔ 名字相似度只负责**提名**，不负责判决（AC-002）"
+                );
                 return Ok(());
             }
             other => anyhow::bail!("未知参数 {other}"),
@@ -508,20 +531,154 @@ async fn main() -> Result<()> {
         &serde_json::from_str::<serde_json::Value>(&schema_raw)
             .context("schema JSON 解析失败（键目录）")?,
     );
+
+    // ══════════════════════════════════════════════════════════════
+    // ⭐ REQ-120 · FK 边补全（在**评分之前**：注入的边也要被采样与评分）
+    // ══════════════════════════════════════════════════════════════
+    //
+    // 位置是**结构性**的，三条都不能挪：
+    // 1. 在 `link_candidates` **之前** —— 否则注入的新边拿不到置信度，
+    //    会被当成「没评分的关系」扔进待查清单（`unscored_links`）；
+    // 2. 在 `s = outcome.stats.clone()` **之后** —— 下面的统计打印读的是 `s`；
+    // 3. 在写任何文件**之前** —— 签字产物有问题时一个字节都不该落盘。
+    let src_url_resolved = src_url
+        .clone()
+        .or_else(|| std::env::var("SRC_URL").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| std::env::var(SOURCE_DATABASE_URL_ENV).ok().filter(|s| !s.trim().is_empty()));
+    // **要连库的是 `--fk-out`**（值域重叠只能从库里读）；`--fk-sign` 是**纯本地**的：
+    // 它读一份已经签好的文件、把边注入条目 —— 不需要再连一次源库。
+    // 早先版本把两者绑在一起，等于要求「签字时必须能连源库」，那是无谓的耦合。
+    if fk_out.is_some() {
+        if src_url_resolved.is_none() {
+            anyhow::bail!(
+                "REQ-120：--fk-out 需要源库连接串（--src 或环境变量 SRC_URL / \
+                 {SOURCE_DATABASE_URL_ENV}）—— 值域重叠只能从库里读，不能猜"
+            );
+        }
+        if keys.is_empty() {
+            anyhow::bail!(
+                "REQ-120：这份 schema.json 没有 primary_key / unique_columns —— \
+                 候选表用哪一列验命中是**猜不出来**的（R3）。先重跑 ontok-introspect"
+            );
+        }
+    }
+    if fk_out.is_none() && fk_unresolved_out.is_some() {
+        anyhow::bail!(
+            "REQ-120：--fk-unresolved-out 只在 --fk-out 下有意义 —— \
+             未解析清单与提案是**同一次运行**的产物，不许各跑一次"
+        );
+    }
+    if let Some(fk_path) = fk_out.as_deref() {
+        let url = src_url_resolved.as_deref().expect("上面已判过");
+        let pool = ontok::extract::sample::sample_pool(url)
+            .await
+            .context("连不上源库（FK 值域重叠采样）")?;
+        let source = ontok::extract::fk::FkSource {
+            schema_file: schema_path.clone(),
+            schema_sha256: ontok::extract::sample::sha256_hex(schema_raw.as_bytes()),
+            schema: report.schema.clone(),
+            // 只读凭据：与 REQ-003 AC-101 同一份事实（勘查报告里读回的那个值）。
+            read_only: report.transaction_read_only.clone(),
+            tables: report.tables.len(),
+            columns: report.tables.iter().map(|t| t.columns.len()).sum(),
+        };
+        let fk_report = ontok::extract::fk::verify(
+            &pool,
+            &report,
+            &keys,
+            &names,
+            source,
+            ontok::extract::fk::FK_TIMEOUT,
+        )
+        .await?;
+        pool.close().await;
+        if let Some(parent) = std::path::Path::new(fk_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(
+            fk_path,
+            ontok::extract::fk::render_report(&fk_report)?,
+        )
+        .with_context(|| format!("写不出 {fk_path}（FK 提案）"))?;
+        // 未解析清单默认与提案同目录：**和提案同源**（同一次运行、同一份数据）。
+        let unresolved_path = fk_unresolved_out.clone().unwrap_or_else(|| {
+            let p = std::path::Path::new(fk_path);
+            p.with_file_name("fk-unresolved.json").to_string_lossy().to_string()
+        });
+        if let Some(parent) = std::path::Path::new(&unresolved_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&unresolved_path, ontok::extract::fk::render_unresolved(&fk_report)?)
+            .with_context(|| format!("写不出 {unresolved_path}（未解析清单）"))?;
+
+        let st = &fk_report.stats;
+        println!();
+        println!("REQ-120 FK 边补全（值域重叠 · {}）", ontok::extract::fk::FK_METHOD);
+        println!(
+            "  待判列      : {} 个 *_id（候选 {} 个 · 实测 {} 个）",
+            st.columns_considered, st.candidates_generated, st.candidates_tested
+        );
+        println!(
+            "  补出关系    : {} 条（strong {} · medium {}，**未签，不进快照**）",
+            st.proposals, st.proposals_strong, st.proposals_medium
+        );
+        println!(
+            "  值域否决    : {} 个候选（命中率 < 0.5，一条关系都不产出）",
+            st.rejected
+        );
+        println!("  未解析      : {} 列（逐条见 {unresolved_path}）", st.unresolved);
+        for (code, n) in fk_report.unresolved_counts() {
+            println!("    · {code:<20} {n}");
+        }
+        if !st.close() {
+            anyhow::bail!(
+                "FK 统计不闭合：{} 列 ≠ 提案 {} + 未解析 {}",
+                st.columns_considered,
+                st.proposals,
+                st.unresolved
+            );
+        }
+    }
+    if let Some(sign_path) = fk_sign.as_deref() {
+        let raw = std::fs::read_to_string(sign_path)
+            .with_context(|| format!("读不出签字产物 {sign_path}"))?;
+        let signed = ontok::extract::fk::load_signed(&raw)?;
+        let known: std::collections::BTreeSet<String> =
+            report.tables.iter().map(|t| t.name.clone()).collect();
+        let st = ontok::extract::fk::inject_signed(&mut outcome.proposal.items, &signed, &known)?;
+        println!();
+        println!("REQ-120 签字产物（{sign_path}）");
+        println!(
+            "  注入关系    : {} 条新增 + {} 条既有边补验证标记（未签 {} 条已忽略）",
+            st.added, st.marked_existing, st.skipped_unsigned
+        );
+    }
+    // R4 / REQ-119 N-1：**单列唯一列上的 N:1 改成 1:1**。
+    // 不带开关：这不是可选项，是「`unique_columns` 明明有约束却只标一半」的修正。
+    let promoted = ontok::extract::fk::promote_unique_cardinality(&mut outcome.proposal.items, &keys);
+    if !promoted.is_empty() {
+        println!();
+        println!("REQ-120 基数修正（R4：单列唯一列 ⇒ 1:1）");
+        for s in &promoted {
+            println!("  · {s}");
+        }
+    }
+    // AC-007：名字推断的边一律盖 `join_verified: false`，签过字的边保留 true。
+    let stamped = ontok::extract::fk::stamp_naming_only(&mut outcome.proposal.items);
+    if stamped > 0 || fk_sign.is_some() {
+        println!("  连接验证标记: naming-only {stamped} 条（value-overlap 由 --fk-sign 给）");
+    }
+
     let candidates = ontok::extract::propose::link_candidates(&outcome.proposal.items, &keys);
     let mut evidence: std::collections::HashMap<
         usize,
         ontok::extract::sample::SampleEvidence,
     > = std::collections::HashMap::new();
 
-    let sample_url = if no_sample {
-        None
-    } else {
-        src_url
-            .clone()
-            .or_else(|| std::env::var("SRC_URL").ok().filter(|s| !s.trim().is_empty()))
-            .or_else(|| std::env::var(SOURCE_DATABASE_URL_ENV).ok().filter(|s| !s.trim().is_empty()))
-    };
+    // R1 ④：`--no-sample` 关的是**置信度采样**（REQ-108 的那一段）。
+    // ⚠️ 它**不**关 REQ-120 的 FK 采样 —— 值域重叠不是「打分素材」，
+    // 是产生关系的**判决依据**；关掉它还能补出关系，等于退回「只看名字」。
+    let sample_url = if no_sample { None } else { src_url_resolved };
     let mut sampled_relations = 0usize;
     if let Some(url) = sample_url {
         if keys.is_empty() {

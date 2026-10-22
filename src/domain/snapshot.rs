@@ -207,6 +207,26 @@ pub struct LinkType {
     /// 与 `Some(0.2)` 截然不同：前者是「不知道」，后者是「知道它很低」。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<crate::domain::confidence::Confidence>,
+    /// **这条连接的「值域重叠」验证结果**（REQ-120 · AC-007）。
+    ///
+    /// | 取值 | 含义 | 谁写它 |
+    /// | --- | --- | --- |
+    /// | `Some(true)` | 签过字的 FK 提案：该列样本值落在目标表主键里 | `ontok-propose --fk-sign` |
+    /// | `Some(false)` | **只是命名推断**（列名后缀），没有做过值域重叠验证 | `ontok-propose` 的通用盖章 |
+    /// | `None` | **没有这条信息**（REQ-120 之前的版本 / 手写提案） | — |
+    ///
+    /// ⛔ 三态不许互相吞：`None` **不是** `Some(false)`。
+    /// 把 REQ-120 之前的版本改标成 `false`，等于替旧版本断言
+    /// 「这条关系只是猜的」—— 那句话没有任何人说过。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_verified: Option<bool>,
+    /// 验证证据的**一句话原文**（命中数 / 样本数 / 示例值 / 目标键列）。
+    ///
+    /// 与 [`Self::join_verified`] 同生共死：`Some(true)` 才有意义。
+    /// `None` + `Some(true)` 是「验过但说不出依据」—— 那不该存在，
+    /// 所以两者由同一个构造点（`extract::fk`）一起写。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_evidence: Option<String>,
 }
 
 /// **写回绑定（占位）** —— 规格 §5.2。

@@ -52,6 +52,8 @@ fn link(key: &str, confidence: Option<Confidence>) -> LinkType {
             claim: "命名约定".into(),
         }],
         confidence,
+        join_verified: None,
+        join_evidence: None,
     }
 }
 
