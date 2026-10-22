@@ -89,3 +89,43 @@
 - **H** 反向属性生成只许一处实现
 - **G** 变异三元组：删反向属性 / range 全改 Literal / 删租户标注，每条必须被测试抓住
 - **S** AC 也会错，发现直接说
+
+---
+
+## 三 · Dev 交付后的裁定（含 BA 自己的误判）
+
+### A-1 · xsd range 必须来自**真实列类型**（必修）
+
+Dev 首版按列名/中文关键词**启发式**推断（快照层 `snapshot::Property` 没有 `data_type`）。
+BA 用 `code/out/schema.json` 的真实 `data_type` 逐条比对 870 条：
+
+```
+一致 754 · 不一致 116 · 一致率 86.7%
+```
+
+**典型错误（每一条都会让数字员工算错）**：
+
+| 表.列 | 真实 | 旧 range | 后果 |
+| --- | --- | --- | --- |
+| `activity.status` | integer | `xsd:string` | `status = 2` 变字符串比较，查不到 |
+| `activity_keys.daily_ip_limit` | integer | `xsd:decimal` | 计数当小数 |
+| `agent_device_version.version_number` | varchar | `xsd:integer` | 版本 "10" vs "9" 排序反了 |
+| `balance_operation_log.point_change` | numeric | `xsd:integer` | **金额丢精度** |
+
+**要求**：`--schema <path>` 匹配到列 ⇒ 用真实类型 + `ontok:rangeSource "schema"`；匹配不到 ⇒ 启发式 + `rangeSource "heuristic"` + 计数；未给 `--schema` ⇒ 三处标记「类型来自启发式」。
+**判据**：`--schema` 模式下 870/870 一致（`verify` 例外单列）。
+
+### ⚠️ A-1b · BA 自己的误判，记录在案
+
+第一轮抽查我只看了 8 条（全在 `activity` 表、恰好都是无歧义列）⇒ 得出「启发式很准」的乐观结论。
+**样本选窄导致结论偏乐观** —— 与之前「AC-004 恒真」「闸没接线」属同一类：**判据的覆盖面不足**。
+
+### A-2 · 反向命名 1 条例外：接受
+
+`customer_subscriptions__order__inverse`（`order ↔ customer_subscriptions` 互为反向、与正向撞名）。
+要求：文档写清为何加 `__inverse` 后缀；加测试断言「撞名时加后缀、计数仍 52/104」。
+
+### A-3 · R5 三处标记只在建模视图：接受
+
+R4 明确「客户视图不含租户信息」，`tenantUnannotated` 本身也是建模/安全信息。
+要求：报告写清「客户视图天然不含租户信息，R5 的警告只对建模视图有意义」，免得 QA 用客户视图验 R5 时误判。
