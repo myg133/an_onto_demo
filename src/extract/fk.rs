@@ -1822,7 +1822,7 @@ impl SignedFk {
 /// 4. 命中数不能超过样本数，样本数不能小于下限；
 /// 5. **一条都没签 ⇒ 拒绝**：一份「签了 0 条」的文件若被当成签字产物，
 ///    等于让调用方以为「补全已经生效」，而实际一条都没进去（fail-open）。
-pub fn load_signed(text: &str) -> Result<SignedFk> {
+pub fn load_signed(text: &str, tenant_columns: Option<&BTreeSet<String>>) -> Result<SignedFk> {
     let v: serde_json::Value = serde_json::from_str(text).context("签字产物 JSON 解析失败")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some(FkReport::KIND) {
         bail!(
@@ -1890,6 +1890,28 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
             ),
         };
         if state == JoinState::Inherited {
+            // ── G-1（阻断项）· **`inherit` 的租户键复核（fail-closed）** ────────
+            //
+            // 为什么必须在这里再判一次（而不是「生成时不产出就够了」）：
+            // 签字文件是**文本**，谁都能手改一条 tenant inherit 塞进来。
+            // F-1 的目的是「这条路径**不存在**」，不是「我们的生成器不产它」。
+            // 所以：租户键列的 inherit ⇒ **拒绝整份文件**（⛔ 不是警告后继续）。
+            let Some(tenants) = tenant_columns else {
+                bail!(
+                    "{subject} 是 inherit 边，但没有租户键声明（`--tenancy`）—— \
+                     无法复核它是不是租户键，拒绝签字产物（fail-closed）。\
+                     请给 --tenancy（与 ontology export 同一份文件）。"
+                );
+            };
+            let column = subject.rsplit_once('.').map(|x| x.1).unwrap_or("");
+            if tenants.contains(column) {
+                bail!(
+                    "拒绝签字产物：{subject} 是**租户键列**（{column} 在 tenancy 声明里），\
+                     租户键的 inherit 一律不许注入——租户边界必须本表实测，继承证明不了 \
+                     「本表这一列指向同一实体」。请把这条 inherit 从签字文件里删掉，\
+                     或改为对本表做值域重叠实测。"
+                );
+            }
             // E-2 的四道闸（继承比实测更容易被伪造，所以更严）。
             let Some(src) = fixed.inherit.as_ref() else {
                 bail!("{subject} 标成 inherit 却没有 facts.inherit（说不出继承自哪条验证）");
@@ -2012,9 +2034,26 @@ pub fn inject_signed(
     items: &mut Vec<serde_json::Value>,
     signed: &SignedFk,
     known_tables: &BTreeSet<String>,
+    tenant_columns: Option<&BTreeSet<String>>,
 ) -> Result<InjectionStats> {
     let mut stats = InjectionStats { skipped_unsigned: signed.skipped_unsigned, ..Default::default() };
     for e in &signed.edges {
+        // G-1 的**第二道闸**（纵深防御）：即便有人绕过 `load_signed` 手搓一个
+        // `SignedFk`（字段是 pub），注入这一层也不放行租户键的 inherit。
+        if e.state == JoinState::Inherited {
+            match tenant_columns {
+                Some(t) if t.contains(&e.from_column) => bail!(
+                    "拒绝注入：{}.{} 是租户键列，租户键的 inherit 不许进快照（G-1）",
+                    e.from_table,
+                    e.from_column
+                ),
+                None => bail!(
+                    "拒绝注入：{} 是 inherit 边但没有租户键声明，无法复核（G-1）",
+                    e.from_table
+                ),
+                _ => {}
+            }
+        }
         if !known_tables.contains(&e.from_table) || !known_tables.contains(&e.to_table) {
             bail!(
                 "签字产物里的边 {} → {} 指向不存在的表（schema 里没有）",
@@ -2644,7 +2683,7 @@ mod tests {
 
     #[test]
     fn unsigned_proposals_are_never_loaded() {
-        let err = load_signed(&report_json(None)).unwrap_err().to_string();
+        let err = load_signed(&report_json(None), None).unwrap_err().to_string();
         assert!(err.contains("一条都没签"), "{err}");
     }
 
@@ -2946,7 +2985,7 @@ mod tests {
         };
 
         // 正常：能签，且 state = Inherited
-        let s = load_signed(&doc(&v)).expect("继承提案应当可签");
+        let s = load_signed(&doc(&v), Some(&BTreeSet::new())).expect("继承提案应当可签");
         assert_eq!(s.edges.len(), 1);
         assert_eq!(s.edges[0].state, JoinState::Inherited);
         assert!(s.edges[0].join_evidence.starts_with("inherited from "));
@@ -2954,20 +2993,20 @@ mod tests {
         // 置信度越界（冒充 strong）⇒ 拒绝
         let mut bad = v.clone();
         bad["confidence"] = serde_json::json!(0.95);
-        let err = load_signed(&doc(&bad)).unwrap_err().to_string();
+        let err = load_signed(&doc(&bad), Some(&BTreeSet::new())).unwrap_err().to_string();
         assert!(err.contains("不在继承区间"), "{err}");
 
         // 缺 facts.inherit ⇒ 拒绝
         let mut bad2 = v.clone();
         bad2["facts"].as_object_mut().unwrap().remove("inherit");
-        let err = load_signed(&doc(&bad2)).unwrap_err().to_string();
+        let err = load_signed(&doc(&bad2), Some(&BTreeSet::new())).unwrap_err().to_string();
         assert!(err.contains("没有 facts.inherit"), "{err}");
 
         // band 被改成 strong ⇒ 当成实测走另一套闸（5/5 会过），但 state 变了 ——
         // 这里断言的是「band 决定三态」，不是「数据能骗过阈值」。
         let mut strong_claim = v.clone();
         strong_claim["band"] = serde_json::json!("strong");
-        let s2 = load_signed(&doc(&strong_claim)).expect("band=strong 走实测闸");
+        let s2 = load_signed(&doc(&strong_claim), Some(&BTreeSet::new())).expect("band=strong 走实测闸");
         assert_eq!(s2.edges[0].state, JoinState::Verified);
     }
 
@@ -2993,11 +3032,11 @@ mod tests {
             "unresolved": [],
         })
         .to_string();
-        let signed = load_signed(&doc).unwrap();
+        let signed = load_signed(&doc, Some(&BTreeSet::new())).unwrap();
         let mut items: Vec<serde_json::Value> = vec![];
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
-        inject_signed(&mut items, &signed, &known).unwrap();
+        inject_signed(&mut items, &signed, &known, Some(&BTreeSet::new())).unwrap();
         assert_eq!(
             items[0]["payload"]["join_verified"],
             serde_json::Value::String("inherit".into())
@@ -3130,7 +3169,7 @@ mod tests {
             }],
         })
         .to_string();
-        let s = load_signed(&doc2).expect("有一条签了就能读");
+        let s = load_signed(&doc2, Some(&BTreeSet::new())).expect("有一条签了就能读");
         assert_eq!(s.len(), 1);
         // 未签的那条（api_call_logs.license_id）要有理由
         let why = s
@@ -3146,8 +3185,120 @@ mod tests {
         assert!(why.starts_with("insufficient_sample:"), "{why}");
         assert!(why.contains("4 行"), "{why}");
         // 一条都没签的那份仍然被拒（P2 不变）
-        let err = load_signed(&doc).unwrap_err().to_string();
+        let err = load_signed(&doc, None).unwrap_err().to_string();
         assert!(err.contains("一条都没签"), "{err}");
+    }
+    // ── G-1（阻断项）：签字文件里的租户键 inherit 必须被复核拒绝 ──────
+
+    /// 手工把一条 **tenant inherit** 塞进签字文件 ⇒ **拒绝整份**（不是警告后继续）。
+    ///
+    /// 变异自证：把 `load_signed` 里那段租户复核删掉，本测试立刻红
+    /// （文件会被接受，`s.len()` 变成 1）。
+    #[test]
+    fn a_hand_written_tenant_inherit_is_rejected() {
+        let mut idx = VerifiedIndex::default();
+        idx.add(
+            "customer_id",
+            verified_source("agent_white_list", "customer_id", 5, 5),
+            "customers",
+            "id",
+            TargetKind::Primary,
+        );
+        let cands = vec![Candidate {
+            table: "customers".into(),
+            key_column: Some("id".into()),
+            target_kind: TargetKind::Primary,
+            key_priority: 0,
+            kind: MatchKind::Plural,
+            stem: "customer".into(),
+        }];
+        let plan = plan_inherit(
+            "api_call_logs",
+            "customer_id",
+            &cands,
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &idx,
+            // 空集：生成端本来就不该产出 —— 这里**故意绕过**生成端，直接手搓文件
+            &BTreeSet::new(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!("生成端应当产出（便于构造绕过用例）") };
+        let mut v = serde_json::to_value(&*p).unwrap();
+        v["reviewed_by"] = serde_json::Value::String("someone".into());
+        let doc = serde_json::json!({
+            "kind": FkReport::KIND,
+            "proposals": [v],
+            "rejected": [],
+            "unresolved": [],
+        })
+        .to_string();
+
+        // ① 声明了 customer_id 是租户键 ⇒ 拒绝，且点名是哪条边、哪个列、为什么
+        let mut tenants = BTreeSet::new();
+        tenants.insert("customer_id".to_string());
+        let err = load_signed(&doc, Some(&tenants)).unwrap_err().to_string();
+        assert!(err.contains("api_call_logs.customer_id"), "要点名边：{err}");
+        assert!(err.contains("租户键"), "要说清原因：{err}");
+        assert!(err.contains("拒绝签字产物"), "{err}");
+
+        // ② 没有租户声明 ⇒ 也拒绝（**无法复核**就是 fail-closed 的理由）
+        let err = load_signed(&doc, None).unwrap_err().to_string();
+        assert!(err.contains("没有租户键声明"), "{err}");
+
+        // ③ 非租户列的 inherit 不受影响
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+            &BTreeSet::new(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!() };
+        let mut v = serde_json::to_value(&*p).unwrap();
+        v["reviewed_by"] = serde_json::Value::String("someone".into());
+        let ok = serde_json::json!({
+            "kind": FkReport::KIND,
+            "proposals": [v],
+            "rejected": [],
+            "unresolved": [],
+        })
+        .to_string();
+        let s = load_signed(&ok, Some(&tenants)).expect("非租户列的 inherit 照常通过");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.edges[0].state, JoinState::Inherited);
+    }
+
+    /// 纵深防御：即便有人手搓 `SignedFk` 绕过 `load_signed`，`inject_signed` 也拦。
+    #[test]
+    fn injection_refuses_a_hand_built_tenant_inherit() {
+        let signed = SignedFk {
+            edges: vec![SignedEdge {
+                from_table: "api_call_logs".into(),
+                from_column: "customer_id".into(),
+                to_table: "customers".into(),
+                to_key_column: "id".into(),
+                cardinality: "N:1".into(),
+                join_evidence: "inherited from x.y (verified 5/5)".into(),
+                confidence: 0.75,
+                reviewed_by: "someone".into(),
+                state: JoinState::Inherited,
+                skipped_unsigned: 0,
+            }],
+            skipped_unsigned: 0,
+            unverified: BTreeMap::new(),
+        };
+        let mut items: Vec<serde_json::Value> = vec![];
+        let known: BTreeSet<String> =
+            ["api_call_logs", "customers"].iter().map(|s| s.to_string()).collect();
+        let mut tenants = BTreeSet::new();
+        tenants.insert("customer_id".to_string());
+        let err = inject_signed(&mut items, &signed, &known, Some(&tenants))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("拒绝注入"), "{err}");
+        assert!(items.is_empty(), "一条都不许进去");
     }
     /// **签字边不被分档器丢掉**（E-2 的必要条件：否则 Q4 那条路白走）。
     #[test]
@@ -3175,7 +3326,7 @@ mod tests {
 
     #[test]
     fn signed_proposals_become_edges_with_ttl_evidence() {
-        let s = load_signed(&report_json(Some("ba-alice"))).unwrap();
+        let s = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         assert_eq!(s.len(), 1);
         let e = &s.edges[0];
         assert_eq!(e.from_table, "api_call_logs");
@@ -3209,7 +3360,7 @@ mod tests {
             "rejected": [], "unresolved": []
         })
         .to_string();
-        let err = load_signed(&doc).unwrap_err().to_string();
+        let err = load_signed(&doc, None).unwrap_err().to_string();
         assert!(err.contains("不许靠签字放行"), "{err}");
     }
 
@@ -3231,10 +3382,10 @@ mod tests {
     #[test]
     fn injection_marks_existing_edges_instead_of_duplicating_them() {
         let mut items = vec![link_item("api_call_logs", "license_id", "licenses", "N:1")];
-        let signed = load_signed(&report_json(Some("ba-alice"))).unwrap();
+        let signed = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
-        let st = inject_signed(&mut items, &signed, &known).unwrap();
+        let st = inject_signed(&mut items, &signed, &known, None).unwrap();
         assert_eq!(st.added, 0);
         assert_eq!(st.marked_existing, 1, "同一条边只补标记，不新增");
         // ⚠️ 标记只落在 payload（`apply` 唯一读得到的那层），顶层**没有**副本
@@ -3253,11 +3404,11 @@ mod tests {
     #[test]
     fn injection_appends_new_edges_without_moving_existing_items() {
         let mut items = vec![link_item("api_call_logs", "license_id", "customers", "N:1")];
-        let signed = load_signed(&report_json(Some("ba-alice"))).unwrap();
+        let signed = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
         let before = items[0].clone();
-        let st = inject_signed(&mut items, &signed, &known).unwrap();
+        let st = inject_signed(&mut items, &signed, &known, None).unwrap();
         assert_eq!(st.added, 1);
         assert_eq!(items[0], before, "既有条目一个字节都不动");
         assert_eq!(items[1]["payload"]["to_type"], "licenses");
@@ -3266,9 +3417,9 @@ mod tests {
     #[test]
     fn injection_refuses_tables_outside_the_schema() {
         let mut items = vec![];
-        let signed = load_signed(&report_json(Some("ba-alice"))).unwrap();
+        let signed = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         let known: BTreeSet<String> = ["api_call_logs"].iter().map(|s| s.to_string()).collect();
-        let err = inject_signed(&mut items, &signed, &known).unwrap_err().to_string();
+        let err = inject_signed(&mut items, &signed, &known, None).unwrap_err().to_string();
         assert!(err.contains("不存在的表"), "{err}");
     }
 

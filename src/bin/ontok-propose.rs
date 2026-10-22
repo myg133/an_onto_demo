@@ -675,10 +675,17 @@ async fn main() -> Result<()> {
     if let Some(sign_path) = fk_sign.as_deref() {
         let raw = std::fs::read_to_string(sign_path)
             .with_context(|| format!("读不出签字产物 {sign_path}"))?;
-        let signed = ontok::extract::fk::load_signed(&raw)?;
+        // G-1：把租户声明交给签字闸**复核**（fail-closed，不是「生成时不产」就算）。
+        let tenants_opt = if tenant_columns.is_empty() { None } else { Some(&tenant_columns) };
+        let signed = ontok::extract::fk::load_signed(&raw, tenants_opt)?;
         let known: std::collections::BTreeSet<String> =
             report.tables.iter().map(|t| t.name.clone()).collect();
-        let st = ontok::extract::fk::inject_signed(&mut outcome.proposal.items, &signed, &known)?;
+        let st = ontok::extract::fk::inject_signed(
+            &mut outcome.proposal.items,
+            &signed,
+            &known,
+            tenants_opt,
+        )?;
         signed_ref = Some(signed);
         println!();
         println!("REQ-120 签字产物（{sign_path}）");

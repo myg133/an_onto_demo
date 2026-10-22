@@ -213,7 +213,7 @@ fn unresolved_file_is_classified_and_counted() {
 #[test]
 fn a_file_without_any_signature_is_refused() {
     let r = report(vec![proposal("api_call_logs.license_id", "licenses", 5, 5, None)]);
-    let err = load_signed(&render_report(&r).unwrap()).unwrap_err().to_string();
+    let err = load_signed(&render_report(&r).unwrap(), None).unwrap_err().to_string();
     assert!(err.contains("一条都没签"), "{err}");
 }
 
@@ -224,7 +224,7 @@ fn only_signed_proposals_become_edges() {
         proposal("api_call_logs.license_id", "licenses", 5, 5, Some("ba")),
         proposal("api_call_logs.customer_id", "customers", 4, 5, None),
     ]);
-    let s = load_signed(&render_report(&r).unwrap()).unwrap();
+    let s = load_signed(&render_report(&r).unwrap(), None).unwrap();
     assert_eq!(s.len(), 1);
     assert_eq!(s.edges[0].from_column, "license_id");
     assert_eq!(s.skipped_unsigned, 1);
@@ -290,9 +290,10 @@ fn ttl_renders_the_three_states_of_join_verification() {
         doc.contains("ontok:joinEvidence \"inherited from e.w_id (verified 4/4)"),
         "{doc}"
     );
-    // c→z 是 None（旧快照）⇒ 一个标记都不许写
+    // c→z 是 None（旧快照）⇒ 一个标记都不许写。
+    // ⚠️ 只数**三元组**（后跟引号），不数文件头那句 F-4 说明里的同名字样。
     assert_eq!(
-        doc.matches("ontok:joinVerified").count(),
+        doc.matches("ontok:joinVerified \"").count(),
         6,
         "三条边 × 正反 = 6 处；None 的边一处都不许有：{doc}"
     );
@@ -355,10 +356,10 @@ fn two_edges_between_the_same_pair_never_share_an_iri() {
 #[test]
 fn injection_writes_the_payload_layer_that_apply_reads() {
     let r = report(vec![proposal("cab.main_customer_id", "customers", 5, 5, Some("ba"))]);
-    let signed = load_signed(&render_report(&r).unwrap()).unwrap();
+    let signed = load_signed(&render_report(&r).unwrap(), None).unwrap();
     let mut items: Vec<serde_json::Value> = vec![];
     let known: BTreeSet<String> = ["cab", "customers"].iter().map(|s| s.to_string()).collect();
-    let st = inject_signed(&mut items, &signed, &known).expect("注入");
+    let st = inject_signed(&mut items, &signed, &known, None).expect("注入");
     assert_eq!(st.added, 1);
 
     let it = &items[0];

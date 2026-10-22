@@ -1509,7 +1509,16 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
     } else {
         TypeSourceMode::HeuristicOnly
     };
-    let header_lines = vec![mode.header_line(&stats), tenancy.header_line()];
+    let header_lines = vec![
+        mode.header_line(&stats),
+        tenancy.header_line(),
+        // ⭐ REQ-120 · F-4：**证据强度**必须写进文件头。
+        //
+        // 数字员工看到 `ontok:joinVerified "true"` 很容易理解成「这条关系在全量数据上
+        // 成立」。它不是：取证方式是「每列取 ≤5 个不同值，去撞目标键」，命中率 5/5
+        // 只说明**抽样没翻车**，不说明「全表都成立」。`inherit` 更弱 —— 本表根本没测。
+        JOIN_EVIDENCE_HEADER.to_string(),
+    ];
     finish(
         opts,
         Body {
@@ -1544,6 +1553,16 @@ const PREFIX_TABLE: &[(&str, &str)] = &[
     ("skos", "http://www.w3.org/2004/02/skos/core#"),
     ("xsd", "http://www.w3.org/2001/XMLSchema#"),
 ];
+
+/// **REQ-120 · F-4**：建模视图文件头对 `ontok:joinVerified` 的**强度声明**。
+///
+/// 只进建模视图（客户视图没有这三态，也不该出现建模术语）。
+/// 措辞刻意说「抽样」与「不构成全量保证」，因为这就是事实：
+/// 取证是每列 ≤5 个不同值去撞目标键（见 `extract::fk` 模块头）。
+const JOIN_EVIDENCE_HEADER: &str = "ontok:joinVerified 是**抽样证据**（每列取 ≤5 个不同值比对目标键），\
+不是全量统计保证：\"true\" = 抽样命中率 ≥95%（常见 5/5），\"inherit\" = 同为名列在别处的验证、\
+本表未实测，\"false\" = 仅列名推断（joinEvidence 写明是哪一种没验）；\
+两种方向（正向/反向属性）各标一条";
 
 /// 客户视图本体节点上的说明（**不含守门词**：它是正文，要过闸）。
 const CUSTOMER_ONTOLOGY_NOTE: &str =

@@ -55,6 +55,18 @@ llm_model.model_id  与  llm_model.id（uuid）0 命中
    `inherited from ` 开头 ⇒ **拒绝整份文件**）；
 6. **⛔ 租户键列一律不许继承**（F-1，替身复跑抓到的漏洞，见 §一·八）。
 
+## 一·九 · F-4：证据强度写进 TTL 文件头
+
+`ontok:joinVerified "true"` 的取证方式是「每列取 ≤5 个不同值去撞目标键」——
+**抽样**，不是全量统计。数字员工看到 `true` 很容易当成「全表成立」，
+所以这句话现在**直接写在建模视图的文件头**（客户视图没有三态，不加）：
+
+```
+# · ontok:joinVerified 是**抽样证据**（每列取 ≤5 个不同值比对目标键），不是全量统计保证：
+#   "true" = 抽样命中率 ≥95%（常见 5/5），"inherit" = 同为名列在别处的验证、本表未实测，
+#   "false" = 仅列名推断（joinEvidence 写明是哪一种没验）；两种方向（正向/反向属性）各标一条
+```
+
 ## 一·八 · F-1 / F-2（替身复跑后的两处裁定）
 
 ### F-1 · `inherit` 不得用于租户键列
@@ -143,7 +155,7 @@ F-1 拒绝继承 : 16 列（租户键：customer_id / main_customer_id / sub_cus
 注入：**22 条新增 + 51 条既有边补验证标记**，未签 18 条被忽略；
 `retain_signed` 把 **5 条**会掉进待查/拒绝的签字边捞回主提案。
 
-TTL（`anspire_fk120_v6` v2，建模视图）：**79 条关系 × 2 = 158 块对象属性**；
+TTL（`anspire_fk120_v7` v2，建模视图）：**79 条关系 × 2 = 158 块对象属性**；
 `joinVerified "true"` **144**（=72×2）、`"inherit"` **2**（=1×2）、`"false"` **12**（=6×2）；
 `joinEvidence` **158**（**每一条边都有**：true 144 + inherit 2 + false 12 —— F-2 的结果）。
 重复主语 0 个。
@@ -160,7 +172,7 @@ TTL（`anspire_fk120_v6` v2，建模视图）：**79 条关系 × 2 = 158 块对
 
 | 产物 | 52 条关系（未签） | 79 条关系（签了 73） | 增量 |
 | --- | --- | --- | --- |
-| 建模视图 TTL | 379,417 B | 423,261 B | **+11.6%** |
+| 建模视图 TTL | 379,417 B | 423,616 B | **+11.7%** |
 | 客户视图 TTL | 295,537 B | 312,889 B | **+5.9%** |
 | 对象属性块 | 104（52×2） | 158（79×2） | +54 |
 
@@ -252,8 +264,16 @@ REQ-119 QA 点名 6 条「其实该是 1:1」的关系，现在**全部 1:1**
 | `license_quota.license_id → licenses` | N:1 | **1:1** |
 | `service_apps.channel_id → marketing_channel_customer` | N:1 | **1:1** |
 
-另有 1 条同规则命中：`internal_staff.customer_id`、`llm_model_peak_config.model_id`
-（唯一列）也一并变 1:1 —— 判据是 `unique_columns`，不是「REQ-119 点名的白名单」。
+**另有 2 条**进 TTL 的 1:1（TLL 里一共 **8 条** 1:1 边，16 块 = 8×2）：
+
+| 关系 | 为什么 1:1 | 来源 |
+| --- | --- | --- |
+| `sub_account_permission.sub_customer_id → customers` | 源列在 `unique_columns` 里（`unique_columns` 判据，非白名单） | 抽取侧 promotion |
+| `llm_model_peak_config.model_id → llm_model` | 目标列 `llm_model.model_id` 是**唯一列**，且源列也是唯一列 | E-1 的 unique 目标 |
+
+⚠️ 口径纠正（QA 复核）：早先这里写的是 `internal_staff.customer_id` —— 它在**流水线里**确实被
+提升成 1:1，但那条边是低档且未签字，**没有进快照**，所以 TTL 里看不到它。
+「有没有提升」与「TTL 里有没有」是两件事，本表说的是后者。
 
 方向说明（**宁少勿多**）：把 1:1 说成 N:1 只少一条约束；把 N:1 说成 1:1 会让开推理
 的一方错误合并个体（REQ-119 B-1 的教训）。所以 1:1 需要**两个证据同时成立**：
@@ -319,11 +339,11 @@ D:\MyCodes\AI\an_onto_demo\feature-REQ-120\out\anspire-req120-model.ttl        �
 D:\MyCodes\AI\an_onto_demo\feature-REQ-120\out\anspire-req120-unsigned-model.ttl ← 同口径未签对照（52 关系）
 ```
 
-复现命令（本地库 `anspire_real`，项目 `anspire_fk120_v6` **已冻结在 v2**）：
+复现命令（本地库 `anspire_real`，项目 `anspire_fk120_v7` **已冻结在 v2**）：
 
 ```powershell
 $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire_real'
-.\target\debug\ontok.exe ontology export --project anspire_fk120_v6 --version 2 `
+.\target\debug\ontok.exe ontology export --project anspire_fk120_v7 --version 2 `
   --model-view --format ttl --out out\anspire-req120-model.ttl `
   --tenancy tenancy.json --schema D:\MyCodes\AI\an_onto_demo\code\out\schema.json
 ```
@@ -355,7 +375,7 @@ $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire
 5. **继承只对 `insufficient_sample` / `sample_failed`**：`low_overlap` 是数据说了不成立、
    `no_candidate` 连名字证据都没有 —— 两者都不继承。（偏保守，已登记。）
 6. **继承必须人签**，且 `confidence ≤ 0.75`：它永远进不了 strong 档。
-   本轮 34 条 inherit 只签了 2 条（`api_call_logs`），其余 32 条**留在提案里没进快照**。
+   本轮 **18 条 inherit 只签了 1 条**（`api_call_logs.license_id`），其余 **17 条**留在提案里没进快照。
 7. **`llm_model.model_id` 自己仍是 `low_overlap`**：它定义业务键，不引用别人。
 8. **候选靠名字提名** ⇒ 「名字与目标表毫无词汇关系、只有值重叠」的边仍提不出（天花板）。
 9. **复数只认三条规则**（`+s` / `+es` / `辅音+y→ies`），不做不规则复数（`people`）。
@@ -365,14 +385,26 @@ $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire
     警告「继承闸对所有人放行」。`ontology export --tenancy` 是**另一件**事（标 tenantKey）。
 12. **F-2 的 `insufficient_sample` 里那个行数是取样窗口（≤25），不是表行数** ——
     报告与 TTL 都按窗口口径写，别读成「这张表只有 4 行」（`deductions` 恰好两者相同）。
+### G-3 · 登记（不改）
+
+- **F-2 的前缀集合是超集**：代码里可能出现 `low_overlap:` / `no_candidate:` / `sample_failed:`，
+  而本产物只用到 `insufficient_sample:`（6 块）、`unsigned:`（6 块）、`naming_only` 兜底（0 块）。
+  超集是有意的：换一批数据时理由仍然写得出来。
+- **F-1 的 CLI 接线已有真进程判据**（`tests/test_req120_tenant_gate.rs` 3 条）：
+  手工构造 tenant inherit ⇒ 进程 exit≠0、stderr 点名、**不写产物**；非租户列 inherit 照常通过。
+  这补上了「`plan_inherit` 有单测、但 CLI 接线没测」的缺口。
+- **QA 的 A/B 跑法值得保留**：V5（无 --tenancy）与 V6（有 --tenancy）两份 TTL 逐边比对，
+  16 条差异**全部**落在租户列、**零误伤** —— 比「看计数对不对」强，因为它同时证明了
+  「闸生效」与「闸没有多拦」。
+
 ## 十 · 测试
 
 | 层 | 数字 |
 | --- | --- |
-| lib（`cargo test --lib`） | **412 passed**（基线 370 + REQ-120 的 42：`extract::fk` 41 + `domain::ttl` 1） |
+| lib（`cargo test --lib`） | **414 passed**（基线 370 + REQ-120 的 44：`extract::fk` 43 + `domain::ttl` 1） |
 | doc（`cargo test --doc`） | **4 passed**（基线 4） |
-| 新增集成（`tests/test_req120_fk.rs`） | **11 passed** |
-| 全量（`cargo test --no-fail-fast`，88 个 target） | **1326 passed / 5 failed** |
+| 新增集成 | `tests/test_req120_fk.rs` **11** + `tests/test_req120_tenant_gate.rs` **3**（G-1 真进程） |
+| 全量（`cargo test --no-fail-fast`，89 个 target） | **1334 passed / 5 failed** |
 
 ### 6 条失败逐条交代（**没有一条由 REQ-120 引入**，均为环境或既有）
 
@@ -398,8 +430,8 @@ Windows 上**编不过**，而 `tests/test_retained_names_req084.rs` 用 `includ
 | 行 | 改法 |
 | --- | --- |
 | 587–588 | `#[cfg(unix)] use …` / `#[cfg(unix)] if x.dev() …`（同一行加属性，不增行） |
-| 1500 / 1526 | `#[cfg(unix)] #[test]`（两个符号链接/硬链接用例在 Windows 上不跑） |
+| 1450 / 1500 / 1526 / 1919 | `#[cfg(unix)] #[test]`（4 条 POSIX 语义用例在 Windows 上不跑：`default_roles_are_two_different_files`、`resolve_roles_rejects_alias_of_baseline`（symlink）、`resolve_roles_rejects_hard_link_of_baseline`（st_ino）、`real_pair_five_missing_columns_are_named`（登记基线是 POSIX 绝对路径）） |
 
 文件总行数 **2758 → 2758**（改前改后相同），`retained_names.req084.tsv` 的
-行号/列号判据全部仍然有效。⚠️ 副作用：Windows 上那两条用例**不执行**（它们测的是
+行号/列号判据全部仍然有效。⚠️ 副作用：Windows 上那 **4 条**用例不执行（它们测的是
 POSIX 的 `st_dev/st_ino` 语义，在这台机器上本来也无从验证）。
