@@ -129,3 +129,59 @@ BA 用 `code/out/schema.json` 的真实 `data_type` 逐条比对 870 条：
 
 R4 明确「客户视图不含租户信息」，`tenantUnannotated` 本身也是建模/安全信息。
 要求：报告写清「客户视图天然不含租户信息，R5 的警告只对建模视图有意义」，免得 QA 用客户视图验 R5 时误判。
+
+---
+
+## 四 · AC-009 替身实验结果（5 题写 SPARQL，只读 TTL、不执行）
+
+### 结论：**够写「形状」，不够写「口径」**
+
+语法层面 5/5 都能写出可执行 SPARQL；**端到端能直接交付客户的只有 1 条**。
+
+| 题 | 结果 | 卡点 |
+| --- | --- | --- |
+| Q1 扣费明细 | ✅ **高**，可直接交付 | 「上个月」边界需服务端注入（SPARQL 1.1 无 `YEAR()`）；时区未定义；`deductions` 有 2 个 tenant 键，走哪个不明确 |
+| Q2 余额 | ❌ **低** | 类选对了，但「余额」落不到任何单列：`recharge_balance` / `transfer_point` / `credit_balance_rmb/usd` 四套互不通约，**无 total、无汇率** |
+| Q3 额度 | ⚠️ 中 | 能算数值，**说不出产品名**（`product_id` 裸串，无 ObjectProperty） |
+| Q4 用过的 API | ⚠️ 中 | 一条活路（经 `licenses`）；字面最贴题的 `api_call_logs` **整类 0 边** |
+| Q5 套餐下订阅 | ⚠️ 中 | 能写，但**默认跨租户**（TTL 无「套餐内订阅项」类） |
+
+**判定（替身原话）**：「宁可说不够。按现在这份 TTL，我不会让数字员工把 Q2/Q3/Q4 的结果直接发给客户。」
+
+### B-1 · **真 bug**：`Functional` / `InverseFunctional` 整体反了
+
+BA 独立核实（全量统计）：
+
+```
+('N:1', 'InverseFunctional')  52 条   ← 应为 FunctionalProperty
+('1:N', 'Functional')         52 条   ← 应为 InverseFunctionalProperty
+```
+
+后果（替身原话）：「56 条 1:N 反向边全被错标成 Functional ⇒ **开推理会把一个套餐下的所有订阅合并成一条**」。
+
+### B-2 · 主键没导出成属性 ⇒ 字符串 FK 无法还原成 IRI
+
+「license 只有 `license_key`/`name`，没有 `id` ⇒ **不能 join 的技术根因**」。
+要求：主键列导出为 `owl:DatatypeProperty` + `ontok:isPrimaryKey true`，类上 `ontok:primaryKeyColumn`。
+
+### B-3 · 枚举值域没导出 ⇒ 魔数猜反不报错
+
+`status`(1/2/3/4/5)、`currency`(POINT/RMB/USD) 全在 label 的中文串里。
+要求：从列注释**确定性解析**允许值 → `ontok:allowedValue`；解析不出不导出（不许编）。
+
+### B-4 · FK 边缺失（**不在本需求修**，另开需求）
+
+`api_call_logs` / `package_products` / `service_config` / `llm_model` / `customer_account_binding` 整类 0 个 ObjectProperty；
+`product_id` / `model_id` / `service_id` / `main_customer_id` / `sub_customer_id` 全是裸串。
+
+**根因是抽取阶段词干匹配太严**（`product_id` → 找 `products`，实际表叫 `package_products`），不是 TTL 的问题。
+⇒ 另开需求改抽取，本需求只登记。
+
+### 替身最想要的一样东西
+
+> **把主键暴露成 datatype property + 把所有 FK 列导出成 ObjectProperty（补上 api_call_logs/product_id 等漏掉的）。**
+> 「5 个孤岛类 + 主键缺失叠加，导致两跳以上的业务问题全写不出；补上这一样，端到端答对从 1 条变 4 条。」
+
+### 这个实验方法值得保留
+
+它证明了：**「代码全绿」不等于「Agent 能用」**。5 题里 4 题方向对，但只有 1 题能交付——**差的那 3 题全卡在信息缺失，不是语法**。
