@@ -203,3 +203,15 @@
 - 机制验证：101 条断言 / 101 证据字节级命中 / 37 个谓词 / 原始 belongs_to 0/51 / 第三次运行 0 token
 - ⚠️ **真实业务文档仍未跑**（4 份语料经 QA 判定过度贴合提示词，只能当冒烟夹具）
 - 新规程：`Copy-Item` 还原保留 mtime ⇒ cargo 不重编 ⇒ 可能跑变异版产物（Dev 自报踩到）。还原后必须 `touch` / `cargo clean -p`
+
+
+## 2026-10-22 — REQ-118 合并与回收
+
+- 合并：`feature/REQ-118` → `develop` **`2b55624`**（2 个提交：`b0a814f` + `959611d`）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 真实库三份提案：name 96 / exclude 96 判定（排 21）/ concept 9 组；缓存二次 **0 token**
+- **清理测试污染**：`anspire_real` 里 3242 条 proposal / 2613 条 item / 3000+ `t_*` 项目全部删除，现只剩 4 个真实项目
+- 新规程两条（写进 `dispatch/rules.md`）：
+  1. **失败路径三态**：complete / partial(exit≠0) / all-failed(不产产物)，⛔ 禁止结论式提示
+  2. **测试库必须独立**：测试不得指向演示库
