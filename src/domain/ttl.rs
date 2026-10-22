@@ -1480,6 +1480,12 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
         // 签过的边数**（正反各一条）。报告里两个数都写。
         if let Some(v) = l.join_verified {
             extra.push(format!("ontok:joinVerified {}", plain(v.as_str())));
+            // F-2：**反向也要写为什么没验**。
+            // 数字员工问「这个客户扣了哪些钱」走的是反向边（`customers__deductions`）；
+            // 只在正向写理由，反向看到的又是一条没有解释的 `false`。
+            if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
+                extra.push(format!("ontok:joinEvidence {}", plain(e)));
+            }
         }
         inverse_blocks.push((
             inv.clone(),
@@ -2198,12 +2204,14 @@ fn model_object_block(l: &ModelLinkView, subject_local: &str, inverse_of: Option
         Some(v) => {
             // 三态：`"true"` / `"inherit"` / `"false"`（REQ-120 rev.2）。
             lines.push(format!("ontok:joinVerified {}", plain(v.as_str())));
-            // 证据只在**有数据证据**时写：`"false"` 没有证据可写，
-            // 写了就是拿「命名推断」冒充「验过」。
-            if v.has_data_evidence() {
-                if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
-                    lines.push(format!("ontok:joinEvidence {}", plain(e)));
-                }
+            // 证据：**三态都写**（REQ-120 rev.3 · F-2）。
+            //
+            // 早先版本只给 `true` / `inherit` 写证据，理由是「`false` 没证据可写」。
+            // 替身复跑否掉了这个理由：数字员工看到 `false` 却不知道是
+            // **数据不够**（`insufficient_sample: 源表仅 4 行`）还是**只看了名字**
+            // （`naming-only`）—— 这两种可信度完全不同，必须能区分。
+            if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
+                lines.push(format!("ontok:joinEvidence {}", plain(e)));
             }
         }
         None => {}

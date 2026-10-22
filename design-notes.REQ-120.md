@@ -45,14 +45,43 @@ llm_model.model_id  与  llm_model.id（uuid）0 命中
 
 证据里写明档次：`-> llm_model.model_id via unique_column (substring)`。
 
-## 一·七 · E-2：同名同义列继承（五条件）
+## 一·七 · E-2：同名同义列继承（六条件）
 
 1. 同名列在**别处**实测通过（`strong/medium`，**不叠继承链**）；
 2. 这些验证的**目标唯一**（表 + 列都一致），否则 `inherit_conflicts += 1` 并拒绝；
 3. 目标表**在本列候选里**（名字证据与数据证据都指向它）；
 4. `confidence = 0.60 + 0.15 × 来源命中率`，**夹在 [0.60, 0.75]**（永远够不着 strong）；
 5. **必须人签**（`load_signed` 复查：缺 `facts.inherit` / 置信度越界 / 证据不以
-   `inherited from ` 开头 ⇒ **拒绝整份文件**）。
+   `inherited from ` 开头 ⇒ **拒绝整份文件**）；
+6. **⛔ 租户键列一律不许继承**（F-1，替身复跑抓到的漏洞，见 §一·八）。
+
+## 一·八 · F-1 / F-2（替身复跑后的两处裁定）
+
+### F-1 · `inherit` 不得用于租户键列
+
+替身原话：`deductions` 同表并存 `customer_id` 与 `main_customer_id`，**两个都标
+tenantKey true** ⇒ 这套库里「叫 `customer_id`」**不能唯一确定**主账号/子账号/付款方；
+别处的同名列只证明「这个名字在某张表里指向 `customers.id`」，**没证明本表这一列
+指向同一实体**。租户边界关系到安全 ⇒ **必须本表实测**。
+
+落地：`ontok-propose --tenancy <tenancy.json>` 读同一份声明（与
+`ontology export --tenancy` 同一格式），`plan_inherit` 首闸即判 `tenant_columns`。
+没给 `--tenancy` ⇒ 明确警告「继承闸对所有人放行」（不静默）。
+
+### F-2 · `false` 边必须写明「为什么没验」
+
+替身判词：唯一入口边 `deductions__customers` = `false` 且**零 joinEvidence** ——
+数字员工看不出是「**数据不够**」还是「**只看了名字**」。这两种可信度完全不同。
+
+落地：`stamp_naming_only(items, reasons)` 给每条 `false` 边写 `ontok:joinEvidence`，
+理由表来自**签字产物**（= 上一次扫描的现场：未签提案 + 未解析清单），
+**正向与反向都写**：
+
+| 情形 | 证据前缀 |
+| --- | --- |
+| 该列在未解析清单 | `insufficient_sample:` / `low_overlap:` / `no_candidate:` / `sample_failed: 后接实测数字` |
+| 该列有提案但没签字 | `unsigned: 有 <band> 提案（confidence …）但**未签字** ⇒ 未进快照` |
+| 不在 FK 抽样域（`_no`/`_code`/主键） | `naming-only: 该列未进入值域重叠抽样 …` |
 
 只对 `insufficient_sample` / `sample_failed` 做：`low_overlap` 是**数据说了不成立**，
 `no_candidate` 连名字证据都没有 —— 两者都不许继承。
@@ -95,63 +124,76 @@ llm_model.model_id  与  llm_model.id（uuid）0 命中
 
 ```
 待判列      : 144 个 *_id（候选 673 个 · 实测计数 427 次）
-补出关系    : 107 条（strong 72 · medium 1 · inherit 34，**未签，不进快照**）
+补出关系    : 91 条（strong 72 · medium 1 · inherit 18，**未签，不进快照**）
 值域否决    : 22 个候选（命中率 < 0.5）
-未解析      : 37 列
+未解析      : 53 列
   · no_candidate          19
   · low_overlap           10
   · candidate_no_pk        0
-  · insufficient_sample    8
+  · insufficient_sample   24   ← F-1 把 16 个租户键列从 inherit 退回这里
   · sample_failed          0
+F-1 拒绝继承 : 16 列（租户键：customer_id / main_customer_id / sub_customer_id / …）
 继承冲突    : 0 列（没有出现「同名不同义」）
 ```
 
-签字（本轮 e2e 的**代签**，真实流程必须是人）：**72 条 strong + 2 条
-`api_call_logs` 的 inherit**，其余 33 条（1 medium + 32 inherit）**故意不签**
-⇒ 验证「未签不进快照」。
+签字（本轮 e2e 的**代签**，真实流程必须是人）：**72 条 strong + 1 条
+`api_call_logs.license_id` 的 inherit**；未签 18 条（1 medium + 17 inherit）
+⇒ 验证「未签不进快照」。`api_call_logs.customer_id` **不再产出 inherit**（F-1）。
 
-注入：**22 条新增 + 52 条既有边补验证标记**，未签 33 条被忽略；
-`retain_signed` 把 **6 条**会掉进待查/拒绝的签字边捞回主提案。
+注入：**22 条新增 + 51 条既有边补验证标记**，未签 18 条被忽略；
+`retain_signed` 把 **5 条**会掉进待查/拒绝的签字边捞回主提案。
 
-TTL（`anspire_fk120_v3` v2，建模视图）：**80 条关系 × 2 = 160 块对象属性**；
-`joinVerified "true"` **144**（=72×2）、`"inherit"` **4**（=2×2）、`"false"` **12**（=6×2）、
-`joinEvidence` **74**（=72+2，只正向）。重复主语 0 个。
+TTL（`anspire_fk120_v6` v2，建模视图）：**79 条关系 × 2 = 158 块对象属性**；
+`joinVerified "true"` **144**（=72×2）、`"inherit"` **2**（=1×2）、`"false"` **12**（=6×2）；
+`joinEvidence` **158**（**每一条边都有**：true 144 + inherit 2 + false 12 —— F-2 的结果）。
+重复主语 0 个。
+
+### 12 块 `false` 边的理由分布（F-2 的交付口径）
+
+| 块数 | 边数 | 理由前缀 | 说明 |
+| --- | --- | --- | --- |
+| 6 | 3 | `insufficient_sample:` | `customer_tpm_rate_limit`（1 行）· `deductions`（4 行）· `frozen_assets`（窗口 25 行仅 1 个不同值） |
+| 6 | 3 | `unsigned:` | `deductions→licenses` / `order→customer_subscriptions`（inherit 0.750 未签）· `subscription_priority→customer_subscriptions`（medium 0.767 未签） |
+| **0** | **0** | `naming-only:` | 本库里**没有**「既没进抽样、又没提案」的 false 边 |
 
 ### 与「只跑抽取、不签字」同口径对比（96 类、同一条流水线）
 
-| 产物 | 52 条关系（未签） | 80 条关系（签了 74） | 增量 |
+| 产物 | 52 条关系（未签） | 79 条关系（签了 73） | 增量 |
 | --- | --- | --- | --- |
-| 建模视图 TTL | 379,417 B | 415,300 B | **+9.5%** |
-| 客户视图 TTL | 295,537 B | 313,539 B | **+6.1%** |
-| 对象属性块 | 104（52×2） | 160（80×2） | +56 |
+| 建模视图 TTL | 379,417 B | 423,261 B | **+11.6%** |
+| 客户视图 TTL | 295,537 B | 312,889 B | **+5.9%** |
+| 对象属性块 | 104（52×2） | 158（79×2） | +54 |
 
 ⚠️ 与 REQ-119 AC-008 的「215.5 KB ⇒ ≤ +40%」比时请用**同一口径**：那份 215.5 KB 是
-84 类的客户视图；本表是 96 类。REQ-120 自己只加了 **6.1%**。
+84 类的客户视图；本表是 96 类。REQ-120 自己只加了 **5.9%**。
 ## 四 · 5 个孤儿类逐个结论
 
 | 类 | 结论 | 依据 |
 | --- | --- | --- |
-| `api_call_logs` | ✅ **补上（inherit）** | 表 **0 行** ⇒ 本表不可能实测；`license_id → licenses` 继承
-`license_quota.license_id (verified 5/5)`、`customer_id → customers` 继承
-`agent_white_list.customer_id`。人签后进快照 ⇒ Q4 可写 |
-| `package_products` | ✅ 补上（8 条对象属性） | `package_benefits/usage_details/usage_quotas/usage_reconciliation_log.product_id
-→ package_products.id` |
-| `service_config` | ❌ **仍未解析**（0 条边） | 三处 `service_id`（`deductions` / `free_amounts` /
-`service_free_amount_config`）**全部** `insufficient_sample`（本表没数据）⇒ 别名一侧
-**没有任何一处实测通过** ⇒ E-2 的条件 1 不成立（继承不能凭空造证据）。这是「数据不够」，
-不是判据不肯做 |
-| `llm_model` | ✅ 补上（**E-1 修好的**） | `llm_provider.model_id` / `llm_model_sort.model_id` /
-`llm_model_peak_config.model_id`（1:1）/ `llm_provider_groups.model_id`
-→ **`llm_model.model_id`（unique 业务键）**，4 条 strong + 5 条 inherit |
+| `api_call_logs` | ⚠️ **部分补上**：`license_id → licenses` 以 `inherit` 进快照；`customer_id` **撤销 inherit**（F-1）且**不进快照** | 表 0 行；`license_id` 非租户键 ⇒ 允许继承；`customer_id` 是 tenantKey ⇒ 必须本表实测 ⇒ 无从验证 |
+| `package_products` | ✅ 补上（8 条对象属性） | 4 处 `product_id → package_products.id` |
+| `service_config` | ❌ **仍未解析**（0 条边） | 三处 `service_id` 全部 `insufficient_sample`，同名列**没有一处实测通过** ⇒ 继承条件 1 不成立 |
+| `llm_model` | ✅ 补上（E-1 修好，8 条对象属性） | 4 条 strong 指向 `llm_model.model_id`（unique 业务键）+ 5 条 inherit |
 | `customer_account_binding` | ✅ 补上（6 条） | `main_customer_id` / `sub_customer_id` → `customers.id` |
 
-### `api_call_logs.license_id` 的三段结论（rev.2）
+### `api_call_logs` 两条边的最终状态（F-1 的交付）
 
-1. **实测不可得**：源库 `select count(*) from api_call_logs` = **0** ⇒ `all_null` ⇒
-   `insufficient_sample`。⛔ 按 AC-008 不许凭名字产出 `"true"`。
-2. **继承可得**（E-2）：同名列 `license_id` 在 `license_quota`（5/5）、`usage_details`
-   （4/4）都已实测指向 `licenses.id`，目标唯一 ⇒ 产出 `band=inherit`、`confidence=0.75`。
-3. **人签后进 TTL**，如实记 `"inherit"`：
+| 边 | `joinVerified` | 为什么 |
+| --- | --- | --- |
+| `api_call_logs__licenses`（`license_id`） | **`"inherit"`** | 非租户键；同名 `license_id` 在 `license_quota`(5/5)/`usage_details`(4/4) 都实测指向 `licenses.id`，目标唯一；人签后进快照 |
+| `api_call_logs__customers`（`customer_id`） | **不进快照**（TTL 里没有这条边） | F-1：`customer_id` 是 tenantKey。**选择"不进快照"而不是"标 false"**，理由见下 |
+
+**为什么选「不进快照」而不是「标 false」**：
+
+1. 它**没有**任何数据证据（0 行表），REQ-108 的分档本来就会把它放进「待查清单」——
+   强行保留等于绕过那道分诊；
+2. 租户键关系到安全：一条 `false` 的租户键边仍然会出现在 SPARQL 的候选里，
+   数字员工很可能照着 join 出去（只是没标"已验证"）——**缺一条边比给一条
+   没有依据的跨租户边更安全**；
+3. 它在 `proposal-pending.json` 里**仍然可见**（带 `join_verified: "false"`），
+   人若要认，走「待查 → 人工接受」的正规路径，而不是被本需求的继承规则顺带放行。
+
+### `api_call_logs.license_id` 的最终 TTL（继承，人签）
 
 ```turtle
 :api_call_logs__licenses a owl:FunctionalProperty, owl:ObjectProperty ;
@@ -162,34 +204,40 @@ TTL（`anspire_fk120_v3` v2，建模视图）：**80 条关系 × 2 = 160 块对
     owl:inverseOf :licenses__api_call_logs .
 ```
 
-### `llm_model` 的结论（E-1 修好的）
-
-`llm_model.model_id` 的值是**业务键**（`kimi-k2.5`），撞 `llm_model.id`（uuid）0 命中 ——
-旧实现把它判成 `low_overlap`。E-1 之后目标列扩到 `unique_columns`：
+### `llm_model` 的结论（E-1）
 
 ```
-llm_provider.model_id            -> llm_model.model_id   strong  5/5
-llm_provider_groups.model_id     -> llm_model.model_id   strong  5/5
-llm_model_sort.model_id          -> llm_model.model_id   strong  5/5
-llm_model_peak_config.model_id   -> llm_model.model_id   strong  1:1
-llm_provider_back*.model_id      -> llm_model.model_id   inherit
+llm_provider.model_id -> llm_model.model_id  strong 5/5
+llm_model_sort.model_id -> llm_model.model_id  strong 5/5
+llm_model_peak_config.model_id -> llm_model.model_id  strong 5/5（1:1）
+llm_provider_groups.model_id -> llm_model.model_id  strong 5/5
+llm_provider_back*.model_id -> llm_model.model_id  inherit（表 0 行）
 ```
-
-`llm_model.model_id` **自己**仍是 `low_overlap`（3 个候选、0 命中）—— 它定义业务键，
-不是引用别人。这是数据事实，不是缺陷。
 
 ### `no_candidate 19` 抽查 2 条（真没候选）
 
 | 列 | 为什么真的没候选 |
 | --- | --- |
-| `deductions.request_id` / `usage_details.request_id` | 词干 `request`：96 张表里**没有任何表名**等于/以 `_request(_s)` 结尾/含 `request` 词元；列注释为空 ⇒ 名字与注释两条通道都是 0 |
-| `llm_auth_cache_change_outbox.run_id` / `source_id` / `target_id` | 词干 `run` / `source` / `target`：同样 0 命中（这些是 outbox 内部事件坐标，不是指向业务表的外键） |
+| `deductions.request_id` / `usage_details.request_id` | 词干 `request`：96 表里没有任何表名等于/以 `_request(_s)` 结尾/含 `request` 词元；注释为空 |
+| `llm_auth_cache_change_outbox.run_id` / `source_id` / `target_id` | 词干 `run`/`source`/`target`：同样 0 命中（outbox 内部事件坐标，不指向业务表） |
 
-**抽查暴露了一个真 bug 并修掉了**：`customer_provider_permissions.policy_id` 原判
-`no_candidate`，而库里明明有 `customer_provider_permission_policies` ——
-复数规则只认 `+s` / `+es`，不认识 `policy → policies`。补上「辅音 + y → ies」后
-它变成 **strong 命中**（`-> customer_provider_permission_policies.id`），
-`no_candidate` 从 20 降到 19。
+**抽查暴露并修掉一个真 bug**：`customer_provider_permissions.policy_id` 原判
+`no_candidate`，而库里有 `customer_provider_permission_policies` —— 复数规则只认
+`+s`/`+es`，不认识 `policy → policies`。补上「辅音 + y → ies」后变成 **strong**。
+
+### F-2 的原文样例（`deductions__customers`）
+
+```turtle
+:deductions__customers a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:domain :deductions ; rdfs:range :customers ;
+    ontok:cardinality "N:1" ;
+    ontok:joinVerified "false" ;
+    ontok:joinEvidence "insufficient_sample: 有效样本 4 行 / 1 个不同值 < 3 条下限（跳过 NULL 之后）" ;
+    owl:inverseOf :customers__deductions .
+```
+
+⚠️ 口径说明：`有效样本 N 行` 是**取样窗口**（≤25 行），不是表的总行数。
+`deductions` 恰好 4 行（窗口=全表），`frozen_assets` 是「窗口 25 行里只有 1 个不同值」。
 ## 五 · 1:1 修正（REQ-119 QA 的 N-1）
 
 REQ-119 QA 点名 6 条「其实该是 1:1」的关系，现在**全部 1:1**
@@ -232,16 +280,17 @@ REQ-119 QA 点名 6 条「其实该是 1:1」的关系，现在**全部 1:1**
     ontok:joinVerified "inherit" ;
     ontok:joinEvidence "inherited from license_quota.license_id (verified 5/5) -> licenses.id via primary_key (plural)" .
 
-# ④ 仅名字推断
+# ④ 仅名字推断 —— **必须带「为什么没验」**（F-2）
 :customer_tpm_rate_limit__customers a owl:FunctionalProperty, owl:InverseFunctionalProperty, owl:ObjectProperty ;
     ontok:cardinality "1:1" ;
-    ontok:joinVerified "false" .
+    ontok:joinVerified "false" ;
+    ontok:joinEvidence "insufficient_sample: 有效样本 1 行 / 1 个不同值 < 3 条下限（跳过 NULL 之后）" .
 ```
 
 四条口径：
 1. `"true"` 只给**签过字且过阈值**的边；`"inherit"` 只给**继承且签过字**的边；
 2. 名字推断一律 `"false"`（可区分，不是省略）；`None`（REQ-120 之前）**一行都不写**；
-3. `joinEvidence` **只在有数据证据时**写（`false` 不写 —— 没有证据这件事已由取值说清）；
+3. `joinEvidence` **每条边都写**（F-2）：`true`/`inherit` 写验证证据，`false` 写「**为什么没验**」——
 4. 正反**两条都标**，所以 `joinVerified` 条数 = **2 × 签过的边数**（144 = 72×2 等）。
 
 ⚠️ TTL 证据**只放数字与目标列**，不放示例值（TTL 是发给数字员工的产物，
@@ -250,12 +299,12 @@ REQ-119 QA 点名 6 条「其实该是 1:1」的关系，现在**全部 1:1**
 
 | 项 | 结果 |
 | --- | --- |
-| 两次同一命令的 `fk-proposals.json` | sha256 `07df9c2acf27cc85b8e44a49df…` 两次**逐字节相同** |
-| 两次同一命令的 `fk-unresolved.json` | sha256 `22ddb069f55dfe014e72ab1e…` 两次**逐字节相同** |
-| FK 阶段（144 列 / 673 候选 / 427 次计数查询） | **44.1 s** / 42.1 s |
+| 两次同一命令的 `fk-proposals.json` | sha256 `7116161b1d3b6d66d7970ab20d…` 两次**逐字节相同** |
+| 两次同一命令的 `fk-unresolved.json` | sha256 `943939f8bb762831e2ea0b27…` 两次**逐字节相同** |
+| FK 阶段（144 列 / 673 候选 / 427 次计数查询） | **42.5 s** / 41.9 s |
 | 全库一次完整抽取（含 REQ-108 采样 + 打分 + 分档） | **103.8 s**（rev.1）；rev.2 的签字轮 **16.1 s** |
 
-建模视图 TTL 两次导出 sha256 `fda51954fd34360d…` **相同**。
+建模视图 TTL 两次导出 sha256 相同（同一冻结版本重导两次）。
 
 确定性靠三件事：候选按（提名档, 表名）排序；样本 `ORDER BY` 源主键 + 固定 `LIMIT`；
 提案/清单渲染前 `sort()`（`FkReport::sort`）。⛔ 全程没有 `random()` / `TABLESAMPLE` / 时间戳
@@ -270,11 +319,11 @@ D:\MyCodes\AI\an_onto_demo\feature-REQ-120\out\anspire-req120-model.ttl        �
 D:\MyCodes\AI\an_onto_demo\feature-REQ-120\out\anspire-req120-unsigned-model.ttl ← 同口径未签对照（52 关系）
 ```
 
-复现命令（本地库 `anspire_real`，项目 `anspire_fk120_v3` **已冻结在 v2**）：
+复现命令（本地库 `anspire_real`，项目 `anspire_fk120_v6` **已冻结在 v2**）：
 
 ```powershell
 $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire_real'
-.\target\debug\ontok.exe ontology export --project anspire_fk120_v3 --version 2 `
+.\target\debug\ontok.exe ontology export --project anspire_fk120_v6 --version 2 `
   --model-view --format ttl --out out\anspire-req120-model.ttl `
   --tenancy tenancy.json --schema D:\MyCodes\AI\an_onto_demo\code\out\schema.json
 ```
@@ -284,7 +333,7 @@ $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire
 | 题 | 判读 | 依据 |
 | --- | --- | --- |
 | Q3 额度说出产品名 | ✅ 能写 | `usage_details.product_id → package_products`（true）+ `product_name` 属性 ⇒ 两跳 |
-| Q4 用过的 API | ✅ **能写了**（rev.2） | `:api_call_logs__licenses` / `:licenses__api_call_logs` 两条边都在（`joinVerified "inherit"`）⇒ 客户→授权→调用明细的两跳可达；⚠️ 但它是**继承**证据，不是实测 |
+| Q4 用过的 API | ✅ **能写了** | `:api_call_logs__licenses` / `:licenses__api_call_logs`（`joinVerified "inherit"`）；客户→授权那一跳用 `:licenses__customers`（`"true"` 实测 5/5），**不经过**被撤销的 `api_call_logs.customer_id` |
 | Q5 套餐下订阅 | ✅ 关系可写 | `customer_subscriptions.template_id → package_templates`（true）+ 反向；跨租户仍未裁定 |
 
 ⚠️ Q2（余额）仍然不行 —— 那是业务口径问题，与关系无关（REQ-119 的结论不变）。
@@ -310,11 +359,17 @@ $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire
 7. **`llm_model.model_id` 自己仍是 `low_overlap`**：它定义业务键，不引用别人。
 8. **候选靠名字提名** ⇒ 「名字与目标表毫无词汇关系、只有值重叠」的边仍提不出（天花板）。
 9. **复数只认三条规则**（`+s` / `+es` / `辅音+y→ies`），不做不规则复数（`people`）。
+10. **F-1 的代价**：16 个租户键列退回 `insufficient_sample`（`inherit` 34 → 18）。
+    这是**刻意**的：宁可少 16 条边，也不给数字员工一条没有本表实测的跨租户边。
+11. **`--tenancy` 只影响 FK 阶段的继承闸**；不给它时 `--fk-out` 照跑，但会 stderr
+    警告「继承闸对所有人放行」。`ontology export --tenancy` 是**另一件**事（标 tenantKey）。
+12. **F-2 的 `insufficient_sample` 里那个行数是取样窗口（≤25），不是表行数** ——
+    报告与 TTL 都按窗口口径写，别读成「这张表只有 4 行」（`deductions` 恰好两者相同）。
 ## 十 · 测试
 
 | 层 | 数字 |
 | --- | --- |
-| lib（`cargo test --lib`） | **409 passed**（基线 370 + REQ-120 的 39：`extract::fk` 38 + `domain::ttl` 1） |
+| lib（`cargo test --lib`） | **412 passed**（基线 370 + REQ-120 的 42：`extract::fk` 41 + `domain::ttl` 1） |
 | doc（`cargo test --doc`） | **4 passed**（基线 4） |
 | 新增集成（`tests/test_req120_fk.rs`） | **11 passed** |
 | 全量（`cargo test --no-fail-fast`，88 个 target） | **1326 passed / 5 failed** |

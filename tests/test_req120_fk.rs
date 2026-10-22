@@ -402,7 +402,7 @@ fn stamping_marks_naming_only_edges_and_keeps_verified_ones() {
         json!({"kind":"add_link_type","target":"c→d","payload":{"from_type":"c","to_type":"d","cardinality":"N:1","join_verified":"true"}}),
         json!({"kind":"add_entity_type","target":"e","payload":{"key":"e"}}),
     ];
-    assert_eq!(stamp_naming_only(&mut items), 1);
+    assert_eq!(stamp_naming_only(&mut items, &std::collections::BTreeMap::new()), 1);
     assert_eq!(
         items[0]["payload"]["join_verified"],
         serde_json::Value::String("false".into())

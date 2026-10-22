@@ -123,6 +123,9 @@ async fn main() -> Result<()> {
     let mut fk_out: Option<String> = None;
     let mut fk_sign: Option<String> = None;
     let mut fk_unresolved_out: Option<String> = None;
+    // REQ-120 · F-1：租户键声明（`tenancy.json`）。给了它，租户键列**不许继承**。
+    // 不给自己也能跑，但会在 stderr 明说「未声明租户键 ⇒ 继承闸对所有人放行」。
+    let mut tenancy_path: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -182,6 +185,8 @@ async fn main() -> Result<()> {
             "--fk-out" => fk_out = Some(val()?),
             "--fk-sign" => fk_sign = Some(val()?),
             "--fk-unresolved-out" => fk_unresolved_out = Some(val()?),
+            // REQ-120 · F-1
+            "--tenancy" => tenancy_path = Some(val()?),
             // REQ-019 · 规格 §7.1 设计点⑤：「校验失败重试 1–2 次，仍失败才标记抽取失败」。
             // REQ-015 把 attempts 钉死在 1，那条规格在生产上就没兑现过。
             "--attempts" => {
@@ -217,6 +222,8 @@ async fn main() -> Result<()> {
                      \x20 --fk-out <file>          对每个 *_id 列生成候选 + 采样验命中率，写 ADR-005 提案（**未签**，不进快照）；需要 --src\n\
                      \x20 --fk-sign <file>         读一份**签过字**（reviewed_by 非空）的同形状文件，把边注入本轮提案（未签的一条不进）\n\
                      \x20 --fk-unresolved-out <f>  未解析清单落点（默认与 --fk-out 同目录的 fk-unresolved.json）\n\
+                     \x20 --tenancy <file>       租户键声明（与 ontology export --tenancy 同一份）：\n\
+                     \x20                        **租户键列禁止 inherit**（F-1：租户边界必须本表实测）\n\
                      \x20 判据：命中率 ≥0.95 strong · 0.5–0.95 medium（需人签）· <0.5 **不产出**；样本 <3 条 ⇒ insufficient_sample\n\
                      \x20 值域重叠是硬证据：⛔ 名字相似度只负责**提名**，不负责判决（AC-002）"
                 );
@@ -568,6 +575,23 @@ async fn main() -> Result<()> {
              未解析清单与提案是**同一次运行**的产物，不许各跑一次"
         );
     }
+    // REQ-120 · F-1：租户键声明。解析失败 ⇒ fail-closed（不静默当成"没有租户键"）。
+    let tenant_columns: std::collections::BTreeSet<String> = match tenancy_path.as_deref() {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("读不出租户声明文件 {path:?}"))?;
+            let decl = ontok::domain::ttl::TenancyDecl::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("租户声明文件 {path:?} 不合法：{e}"))?;
+            decl.columns.iter().cloned().collect()
+        }
+        None => {
+            eprintln!(
+                "⚠ 未声明租户键（没给 --tenancy）：**继承闸对所有人放行** —— \
+                 租户键列会被允许 inherit。租户边界关系到安全，正式跑请给 --tenancy。"
+            );
+            std::collections::BTreeSet::new()
+        }
+    };
     if let Some(fk_path) = fk_out.as_deref() {
         let url = src_url_resolved.as_deref().expect("上面已判过");
         let pool = ontok::extract::sample::sample_pool(url)
@@ -589,6 +613,7 @@ async fn main() -> Result<()> {
             &names,
             source,
             ontok::extract::fk::FK_TIMEOUT,
+            &tenant_columns,
         )
         .await?;
         pool.close().await;
@@ -646,6 +671,7 @@ async fn main() -> Result<()> {
             );
         }
     }
+    let mut signed_ref: Option<ontok::extract::fk::SignedFk> = None;
     if let Some(sign_path) = fk_sign.as_deref() {
         let raw = std::fs::read_to_string(sign_path)
             .with_context(|| format!("读不出签字产物 {sign_path}"))?;
@@ -653,6 +679,7 @@ async fn main() -> Result<()> {
         let known: std::collections::BTreeSet<String> =
             report.tables.iter().map(|t| t.name.clone()).collect();
         let st = ontok::extract::fk::inject_signed(&mut outcome.proposal.items, &signed, &known)?;
+        signed_ref = Some(signed);
         println!();
         println!("REQ-120 签字产物（{sign_path}）");
         println!(
@@ -671,7 +698,16 @@ async fn main() -> Result<()> {
         }
     }
     // AC-007：名字推断的边一律盖 `join_verified: false`，签过字的边保留 true。
-    let stamped = ontok::extract::fk::stamp_naming_only(&mut outcome.proposal.items);
+    // F-2：`false` 边必须带「为什么没验」——理由来自签字产物（= 上一次扫描的现场）。
+    // 没给 `--fk-sign` 时理由表为空，走兜底那句 `naming-only: …`。
+    let unverified_reasons = signed_ref
+        .as_ref()
+        .map(|s| s.unverified.clone())
+        .unwrap_or_default();
+    let stamped = ontok::extract::fk::stamp_naming_only(
+        &mut outcome.proposal.items,
+        &unverified_reasons,
+    );
     if stamped > 0 || fk_sign.is_some() {
         println!("  连接验证标记: naming-only {stamped} 条（value-overlap 由 --fk-sign 给）");
     }

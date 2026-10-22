@@ -952,6 +952,9 @@ pub struct FkStats {
     /// 同名列有验证、但**目标不唯一**（同名不同义）而被拒绝继承的列名数。
     #[serde(default)]
     pub inherit_conflicts: usize,
+    /// **租户键列**因 F-1 被拒绝继承的列数（安全边界：必须本表实测）。
+    #[serde(default)]
+    pub inherit_tenant_key_skipped: usize,
     /// 被否决的**候选**数（一条列可能有 2 个候选都被否决）。
     pub rejected: usize,
     /// 未解析的**列**数。
@@ -1312,6 +1315,7 @@ pub async fn verify(
     names: &TableNames,
     source: FkSource,
     timeout: Duration,
+    tenant_columns: &BTreeSet<String>,
 ) -> Result<FkReport> {
     let catalog = FkCatalog::build(report, keys, names);
     let pending = FkCatalog::pending_columns(report);
@@ -1420,6 +1424,7 @@ pub async fn verify(
             p.facts.target_kind,
         );
     }    let mut inherited = 0usize;
+    let mut tenant_key_skipped = 0usize;
     for o in outcomes.iter_mut() {
         let Verdict::Unresolved(u) = &o.verdict else { continue };
         if u.code != UnresolvedCode::InsufficientSample.as_str()
@@ -1434,16 +1439,26 @@ pub async fn verify(
         } else {
             UnresolvedCode::SampleFailed
         };
-        match plan_inherit(&o.table, &o.column, &o.candidates, code, &u.reason, &index) {
+        match plan_inherit(
+            &o.table,
+            &o.column,
+            &o.candidates,
+            code,
+            &u.reason,
+            &index,
+            tenant_columns,
+        ) {
             InheritPlan::Propose(p) => {
                 o.verdict = Verdict::Propose(p);
                 inherited += 1;
             }
+            InheritPlan::Skip(InheritSkip::TenantKey) => tenant_key_skipped += 1,
             InheritPlan::Skip(_) => {}
         }
     }
     out.stats.proposals_inherited = inherited;
     out.stats.inherit_conflicts = index.conflicts();
+    out.stats.inherit_tenant_key_skipped = tenant_key_skipped;
 
     // ── 第三阶段：汇总（统计只在这里算一次，不增量维护）──────────────────
     for o in &outcomes {
@@ -1588,6 +1603,8 @@ pub enum InheritSkip {
     TargetNotInCandidates,
     /// 唯一的验证来源就是本表自己（不许自证）。
     SelfSource,
+    /// **本列是租户键**（F-1）：租户边界关系到安全，必须本表实测，不许继承。
+    TenantKey,
 }
 
 impl InheritSkip {
@@ -1597,6 +1614,7 @@ impl InheritSkip {
             InheritSkip::AmbiguousTarget => "ambiguous_target",
             InheritSkip::TargetNotInCandidates => "target_not_in_candidates",
             InheritSkip::SelfSource => "self_source",
+            InheritSkip::TenantKey => "tenant_key",
         }
     }
 }
@@ -1619,7 +1637,19 @@ pub fn plan_inherit(
     code: UnresolvedCode,
     code_reason: &str,
     index: &VerifiedIndex,
+    tenant_columns: &BTreeSet<String>,
 ) -> InheritPlan {
+    // ⛔ F-1：**租户键列不许继承**。
+    //
+    // 替身复跑抓到的真漏洞：`deductions` 同表并存 `customer_id` 与
+    // `main_customer_id`，**两个都被标成 tenantKey** —— 说明这套库里
+    // 「叫 customer_id」并不能唯一确定主账号/子账号/付款方。
+    // 别处的同名列只证明「这个名字在某张表里指向 customers.id」，
+    // **没有**证明本表这一列指向同一实体。租户边界关系到安全：
+    // 宁可少一条边，也不能让数字员工拿一条继承来的边去跨租户查数。
+    if tenant_columns.contains(column) {
+        return InheritPlan::Skip(InheritSkip::TenantKey);
+    }
     let Some(t) = index.get(column) else {
         return InheritPlan::Skip(InheritSkip::NoVerifiedNamesake);
     };
@@ -1755,6 +1785,13 @@ pub struct SignedFk {
     pub edges: Vec<SignedEdge>,
     /// 文件里有几条提案**没签**（被忽略）。
     pub skipped_unsigned: usize,
+    /// **「为什么这条边没验」的理由表**（F-2）：`table.column` → 一句话原因。
+    ///
+    /// 由同一份签字文件的 `proposals[]`（未签的那些）+ `unresolved[]` 生成 ——
+    /// 签字产物就是**上一次扫描的完整现场**，理由不必再跑一次库去算。
+    /// 它写进 `ontok:joinEvidence`，让数字员工能区分
+    /// 「**数据不够**」与「**只看了名字**」这两种可信度完全不同的情形。
+    pub unverified: BTreeMap<String, String>,
 }
 
 impl SignedFk {
@@ -1799,6 +1836,7 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
     };
     let mut edges = Vec::new();
     let mut skipped_unsigned = 0usize;
+    let mut unverified: BTreeMap<String, String> = BTreeMap::new();
     for it in items {
         let subject = it.get("subject").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let reviewer = it
@@ -1808,6 +1846,32 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
             .filter(|s| !s.is_empty());
         let Some(reviewer) = reviewer else {
             skipped_unsigned += 1;
+            // F-2：未签的提案也要留下「为什么还没进快照」。
+            let band = it.get("band").and_then(|b| b.as_str()).unwrap_or("?");
+            let conf = it.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
+            // 继承提案：把「继承自哪条验证」写清（比「未签字」更具体），
+            // 但**不复述整段 reason** —— 那会把一句证据撑成 300 字。
+            let src = it
+                .get("facts")
+                .and_then(|f| f.get("inherit"))
+                .and_then(|i| {
+                    Some((
+                        i.get("from_table")?.as_str()?.to_string(),
+                        i.get("from_column")?.as_str()?.to_string(),
+                        i.get("matched")?.as_u64()?,
+                        i.get("sampled")?.as_u64()?,
+                    ))
+                });
+            let why = match (band, src) {
+                ("inherit", Some((t, c, m, s))) => format!(
+                    "unsigned: 有 inherit 提案（confidence {conf:.3}）但**未签字** ⇒ 未进快照；\
+                     继承来源 {t}.{c} (verified {m}/{s})，本表未实测"
+                ),
+                _ => format!(
+                    "unsigned: 有 {band} 提案（confidence {conf:.3}）但**未签字** ⇒ 未进快照"
+                ),
+            };
+            unverified.insert(subject.clone(), why);
             continue;
         };
         let facts = it
@@ -1895,6 +1959,19 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
             skipped_unsigned: 0,
         });
     }
+    // F-2：`unresolved[]` 是「这一列为什么没验出来」的**一手材料**，
+    // 直接搬进理由表（`code: reason`）。它比「未签字」更具体：
+    // 数字员工读到的应该是「源表仅 4 行」，不是「没人签」。
+    if let Some(items) = v.get("unresolved").and_then(|u| u.as_array()) {
+        for u in items {
+            let Some(subject) = u.get("subject").and_then(|s| s.as_str()) else { continue };
+            let code = u.get("code").and_then(|c| c.as_str()).unwrap_or("unverified");
+            let reason = u.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+            // 朴素但诚实的一句：`<code>: <reason>`
+            unverified.insert(subject.to_string(), format!("{code}: {reason}"));
+        }
+    }
+
     if edges.is_empty() {
         bail!(
             "签字产物里没有一条 reviewed_by 非空（共 {} 条提案）—— \
@@ -1906,7 +1983,7 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
         (a.from_table.as_str(), a.from_column.as_str(), a.to_table.as_str())
             .cmp(&(b.from_table.as_str(), b.from_column.as_str(), b.to_table.as_str()))
     });
-    Ok(SignedFk { edges, skipped_unsigned })
+    Ok(SignedFk { edges, skipped_unsigned, unverified })
 }
 
 /// 注入统计（打印给人看）。
@@ -2096,13 +2173,36 @@ pub fn promote_unique_cardinality(
     changed
 }
 
+/// 列**不在 FK 抽样域**时 `false` 边的理由（F-2 的兜底一句）。
+///
+/// 什么时候会用到：`_no` / `_code` 后缀的关系（`REL_SUFFIXES` 会为它们造边），
+/// 以及本身是主键的 `*_id` 列 —— 它们**从来没进过**值域重叠抽样，
+/// 说「数据不够」是错的，说「只看了名字」才对。
+pub const FALLBACK_UNVERIFIED_REASON: &str =
+    "naming-only: 该列未进入值域重叠抽样（不是 *_id 列或本身是本表主键）—— 仅按列名推断";
+
 /// **给所有关系条目盖上「连接验证」的章**（AC-007 的可区分性）。
 ///
 /// 名字推断出来的边一律 `join_verified: false`；已经带这个键的（注入的
 /// FK 边）原样保留。⛔ 不盖 `true` —— 那是给签过字、验过值域的边留的。
 ///
 /// 返回盖章条数（报告里要数出来）。
-pub fn stamp_naming_only(items: &mut [serde_json::Value]) -> usize {
+///
+/// # F-2：`"false"` 必须带**为什么没验**
+///
+/// 替身复跑的判词：「`deductions__customers` = `false`，**零 joinEvidence** ——
+/// 数字员工看不出这是『数据不够』还是『只看了名字』。」
+/// 这两种可信度完全不同，所以：
+///
+/// | 情形 | 写进 `ontok:joinEvidence` 的内容 |
+/// | --- | --- |
+/// | 该列在未解析清单里 | `<code>: <reason>`（如 `insufficient_sample: 有效样本 4 行…`） |
+/// | 该列有提案但**没签字** | `unsigned: 有 <band> 提案（confidence …）但未签字 ⇒ 未进快照` |
+/// | 该列不在 FK 抽样域（不是 `*_id`／本身是主键） | `naming-only: …` |
+pub fn stamp_naming_only(
+    items: &mut [serde_json::Value],
+    unverified: &BTreeMap<String, String>,
+) -> usize {
     let mut n = 0;
     for it in items.iter_mut() {
         if it.get("kind").and_then(|k| k.as_str()) != Some("add_link_type") {
@@ -2120,6 +2220,20 @@ pub fn stamp_naming_only(items: &mut [serde_json::Value]) -> usize {
             "join_verified".into(),
             serde_json::Value::String(JoinState::NamingOnly.as_str().to_string()),
         );
+        // F-2：把「为什么没验」写进证据（查得到就写一手原因，查不到就说清白）。
+        let from = p.get("from_type").and_then(|v| v.as_str()).unwrap_or("");
+        let column = p
+            .get("evidence")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|x| x.get("column"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let key = format!("{from}.{column}");
+        let reason = unverified.get(&key).cloned().unwrap_or_else(|| {
+            FALLBACK_UNVERIFIED_REASON.to_string()
+        });
+        p.insert("join_evidence".into(), serde_json::Value::String(reason));
         n += 1;
     }
     n
@@ -2691,6 +2805,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "取样失败（all_null）",
             &inherit_index(),
+            &BTreeSet::new(),
         );
         let InheritPlan::Propose(p) = plan else { panic!("应当继承：{plan:?}") };
         assert_eq!(p.subject, "api_call_logs.license_id");
@@ -2729,6 +2844,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "x",
             &idx,
+            &BTreeSet::new(),
         );
         assert_eq!(plan.skip_reason(), Some(InheritSkip::AmbiguousTarget), "{plan:?}");
     }
@@ -2743,6 +2859,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "x",
             &empty,
+            &BTreeSet::new(),
         );
         assert_eq!(plan.skip_reason(), Some(InheritSkip::NoVerifiedNamesake));
 
@@ -2762,6 +2879,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "x",
             &idx,
+            &BTreeSet::new(),
         );
         assert_eq!(plan.skip_reason(), Some(InheritSkip::TargetNotInCandidates));
     }
@@ -2784,6 +2902,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "x",
             &idx,
+            &BTreeSet::new(),
         );
         assert_eq!(plan.skip_reason(), Some(InheritSkip::SelfSource));
     }
@@ -2811,6 +2930,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "取样失败（all_null）",
             &inherit_index(),
+            &BTreeSet::new(),
         );
         let InheritPlan::Propose(p) = plan else { panic!() };
         let mut v = serde_json::to_value(&*p).unwrap();
@@ -2861,6 +2981,7 @@ mod tests {
             UnresolvedCode::InsufficientSample,
             "取样失败（all_null）",
             &inherit_index(),
+            &BTreeSet::new(),
         );
         let InheritPlan::Propose(p) = plan else { panic!() };
         let mut v = serde_json::to_value(&*p).unwrap();
@@ -2888,6 +3009,146 @@ mod tests {
         );
     }
 
+    // ── F-1：租户键列不许继承 ──────────────────────────────────
+
+    /// 替身复跑的结论：`deductions` 同表 `customer_id` 与 `main_customer_id`
+    /// **都被标成 tenantKey** ⇒ 名字不能唯一确定主客体 ⇒ 租户键必须本表实测。
+    #[test]
+    fn inherit_is_forbidden_for_tenant_key_columns() {
+        let mut tenants = BTreeSet::new();
+        tenants.insert("customer_id".to_string());
+        tenants.insert("main_customer_id".to_string());
+        tenants.insert("sub_customer_id".to_string());
+        // customer_id 是租户键 ⇒ 拒绝继承（即使同名列在别处验过）
+        let mut idx = inherit_index();
+        idx.add(
+            "customer_id",
+            verified_source("agent_white_list", "customer_id", 5, 5),
+            "customers",
+            "id",
+            TargetKind::Primary,
+        );
+        let cust_candidates = vec![Candidate {
+            table: "customers".into(),
+            key_column: Some("id".into()),
+            target_kind: TargetKind::Primary,
+            key_priority: 0,
+            kind: MatchKind::Plural,
+            stem: "customer".into(),
+        }];
+        let plan = plan_inherit(
+            "api_call_logs",
+            "customer_id",
+            &cust_candidates,
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &idx,
+            &tenants,
+        );
+        assert_eq!(plan.skip_reason(), Some(InheritSkip::TenantKey), "{plan:?}");
+
+        // license_id 不是租户键 ⇒ 仍然可以继承
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+            &tenants,
+        );
+        assert!(matches!(plan, InheritPlan::Propose(_)), "{plan:?}");
+    }
+
+    // ── F-2：`false` 边必须写明「为什么没验」─────────────────────
+
+    /// 三种理由各归各位：未解析 → `<code>: <reason>`；未签 → `unsigned: …`；
+    /// 不在抽样域 → `naming-only: …`。
+    #[test]
+    fn stamping_writes_why_nothing_was_verified() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "deductions.customer_id".to_string(),
+            "insufficient_sample: 有效样本 4 行 / 1 个不同值 < 3 条下限".to_string(),
+        );
+        let mut items = vec![
+            link_item("deductions", "customer_id", "customers", "N:1"),
+            // 不在 FK 抽样域（`_no` 后缀的边就是这样造的）⇒ 兜底理由
+            link_item("order", "customer_no", "customers", "N:1"),
+        ];
+        assert_eq!(stamp_naming_only(&mut items, &map), 2);
+        assert_eq!(
+            items[0]["payload"]["join_verified"],
+            serde_json::Value::String("false".into())
+        );
+        let why = items[0]["payload"]["join_evidence"].as_str().unwrap();
+        assert!(why.starts_with("insufficient_sample:"), "{why}");
+        assert!(why.contains("4 行"), "必须能看出是数据不够：{why}");
+        let why2 = items[1]["payload"]["join_evidence"].as_str().unwrap();
+        assert!(why2.starts_with("naming-only:"), "{why2}");
+    }
+
+    /// 签字产物是**上一次扫描的现场**：未签的提案 + 未解析的列都要变成理由。
+    #[test]
+    fn signed_file_carries_the_reasons_for_unverified_edges() {
+        // 一条未签的提案（inherit）+ 一条未解析的列
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+            &BTreeSet::new(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!() };
+        let prop = serde_json::to_value(&*p).unwrap();
+        let doc = serde_json::json!({
+            "kind": FkReport::KIND,
+            "proposals": [prop.clone()],
+            "rejected": [],
+            "unresolved": [{
+                "subject": "deductions.customer_id",
+                "code": "insufficient_sample",
+                "reason": "有效样本 4 行 / 1 个不同值 < 3 条下限",
+            }],
+        })
+        .to_string();
+        // 一条都没签 ⇒ 整体被拒，但理由仍要能算出来（用 load_signed 的 Err 路径测不到，
+        // 所以这里先签一条，再检查另一条的理由）
+        let mut prop2 = prop.clone();
+        prop2["reviewed_by"] = serde_json::Value::String("ba".into());
+        prop2["subject"] = serde_json::Value::String("api_call_logs.other_id".into());
+        let doc2 = serde_json::json!({
+            "kind": FkReport::KIND,
+            "proposals": [prop2, prop],
+            "rejected": [],
+            "unresolved": [{
+                "subject": "deductions.customer_id",
+                "code": "insufficient_sample",
+                "reason": "有效样本 4 行 / 1 个不同值 < 3 条下限",
+            }],
+        })
+        .to_string();
+        let s = load_signed(&doc2).expect("有一条签了就能读");
+        assert_eq!(s.len(), 1);
+        // 未签的那条（api_call_logs.license_id）要有理由
+        let why = s
+            .unverified
+            .get("api_call_logs.license_id")
+            .expect("未签提案必须有理由");
+        assert!(why.starts_with("unsigned:"), "{why}");
+        // 未解析的列要有理由
+        let why = s
+            .unverified
+            .get("deductions.customer_id")
+            .expect("未解析的列必须有理由");
+        assert!(why.starts_with("insufficient_sample:"), "{why}");
+        assert!(why.contains("4 行"), "{why}");
+        // 一条都没签的那份仍然被拒（P2 不变）
+        let err = load_signed(&doc).unwrap_err().to_string();
+        assert!(err.contains("一条都没签"), "{err}");
+    }
     /// **签字边不被分档器丢掉**（E-2 的必要条件：否则 Q4 那条路白走）。
     #[test]
     fn signed_edges_survive_confidence_routing() {
@@ -3021,7 +3282,7 @@ mod tests {
                 x
             },
         ];
-        let n = stamp_naming_only(&mut items);
+        let n = stamp_naming_only(&mut items, &BTreeMap::new());
         assert_eq!(n, 1);
         assert_eq!(
             items[0]["payload"]["join_verified"],
