@@ -105,7 +105,10 @@ async fn main() -> Result<()> {
     let mut llm_limit: Option<usize> = None;
     // REQ-113 · 排除表：**数据**由产品执行，不是调用方先跑脚本过滤一遍。
     //
-    // 不给 `--exclude` ⇒ 行为与 REQ-112 逐字节相同（提案里连 `inputs` 都不出现）。
+    // 不给 `--exclude` ⇒ 行为与 REQ-112 逐字节相同（提案里没有 `inputs.exclusions`）。
+    // ⭐ REQ-118 · A-1 起，`inputs.names` **恒出现**（每次抽取都基于某份翻译表）；
+    // 这是有意的契约变更：名字的溯源不能再无据可查。`inputs.exclusions` 仍只在
+    // 给了 `--exclude` 时出现。
     let mut exclude_path: Option<String> = None;
     // 陈旧排除（文件里点名、schema 里没有）默认只警告；这个开关把它变成**硬失败**。
     let mut strict_exclusions = false;
@@ -176,6 +179,7 @@ async fn main() -> Result<()> {
             }
             "-h" | "--help" => {
                 println!("schema JSON → 本体提案（本地计算，不连库）\n  --schema / --names / --out / --stats / --project");
+                println!("REQ-118 · 名字溯源（P4）：\n  --names <file>  翻译表。提案元信息**恒记** inputs.names =\n                  {{file, sha256, agent, version, reviewed_by}}（+ 有 _proposal 时带上原始提案的 file/sha256）；\n                  reviewed_by 取翻译表 `_proposal.reviewed_by`，没有这一块就是 null（字段仍存在）");
                 println!("REQ-059 抽取归属（extracted_by 记的是**真实执行者**，不是调用方填的占位）:\n  --agent <name> / --agent-version <ver>\n                现在是**断言**而不是标签：不带就由真正跑起来的实现自报（{INPROC_EXECUTOR_ID} v{INPROC_EXECUTOR_VERSION}）；\n                带上就必须与事实相符，对不上**拒绝出产物**。\n                要登记一个自己的名字，请用下面的 --agent-registry（查得到才放行）。");
                 println!("REQ-013 agent-registry（带上才连 ONTOK_DATABASE_URL）:\n  --agent-registry <name> / --agent-registry-version <ver> / --round <n>");
                 println!("REQ-019:\n  --attempts <n>  每组抽取的尝试次数（默认 {DEFAULT_ATTEMPTS}）\n  --round ≥2 时会连库载入基版本的已有类型（规格 §7.1 阶段 1 的五个输入之一）");
@@ -314,6 +318,32 @@ async fn main() -> Result<()> {
     let names_raw = std::fs::read_to_string(&names_path)
         .with_context(|| format!("读不到翻译表 {names_path}"))?;
     let names = TableNames::load(&names_raw)?;
+    // ⭐ REQ-118 · A-1（P4）：**产物侧**必须能查到「这份提案用的是哪份翻译表、谁签的」。
+    //
+    // 只把 `<file, sha256, agent, version, reviewed_by>` 记进 `inputs.names`——
+    // ⛔ 不记整份 `names` 映射：`inputs` 是**元信息**段，不是第二份知识资产
+    // （也免得被排除的表名从这一段漏进提案文本）。
+    //
+    // `reviewed_by` 从翻译表的 `_proposal` 块取（`ontok name suggest --as-names`
+    // 写的那一块）。老翻译表没有这块 ⇒ `null`，但**字段必须存在**：
+    // 「没人签过」与「没有这一栏」在评审记录里是两件事。
+    let names_sha256 = ontok::extract::sample::sha256_hex(names_raw.as_bytes());
+    let names_proposal = serde_json::from_str::<serde_json::Value>(&names_raw)
+        .ok()
+        .and_then(|v| v.get("_proposal").cloned());
+    let names_reviewed_by = names_proposal
+        .as_ref()
+        .and_then(|p| p.get("reviewed_by"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    // 原始**提案文件**（`names.proposal.json`）的引用：`_proposal` 里有就带上。
+    // `--names` 吃的是**转换后**的 TableNames，它的 sha 与提案文件的 sha 不同 ——
+    // 两个都记，才知道「名字来自哪份提案、经由哪份输入进去」。
+    let names_proposal_ref = names_proposal.as_ref().and_then(|p| {
+        let file = p.get("file").and_then(|v| v.as_str())?;
+        let sha = p.get("sha256").and_then(|v| v.as_str())?;
+        Some(serde_json::json!({ "file": file, "sha256": sha }))
+    });
 
     // ── REQ-015：造实现 + 编排，不再直接 RuleBasedAgent::new(…).propose(…) ──
     //
@@ -1030,27 +1060,62 @@ async fn main() -> Result<()> {
         &missing,
     )?;
 
-    // ── REQ-113 · 溯源：**一个文件 = 一条完整审计链**（BA 裁定「单一文件」）────
+    // ── REQ-118 · A-1（P4）· 溯源：**输入侧两份文件都要落进产物** ────────
     //
-    // `inputs.exclusions` 就是完整审计段：
-    // `{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`。
+    // `inputs.names` 恒存在（`--names` 必然给过，默认路径也算）：
+    // `{file, sha256, agent, version, reviewed_by}` —— 与 `inputs.exclusions` 同构。
+    // `reviewed_by = null` 是**允许且必须存在**的：提案还没签，但将来签了要有地方记。
     //
-    // 为什么把逐条明细也放进来（而不是侧车文件）：
-    // 用户要搬的**只有一个** proposal.json；侧车会让「丢一个文件就导不进」，
-    // 产品还多一个产出文件。AC-001 的判据随之精确化：
-    // `items` 段里 grep 被排除表名 = 0，且整份文件里这些表名**只允许**出现在这一段内。
-    // 这一段是**元信息**（谁判的、依据什么、排了谁），不是实体。
-    if let Some(ex) = &exclusions {
-        let counts = ontok::extract::exclusions::Counts::of(&outcome.stats);
-        let rec = ex.record(
-            ontok::extract::exclusions::Displayed {
-                applied: &exclusion_applied,
-                stale: &exclusion_stale,
-                flagged: &exclusion_flagged,
-            },
-            counts,
+    // ⚠️ 这改变了 REQ-112 时期「不给 --exclude ⇒ 提案里连 inputs 都不出现」的口径：
+    // 那是当时还没有名字溯源。现在**每一次**抽取都基于某份翻译表，
+    // 不记它等于「抽出来的名字无据可查」—— 正是 REQ-118 要修的那一格。
+    {
+        let mut inputs = serde_json::Map::new();
+        let mut names_rec = serde_json::Map::new();
+        names_rec.insert("file".into(), serde_json::Value::from(names_path.clone()));
+        names_rec.insert("sha256".into(), serde_json::Value::from(names_sha256.clone()));
+        names_rec.insert("agent".into(), serde_json::Value::from(names.agent.clone()));
+        names_rec.insert(
+            "version".into(),
+            serde_json::Value::from(names.version.clone()),
         );
-        outcome.proposal.inputs = Some(serde_json::json!({ "exclusions": rec }));
+        names_rec.insert(
+            "reviewed_by".into(),
+            match &names_reviewed_by {
+                Some(s) => serde_json::Value::from(s.clone()),
+                None => serde_json::Value::Null,
+            },
+        );
+        if let Some(pref) = &names_proposal_ref {
+            names_rec.insert("proposal".into(), pref.clone());
+        }
+        inputs.insert("names".into(), serde_json::Value::Object(names_rec));
+        // ── REQ-113 · 排除审计段（沿用既有形状，**一个文件 = 一条完整审计链**）──
+        //
+        // `inputs.exclusions` 是完整审计段：
+        // `{file, version, sha256, declared_by, reviewed_by, rule, counts, excluded[], flagged[], stale[]}`。
+        //
+        // 为什么把逐条明细也放进来（而不是侧车文件）：
+        // 用户要搬的**只有一个** proposal.json；侧车会让「丢一个文件就导不进」，
+        // 产品还多一个产出文件。AC-001 的判据随之精确化：
+        // `items` 段里 grep 被排除表名 = 0，且整份文件里这些表名**只允许**出现在这一段内。
+        // 这一段是**元信息**（谁判的、依据什么、排了谁），不是实体。
+        if let Some(ex) = &exclusions {
+            let counts = ontok::extract::exclusions::Counts::of(&outcome.stats);
+            let rec = ex.record(
+                ontok::extract::exclusions::Displayed {
+                    applied: &exclusion_applied,
+                    stale: &exclusion_stale,
+                    flagged: &exclusion_flagged,
+                },
+                counts,
+            );
+            inputs.insert(
+                "exclusions".into(),
+                serde_json::to_value(rec).unwrap_or(serde_json::Value::Null),
+            );
+        }
+        outcome.proposal.inputs = Some(serde_json::Value::Object(inputs));
     }
 
     std::fs::write(&out, serde_json::to_string_pretty(&outcome.proposal)?)

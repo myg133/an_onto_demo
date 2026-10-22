@@ -2112,8 +2112,14 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
         let ConceptCmd::Import { file, project, base_version, round } = cmd else {
             unreachable!("ConceptCmd 只有三个变体；Suggest 已在上面分流")
         };
-        let text = std::fs::read_to_string(&file)
+        // ⭐ REQ-118 · A-1（P4）：溯源要记**文件本身**的 sha256，所以先按字节读，
+        // 再解析。`read_to_string` 拿不到「文件原始字节」这个身份（BOM/行尾差异会漂）。
+        let file_bytes = std::fs::read(&file)
             .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
+        let file_sha256 = crate::extract::sample::sha256_hex(&file_bytes);
+        let text = String::from_utf8(file_bytes).map_err(|e| {
+            anyhow::anyhow!("概念声明 {} 不是 UTF-8 文本，拒绝解析：{e}", file.display())
+        })?;
         let decl = crate::domain::concept::ConceptDeclaration::parse(&text)?;
         // **fail-closed**：指纹对不上 = 有人改了内容没升版本。
         // 不静默接受，也不「顺手帮他升一级」—— 那等于替他做版本决定。
@@ -2170,6 +2176,27 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
                     extracted_by: Some(eb.clone()),
                 },
                 &items,
+            )
+            .await?;
+
+        // ⭐ REQ-118 · A-1（P4）：**产物侧**记下「这份提案用的是哪份声明、谁签的」。
+        //
+        // 形状与 `inputs.exclusions` 同构：`file` / `sha256` / `declared_by` / `reviewed_by`，
+        // 外加声明自己的 `version` 与 `confirmed_by`。四个「签名类」字段**必须存在**，
+        // 值可以是 `null`（现在没人签）—— 「没人签」与「没有这一栏」是两件事。
+        proposals
+            .set_inputs(
+                row.id,
+                &serde_json::json!({
+                    "concepts": {
+                        "file": file.display().to_string(),
+                        "sha256": file_sha256,
+                        "version": &decl.version,
+                        "declared_by": &decl.declared_by,
+                        "confirmed_by": &decl.confirmed_by,
+                        "reviewed_by": &decl.reviewed_by,
+                    }
+                }),
             )
             .await?;
         let rows = proposals.items(row.id).await?;
@@ -2679,12 +2706,21 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
                     rec.declared_by,
                     rec.reviewed_by.as_deref().unwrap_or("—")
                 );
+                // ⭐ REQ-118 · A-1：**保留 `inputs` 里的其它键**（`names` 等）。
+                // 上一版这里只写 `{ "exclusions": rec }` —— 于是「既给 --names 又给
+                // --exclude」的提案，落库后**名字溯源整块消失**（只剩排除那一段）。
+                // 现在把校验后的 `exclusions` 写回**原对象**，其它输入记录原样保留。
+                let mut stored = inputs.as_object().cloned().unwrap_or_default();
+                stored.insert(
+                    "exclusions".to_string(),
+                    serde_json::to_value(&rec).context("排除记录序列化失败")?,
+                );
                 proposals
-                    .set_inputs(row.id, &serde_json::json!({ "exclusions": rec }))
+                    .set_inputs(row.id, &Value::Object(stored))
                     .await?;
             }
             None => {
-                // 有 `inputs` 但没有 `exclusions`（将来的其它输入记录）：原样留档，不丢。
+                // 有 `inputs` 但没有 `exclusions`（例如只有 `names`）：原样留档，不丢。
                 proposals.set_inputs(row.id, inputs).await?;
             }
         }

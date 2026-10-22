@@ -59,6 +59,23 @@
 //!
 //! 传输（[`LlmTransport`]）与缓存（[`ProposalCache`]）都是注入的 trait；
 //! 读写文件由 `cli` 负责。所以全部 AC 都能用 `ScriptedTransport` + 内存缓存跑。
+//!
+//! # AC-001 的判据范围（BA 裁定 A-3）
+//!
+//! 六字段（`claim / evidence / confidence / reason / decided_by / reviewed_by`）
+//! 是对**提案条目**（各命令文件顶层的 `proposals[]`）的要求。
+//! `concept suggest --ai` 的 `groups[]` 是 **REQ-010 的 `ConceptGroup` 形状**
+//! （key / display_name / members / scope_hint / low_confidence / extracted_by / evidence），
+//! **不叠加**这六栏 —— 两份数组装在同一文件里，各有各的契约。
+//!
+//! # 已知限制（登记，不声称已验证）
+//!
+//! - **R4 的低置信分支在真实数据上未触发**：qwen36-27B 对 96 张表 / 9 个组给出的
+//!   最低置信度都 ≥ 0.6，所以 `low_confidence: true` 在真实产物里是 **0 条**；
+//!   分支本身由单测 [`tests::low_confidence_is_marked_not_dropped`] 覆盖，
+//!   但 ⛔ 不许据此说「低置信标注已在真实数据上验证」。
+//! - **运行经济学不进文件**（见 [`ProposalStats::content_json`]）：token / 缓存命中数
+//!   只出现在 stderr 报告里，否则 AC-005 的「第二次逐字节相同」永远不成立。
 
 use std::collections::BTreeMap;
 
