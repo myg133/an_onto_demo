@@ -169,3 +169,57 @@ Dev 报 `llm_model` 未解析，理由是「`model_id` 是业务键（`kimi-k2.5
 | 未解析 76 列 + `close()` 闭合断言 | ✅ |
 | `joinVerified` 正反双标（134 = 67×2） | ✅ 接受，Dev 已写明 |
 | preflight 用**行数不变 shim** | ✅ 正确做法（说明规程订正生效） |
+
+---
+
+## 四 · AC-011 复跑（REQ-120 后）与裁定 F-1/F-2/F-3
+
+### 复跑结果：能交付 **1 → 2 条**
+
+| 题 | 上一轮 | 本轮 | 结论 |
+| --- | --- | --- | --- |
+| Q1 扣费明细 | ✅ 可交付 | ❌ **不能** | 入口边 `deductions__customers` 是 `false` 且**零证据** |
+| Q2 余额 | ❌ | ❌ | 边最干净（1:1 true 5/5），但「余额」口径不在 TTL 里 |
+| Q3 套餐剩余额度 + 产品名 | ⚠️ 说不出产品名 | ✅ **解决** | `usage_quotas__package_products` 是 `true` 边（5/5），`product_name` 直接可用 |
+| Q4 用过的 API | ⚠️ 绕路 | ⚠️ 降级 | 绕路整条变 `true`；直路 `api_call_logs` 仍两跳 `inherit` |
+| Q5 套餐下订阅 | ⚠️ 可写 | ✅ 可交付 | 两跳全 `true`，join 键非空 |
+
+**Q1 从"可交付"变成"不能"**——这不是退步，是上一轮替身没发现 `deductions__customers` 是 `false`（它当时只验证了方向）。
+
+### 数据真相（BA 实查源库）
+
+```
+deductions      = 4 行      ⇒ insufficient_sample
+api_call_logs   = 0 行      ⇒ 无法验证
+usage_details   = 216 行    ⇒ 可验证（4/4）
+balances        = 17935 行  ⇒ 可验证（5/5, 1:1）
+```
+
+**钱相关的那两张表在 UAT 里几乎是空的** ⇒ 它们的边**无法用值域重叠验证**。这不是方法问题，是数据可得性问题。
+
+### F-1 · **`inherit` 不得用于租户键列**（替身指出的设计漏洞）
+
+替身原话（成立）：
+
+> `deductions` 同表并存 `customer_id` 和 `main_customer_id`，**两个都标 tenantKey true** ⇒ 这套库里「叫 customer_id」**不能唯一确定主账号/子账号/付款方**。
+> `inherit` 的证人来自另一张表，**没证明本表这一列指向同一实体**。
+
+**裁定**：`inherit` 只用于**非租户键**列。`api_call_logs__licenses`（`license_id`）保留；`api_call_logs__customers`（tenantKey）**撤销**。
+
+### F-2 · 数据不足的边必须写明「为什么没验」
+
+TTL 里 `false` 看不出是「数据不够」还是「只看了名字」——这两种可信度完全不同。
+
+**要求**：`false` / `insufficient_sample` 的边，`joinEvidence` 必须写明，如
+`insufficient_sample: 源表仅 4 行，无法验证值域重叠（非名字推断）`。
+
+### F-3 · Q2 余额口径缺失（登记，不在本需求修）
+
+`balances` 20+ 金额列、3 币种、无 `total_balance`、无 `ontok:semantic` ⇒「余额 = 哪几列相加、按哪个币种」**是业务口径，不在本体里**。
+⇒ 属文档/口径层（REQ-116/117 范畴），**注册为产品缺口**。
+
+### F-4 · 替身对 `true` 的解读值得记
+
+> 「`joinVerified "true"` 的证据全是 `5/5`、`4/4` 这种小样本，只该读作**「抽了 5 行没翻车」**，不是统计保证。」
+
+⇒ 这一点应写进 TTL 文件头与文档：**`true` 是抽样证据，不是全量保证**。
