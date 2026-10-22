@@ -194,3 +194,12 @@
 - 真实数据：新建 `anspire_grouped`（96→排除 12→84 对象），本体 v2 + 8 组 v3（冻结）
 - 验证：`GET /api/graph` 200 / 83 节点 / **8 组** / 未分组 0 / 响应无字面 `"key"`；`ontology overview` **exit 0**
 - 声明改动留痕：`code/out/concept-declaration-ai-v2.json`（v1.0.1，digest `04ffce330779807d`，「未持 Key」→「未持凭证」）
+
+## 2026-10-22 — REQ-116 合并与回收
+
+- 合并：`feature/REQ-116` → `develop` **`5f6636f`**（2 个提交：`31838ef` + `90c6e71`）
+- 禁改面（`http.rs` / `tools.rs` / `property_filter.rs` / `Cargo.*`）相对 `a85383a` **零 diff**；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 机制验证：101 条断言 / 101 证据字节级命中 / 37 个谓词 / 原始 belongs_to 0/51 / 第三次运行 0 token
+- ⚠️ **真实业务文档仍未跑**（4 份语料经 QA 判定过度贴合提示词，只能当冒烟夹具）
+- 新规程：`Copy-Item` 还原保留 mtime ⇒ cargo 不重编 ⇒ 可能跑变异版产物（Dev 自报踩到）。还原后必须 `touch` / `cargo clean -p`
