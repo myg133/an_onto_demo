@@ -18,7 +18,8 @@
 | xsd 推断 | `ttl.rs::xsd_range` / `classify_column` / `classify_text` | 列名优先、中文业务名次之 |
 | 租户落点 | `ttl.rs::tenancy_report` | 序列化器与 CLI 共用同一份计算 |
 | range 统计 | `ttl.rs::range_stats` | 从**最终正文**数；`TtlDocument::stats` 携带 |
-| 出口接线 | `src/cli.rs`（`--tenancy` + stderr 回执） | 仍只经 `domain::pipeline`（纪律 H） |
+| 真实列类型 | `ttl.rs::SchemaTypes::parse` / `xsd_for_sql_type` | `--schema`：SQL `data_type` → xsd；`ontok:rangeSource` 标来源 |
+| 出口接线 | `src/cli.rs`（`--tenancy` / `--schema` + stderr 回执） | 仍只经 `domain::pipeline`（纪律 H） |
 
 ⛔ 未改：抽取 / 评分 / 分组 / 四红线 / `tools.rs` / `guard()` / `property_filter.rs` / `/api` 路由。
 
@@ -57,38 +58,79 @@
     owl:inverseOf :订单__客户 .
 ```
 
-## 3 · xsd range（R3 / AC-002）
+## 3 · xsd range（R3 / AC-002 / A-1）
 
-### 3.1 ⚠️ 必须说清的前提：快照层没有 SQL 类型
+### 3.1 真实列类型优先（`--schema`）
 
-`snapshot::Property` 只有 `column` / `nullable` / `note` / `sample`，**没有 `data_type`**；
-`ontology export` 只连本体库、不连源库。因此本轮做的是**确定性推断**，
-不是「读列类型后映射」。等 REQ-120 的 R2RML 拿到真实列类型时，§3.2 的映射表
-就是它的输入规格。
+```powershell
+ontok ontology export --project anspire_grouped --version 3 --model-view `
+  --schema ..\code\out\schema.json --out out\model.ttl
+```
 
-### 3.2 映射表（列名优先 → 中文业务名/注释 → 兜底）
+`--schema` 吃 `ontok-introspect` 产出的 JSON（`tables[].columns[].data_type`）。
+匹配键：**实体 key = 表名、属性列名 = 列名**（trim + 小写）。
+
+| 情形 | range 来源 | TTL 标记 |
+| --- | --- | --- |
+| 给了 `--schema` 且 `(表, 列)` 匹配到、SQL 类型可映射 | 真实列类型 | `ontok:rangeSource "schema"` |
+| 给了 `--schema` 但列没匹配上 / SQL 类型认不出 | 启发式 | `ontok:rangeSource "heuristic"` + stderr 列出 |
+| 没给 `--schema` | 全启发式 | 每个属性 `"heuristic"` + 文件头 + `ontok:rangeSourceHeuristic N` + stderr |
+
+⚠️ **快照层没有 `data_type`**（`snapshot::Property` 只有 column/nullable/note/sample），
+所以「真实类型」只能由 `--schema` 从外部带进来；这不改快照结构、不改 apply 路径。
+
+SQL → xsd 映射（`ttl.rs::xsd_for_sql_type`）：
+
+| SQL `data_type` | xsd |
+| --- | --- |
+| `boolean` / `bool` | `xsd:boolean` |
+| `integer` / `smallint` / `bigint` / `int*` / `serial*` | `xsd:integer` |
+| `numeric` / `decimal` / `real` / `double precision` / `money` | `xsd:decimal` |
+| `timestamp` / `timestamp without time zone` / `timestamp with time zone` / `timestamptz` | `xsd:dateTime` |
+| `date` | `xsd:date` |
+| `character varying` / `varchar` / `text` / `uuid` / `json` / `jsonb` / `bytea` … | `xsd:string` |
+| 其他（自定义 enum / 域类型） | 回退启发式 + 计数 |
+
+⛔ **`numeric` 绝不归 integer**（`point_change` 会丢小数）；
+`character varying` 即使内容是 `"10"` 也必须是 string（`version_number` 的字符串排序：
+`"9" > "10"`，物理类型就是 text）。**不要用业务语义覆盖物理类型**：`status` 真实是
+integer 就写 integer，原注释保留在 `rdfs:comment`。
+
+### 3.2 没给 `--schema` 时才走启发式
+
+列名优先 → 中文业务名/注释 → `xsd:string` 兜底：
 
 | 判定（按优先级） | xsd |
 | --- | --- |
-| 布尔：`is_*` / `has_*` / `can_*` / `allow_*` / `enable_*` / `auto_*` / `*_enabled` / `*_flag` / `*_deleted` / `*_active` / `*_visible` / `*_read` / `active`；中文「是否 / 可见 / 软删 / 允许 / 默认自动 / 开关 / 已删除 / 已禁用 / 已启用」 | `xsd:boolean` |
+| 布尔：`is_*` / `has_*` / `can_*` / `allow_*` / `enable_*` / `auto_*` / `*_enabled` / `*_flag` / `*_deleted` / `*_active` / `*_visible` / `*_read` / `active`；中文「是否 / 可见 / 软删 / 允许 / 默认自动 / 开关」 | `xsd:boolean` |
 | 时间：`*_at` / `*_time` / `*_on` / `*_until` / `*_start` / `*_end` / `timestamp`；中文「时间 / 时刻 / 到期 / 过期 / 有效期」 | `xsd:dateTime` |
 | 日期：`*_date` / `date`；中文「日期」 | `xsd:date` |
-| 整数：列名段 `count / cnt / num / nums / number / times / qty / quantity / points / point / tokens / days / hours / minutes / seconds / duration / cycles / seq / priority / sort / rank / qpm / tpm / rpm / percent`；中文「次数 / 数量 / 条数 / 个数 / 人数 / 天数 / 序号 / 排名 / 积分 / 点数 / 优先级 / 排序 / QPM / TPM / 百分比 / Token数」 | `xsd:integer` |
-| 小数：列名段 `amount / price / balance / cost / fee / quota / limit / credit / recharge / rebate / discount / rate / ratio / total / sum / used / usage / remain / remaining / debt / threshold / weight / free / frozen / transfer / paid / refund / charge / sale`；中文「金额 / 余额 / 价格 / 费用 / 用量 / 额度 / 合计 / 单价 / 总价 / 折扣 / 比例 / 权重 / 时长 / 分钟 / 小时 / 税率 / 汇率 / 得分 / 上限 / 下限 / 原价 / 费率 / 限额 / 限制 / 赠送量 / 消耗量 / 变化量 / 授信 / 赠送」 | `xsd:decimal` |
-| 文本：`*_id / *_key / *_code / *_name / *_title / *_type / *_status / *_url / *_json / *_text / *_by / *_no / *_user / *_cycle / *_config / *_data / *_version …`；中文「名称 / 状态 / 编号 / 编码 / 类型 / 备注 / 描述 / 说明 / 地址 / 电话 / 邮箱 / 链接 / 密码 / 账号 / 客户 / 用户 / 所属 / 信息 / 详情 / 规则 / 授权 / 模型 …」 | `xsd:string` |
+| 整数：列名段 `count / num / times / tokens / points / qty / qpm / tpm / priority / sort …`；中文「次数 / 数量 / 积分 / 点数 / 优先级 / 排序」 | `xsd:integer` |
+| 小数：列名段 `amount / price / balance / cost / fee / quota / limit / credit / rate / ratio / total …`；中文「金额 / 余额 / 价格 / 费用 / 用量 / 额度 / 限额」 | `xsd:decimal` |
+| 文本：`*_id / *_name / *_status / *_code / *_json / *_by …`；中文「名称 / 状态 / 编号 / 类型 / 备注 / 客户 / 用户」 | `xsd:string` |
 | **一条都没命中** | `xsd:string` + `ontok:rangeUnmapped true` + 计数/列出 |
 
-### 3.3 失败（fail-visible，⛔ 不静默）
+### 3.3 fail-visible（⛔ 不静默）
 
-- 属性照常导出，range = `xsd:string`；
-- 属性块写 `ontok:rangeUnmapped true`（机器可查）；
-- `range_stats()` 计数并在**清单**里列出；
-- CLI 导出回执在 stderr 打出分布与清单，例如：
-  `· xsd range（建模视图）：decimal 80 · integer 43 · dateTime 194 · date 0 · boolean 17 · string 536（含未映射 1） · rdfs:Literal 0 · 未映射清单：verify（数值列 decimal+integer = 123）`
-- 本版 `anspire_grouped` v3 实测：**`rdfs:Literal` 0 条**；未映射 1 条（`verify`，
-  快照里没有类型线索，按 R3 兜底为 string 并列出）。
-- 映射失败**不是** `rdfs:Literal`：R3 的裁定是失败 ⇒ `xsd:string`（AC-002 只要求
-  `rdfs:Literal` 不许出现在非失败属性上；本轮为 0 条，判据真空满足）。
+- 未给 schema：文件头写
+  `# · xsd 类型来源：**启发式**（未读真实列类型；--schema <schema.json> 可消除）—— schema 0 / heuristic 843`
+  + 本体节点 `ontok:rangeSourceSchema 0 ; ontok:rangeSourceHeuristic 843` +
+  每个属性 `ontok:rangeSource "heuristic"` + stderr 再次警告。
+- 给了 schema 但列没匹配上：`ontok:rangeSource "heuristic"` + 计数 + stderr 清单
+  `⚠ --schema 未匹配/类型认不出 N 个属性，已回退启发式：…`。
+- 客户端（客户视图）没有列名，`--schema` 对它不生效：文件头写
+  `客户视图不含列名，--schema 不生效；类型以建模视图为准`，stderr 同步说明。
+
+**本版实测（`anspire_grouped` v3，870 条数据类型属性）：**
+
+- 给 `--schema`（`code/out/schema.json`）：`rangeSource schema 870 / heuristic 0`，
+  与真实 `data_type` **逐条一致 870/870（0 不一致、0 未映射）**；
+  `rdfs:Literal 0`；分布：decimal 76 · integer 127 · dateTime 191 · date 0 · boolean 2 · string 474。
+- 不给 `--schema`（旧启发式）：`heuristic 870`，与真实类型**不一致 116 条（13.3%）**。
+  典型：`activity.status`（integer → 旧 string）、`agent_device_version.version_number`
+  （varchar → 旧 integer）、`balance_operation_log.point_change`（numeric → 旧 integer）、
+  `activity_keys.daily_ip_limit`（integer → 旧 decimal）。
+- 完整不一致清单：`out/schema-vs-ttl.txt`（116 行，前 20 条见交付报告）。
 
 ## 4 · IRI 模板（AC-003）
 
@@ -155,12 +197,18 @@ ontok:instanceIri "https://ontok.local/anspire_grouped#{class}/{id}"
 - 给了但 `reviewed_by` 为空 ⇒ `未签` + `ontok:tenancyReviewed false` + `tenantUnannotated`；
 - 已签但一个属性都没命中 ⇒ `声明未命中任何属性` + `tenantUnannotated`（仍写 `tenancyReviewedBy`）。
 
+> ⚠️ **R5 的三处标记只对建模视图有意义。** 客户视图**天然不含租户信息**
+> （R4：租户键是建模/安全信息，客户视图结构上不读 `TtlOptions::tenancy`），
+> 所以「未标注租户键」的警告放在客户视图只会误导。验证 R5 时请用
+> `--model-view`；客户视图的正确判据是「一个 `tenant*` 都没有」。
+
 ## 6 · 客户视图 vs 建模视图
 
 | 项 | 客户视图 | 建模视图 |
 | --- | --- | --- |
 | 反向属性 + 双向 `owl:inverseOf` | ✅（52 + 104） | ✅（52 + 104） |
-| `rdfs:range` xsd 类型 | ✅（按业务名推断） | ✅（按列名推断，更准） |
+| `rdfs:range` xsd 类型 | ✅（按业务名启发式） | ✅（`--schema` 真实列类型优先，未匹配才启发式） |
+| `ontok:rangeSource` | ✅（全是 heuristic） | ✅（schema / heuristic 逐属性标注） |
 | `ontok:instanceIri` | ✅ 83 | ✅ 84 |
 | `ontok:tenantKey` / `tenantColumn` | ⛔ **0** | ✅（已签声明时） |
 | `ontok:tenantUnannotated` 等状态标记 | ⛔ **0** | ✅ |
@@ -178,34 +226,38 @@ ontok:instanceIri "https://ontok.local/anspire_grouped#{class}/{id}"
 
 | 文件 | 字节 | SHA-256（两次相同） |
 | --- | --- | --- |
-| 客户视图 | 246,741（基线 220,696，**+11.8%**） | `4E31DCEB…F5DA1E` |
-| 建模视图（无声明） | 262,310 | `5D37E2F0…B0098C` |
-| 建模视图（`tenancy.json`） | 266,013 | `247A5B6F…FDE4E` |
-| 客户视图（带 `--tenancy`） | 246,741（**与不带逐字节相同**） | `4E31DCEB…F5DA1E` |
+| 客户视图（启发式） | 277,289（基线 220,696，**+25.6%**） | `AD357799…4E87FA` |
+| 建模视图（启发式 + tenancy） | 297,533 | `623E6D68…041A2D` |
+| 建模视图（`--schema` + tenancy） | 294,955 | `71908295…4083B4` |
+| 客户视图（带 `--tenancy`） | 277,289（**与不带逐字节相同**） | `AD357799…4E87FA` |
 
-体积上限 40%（≤ 308,974 字节）—— 实测 +11.8%。
+体积上限 40%（≤ 308,974 字节）—— 实测 +25.6%（`rangeSource` 逐属性标注约 +15 KB）。
 
 ## 8 · 已知限制 / 风险（登记，不粉饰）
 
 | # | 限制 | 影响 | 缓解 |
 | --- | --- | --- | --- |
-| 1 | xsd 类型是**推断**（快照无 SQL 类型） | 列名不规范的列可能被归到 string | `ontok:rangeUnmapped` + 计数列出；REQ-120 用真实列类型替换 |
-| 2 | 反向名撞正向名时追加 `__inverse` | R1 的命名规则有 1 条例外 | 已在模块头/本文件写明；计数仍是 52/104 |
-| 3 | 客户视图只能靠中文名推断类型 | 个别业务名含糊的属性会落到 string | 客户视图不是 Agent 查询入口；建模视图为准 |
+| 1 | **不给 `--schema` 时** xsd 类型仍是启发式 | 列名不规范的列可能判错（实测 116/870 = 13.3%） | 文件头 + `rangeSource` + stderr 三处明说；**Agent 消费时应带 `--schema`**（870/870） |
+| 2 | `--schema` 只对建模视图生效（客户视图无列名） | 客户视图类型不可靠 | 客户视图不是 Agent 查询入口；类型以建模视图为准（文件头明说） |
+| 3 | 反向名撞正向名时追加 `__inverse` | R1 的命名规则有 1 条例外 | 已在模块头/本文件写明；计数仍是 52/104 |
 | 4 | 租户声明是**声明**不是证明 | 写错列名 = 安全漏洞 | 必须 `reviewed_by` 人签；未签不落标注；`tables` 收窄 |
 | 5 | 反向属性 vs 已存在的反向关系（order ↔ customer_subscriptions） | 两条关系互为反向，各自仍生成一条反向属性 | 计数按 AC 要求保留 52 条；`__inverse` 后缀区分 |
 
 ## 9 · AC-009 的准备（5 个业务问题）
 
-Agent 只读的 TTL：`out/req119-model-tenancy.ttl`
-（本次工作区：`D:\MyCodes\AI\an_onto_demo\feature-REQ-119\out\req119-model-tenancy.ttl`；
+Agent 只读的 TTL（**真实列类型 + 租户标注**）：
+`out/REQ-119-model-view.ttl`
+（本次工作区：`D:\MyCodes\AI\an_onto_demo\feature-REQ-119\out\REQ-119-model-view.ttl`；
 `out/` 按仓库纪律不入库，可用下方命令重新生成）。
+
+⚠️ 这份 TTL 是 `--schema` 模式：870/870 属性带 `ontok:rangeSource "schema"`，
+`SUM(?扣费金额)` 这类聚合的类型前提成立。
 
 预期能力与落点：
 
 | # | 问题 | TTL 里要用的东西 |
 | --- | --- | --- |
-| 1 | 某客户上个月所有扣费明细 | `:customers__deductions`（反向）+ `:deductions__created_at`（dateTime）+ `:deductions__amount`（decimal） |
+| 1 | 某客户上个月所有扣费明细 | `:customers__deductions`（反向）+ `:deductions__created_at`（dateTime）+ `:deductions__deduction_amount`（decimal） |
 | 2 | 某客户当前余额 | `:customers__balance`（decimal）+ `:customers__customer_id`（string，租户键） |
 | 3 | 某订阅还剩多少额度 | `:customer_subscriptions__usage_quotas`（反向）+ `:usage_quotas__*`（decimal/integer） |
 | 4 | 某客户用过哪些 API（按授权） | 两跳反向：`:customers__licenses` → `:licenses__usage_details`（或 `:customers__customer_provider_permissions` 分支） |
@@ -217,7 +269,9 @@ Agent 只读的 TTL：`out/req119-model-tenancy.ttl`
 
 ```powershell
 $env:ONTOK_DATABASE_URL='postgresql://postgres:postgres@172.17.0.87:5432/anspire_real'
-ontok ontology export --project anspire_grouped --version 3 --out out/req119-customer.ttl
-ontok ontology export --project anspire_grouped --version 3 --model-view --out out/req119-model.ttl
-ontok ontology export --project anspire_grouped --version 3 --model-view --tenancy tenancy.json --out out/req119-model-tenancy.ttl
+ontok ontology export --project anspire_grouped --version 3 --out out/REQ-119-customer-view.ttl
+ontok ontology export --project anspire_grouped --version 3 --model-view --tenancy tenancy.json --out out/REQ-119-model-view.ttl
+# A-1：真实列类型（推荐；AC-009 用的就是这份）
+ontok ontology export --project anspire_grouped --version 3 --model-view `
+  --tenancy tenancy.json --schema ..\code\out\schema.json --out out/REQ-119-model-view.ttl
 ```

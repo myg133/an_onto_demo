@@ -566,6 +566,13 @@ pub enum OntologyCmd {
         /// stderr 警告）。`reviewed_by` 为空 ⇒ 视为**未签**，不落标注。
         #[arg(long)]
         tenancy: Option<PathBuf>,
+        /// ⭐ REQ-119 A-1 · **真实列类型**（`ontok-introspect` 产出的 schema JSON）。
+        ///
+        /// 按「实体 key = 表名 + 属性列名」查 `data_type`：命中即以真实类型为准，
+        /// 属性标 `ontok:rangeSource "schema"`；未命中/未给 ⇒ 启发式 + `"heuristic"`，
+        /// 文件头与 stderr 会**明说**类型来源。给了本参数后建模视图应当 0 条启发式。
+        #[arg(long)]
+        schema: Option<PathBuf>,
     },
     /// 比较两个版本
     Diff {
@@ -1132,7 +1139,11 @@ fn write_stdout(text: &str, newline: bool) {
 ///
 /// 分布是序列化器**从最终正文数出来的**（`TtlDocument::stats`），出口这里只读，
 /// 不碰产物字节、也不重算 —— 客户视图在序列化前有属性级剔除，按视图重算会多算。
-fn eprint_ttl_stats(track: &str, stats: Option<&crate::domain::ttl::RangeStats>) {
+fn eprint_ttl_stats(
+    track: &str,
+    stats: Option<&crate::domain::ttl::RangeStats>,
+    schema_given: bool,
+) {
     let Some(stats) = stats else {
         return;
     };
@@ -1141,6 +1152,19 @@ fn eprint_ttl_stats(track: &str, stats: Option<&crate::domain::ttl::RangeStats>)
         stats.summary(),
         stats.numeric()
     );
+    if !schema_given {
+        eprintln!("⚠ xsd 类型来源：未读真实列类型，全部来自启发式（--schema <schema.json> 可消除）");
+    } else if stats.source("heuristic") > 0 {
+        let list = if stats.heuristic.is_empty() {
+            "（清单为空）".to_string()
+        } else {
+            stats.heuristic.join("、")
+        };
+        eprintln!(
+            "⚠ --schema 未匹配/类型认不出 {} 个属性，已回退启发式：{list}",
+            stats.source("heuristic")
+        );
+    }
 }
 
 /// ⭐ REQ-107 · 客户类产物的**发布入口**（CLI 侧的唯一一处）。
@@ -3204,7 +3228,7 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
         // 序列化、前处理、发布闸**全在管线里**，本函数体里没有第二份 TTL 生成逻辑。
         // HTTP 的 `/api/ontology.ttl` 走的是**同一个** `Product::CustomerTurtle`，
         // 所以「页面下载的」与「CLI 导出的」是同一批字节（AC-007）。
-        OntologyCmd::Export { project, version, model_view, out, base, format, tenancy } => {
+        OntologyCmd::Export { project, version, model_view, out, base, format, tenancy, schema } => {
             // 格式是**显式**参数：认不出就报错，不静默回退成 ttl（fail-closed）。
             if format != "ttl" {
                 anyhow::bail!(
@@ -3234,6 +3258,24 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 None => None,
             };
 
+            // ⭐ REQ-119 A-1 · 真实列类型（`--schema`）。解析失败 ⇒ 直接报错（fail-closed）：
+            // 悄悄退回启发式会让调用方以为「用的是真实类型」。
+            let schema_types = match &schema {
+                Some(path) => {
+                    let raw = std::fs::read_to_string(path)
+                        .with_context(|| format!("读不出 schema 文件 {path:?}"))?;
+                    Some(
+                        crate::domain::ttl::SchemaTypes::parse(&raw).map_err(|e| {
+                            anyhow::anyhow!("schema 文件 {path:?} 不合法：{e}")
+                        })?,
+                    )
+                }
+                None => None,
+            };
+            if schema_types.as_ref().is_some_and(|s| s.is_empty()) {
+                eprintln!("⚠ --schema 里一列都没读到：本次仍全部走启发式（检查 tables/columns）");
+            }
+
             // 动作层条数：**只**用于文件头的有损声明（内容一个字节都不导出）。
             let action_type_count = snap.action_types.len();
             let opts = crate::domain::ttl::TtlOptions {
@@ -3242,6 +3284,7 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 base: base.as_str(),
                 action_type_count,
                 tenancy: tenancy_decl.as_ref(),
+                schema: schema_types.as_ref(),
             };
 
             if model_view {
@@ -3256,7 +3299,7 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 if let Some(warning) = tenancy.warning() {
                     eprintln!("{warning}");
                 }
-                eprint_ttl_stats("建模视图", model_ttl.range_stats());
+                eprint_ttl_stats("建模视图", model_ttl.range_stats(), schema_types.is_some());
                 match &out {
                     Some(p) => {
                         std::fs::write(p, model_ttl.as_str())
@@ -3280,13 +3323,18 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             if tenancy_decl.is_some() {
                 eprintln!("⚠ --tenancy 只在建模视图生效：客户视图 TTL 不含租户标注（R4）");
             }
+            if schema_types.is_some() {
+                eprintln!(
+                    "⚠ 客户视图不含列名，--schema 无法按列匹配：本文件仍走启发式（类型以建模视图为准）"
+                );
+            }
             let sv = snapshot_to_view(&snap);
             let cv = crate::domain::view::project(&sv);
             let customer_ttl = publish_customer(
                 crate::domain::pipeline::OutletId::C6,
                 crate::domain::pipeline::Product::CustomerTurtle { view: &cv, opts },
             );
-            eprint_ttl_stats("客户视图", customer_ttl.range_stats());
+            eprint_ttl_stats("客户视图", customer_ttl.range_stats(), false);
             match &out {
                 Some(p) => {
                     std::fs::write(p, customer_ttl.as_str())

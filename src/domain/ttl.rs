@@ -102,7 +102,19 @@
 //! **⛔ 反向属性只在本文件生成一次**：命名的唯一入口是 [`inverse_candidate`]，
 //! 正/反两个块共用 [`inverse_object_block`]；两版视图只提供各自的标签/附加行。
 //!
-//! ## 2. xsd range（R3 / AC-002）
+//! ## 2. xsd range（R3 / AC-002 / A-1）
+//!
+//! **真实列类型优先**：给 `--schema <ontok-introspect 的 schema.json>` 时，按
+//! 「实体 key = 表名 + 属性列名」查 `data_type`，命中就直接用（映射表见
+//! [`xsd_for_sql_type`]）；属性写 `ontok:rangeSource "schema"`。
+//! 没给 `--schema` / 列没匹配上 / SQL 类型认不出 ⇒ 才走下面的启发式，
+//! 写 `ontok:rangeSource "heuristic"`，**文件头 + 本体节点计数 + stderr 三处明说**。
+//!
+//! ⚠️ **不能只靠启发式**：数字员工看到 `xsd:decimal` 就会写 `SUM()`；实际列若是
+//! 字符串，结果要么报错要么是垃圾。所以 `--schema` 模式的验收线是
+//! **0 条 heuristic**（本版真实 schema 下 870/870 命中）。
+//!
+//! 启发式映射表（无 schema 或兜底时）：
 //!
 //! | 判定（按优先级） | xsd 类型 |
 //! | --- | --- |
@@ -114,13 +126,14 @@
 //! | 文本：列名 `*_id` / `*_name` / `*_status` / `*_code` / `*_json` / `*_by` …；中文「名称 / 状态 / 编号 / 类型 / 备注 / 客户 / 用户」 | `xsd:string` |
 //! | **认不出** | `xsd:string` + `ontok:rangeUnmapped true`，并计入 [`range_stats`] |
 //!
-//! ⚠️ **为什么是推断而不是「读列类型」**：快照层的 `snapshot::Property` 只有
-//! `column` / `nullable` / `note` / `sample`，**没有 SQL 类型**，而导出命令只连
-//! 本体库、不连源库。所以这里做的是**确定性推断**（列名优先、中文业务名次之），
-//! 不是伪造一个「已知类型」。认不出的属性**照样导出**（`xsd:string`），但会在
-//! 文件里留 `ontok:rangeUnmapped true`、在 `range_stats()` 里计数、由 CLI 在
-//! stderr 逐条列出 —— ⛔ 不许静默。等 REQ-120 的 R2RML 拿到真实列类型时，
-//! 映射表就是它的输入规格。
+//! ⚠️ **快照层没有 SQL 类型**（`snapshot::Property` 只有 `column` / `nullable` /
+//! `note` / `sample`），所以没给 `--schema` 时只能推断 —— 这不是偷偷猜：
+//! 文件头写「**启发式**（未读真实列类型）」，每个属性写 `ontok:rangeSource`，
+//! 本体节点写 `ontok:rangeSourceSchema` / `ontok:rangeSourceHeuristic` 计数，
+//! stderr 再警告一次。认不出的列同样显式标记 + 计数 + 列出。
+//!
+//! 客户视图**没有列名**（结构上不发布），所以 `--schema` 对它不生效；
+//! 文件头会写「客户视图不含列名，--schema 不生效；类型以建模视图为准」。
 //!
 //! ## 3. IRI 模板（AC-003）
 //!
@@ -176,12 +189,25 @@ pub struct TtlOptions<'a> {
     /// ⭐ REQ-119 · 租户声明（`--tenancy`）。**只在建模视图生效**：
     /// [`serialize_customer`] 根本不读它 ⇒ 客户视图正文里不会有任何租户标记。
     pub tenancy: Option<&'a TenancyDecl>,
+    /// ⭐ REQ-119 · 真实列类型（`--schema <introspect.json>`）。
+    ///
+    /// 建模视图按「实体 key = 表名 + 属性列名」查真实 `data_type`；命中即以它为准，
+    /// 并标 `ontok:rangeSource "schema"`。未命中/未给 schema ⇒ 启发式 + `"heuristic"`。
+    /// 客户视图没有列名（结构上不发布），所以这一栏对它不生效（见模块头）。
+    pub schema: Option<&'a SchemaTypes>,
 }
 
 impl<'a> TtlOptions<'a> {
     /// 用默认 base 与「动作层 0 个」构造（测试与纯函数调用方用）。
     pub fn new(project: &'a str, version: i32) -> Self {
-        Self { project, version, base: DEFAULT_BASE, action_type_count: 0, tenancy: None }
+        Self {
+            project,
+            version,
+            base: DEFAULT_BASE,
+            action_type_count: 0,
+            tenancy: None,
+            schema: None,
+        }
     }
 
     /// base 归一化：去掉结尾 `#`，补齐结尾 `/`。
@@ -192,6 +218,118 @@ impl<'a> TtlOptions<'a> {
         } else {
             format!("{b}/")
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// REQ-119 · 真实列类型（`--schema <ontok-introspect JSON>`）
+// ══════════════════════════════════════════════════════════════
+
+/// `ontok-introspect` 产出的 schema 报告里，**本模块真正用到的那部分**。
+///
+/// 只收 `tables[].name` / `tables[].columns[].{name,data_type}`；其余字段
+/// （server_version / 注释 / 主键 …）反序列化时忽略 —— 这样同一份 `--schema`
+/// 也可以直接吃 `code/out/schema.json`，不需要另做一份裁剪文件。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaTypes {
+    /// `(表名, 列名)` → 原始 SQL 类型（都已 trim + 小写）。
+    columns: BTreeMap<(String, String), String>,
+}
+
+impl SchemaTypes {
+    /// 解析 schema JSON。⛔ 解析失败直接报错（fail-closed）：悄悄当成「没给
+    /// `--schema`」会退回启发式，而调用方以为用的是真实类型。
+    pub fn parse(json: &str) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct Doc {
+            #[serde(default)]
+            tables: Vec<Tab>,
+        }
+        #[derive(Deserialize)]
+        struct Tab {
+            name: String,
+            #[serde(default)]
+            columns: Vec<Col>,
+        }
+        #[derive(Deserialize)]
+        struct Col {
+            name: String,
+            #[serde(default)]
+            data_type: String,
+        }
+
+        let doc: Doc = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut columns = BTreeMap::new();
+        for t in doc.tables {
+            let table = t.name.trim().to_ascii_lowercase();
+            if table.is_empty() {
+                continue;
+            }
+            for c in t.columns {
+                let column = c.name.trim().to_ascii_lowercase();
+                if column.is_empty() {
+                    continue;
+                }
+                let ty = c.data_type.trim().to_ascii_lowercase();
+                if !ty.is_empty() {
+                    columns.insert((table.clone(), column), ty);
+                }
+            }
+        }
+        Ok(Self { columns })
+    }
+
+    /// 查真实 `data_type`（SQL 原始串）。表名 / 列名按 trim + 小写比对。
+    pub fn data_type(&self, table: &str, column: &str) -> Option<&str> {
+        self.columns
+            .get(&(table.trim().to_ascii_lowercase(), column.trim().to_ascii_lowercase()))
+            .map(|s| s.as_str())
+    }
+
+    /// 已收录的列数（回执用）。
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+}
+
+/// SQL `data_type` → xsd（AC-119 A-1 的映射表）。
+///
+/// | SQL | xsd |
+/// | --- | --- |
+/// | `boolean` / `bool` | `xsd:boolean` |
+/// | `integer` / `int` / `bigint` / `smallint` / `serial*` | `xsd:integer` |
+/// | `numeric` / `decimal` / `real` / `double precision` / `money` | `xsd:decimal` |
+/// | `timestamp*` / `timestamptz` / `datetime` | `xsd:dateTime` |
+/// | `date` | `xsd:date` |
+/// | `character varying` / `varchar` / `text` / `uuid` / `json*` / `bytea` … | `xsd:string` |
+/// | 其他 | `None`（退回启发式，并计数/列出） |
+///
+/// ⚠️ `numeric` **绝不许**归成 integer（`point_change` 这类会丢小数）。
+/// `character varying` 即使内容像数字（`version_number = "10"`）也必须是 string：
+/// 物理类型就是 text，按字符串排序才是数据库的真实语义。
+pub fn xsd_for_sql_type(data_type: &str) -> Option<XsdType> {
+    let t = data_type.trim().to_ascii_lowercase();
+    // 去掉 `character varying(64)` / `numeric(10,2)` 这类精度括号。
+    let base = t.split('(').next().unwrap_or(&t).trim();
+    match base {
+        "boolean" | "bool" => Some(XsdType::Boolean),
+        "integer" | "int" | "int2" | "int4" | "int8" | "smallint" | "bigint" | "serial"
+        | "bigserial" | "smallserial" | "serial2" | "serial4" | "serial8" => {
+            Some(XsdType::Integer)
+        }
+        "numeric" | "decimal" | "real" | "double precision" | "float" | "float4" | "float8"
+        | "money" => Some(XsdType::Decimal),
+        "date" => Some(XsdType::Date),
+        "timestamp" | "timestamp without time zone" | "timestamp with time zone"
+        | "timestamp without timezone" | "timestamp with timezone" | "timestamptz"
+        | "datetime" => Some(XsdType::DateTime),
+        "character varying" | "varchar" | "character" | "char" | "bpchar" | "text"
+        | "citext" | "name" | "uuid" | "json" | "jsonb" | "bytea" => Some(XsdType::String),
+        _ => None,
     }
 }
 
@@ -394,24 +532,63 @@ impl XsdType {
     }
 }
 
-/// range 是靠什么定出来的。
+/// range 是靠**哪条规则**定出来的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RangeBasis {
-    /// 列名 / 业务名命中了规则。
+    /// 命中了规则（列/中文名启发式，或真实列类型）。
     Matched,
     /// 一条规则都没命中 ⇒ `xsd:string` 兜底，并且必须计数 + 列出（R3）。
     Unmapped,
 }
 
-/// 列名 → 类型。**列名优先**（`Some(column)` 只在建模视图有）。
-fn xsd_range(column: Option<&str>, name: &str, note: Option<&str>) -> (XsdType, RangeBasis) {
+/// xsd 类型的**来源**（A-1）：真实列类型 / 启发式。
+///
+/// 每个数据类型属性都写 `ontok:rangeSource "schema"|"heuristic"`，统计口径见
+/// [`range_stats`] 与 CLI stderr。⛔ 不许「照旧启发式但不说」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeSource {
+    /// 来自 `--schema` 的真实 `data_type`。
+    Schema,
+    /// 没给 schema / schema 没匹配上 / SQL 类型认不出 ⇒ 列名+中文关键词推断。
+    Heuristic,
+}
+
+impl RangeSource {
+    pub fn key(self) -> &'static str {
+        match self {
+            RangeSource::Schema => "schema",
+            RangeSource::Heuristic => "heuristic",
+        }
+    }
+}
+
+/// 定 range 的**唯一入口**：schema 优先 → 列名 → 中文名 → string 兜底。
+fn xsd_range(
+    entity_key: Option<&str>,
+    column: Option<&str>,
+    schema: Option<&SchemaTypes>,
+    name: &str,
+    note: Option<&str>,
+) -> (XsdType, RangeBasis, RangeSource) {
+    // ① 真实列类型（只在建模视图有 entity/column）。
+    if let (Some(entity), Some(column), Some(schema)) = (entity_key, column, schema) {
+        if let Some(data_type) = schema.data_type(entity, column) {
+            if let Some(xsd) = xsd_for_sql_type(data_type) {
+                return (xsd, RangeBasis::Matched, RangeSource::Schema);
+            }
+            // schema 里有这列，但 SQL 类型认不出（自定义 enum / 域类型 …）：
+            // 不假装知道 —— 退回启发式，并在回执里由 `heuristic` 计数暴露。
+        }
+    }
+    // ② 列名启发式（建模视图）。
     if let Some(xsd) = column.and_then(classify_column) {
-        return (xsd, RangeBasis::Matched);
+        return (xsd, RangeBasis::Matched, RangeSource::Heuristic);
     }
+    // ③ 中文业务名 / 注释启发式（客户视图只能走这条）。
     if let Some(xsd) = classify_text(name, note) {
-        return (xsd, RangeBasis::Matched);
+        return (xsd, RangeBasis::Matched, RangeSource::Heuristic);
     }
-    (XsdType::String, RangeBasis::Unmapped)
+    (XsdType::String, RangeBasis::Unmapped, RangeSource::Heuristic)
 }
 
 /// 列名规则（见模块头的映射表）。返回 `None` = 认不出。
@@ -558,14 +735,21 @@ const ZH_STRING: &[&str] = &[
 // REQ-119 · 导出后的 range 统计（CLI stderr 用；纯函数）
 // ══════════════════════════════════════════════════════════════
 
-/// 一份 TTL 里 `rdfs:range` 的分布 + 未映射清单。
+/// 一份 TTL 里 `rdfs:range` 的分布 + 未映射清单 + 类型来源。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RangeStats {
     /// `decimal` / `integer` / `dateTime` / `date` / `boolean` / `string` /
     /// `literal` / `other` → 条数。
     pub counts: BTreeMap<String, usize>,
+    /// `schema` / `heuristic` → 条数（A-1）。
+    pub sources: BTreeMap<String, usize>,
     /// 带 `ontok:rangeUnmapped true` 的属性标签（去重、排序）。
     pub unmapped: Vec<String>,
+    /// `ontok:rangeSource "heuristic"` 的属性标签（去重、排序）。
+    ///
+    /// `--schema` 模式下，这里就是「**schema 没匹配上 / 类型认不出**」的清单；
+    /// 没有 schema 时它是全部属性（只用于计数，不在摘要里逐条展开）。
+    pub heuristic: Vec<String>,
 }
 
 impl RangeStats {
@@ -576,6 +760,11 @@ impl RangeStats {
     /// 数值列条数（AC-002 的「能不能 SUM」）。
     pub fn numeric(&self) -> usize {
         self.get("decimal") + self.get("integer")
+    }
+
+    /// `ontok:rangeSource` 的条数。
+    pub fn source(&self, key: &str) -> usize {
+        self.sources.get(key).copied().unwrap_or(0)
     }
 
     /// 一行人类可读摘要（CLI stderr）。
@@ -594,6 +783,11 @@ impl RangeStats {
         if self.get("other") > 0 {
             out.push_str(&format!(" · other {}", self.get("other")));
         }
+        out.push_str(&format!(
+            " · rangeSource: schema {} / heuristic {}",
+            self.source("schema"),
+            self.source("heuristic")
+        ));
         if !self.unmapped.is_empty() {
             out.push_str(&format!(" · 未映射清单：{}", self.unmapped.join("、")));
         }
@@ -617,14 +811,20 @@ fn clean_label(raw: &str) -> String {
 pub fn range_stats(ttl: &str) -> RangeStats {
     let mut stats = RangeStats::default();
     let mut label: Option<String> = None;
+    let mut pending_source: Option<String> = None;
     for line in ttl.lines() {
         let t = line.trim_start();
-        // 新块（主语行）⇒ 清空上一个标签。
+        // 新块（主语行）⇒ 清空上一个标签 / 待定来源。
         if t.starts_with(':') || t.starts_with('<') {
             label = None;
+            pending_source = None;
         }
         if let Some(rest) = t.strip_prefix("rdfs:label ") {
-            label = Some(clean_label(rest));
+            let l = clean_label(rest);
+            if pending_source.as_deref() == Some("heuristic") {
+                stats.heuristic.push(l.clone());
+            }
+            label = Some(l);
             continue;
         }
         if let Some(rest) = t.strip_prefix("rdfs:range ") {
@@ -643,6 +843,21 @@ pub fn range_stats(ttl: &str) -> RangeStats {
             *stats.counts.entry(key.to_string()).or_insert(0) += 1;
             continue;
         }
+        if let Some(rest) = t.strip_prefix("ontok:rangeSource ") {
+            let value = rest.trim_end_matches([' ', ';', '.']).trim_matches('"');
+            if value == "schema" || value == "heuristic" {
+                *stats.sources.entry(value.to_string()).or_insert(0) += 1;
+                // 块内顺序两版不同：建模视图是 range→rangeSource→label，
+                // 客户视图是 label→…→range→rangeSource。两种顺序都要能收集清单。
+                if value == "heuristic" {
+                    if let Some(l) = &label {
+                        stats.heuristic.push(l.clone());
+                    }
+                }
+                pending_source = Some(value.to_string());
+            }
+            continue;
+        }
         if t.starts_with("ontok:rangeUnmapped ") {
             if let Some(l) = &label {
                 stats.unmapped.push(l.clone());
@@ -651,6 +866,8 @@ pub fn range_stats(ttl: &str) -> RangeStats {
     }
     stats.unmapped.sort();
     stats.unmapped.dedup();
+    stats.heuristic.sort();
+    stats.heuristic.dedup();
     stats
 }
 
@@ -799,8 +1016,14 @@ pub fn serialize_customer(view: &CustomerView, opts: &TtlOptions<'_>) -> TtlDocu
         ));
     }
 
-    let header =
-        ontology_header(ns.ontology(), opts, CUSTOMER_ONTOLOGY_NOTE, None, None);
+    let stats = range_stats(&prop_blocks.join("\n"));
+    let mode = if opts.schema.is_some() {
+        TypeSourceMode::CustomerNoColumns
+    } else {
+        TypeSourceMode::HeuristicOnly
+    };
+    let header = ontology_header(ns.ontology(), opts, CUSTOMER_ONTOLOGY_NOTE, None, None, &stats);
+    let header_lines = vec![mode.header_line(&stats)];
     finish(
         opts,
         Body {
@@ -810,7 +1033,8 @@ pub fn serialize_customer(view: &CustomerView, opts: &TtlOptions<'_>) -> TtlDocu
             rels: rel_blocks,
             inverses: inverse_blocks.into_iter().map(|(_, b)| b).collect(),
         },
-        None,
+        &header_lines,
+        stats,
     )
 }
 
@@ -853,7 +1077,13 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
                     .hits
                     .get(&e.key)
                     .is_some_and(|cols| cols.contains(effective_column(p)));
-            prop_blocks.push(model_datatype_block(&class_local, p, &e.key, tenant_key));
+            prop_blocks.push(model_datatype_block(
+                &class_local,
+                p,
+                &e.key,
+                tenant_key,
+                opts.schema,
+            ));
         }
     }
 
@@ -913,6 +1143,13 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
     }
     inverse_blocks.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let stats = range_stats(&prop_blocks.join("\n"));
+    let mode = if opts.schema.is_some() {
+        TypeSourceMode::SchemaPreferred
+    } else {
+        TypeSourceMode::HeuristicOnly
+    };
+    let header_lines = vec![mode.header_line(&stats), tenancy.header_line()];
     finish(
         opts,
         Body {
@@ -922,13 +1159,15 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
                 &model_ontology_note(opts.action_type_count),
                 view.extracted_by.as_ref().map(|e| (e.agent.as_str(), e.version.as_str(), e.round)),
                 Some(&tenancy),
+                &stats,
             ),
             classes: class_blocks,
             props: prop_blocks,
             rels: rel_blocks,
             inverses: inverse_blocks.into_iter().map(|(_, b)| b).collect(),
         },
-        Some(&tenancy.header_line()),
+        &header_lines,
+        stats,
     )
 }
 
@@ -1013,12 +1252,46 @@ struct Body {
     inverses: Vec<String>,
 }
 
+/// xsd 类型来源的三种出口口径（决定文件头怎么写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeSourceMode {
+    /// 没给 `--schema`。
+    HeuristicOnly,
+    /// 给了 `--schema`，建模视图按真实列类型优先。
+    SchemaPreferred,
+    /// 给了 `--schema`，但客户视图没有列名可匹配。
+    CustomerNoColumns,
+}
+
+impl TypeSourceMode {
+    /// 文件头里的「类型来源」一行（R-1：不让启发式静默冒充真实类型）。
+    fn header_line(self, stats: &RangeStats) -> String {
+        let schema = stats.source("schema");
+        let heuristic = stats.source("heuristic");
+        match self {
+            TypeSourceMode::HeuristicOnly => format!(
+                "xsd 类型来源：**启发式**（未读真实列类型；--schema <schema.json> 可消除）\
+                 —— schema {schema} / heuristic {heuristic}"
+            ),
+            TypeSourceMode::SchemaPreferred => format!(
+                "xsd 类型来源：真实列类型（--schema 优先；未匹配/类型认不出回退启发式）\
+                 —— schema {schema} / heuristic {heuristic}"
+            ),
+            TypeSourceMode::CustomerNoColumns => format!(
+                "xsd 类型来源：启发式（客户视图不含列名，--schema 不生效；类型以建模视图为准）\
+                 —— schema {schema} / heuristic {heuristic}"
+            ),
+        }
+    }
+}
+
 fn ontology_header(
     ontology: &str,
     opts: &TtlOptions<'_>,
     note: &str,
     extracted_by: Option<(&str, &str, i32)>,
     tenancy: Option<&TenancyReport>,
+    stats: &RangeStats,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("<{ontology}> a owl:Ontology ;\n"));
@@ -1037,8 +1310,13 @@ fn ontology_header(
     }
     out.push_str(&format!("    ontok:sourceProject {} ;\n", plain(opts.project)));
 
+    // REQ-119 · 类型来源计数（A-1：`rangeSource` 的机器可读口径）。
+    let mut marks: Vec<String> = vec![
+        format!("ontok:rangeSourceSchema {}", stats.source("schema")),
+        format!("ontok:rangeSourceHeuristic {}", stats.source("heuristic")),
+    ];
+
     // REQ-119 · 租户状态标记（只在建模视图传入；客户视图传 None）。
-    let mut marks: Vec<String> = Vec::new();
     if let Some(t) = tenancy {
         if t.signed {
             if let Some(name) = &t.reviewed_by {
@@ -1061,7 +1339,12 @@ fn ontology_header(
     out
 }
 
-fn finish(opts: &TtlOptions<'_>, b: Body, tenant_header: Option<&str>) -> TtlDocument {
+fn finish(
+    opts: &TtlOptions<'_>,
+    b: Body,
+    header_lines: &[String],
+    stats: RangeStats,
+) -> TtlDocument {
     // 本体 IRI 与 `NameSpace::new` 同源（A-7：头部默认前缀 == 正文本体 IRI）。
     let ontology = format!("{}{}", opts.normalized_base(), local_model(opts.project));
 
@@ -1074,7 +1357,7 @@ fn finish(opts: &TtlOptions<'_>, b: Body, tenant_header: Option<&str>) -> TtlDoc
         doc.push_str(&format!("@prefix {p}: <{iri}> .\n"));
     }
     doc.push('\n');
-    doc.push_str(&lossy_header(opts, tenant_header));
+    doc.push_str(&lossy_header(opts, header_lines));
     doc.push('\n');
 
     let mut body = String::new();
@@ -1087,16 +1370,15 @@ fn finish(opts: &TtlOptions<'_>, b: Body, tenant_header: Option<&str>) -> TtlDoc
         body.push_str(&group.join("\n"));
     }
     doc.push_str(&body);
-    let stats = range_stats(&body);
     TtlDocument { doc, body, stats }
 }
 
 /// 文件头的**有损声明**（AC-008：三个关键词一个都不能少）。
 ///
-/// ⛔ 它是**编译期常量 + 一个计数 + 一行租户状态**：不含任何项目数据
+/// ⛔ 它是**编译期常量 + 计数 + 类型来源/租户状态**：不含任何项目数据
 /// （尤其不写 `reviewed_by` 人名），所以把它排除在发布闸的扫描之外不会
 /// 放过任何数据字节（理由见模块头）。
-fn lossy_header(opts: &TtlOptions<'_>, tenant_header: Option<&str>) -> String {
+fn lossy_header(opts: &TtlOptions<'_>, header_lines: &[String]) -> String {
     let mut out = format!(
         "# ── 有损声明：本文件是 OWL 本体的降级表达，逐项如下 ──\n\
          # · ActionType：未导出（{} 个）—— OWL / SHACL / SWRL 均无干净对应（规格 §5.5）\n\
@@ -1105,7 +1387,7 @@ fn lossy_header(opts: &TtlOptions<'_>, tenant_header: Option<&str>) -> String {
          # · 不含实例数据（ABox）；不含 SHACL 形状（nullable / 必填不导出）\n",
         opts.action_type_count
     );
-    if let Some(line) = tenant_header {
+    for line in header_lines {
         out.push_str(&format!("# · {line}\n"));
     }
     out
@@ -1416,12 +1698,13 @@ fn model_class_block(
 }
 
 fn datatype_block(subject_local: &str, obj_local: &str, p: &CustomerProp<'_>) -> String {
-    let (xsd, basis) = xsd_range(None, p.name, p.note);
+    let (xsd, basis, source) = xsd_range(None, None, None, p.name, p.note);
     let mut lines: Vec<String> = Vec::new();
     lines.push("a owl:DatatypeProperty".to_string());
     lines.push(format!("rdfs:label {}", zh(p.name)));
     lines.push(format!("rdfs:domain :{obj_local}"));
     lines.push(format!("rdfs:range {}", xsd.iri()));
+    lines.push(format!("ontok:rangeSource \"{}\"", source.key()));
     if let Some(n) = p.note {
         lines.push(format!("rdfs:comment {}", zh(n)));
     }
@@ -1437,15 +1720,17 @@ fn model_datatype_block(
     p: &ModelPropertyView,
     entity_key: &str,
     tenant_key: bool,
+    schema: Option<&SchemaTypes>,
 ) -> String {
     let column = effective_column(p);
     let subject = format!(":{class_local}__{}", local_model(column));
     let label = if p.name.trim().is_empty() { column } else { p.name.as_str() };
-    let (xsd, basis) = xsd_range(Some(column), label, p.note.as_deref());
+    let (xsd, basis, source) = xsd_range(Some(entity_key), Some(column), schema, label, p.note.as_deref());
     let mut lines: Vec<String> = Vec::new();
     lines.push("a owl:DatatypeProperty".to_string());
     lines.push(format!("rdfs:domain :{class_local}"));
     lines.push(format!("rdfs:range {}", xsd.iri()));
+    lines.push(format!("ontok:rangeSource \"{}\"", source.key()));
     lines.push(format!("rdfs:label {}", zh(label)));
     lines.push(format!("ontok:column {}", plain(column)));
     lines.push(format!("ontok:nullable {}", bool_lit(p.nullable)));
@@ -1465,7 +1750,6 @@ fn model_datatype_block(
     if basis == RangeBasis::Unmapped {
         lines.push("ontok:rangeUnmapped true".to_string());
     }
-    let _ = entity_key; // subject 的本地名已含类 key；参数留着让调用点可读
     block(&subject, lines)
 }
 
@@ -1708,6 +1992,7 @@ mod tests {
             base: DEFAULT_BASE,
             action_type_count: 0,
             tenancy: None,
+            schema: None,
         }
     }
 
@@ -1998,6 +2283,134 @@ mod tests {
     }
 
     #[test]
+    fn sql_types_map_to_the_documented_xsd() {
+        // A-1 的映射表：numeric 必须是 decimal（point_change 会丢精度，
+        // character varying 即使内容是 "10" 也必须是 string）。
+        for (sql, want) in [
+            ("numeric", XsdType::Decimal),
+            ("decimal(10,2)", XsdType::Decimal),
+            ("integer", XsdType::Integer),
+            ("bigint", XsdType::Integer),
+            ("serial", XsdType::Integer),
+            ("boolean", XsdType::Boolean),
+            ("character varying", XsdType::String),
+            ("character varying(64)", XsdType::String),
+            ("text", XsdType::String),
+            ("uuid", XsdType::String),
+            ("jsonb", XsdType::String),
+            ("timestamp without time zone", XsdType::DateTime),
+            ("timestamp with time zone", XsdType::DateTime),
+            ("date", XsdType::Date),
+        ] {
+            assert_eq!(xsd_for_sql_type(sql), Some(want), "SQL {sql:?} 的映射不对");
+        }
+        assert_eq!(xsd_for_sql_type("custom_enum"), None, "认不出的 SQL 类型不许瞎猜");
+    }
+
+    fn opts_with_schema(schema: &SchemaTypes) -> TtlOptions<'_> {
+        TtlOptions {
+            project: "demo",
+            version: 2,
+            base: DEFAULT_BASE,
+            action_type_count: 0,
+            tenancy: None,
+            schema: Some(schema),
+        }
+    }
+
+    #[test]
+    fn schema_types_override_heuristic_and_mark_the_source() {
+        let schema = SchemaTypes::parse(
+            r#"{"tables":[{"name":"order","columns":[
+                {"name":"is_deleted","data_type":"integer"},
+                {"name":"amount","data_type":"character varying"},
+                {"name":"created_at","data_type":"timestamp without time zone"},
+                {"name":"status","data_type":"integer"}
+            ]}]}"#,
+        )
+        .expect("schema 合法");
+        let mut v = mv();
+        v.entity_types[0].properties = vec![
+            ModelPropertyView {
+                name: "备注".into(),
+                column: "is_deleted".into(),
+                nullable: false,
+                note: None,
+                sample: None,
+            },
+            ModelPropertyView {
+                name: "金额".into(),
+                column: "amount".into(),
+                nullable: false,
+                note: None,
+                sample: None,
+            },
+            ModelPropertyView {
+                name: "创建时间".into(),
+                column: "created_at".into(),
+                nullable: false,
+                note: None,
+                sample: None,
+            },
+            ModelPropertyView {
+                name: "状态".into(),
+                column: "status".into(),
+                nullable: false,
+                note: None,
+                sample: None,
+            },
+            ModelPropertyView {
+                name: "莫名列".into(),
+                column: "zzz_unknown".into(),
+                nullable: true,
+                note: None,
+                sample: None,
+            },
+        ];
+        let doc = serialize_model(&v, &opts_with_schema(&schema));
+        let d = doc.doc();
+        // 真实类型压过启发式：is_deleted(integer) 不再 boolean、amount(varchar) 不再 decimal。
+        assert!(block_of(d, ":order__is_deleted a ").contains("rdfs:range xsd:integer"), "{d}");
+        assert!(block_of(d, ":order__amount a ").contains("rdfs:range xsd:string"), "{d}");
+        assert!(block_of(d, ":order__created_at a ").contains("rdfs:range xsd:dateTime"), "{d}");
+        assert!(block_of(d, ":order__status a ").contains("rdfs:range xsd:integer"), "{d}");
+        for col in ["is_deleted", "amount", "created_at", "status"] {
+            assert!(
+                block_of(d, &format!(":order__{col} a ")).contains("ontok:rangeSource \"schema\""),
+                "{col} 必须标 schema 来源：{d}"
+            );
+        }
+        // 没匹配上的列：启发式 + 未映射标记 + 清单。
+        let unknown = block_of(d, ":order__zzz_unknown a ");
+        assert!(unknown.contains("ontok:rangeSource \"heuristic\""), "{unknown}");
+        assert!(unknown.contains("ontok:rangeUnmapped true"), "{unknown}");
+        let stats = range_stats(d);
+        assert_eq!(stats.source("schema"), 4, "{stats:?}");
+        assert_eq!(stats.source("heuristic"), 1, "{stats:?}");
+        assert_eq!(stats.heuristic, vec!["莫名列".to_string()]);
+        assert!(d.contains("ontok:rangeSourceSchema 4"), "本体节点必须有计数：{d}");
+        assert!(d.contains("ontok:rangeSourceHeuristic 1"), "{d}");
+    }
+
+    #[test]
+    fn no_schema_marks_heuristic_in_header_ontology_and_stats() {
+        let doc = serialize_model(&mv(), &opts());
+        let d = doc.doc();
+        assert!(
+            d.contains("# · xsd 类型来源：**启发式**（未读真实列类型"),
+            "① 文件头必须明说启发式：{d}"
+        );
+        assert!(d.contains("ontok:rangeSourceHeuristic 1"), "② 本体节点计数：{d}");
+        assert!(
+            block_of(d, ":order__created_at a ").contains("ontok:rangeSource \"heuristic\""),
+            "③ 每个属性标来源：{d}"
+        );
+        let stats = range_stats(d);
+        assert_eq!(stats.source("schema"), 0, "{stats:?}");
+        assert_eq!(stats.source("heuristic"), 1, "{stats:?}");
+    }
+
+    #[test]
     fn every_class_declares_an_instance_iri_template() {
         let c = serialize_customer(&cv(), &opts()).into_doc();
         assert_eq!(c.matches("ontok:instanceIri").count(), 2, "{c}");
@@ -2030,6 +2443,7 @@ mod tests {
             base: DEFAULT_BASE,
             action_type_count: 0,
             tenancy: Some(decl),
+            schema: None,
         }
     }
 

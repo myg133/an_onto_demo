@@ -108,8 +108,9 @@ fn opts() -> TtlOptions<'static> {
         version: 2,
         base: DEFAULT_BASE,
         action_type_count: 0,
-        // REQ-119：本文件的判据不涉及租户标注。
+        // REQ-119：本文件的判据不涉及租户标注 / 真实列类型。
         tenancy: None,
+        schema: None,
     }
 }
 
@@ -409,6 +410,7 @@ fn a7_header_prefix_iri_must_equal_the_body_ontology_iri() {
             base: DEFAULT_BASE,
             action_type_count: 0,
             tenancy: None,
+            schema: None,
         };
         let doc = serialize_customer(&clean_view(), &o);
         assert_a7_invariant("C6 客户轨", project, doc.doc());
@@ -567,6 +569,7 @@ async fn live_anspire_ai_v2_exports_the_reference_counts_and_is_deterministic() 
         base: DEFAULT_BASE,
         action_type_count: snap.action_types.len(),
         tenancy: None,
+        schema: None,
     };
     let one = render(OutletId::D9, Product::ModelTurtle { view: &mv, opts: ttl_opts })
         .expect("建模轨不过闸")

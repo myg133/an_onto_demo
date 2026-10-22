@@ -21,8 +21,8 @@ use ontok::domain::model_view::{
     ModelEntityView, ModelLinkView, ModelPropertyView, ModelTrackView,
 };
 use ontok::domain::ttl::{
-    range_stats, serialize_customer, serialize_model, tenancy_report, TenancyDecl, TtlOptions,
-    DEFAULT_BASE,
+    range_stats, serialize_customer, serialize_model, tenancy_report, xsd_for_sql_type, SchemaTypes,
+    TenancyDecl, TtlOptions, DEFAULT_BASE,
 };
 use ontok::domain::view::{CustomerView, EntityView, PropertyView, RelationView};
 
@@ -189,6 +189,7 @@ fn opts() -> TtlOptions<'static> {
         base: DEFAULT_BASE,
         action_type_count: 0,
         tenancy: None,
+        schema: None,
     }
 }
 
@@ -199,6 +200,7 @@ fn opts_with<'a>(decl: &'a TenancyDecl) -> TtlOptions<'a> {
         base: DEFAULT_BASE,
         action_type_count: 0,
         tenancy: Some(decl),
+        schema: None,
     }
 }
 
@@ -412,13 +414,175 @@ fn ac007_customer_has_the_capabilities_but_no_tenancy() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// A-1 · 真实列类型（--schema）
+// ══════════════════════════════════════════════════════════════
+
+/// 一份最小的 `ontok-introspect` schema（故意与启发式对着干）：
+/// `amount` 是 varchar（启发式会当 decimal）、`status` 是 integer（启发式会当 string）、
+/// `version_number` 是 varchar（启发式会当 integer）、`point_change` 是 numeric。
+const SCHEMA_FIXTURE: &str = r#"{"tables":[
+  {"name":"customers","columns":[
+    {"name":"customer_id","data_type":"character varying"},
+    {"name":"balance","data_type":"numeric"},
+    {"name":"created_at","data_type":"timestamp without time zone"},
+    {"name":"is_deleted","data_type":"integer"},
+    {"name":"amount","data_type":"character varying"},
+    {"name":"status","data_type":"integer"},
+    {"name":"version_number","data_type":"character varying"},
+    {"name":"point_change","data_type":"numeric"}
+  ]},
+  {"name":"deductions","columns":[
+    {"name":"customer_id","data_type":"character varying"},
+    {"name":"amount","data_type":"numeric"}
+  ]},
+  {"name":"order","columns":[{"name":"customer_id","data_type":"character varying"}]},
+  {"name":"customer_subscriptions","columns":[{"name":"customer_id","data_type":"character varying"}]}
+]}"#;
+
+fn schema_model() -> ModelTrackView {
+    let mut v = model_view();
+    for (name, column) in [
+        ("状态", "status"),
+        ("版本号", "version_number"),
+        ("点数变化量", "point_change"),
+    ] {
+        v.entity_types[0].properties.push(prop(name, column));
+    }
+    v
+}
+
+fn schema_opts<'a>(schema: &'a SchemaTypes) -> TtlOptions<'a> {
+    TtlOptions {
+        project: "demo",
+        version: 3,
+        base: DEFAULT_BASE,
+        action_type_count: 0,
+        tenancy: None,
+        schema: Some(schema),
+    }
+}
+
+#[test]
+fn a1_schema_types_override_heuristic_per_column() {
+    let schema = SchemaTypes::parse(SCHEMA_FIXTURE).expect("schema 合法");
+    let doc = serialize_model(&schema_model(), &schema_opts(&schema));
+    let d = doc.doc();
+
+    // 真实类型压过启发式（这四条都是启发式会判错的形态）。
+    assert!(block_of(d, ":customers__amount a ").contains("rdfs:range xsd:string"), "{d}");
+    assert!(block_of(d, ":customers__status a ").contains("rdfs:range xsd:integer"), "{d}");
+    assert!(
+        block_of(d, ":customers__version_number a ").contains("rdfs:range xsd:string"),
+        "{d}"
+    );
+    assert!(
+        block_of(d, ":customers__point_change a ").contains("rdfs:range xsd:decimal"),
+        "{d}"
+    );
+    for col in ["amount", "status", "version_number", "point_change", "created_at"] {
+        assert!(
+            block_of(d, &format!(":customers__{col} a ")).contains("ontok:rangeSource \"schema\""),
+            "{col} 必须标 schema 来源：{d}"
+        );
+    }
+    // 没匹配上的列：启发式 + 未映射 + 计数。
+    let unknown = block_of(d, ":customers__zzz_unknown a ");
+    assert!(unknown.contains("ontok:rangeSource \"heuristic\""), "{unknown}");
+    assert!(unknown.contains("ontok:rangeUnmapped true"), "{unknown}");
+    let stats = range_stats(d);
+    assert_eq!(stats.source("schema"), 12, "{stats:?}");
+    assert_eq!(stats.source("heuristic"), 1, "{stats:?}");
+    assert_eq!(stats.heuristic, vec!["莫名列".to_string()]);
+    assert!(d.contains("ontok:rangeSourceSchema 12"), "{d}");
+    assert!(d.contains("ontok:rangeSourceHeuristic 1"), "{d}");
+    assert!(d.contains("# · xsd 类型来源：真实列类型"), "{d}");
+}
+
+#[test]
+fn a1_no_schema_has_all_three_marks() {
+    let doc = serialize_model(&model_view(), &opts());
+    let d = doc.doc();
+    assert!(d.contains("# · xsd 类型来源：**启发式**（未读真实列类型"), "① 文件头：{d}");
+    assert!(d.contains("ontok:rangeSourceHeuristic 10"), "② 本体节点计数：{d}");
+    assert!(
+        block_of(d, ":customers__amount a ").contains("ontok:rangeSource \"heuristic\""),
+        "③ 属性来源标记：{d}"
+    );
+    let stats = range_stats(d);
+    assert_eq!(stats.source("heuristic"), 10, "{stats:?}");
+    assert_eq!(stats.source("schema"), 0, "{stats:?}");
+}
+
+#[test]
+fn a1_schema_parse_is_fail_closed_and_normalizes_names() {
+    assert!(SchemaTypes::parse("{not json").is_err(), "坏 JSON 必须报错");
+    let s = SchemaTypes::parse(
+        r#"{"tables":[{"name":" Customers ","columns":[{"name":" Amount ","data_type":"NUMERIC(10,2)"}]}]}"#,
+    )
+    .expect("合法");
+    assert_eq!(s.data_type("customers", "amount"), Some("numeric(10,2)"));
+    assert_eq!(s.data_type("CUSTOMERS", "AMOUNT"), Some("numeric(10,2)"));
+    assert!(s.data_type("customers", "missing").is_none());
+}
+
+#[test]
+fn a2_collision_suffix_keeps_the_required_52_and_104_counts() {
+    // 52 条对象属性：50 条链式 + 一对互为反向（t50→t51 / t51→t50）。
+    let mut v = ModelTrackView {
+        seq: 3,
+        extracted_by: None,
+        entity_types: (0..52)
+            .map(|i| ModelEntityView {
+                key: format!("t{i}"),
+                display_name: format!("T{i}"),
+                description: None,
+                aliases: vec![],
+                parent: None,
+                disjoint_with: vec![],
+                properties: vec![],
+                evidence: vec![],
+            })
+            .collect(),
+        link_types: Vec::new(),
+        action_types: vec![],
+        functions: vec![],
+    };
+    for i in 0..50 {
+        v.link_types.push(link(&format!("l{i}"), &format!("t{i}"), &format!("t{}", i + 1)));
+    }
+    v.link_types.push(link("l50", "t50", "t51"));
+    v.link_types.push(link("l51", "t51", "t50"));
+    assert_eq!(v.link_types.len(), 52);
+
+    let d = serialize_model(&v, &opts()).into_doc();
+    assert_eq!(d.matches("owl:ObjectProperty").count(), 104, "52 正 + 52 反");
+    assert_eq!(d.matches("owl:inverseOf").count(), 104, "双向各一条");
+    // 命名冲突：`t51→t50` 的正向名被 `t50→t51` 的反向名占用 ⇒ 加 `__inverse`。
+    assert!(d.contains(":t51__t50 a "), "{d}");
+    assert!(d.contains(":t51__t50__inverse a "), "冲突必须加后缀：{d}");
+    assert!(
+        d.contains("owl:inverseOf :t51__t50__inverse"),
+        "正向必须指到带后缀的反向：{d}"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // AC-010 · 文档
 // ══════════════════════════════════════════════════════════════
 
 #[test]
 fn ac010_module_header_documents_the_three_conventions() {
     let src = common::read_source("src/domain/ttl.rs");
-    for keyword in ["ontok:instanceIri", "反向属性", "xsd:decimal", "{class}", "{id}"] {
+    for keyword in [
+        "ontok:instanceIri",
+        "反向属性",
+        "xsd:decimal",
+        "{class}",
+        "{id}",
+        "--schema",
+        "ontok:rangeSource",
+        "xsd_for_sql_type",
+    ] {
         assert!(src.contains(keyword), "ttl.rs 模块头缺少 `{keyword}` 的说明");
     }
 }
@@ -464,6 +628,7 @@ async fn live_grouped_v3_counts_and_volume_are_within_the_contract() {
         base: DEFAULT_BASE,
         action_type_count: snap.action_types.len(),
         tenancy: None,
+        schema: None,
     };
     let m = serialize_model(&model, &o).into_doc();
     let c = serialize_customer(&cv, &o).into_doc();
@@ -512,4 +677,98 @@ async fn live_grouped_v3_counts_and_volume_are_within_the_contract() {
     // AC-006：两次导出逐字节相同。
     assert_eq!(m, serialize_model(&model, &o).into_doc(), "建模视图两次导出不一致");
     assert_eq!(c, serialize_customer(&cv, &o).into_doc(), "客户视图两次导出不一致");
+}
+
+/// A-1 的**最终判据**：给真实 schema 后，870 条数据类型属性的 range 与
+/// `schema.json` 的 `data_type` **逐条一致**（0 条启发式、0 条不一致）。
+///
+/// schema 路径优先读 `ONTOK_SCHEMA_JSON`，否则用仓库外的 `../code/out/schema.json`；
+/// 文件不存在 ⇒ 明确跳过（不是假绿：报告里写清是环境缺失）。
+#[tokio::test]
+async fn live_schema_makes_all_ranges_match_real_data_types() {
+    use ontok::db::project::PgProjectStore;
+    use ontok::db::snapshot_store::PgStore;
+    use ontok::domain::ttl::local_model;
+
+    if std::env::var(ontok::config::TEST_DATABASE_URL_ENV).is_err() {
+        eprintln!("· 缺 ONTOK_TEST_DATABASE_URL ⇒ 跳过 A-1 真库逐条比对");
+        return;
+    }
+    let schema_path = std::env::var("ONTOK_SCHEMA_JSON")
+        .unwrap_or_else(|_| "../code/out/schema.json".to_string());
+    let Ok(raw) = std::fs::read_to_string(&schema_path) else {
+        eprintln!("· 读不到 {schema_path} ⇒ 跳过 A-1 逐条比对（设置 ONTOK_SCHEMA_JSON）");
+        return;
+    };
+    let schema = SchemaTypes::parse(&raw).expect("schema.json 合法");
+
+    let pool = common::test_pool().await;
+    let ps = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+    let Some(p) = ps.get_by_name("anspire_grouped").await.expect("查项目失败") else {
+        eprintln!("· 库里没有 `anspire_grouped` ⇒ 跳过");
+        return;
+    };
+    let Ok(v) = ps.version_by_seq(p.id, &p.name, 3).await else {
+        eprintln!("· 没有 v3 ⇒ 跳过");
+        return;
+    };
+    let snap = store.get_snapshot(v.id).await.expect("读快照失败").expect("v3 应当有快照");
+    let model = ontok::domain::model_view::project_model_track(&snap);
+    let o = TtlOptions {
+        project: "anspire_grouped",
+        version: 3,
+        base: DEFAULT_BASE,
+        action_type_count: snap.action_types.len(),
+        tenancy: None,
+        schema: Some(&schema),
+    };
+    let m = serialize_model(&model, &o).into_doc();
+    let stats = range_stats(&m);
+    let total: usize = model.entity_types.iter().map(|e| e.properties.len()).sum();
+    assert_eq!(total, 870, "数据前提：870 条数据类型属性");
+    assert_eq!(stats.source("schema"), total, "所有属性都必须来自真实 schema：{stats:?}");
+    assert_eq!(stats.source("heuristic"), 0, "schema 模式不许回退启发式：{stats:?}");
+    assert_eq!(stats.unmapped.len(), 0, "schema 模式不应有未映射：{stats:?}");
+
+    let mut mismatched: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    for e in &model.entity_types {
+        for prop in &e.properties {
+            let column = if prop.column.trim().is_empty() {
+                prop.name.trim()
+            } else {
+                prop.column.trim()
+            };
+            let Some(sql) = schema.data_type(&e.key, column) else {
+                missing.push(format!("{}.{}", e.key, column));
+                continue;
+            };
+            let want = xsd_for_sql_type(sql)
+                .unwrap_or_else(|| panic!("schema 类型认不出：{}.{} = {sql}", e.key, column));
+            let subject = format!(":{}__{}", local_model(&e.key), local_model(column));
+            let block = block_of(&m, &format!("{subject} a "));
+            if !block.contains(&format!("rdfs:range {}", want.iri())) {
+                mismatched.push(format!(
+                    "{}.{} | 真实 {sql} | 期望 {} | 实际块：{}",
+                    e.key,
+                    column,
+                    want.iri(),
+                    block.lines().find(|l| l.contains("rdfs:range")).unwrap_or("<无>")
+                ));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "schema 缺列：{missing:?}");
+    assert!(
+        mismatched.is_empty(),
+        "A-1 失败：{} 条与真实类型不一致（前 20 条）：\n{}",
+        mismatched.len(),
+        mismatched.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+    );
+    eprintln!(
+        "A-1 实测：{total} 条属性 · schema {} 条 · heuristic {} 条 · 不一致 0 条",
+        stats.source("schema"),
+        stats.source("heuristic")
+    );
 }
