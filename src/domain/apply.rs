@@ -327,14 +327,13 @@ fn link_from_payload(key: &str, p: &serde_json::Value) -> Result<LinkType, Apply
         },
         // REQ-120 · 连接验证（AC-007）：**提案说什么就落什么**，三态原样透传。
         //
-        // `join_verified` 缺席 ⇒ `None`（手写提案 / REQ-120 之前的提案）——
-        // ⛔ 不默认成 `false`：「没说过」与「说过是命名推断」是两件事。
-        // 但给了却读不懂（不是布尔）⇒ **丢弃整份提案**是本模块既有的
-        // `BadConfidence` 同款纪律吗？不是 —— 这里**不**新增错误变体：
-        // 一个非布尔的 `join_verified` 只可能是手写笔误，把它当 `None`
-        // 会让 TTL 少一行标注（可见）、而拒绝整份提案会让 96 张表白抽一遍
-        // （代价不对等）。所以取 `as_bool()`，读不出就是 `None`。
-        join_verified: obj.get("join_verified").and_then(|v| v.as_bool()),
+        // | 提案里 | 快照里 |
+        // | --- | --- |
+        // | `"true"` / `"inherit"` / `"false"`（字符串，当前写法） | 对应三态 |
+        // | `true` / `false`（布尔，rev.1 的写法 / 手写提案） | `Verified` / `NamingOnly` |
+        // | 缺席 / `null` | `None`（**不**默认成 `"false"`） |
+        // | 认不出的字符串 | `None`（不猜；TTL 少一行标注是**可见**的失败） |
+        join_verified: join_state_from_payload(obj.get("join_verified")),
         join_evidence: obj
             .get("join_evidence")
             .and_then(|v| v.as_str())
@@ -346,6 +345,16 @@ fn link_from_payload(key: &str, p: &serde_json::Value) -> Result<LinkType, Apply
 ///
 /// 为什么不用空串兜底：`{table: "", column: "", claim: ""}` 会让「这条关系
 /// 有 1 条证据」变成一句没有任何信息的断言 —— 与「没有证据」必须可区分。
+fn join_state_from_payload(v: Option<&serde_json::Value>) -> Option<crate::domain::snapshot::JoinState> {
+    use crate::domain::snapshot::JoinState;
+    match v? {
+        serde_json::Value::String(s) => JoinState::parse(s),
+        serde_json::Value::Bool(true) => Some(JoinState::Verified),
+        serde_json::Value::Bool(false) => Some(JoinState::NamingOnly),
+        _ => None,
+    }
+}
+
 fn evidence_from_json(v: &serde_json::Value) -> Option<Evidence> {
     let obj = v.as_object()?;
     let table = obj.get("table").and_then(|x| x.as_str())?;

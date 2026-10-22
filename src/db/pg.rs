@@ -95,7 +95,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     // 容量按「全都要发」估算 —— 稳态下真实长度短得多，但多出来的容量
     // 只是没被用到的 Vec 内存，不是一次分配失败。
-    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + 512;
+    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + JOIN_STATE_PATCH.len() + 512;
     let mut batch = String::with_capacity(cap);
     batch.push_str(MIGRATE_LOCK_PREFIX);
     batch.push_str(SCHEMA);
@@ -111,6 +111,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
         }
     }
     batch.push_str(BACKFILL_PATCH);
+    // REQ-120 · 三态列的类型归一（通常空转，见 `JOIN_STATE_PATCH`）。
+    batch.push_str(JOIN_STATE_PATCH);
     batch.push_str(SCHEMA_AGENT_REGISTRY_PATCH);
     // REQ-109 · `ai_cache` 与 agent-registry 同一条 batch（同一把交易级咨询锁）。
     // 新表、无外键、无历史遗留 ⇒ 不需要 ALTER 补列那条路径。
@@ -329,10 +331,10 @@ CREATE TABLE IF NOT EXISTS link_types (
   confidence          REAL,
   confidence_method   TEXT,
   confidence_signals  JSONB,
-  -- REQ-120 · 这条关系的连接是否经过**值域重叠**验证（AC-007）。
-  -- NULL = 没有这条信息（REQ-120 之前的版本 / 手写提案），
-  -- 与 false（确定只是命名推断）是两件事 —— 三态语义与 `confidence` 一致。
-  join_verified       BOOLEAN,
+  -- REQ-120 · 连接的验证状态（AC-007，三态）：'true' / 'inherit' / 'false'。
+  -- TEXT 而不是 BOOLEAN：BA rev.2 把「同名同义列继承」加成第三态。
+  -- NULL = 没有这条信息（REQ-120 之前的版本 / 手写提案）。
+  join_verified       TEXT,
   join_evidence       TEXT,
   UNIQUE (version_id, key)
 );
@@ -550,7 +552,7 @@ const ALTER_PATCHES: [(&str, &str, &str); 16] = [
     (
         "link_types",
         "join_verified",
-        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_verified BOOLEAN;",
+        "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_verified TEXT;",
     ),
     (
         "link_types",
@@ -558,6 +560,38 @@ const ALTER_PATCHES: [(&str, &str, &str); 16] = [
         "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_evidence TEXT;",
     ),
 ];
+
+/// REQ-120 · **把 `link_types.join_verified` 从布尔归一成文本**（三态）。
+///
+/// # 为什么必须是「无条件但通常空转」的一条，而不是 [`ALTER_PATCHES`] 的一条
+///
+/// `ALTER_PATCHES` 的跳过判据是「**列是否存在**」。本轮先落的是 `BOOLEAN`（两态），
+/// BA rev.2 之后要三态（`true` / `inherit` / `false`），于是**列已存在、类型却不对**
+/// —— 恰好是那张表的跳过判据看不见的情形。
+///
+/// 放一个 `DO` 块：**稳态库上一把锁都不取**（只读 `information_schema`，
+/// 条件为假就不发 `ALTER`），只有真的还是 `boolean` 的库才做一次类型转换。
+/// 与 [`BACKFILL_PATCH`] 同一条纪律：**无条件执行、可重复跑、代价可忽略**。
+///
+/// ⚠️ 类型转换是**有损的**：`boolean → text` 只可能得到 `'true'` / `'false'`，
+/// 不会凭空变出 `'inherit'`（继承态是本轮 rev.2 才引入的，历史上没有这条数据）。
+const JOIN_STATE_PATCH: &str = r#"
+-- REQ-120 · link_types.join_verified: BOOLEAN → TEXT（三态 true / inherit / false）。
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'link_types'
+      AND column_name = 'join_verified'
+      AND data_type = 'boolean'
+  ) THEN
+    ALTER TABLE link_types
+      ALTER COLUMN join_verified TYPE TEXT
+      USING (CASE WHEN join_verified THEN 'true' ELSE 'false' END);
+  END IF;
+END $$;
+"#;
 
 /// REQ-012 · 回填历史 `action_types.ordinal`。**无条件**执行，从不跳过。
 ///

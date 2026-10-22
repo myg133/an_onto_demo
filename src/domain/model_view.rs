@@ -118,13 +118,13 @@ pub struct ModelLinkView {
     /// AC-010 要求「model-view 里每条关系都有」，而「缺字段」与
     /// 「这一版没有分数」在判读时是两件事。
     pub confidence: Option<crate::domain::confidence::Confidence>,
-    /// **这条连接有没有经过值域重叠验证**（REQ-120 · AC-007）。
+    /// **这条连接的验证状态**（REQ-120 · AC-007，三态）。
     ///
-    /// 三态与快照层同源（[`crate::domain::snapshot::LinkType::join_verified`]）：
-    /// `Some(true)` = 签过字的 FK 提案 · `Some(false)` = 只是命名推断 ·
-    /// `None` = 这一版没有这条信息。
-    pub join_verified: Option<bool>,
-    /// 验证证据原文（命中数 / 样本数 / 示例值）。只与 `Some(true)` 同时出现。
+    /// 与快照层同源（[`crate::domain::snapshot::JoinState`]）：
+    /// `Verified` = 值域重叠实测通过 · `Inherited` = 同名同义列继承 ·
+    /// `NamingOnly` = 仅名字推断 · `None` = 这一版没有这条信息。
+    pub join_verified: Option<crate::domain::snapshot::JoinState>,
+    /// 验证证据原文。**只有实测 / 继承才有**（`NamingOnly` 没有证据可写）。
     pub join_evidence: Option<String>,
     /// **这条关系由哪一列实现**（REQ-120）。
     ///

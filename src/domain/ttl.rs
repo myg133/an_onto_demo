@@ -1479,7 +1479,7 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
         // ⚠️ 代价如实登记：TTL 里 `ontok:joinVerified` 的**条数 = 2 ×
         // 签过的边数**（正反各一条）。报告里两个数都写。
         if let Some(v) = l.join_verified {
-            extra.push(format!("ontok:joinVerified {}", plain(bool_lit(v))));
+            extra.push(format!("ontok:joinVerified {}", plain(v.as_str())));
         }
         inverse_blocks.push((
             inv.clone(),
@@ -2185,8 +2185,9 @@ fn model_object_block(l: &ModelLinkView, subject_local: &str, inverse_of: Option
     //
     // | 快照 | 这一行 | 为什么 |
     // | --- | --- | --- |
-    // | `Some(true)` | `ontok:joinVerified "true"` + `ontok:joinEvidence` | 签过字的 FK 提案 |
-    // | `Some(false)` | `ontok:joinVerified "false"` | 只是列名后缀推断 |
+    // | `Verified` | `ontok:joinVerified "true"` + `ontok:joinEvidence` | 签过字的 FK 提案（值域重叠实测） |
+    // | `Inherited` | `ontok:joinVerified "inherit"` + `ontok:joinEvidence` | 同名同义列继承（来源写进证据） |
+    // | `NamingOnly` | `ontok:joinVerified "false"`（**不写证据**） | 只是列名后缀推断 |
     // | `None` | **不写** | REQ-120 之前的版本：没说过，替它说就是编 |
     //
     // 值是**字符串字面量**（`"true"` / `"false"`）而不是裸布尔：
@@ -2195,9 +2196,14 @@ fn model_object_block(l: &ModelLinkView, subject_local: &str, inverse_of: Option
     //  有意的 —— 本 REQ 不借「统一风格」去改另一个 REQ 已验收的三元组。）
     match l.join_verified {
         Some(v) => {
-            lines.push(format!("ontok:joinVerified {}", plain(bool_lit(v))));
-            if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
-                lines.push(format!("ontok:joinEvidence {}", plain(e)));
+            // 三态：`"true"` / `"inherit"` / `"false"`（REQ-120 rev.2）。
+            lines.push(format!("ontok:joinVerified {}", plain(v.as_str())));
+            // 证据只在**有数据证据**时写：`"false"` 没有证据可写，
+            // 写了就是拿「命名推断」冒充「验过」。
+            if v.has_data_evidence() {
+                if let Some(e) = l.join_evidence.as_deref().filter(|e| !e.trim().is_empty()) {
+                    lines.push(format!("ontok:joinEvidence {}", plain(e)));
+                }
             }
         }
         None => {}
@@ -2545,7 +2551,7 @@ mod tests {
                 claim: "列名推断".into(),
             }],
             confidence: None,
-            join_verified: Some(true),
+            join_verified: Some(crate::domain::snapshot::JoinState::Verified),
             join_evidence: Some("value-overlap 5/5 (100.00%) -> customer.id via plural".into()),
             column: Some("customer_id".into()),
         });

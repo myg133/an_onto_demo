@@ -53,6 +53,7 @@
 use super::introspect::{ColumnMeta, KeyCatalog, SchemaReport};
 use super::names::TableNames;
 use super::sample::{self, SampleSpec};
+use crate::domain::snapshot::JoinState;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
@@ -157,12 +158,52 @@ impl MatchKind {
 }
 
 /// 一个候选表。
+/// **候选目标列的档次**（E-1：join 目标不只是主键）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    /// 单列主键。
+    Primary,
+    /// 单列**唯一列**（业务键，如 `llm_model.model_id`）。
+    Unique,
+}
+
+impl TargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetKind::Primary => "primary_key",
+            TargetKind::Unique => "unique_column",
+        }
+    }
+
+    /// 写进 TTL 证据的那个词：BA rev.2 要求 `-> llm_model.model_id via unique_column`。
+    pub fn tag(self) -> &'static str {
+        match self {
+            TargetKind::Primary => "primary_key",
+            TargetKind::Unique => "unique_column",
+        }
+    }
+}
+
+/// 一个候选 `(表, 目标列)` 对。
+///
+/// # E-1（BA rev.2）：为什么一个表会出多个候选
+///
+/// 原来的目标列只有「单列主键 → 第一个单列唯一列」，于是 `llm_model.model_id`
+/// （业务键、`unique` 索引、**主键是另外一列 `id`**）永远验不到：拿 `kimi-k2.5`
+/// 去撞 `llm_model.id`（uuid）必然 0 命中 ⇒ 被误判成 `low_overlap`。
+/// 现在**每个可 join 的目标列各出一个候选**（主键 + 全部单列唯一列），
+/// 命中率最高的那一个胜出，证据里写清是 `primary_key` 还是 `unique_column`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     /// 候选表名。
     pub table: String,
-    /// **用哪一列验命中**：单列主键 → 第一个单列唯一列 → `None`（验不了，R3）。
+    /// **用哪一列验命中**：主键或单列唯一列；`None` = 这张表没有可 join 的键列（R3）。
     pub key_column: Option<String>,
+    /// 目标列档次（`key_column` 为 `None` 时无意义）。
+    pub target_kind: TargetKind,
+    /// 同表内的目标优先级：主键 0，其余按 `unique_columns` 序 1..（仅用于**同分**排序）。
+    pub key_priority: u8,
     /// 怎么被提名的。
     pub kind: MatchKind,
     /// 命中的那个词干变体（`main_customer` 列会先用 `main_customer`、再用 `customer`）。
@@ -177,12 +218,32 @@ pub struct TableFacts {
     pub display_cn: Option<String>,
     /// 这张表**有几列**（用于报文件头统计）。
     pub column_count: usize,
-    /// 引用目标键列（R3 的判据）。
-    pub key_column: Option<String>,
-    /// 单列唯一列（R4 的「目录侧唯一性」证据）。
+    /// 单列主键（可作 join 目标）。
+    pub primary_key: Option<String>,
+    /// 单列唯一列（含主键，`schema.json` 原样）。
     pub unique_columns: Vec<String>,
     /// 全部列名（大小写敏感）。
     pub columns: Vec<String>,
+}
+
+impl TableFacts {
+    /// **可作 join 目标**的列：主键在前，其余单列唯一列按字典序。
+    ///
+    /// 去重（主键通常也在 `unique_columns` 里）—— 同一个 (表, 列) 不许测两遍，
+    /// 否则「候选数」这个统计会平白膨胀，同一份证据也会出现两条。
+    pub fn targets(&self) -> Vec<(String, TargetKind)> {
+        let mut out: Vec<(String, TargetKind)> = Vec::new();
+        if let Some(pk) = self.primary_key.as_deref() {
+            out.push((pk.to_string(), TargetKind::Primary));
+        }
+        for u in &self.unique_columns {
+            if out.iter().any(|(c, _)| c == u) {
+                continue;
+            }
+            out.push((u.clone(), TargetKind::Unique));
+        }
+        out
+    }
 }
 
 /// **候选目录**：96 张表的事实快照 + 提名算法（纪律 H：提名只有这一处实现）。
@@ -202,7 +263,7 @@ impl FkCatalog {
                 name: t.name.clone(),
                 display_cn: names.lookup(&t.name).map(str::to_string),
                 column_count: t.columns.len(),
-                key_column: keys.get(&t.name).and_then(|k| k.key_column()).map(str::to_string),
+                primary_key: keys.get(&t.name).and_then(|k| k.primary_key.clone()),
                 unique_columns: keys
                     .get(&t.name)
                     .map(|k| k.unique_columns.clone())
@@ -222,17 +283,20 @@ impl FkCatalog {
         self.tables.iter().find(|t| t.name == name)
     }
 
-    /// **一个 `*_id` 列的全部候选**（按「像不像」+ 表名排序，截到 [`MAX_CANDIDATES`]）。
+    /// **一个 `*_id` 列的全部候选**（按「像不像」+ 表名 + 目标列优先级排序，截到 [`MAX_CANDIDATES`]）。
     ///
     /// # 判据（`stems` 由长到短逐个试）
     ///
     /// | [`MatchKind`] | 条件 | 真实例子 |
     /// | --- | --- | --- |
     /// | `Exact` | `t == stem` | `order_id` → `order` |
-    /// | `Plural` | `t == stem + s/es` | `license_id` → `licenses` |
+    /// | `Plural` | `t == stem + s/es/ies` | `license_id` → `licenses`、`policy_id` → `…policies` |
     /// | `Suffix` | `t` 以 `_stem` / `_stems` 结尾 | `product_id` → `package_products` |
     /// | `Substring` | `stem`（或其复数）是 `t` 的一个词元 | `service_id` → `service_apps` |
     /// | `CommentMention` | 列注释出现该表的中文名/英文名 | `customer_id`「客户标识」→ `customers` |
+    ///
+    /// **目标列不只一个**（E-1）：每张命中的表出 **主键 + 每个单列唯一列** 各一个候选。
+    /// `llm_model.model_id` 这类「业务键当外键」的情形靠它才验得出来。
     ///
     /// **自身表不进候选**：自引用 FK 不在本需求范围内（真实库 0 条），
     /// 放进来只会让「`package_products.product_id`」在候选里多一个自己，
@@ -261,18 +325,49 @@ impl FkCatalog {
                 best.insert(t.name.as_str(), (MatchKind::CommentMention.rank() * 16, MatchKind::CommentMention, stem_full.to_string()));
             }
         }
-        let mut out: Vec<(u8, Candidate)> = best
-            .into_iter()
-            .map(|(name, (score, kind, stem))| {
-                let key_column = self
-                    .get(name)
-                    .and_then(|t| t.key_column.clone());
-                (score, Candidate { table: name.to_string(), key_column, kind, stem })
-            })
-            .collect();
-        // 排序键 = (优先级, 表名)：**不含任何依赖内存地址的量** ⇒ 确定性。
-        out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.table.cmp(&b.1.table)));
-        out.into_iter().take(MAX_CANDIDATES).map(|(_, c)| c).collect()
+        let mut out: Vec<(u8, u8, Candidate)> = Vec::new();
+        for (name, (score, kind, stem)) in best {
+            let Some(t) = self.get(name) else { continue };
+            let targets = t.targets();
+            if targets.is_empty() {
+                // 没有可 join 的键列 ⇒ 仍然出一个候选，让未解析清单能说出「候选表无主键」（R3）。
+                out.push((
+                    score,
+                    0,
+                    Candidate {
+                        table: name.to_string(),
+                        key_column: None,
+                        target_kind: TargetKind::Primary,
+                        key_priority: 0,
+                        kind,
+                        stem,
+                    },
+                ));
+                continue;
+            }
+            for (i, (col, tk)) in targets.into_iter().enumerate() {
+                out.push((
+                    score,
+                    i as u8,
+                    Candidate {
+                        table: name.to_string(),
+                        key_column: Some(col),
+                        target_kind: tk,
+                        key_priority: i as u8,
+                        kind,
+                        stem: stem.clone(),
+                    },
+                ));
+            }
+        }
+        // 排序键 = (提名档, 同表目标优先级, 表名, 目标列)：**不含依赖内存地址的量** ⇒ 确定性。
+        out.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.table.cmp(&b.2.table))
+                .then_with(|| a.2.key_column.cmp(&b.2.key_column))
+        });
+        out.into_iter().take(MAX_CANDIDATES).map(|(_, _, c)| c).collect()
     }
 
     /// 全部待判的 `*_id` 列（按表名、列序）—— 未解析清单的**域**。
@@ -324,25 +419,50 @@ fn stem_variants(stem: &str) -> Vec<String> {
 }
 
 /// 词干 ↔ 表名的一档匹配（**唯一实现**）。
+///
+/// # 复数形态三种（`policy_id` 那个坑抓出来的）
+///
+/// `+s`（`license`→`licenses` 走的是 `+s`？不是 —— 是 `+es`）、`+es`、
+/// 以及**辅音 + y → ies**（`policy` → `policies`）。只认前两种时，
+/// `customer_provider_permissions.policy_id` 与 `customer_provider_permission_policies`
+/// 明明是同一件事，却因为「复数拼法不认识」被判成 `no_candidate`。
 pub fn match_column_to_table(stem: &str, table: &str) -> Option<MatchKind> {
-    let plural = format!("{stem}s");
-    let plural_es = format!("{stem}es");
+    let plurals = plural_forms(stem);
     if table == stem {
         return Some(MatchKind::Exact);
     }
-    if table == plural || table == plural_es {
+    if plurals.iter().any(|p| p == table) {
         return Some(MatchKind::Plural);
     }
-    for p in [stem, plural.as_str(), plural_es.as_str()] {
+    for p in std::iter::once(stem).chain(plurals.iter().map(|s| s.as_str())) {
         if table.ends_with(&format!("_{p}")) {
             return Some(MatchKind::Suffix);
         }
     }
     let tokens: Vec<&str> = table.split('_').filter(|p| !p.is_empty()).collect();
-    if tokens.iter().any(|t| *t == stem || *t == plural || *t == plural_es) {
+    if tokens
+        .iter()
+        .any(|t| *t == stem || plurals.iter().any(|p| p == t))
+    {
         return Some(MatchKind::Substring);
     }
     None
+}
+
+/// 一个词干的**全部复数写法**（去重、保序）。
+///
+/// 只覆盖英文名词的三条主流规则：`+s` / `+es` / `辅音+y → ies`。
+/// 不做不规则复数（`person/people`）—— 那需要词表，而本模块不引新依赖，
+/// 也不拿「猜」当提名依据（候选宽一点可以，但**不能编**）。
+pub fn plural_forms(stem: &str) -> Vec<String> {
+    let mut out = vec![format!("{stem}s"), format!("{stem}es")];
+    if stem.ends_with('y') {
+        let head: String = stem.chars().take(stem.chars().count() - 1).collect();
+        out.push(format!("{head}ies"));
+    }
+    let mut seen = BTreeSet::new();
+    out.retain(|p| seen.insert(p.clone()));
+    out
 }
 
 /// 列注释是不是**提到了这张表**（中文名或英文表名）。
@@ -492,13 +612,15 @@ pub fn ratio_milli(matched: u32, sampled: u32) -> u32 {
     ((matched as u64) * 1000 / (sampled as u64)) as u32
 }
 
-/// 判决档（R2）。
+/// 判决档（R2 + E-2 的第三档）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Band {
     /// ≥ 0.95 ⇒ `confidence ≥ 0.9`，可直接进提案。
     Strong,
     /// 0.5–0.95 ⇒ 中等，**必须人签**。
     Medium,
+    /// 同名同义列继承（E-2）：本表未实测，`confidence ∈ [0.60, 0.75]`，**必须人签**。
+    Inherit,
     /// < 0.5 ⇒ **不产出关系**。
     Vetoed,
 }
@@ -508,6 +630,7 @@ impl Band {
         match self {
             Band::Strong => "strong",
             Band::Medium => "medium",
+            Band::Inherit => "inherit",
             Band::Vetoed => "vetoed",
         }
     }
@@ -556,6 +679,23 @@ pub fn confidence_of(milli: u32) -> f64 {
 // ③ 提案：ADR-005 的六字段 + 机器可读 facts
 // ──────────────────────────────────────────────────────────
 
+/// 继承来源（E-2：同名同义列继承的**出处**，必须写清是哪张表的哪条验证）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InheritSource {
+    /// 验证来自哪张表（必须是**另一张表**）。
+    pub from_table: String,
+    /// 同名列的列名。
+    pub from_column: String,
+    /// 那条验证的命中数。
+    pub matched: u32,
+    /// 那条验证的样本数（分母）。
+    pub sampled: u32,
+    /// 那条验证的命中率（千分比）。
+    pub ratio_milli: u32,
+    /// 同一列名在别处还有几处验证（目标必须**全部一致**才允许继承）。
+    pub peers: usize,
+}
+
 /// 一条 FK 提案的**机器可读事实**（verified 之后进 TTL 的证据也从这里生成）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FkFacts {
@@ -563,6 +703,9 @@ pub struct FkFacts {
     pub to_table: String,
     /// 用哪一列验的命中（目标表的键列）。
     pub to_key_column: String,
+    /// 目标列是**主键**还是**单列唯一列**（E-1：`llm_model.model_id` 是后者）。
+    #[serde(default = "default_target_kind")]
+    pub target_kind: TargetKind,
     /// 命中数（有几个**被验的值**落在目标键里）。
     pub matched: u32,
     /// **被验的不同值个数** —— 命中率的分母。
@@ -590,6 +733,14 @@ pub struct FkFacts {
     pub match_kind: MatchKind,
     /// 命中的词干变体。
     pub stem: String,
+    /// **继承来源**（E-2）。`Some` ⇒ 这条提案**本表没实测**，数字全部来自
+    /// `source` 那张表的同名列验证；`band = inherit`，`confidence ∈ [0.60, 0.75]`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherit: Option<InheritSource>,
+}
+
+fn default_target_kind() -> TargetKind {
+    TargetKind::Primary
 }
 
 impl FkFacts {
@@ -599,33 +750,63 @@ impl FkFacts {
     /// REQ-108 AC-003「不落原值」的纪律在这里继续有效。示例值只留在
     /// **提案文件**里（那是给人看的，AC-001 要求它）。
     pub fn ttl_evidence(&self) -> String {
+        // E-2：继承态的 TTL 证据**不许**长得像实测 —— 开头就写 `inherited from`。
+        if let Some(src) = &self.inherit {
+            return format!(
+                "inherited from {}.{} (verified {}/{}) -> {}.{} via {} ({})",
+                src.from_table,
+                src.from_column,
+                src.matched,
+                src.sampled,
+                self.to_table,
+                self.to_key_column,
+                self.target_kind.tag(),
+                self.match_kind.as_str()
+            );
+        }
         format!(
-            "value-overlap {}/{} ({}.{:02}%) -> {}.{} via {}",
+            "value-overlap {}/{} ({}.{:02}%) -> {}.{} via {} ({})",
             self.matched,
             self.sampled,
             self.ratio_milli / 10,
             self.ratio_milli % 10,
             self.to_table,
             self.to_key_column,
+            self.target_kind.tag(),
             self.match_kind.as_str()
         )
     }
 
     /// 提案里的证据行（AC-001：匹配方式 + 命中数/样本数 + 示例值）。
     pub fn evidence_line(&self) -> String {
+        // E-2：继承态的证据行必须**一眼看出没实测**。
+        if let Some(src) = &self.inherit {
+            return format!(
+                "本表**未实测**；inherited from {}.{} (verified {}/{}) · 目标键 {}.{}（{}）· 提名 {}",
+                src.from_table,
+                src.from_column,
+                src.matched,
+                src.sampled,
+                self.to_table,
+                self.to_key_column,
+                self.target_kind.tag(),
+                self.match_kind.cn(),
+            );
+        }
         let samples = if self.samples.is_empty() {
             "（无）".to_string()
         } else {
             self.samples.join(", ")
         };
         format!(
-            "值域重叠 命中 {} / {} 个不同样本值（共取 {} 行，{}‰）· 目标键 {}.{} · 提名 {} · 样本示例 {}",
+            "值域重叠 命中 {} / {} 个不同样本值（共取 {} 行，{}‰）· 目标键 {}.{}（{}）· 提名 {} · 样本示例 {}",
             self.matched,
             self.sampled,
-            self.sampled,
+            self.window_rows,
             self.ratio_milli,
             self.to_table,
             self.to_key_column,
+            self.target_kind.tag(),
             self.match_kind.cn(),
             samples
         )
@@ -764,6 +945,12 @@ pub struct FkStats {
     pub proposals: usize,
     pub proposals_strong: usize,
     pub proposals_medium: usize,
+    /// **继承**出来的提案数（E-2）—— 单列一个计数，免得被算进 strong/medium。
+    #[serde(default)]
+    pub proposals_inherited: usize,
+    /// 同名列有验证、但**目标不唯一**（同名不同义）而被拒绝继承的列名数。
+    #[serde(default)]
+    pub inherit_conflicts: usize,
     /// 被否决的**候选**数（一条列可能有 2 个候选都被否决）。
     pub rejected: usize,
     /// 未解析的**列**数。
@@ -953,7 +1140,10 @@ pub fn decide_column(
     usable.sort_by(|a, b| {
         let ra = ratio_milli(a.1, sample.denominator());
         let rb = ratio_milli(b.1, sample.denominator());
-        rb.cmp(&ra).then_with(|| a.0.table.cmp(&b.0.table))
+        rb.cmp(&ra)
+            .then_with(|| a.0.table.cmp(&b.0.table))
+            .then_with(|| a.0.key_priority.cmp(&b.0.key_priority))
+            .then_with(|| a.0.key_column.cmp(&b.0.key_column))
     });
     let (best, best_hits) = usable[0];
     let best_milli = ratio_milli(best_hits, sample.denominator());
@@ -962,6 +1152,7 @@ pub fn decide_column(
         FkFacts {
             to_table: c.table.clone(),
             to_key_column: c.key_column.clone().unwrap_or_default(),
+            target_kind: c.target_kind,
             matched,
             sampled: sample.denominator(),
             window_rows: sample.window_rows,
@@ -979,6 +1170,7 @@ pub fn decide_column(
             unique_column,
             match_kind: c.kind,
             stem: c.stem.clone(),
+            inherit: None,
         }
     };
 
@@ -1124,6 +1316,14 @@ pub async fn verify(
         keys.get(t).and_then(|k| k.key_column()).map(str::to_string)
     };
 
+    // ── 第一阶段：逐列采样 + 判决（E-1：候选 = (表, 目标列) 对）────────
+    struct Outcome {
+        table: String,
+        column: String,
+        candidates: Vec<Candidate>,
+        verdict: Verdict,
+    }
+    let mut outcomes: Vec<Outcome> = Vec::with_capacity(pending.len());
     for (table, column) in pending {
         let candidates = catalog.candidates(table, column);
         out.stats.candidates_generated += candidates.len();
@@ -1162,19 +1362,88 @@ pub async fn verify(
             hits.push(count_hits(pool, &cs, &sample.tested, timeout).await);
         }
 
-        match decide_column(table, &column.name, &sample, &candidates, &hits, unique_column) {
+        let verdict = decide_column(table, &column.name, &sample, &candidates, &hits, unique_column);
+        outcomes.push(Outcome {
+            table: table.to_string(),
+            column: column.name.clone(),
+            candidates,
+            verdict,
+        });
+    }
+
+    // ── 第二阶段（E-2）：同名同义列**继承** ────────────────────────────
+    //
+    // 只对「**本表拿不到数据**」的列做继承（`insufficient_sample` / `sample_failed`）。
+    // ⛔ 绝不对 `low_overlap` 做：那是**数据说了不成立**，继承等于拿别处的证据
+    //    推翻本处的实测；也绝不对 `no_candidate` 做（连名字证据都没有）。
+    //
+    // 五个条件（BA rev.2，全部满足才产出）：
+    // 1. 同名列在**别处**已被**实测**通过（`strong` / `medium`，不是继承链）；
+    // 2. 这些验证的**目标唯一**（表 + 列都一致）—— 两处不一致就是同名不同义；
+    // 3. 目标表**在本列的候选里**（名字证据与数据证据都指向它）；
+    // 4. `confidence ∈ [0.60, 0.75]`（明确低于 strong）；
+    // 5. 必须人签（由 `load_signed` 把关，未签不进快照）。
+    let mut index = VerifiedIndex::default();
+    for o in &outcomes {
+        let Verdict::Propose(p) = &o.verdict else { continue };
+        if p.band == "inherit" {
+            continue; // 只从**实测**继承，不叠继承链
+        }
+        index.add(
+            &o.column,
+            InheritSource {
+                from_table: o.table.clone(),
+                from_column: o.column.clone(),
+                matched: p.facts.matched,
+                sampled: p.facts.sampled,
+                ratio_milli: p.facts.ratio_milli,
+                peers: 0,
+            },
+            &p.facts.to_table,
+            &p.facts.to_key_column,
+            p.facts.target_kind,
+        );
+    }    let mut inherited = 0usize;
+    for o in outcomes.iter_mut() {
+        let Verdict::Unresolved(u) = &o.verdict else { continue };
+        if u.code != UnresolvedCode::InsufficientSample.as_str()
+            && u.code != UnresolvedCode::SampleFailed.as_str()
+        {
+            // ⛔ 只对「本表拿不到数据」做继承：`low_overlap` 是**数据说了不成立**，
+            //    `no_candidate` 连名字证据都没有。两者都不许继承。
+            continue;
+        }
+        let code = if u.code == UnresolvedCode::InsufficientSample.as_str() {
+            UnresolvedCode::InsufficientSample
+        } else {
+            UnresolvedCode::SampleFailed
+        };
+        match plan_inherit(&o.table, &o.column, &o.candidates, code, &u.reason, &index) {
+            InheritPlan::Propose(p) => {
+                o.verdict = Verdict::Propose(p);
+                inherited += 1;
+            }
+            InheritPlan::Skip(_) => {}
+        }
+    }
+    out.stats.proposals_inherited = inherited;
+    out.stats.inherit_conflicts = index.conflicts();
+
+    // ── 第三阶段：汇总（统计只在这里算一次，不增量维护）──────────────────
+    for o in &outcomes {
+        match &o.verdict {
             Verdict::Propose(p) => {
+                out.stats.proposals += 1;
                 out.stats.proposals_strong += usize::from(p.band == "strong");
                 out.stats.proposals_medium += usize::from(p.band == "medium");
-                out.stats.proposals += 1;
-                out.proposals.push(*p);
+                out.proposals.push((**p).clone());
             }
             Verdict::Vetoed { unresolved, rejected } => {
                 out.stats.rejected += rejected.len();
                 out.stats.unresolved_low_overlap += 1;
                 out.stats.unresolved += 1;
-                out.rejected.extend(rejected);
-                out.unresolved.push(*unresolved);
+                out.rejected.extend(rejected.iter().cloned());
+                out.unresolved.push((**unresolved).clone());
             }
             Verdict::Unresolved(u) => {
                 match u.code.as_str() {
@@ -1185,7 +1454,7 @@ pub async fn verify(
                     _ => out.stats.unresolved_sample_failed += 1,
                 }
                 out.stats.unresolved += 1;
-                out.unresolved.push(*u);
+                out.unresolved.push((**u).clone());
             }
         }
     }
@@ -1200,6 +1469,245 @@ pub async fn verify(
         );
     }
     Ok(out)
+}
+
+/// 继承态的置信度：`0.60 + 0.15 × (来源命中率)`，夹在 **[0.60, 0.75]**。
+///
+/// 为什么是这条区间（BA rev.2）：继承的证据**弱于本表实测**（strong ≥ 0.90），
+/// 又**强于纯命名推断**（0.5 以下一律不产出）。上限 0.75 是刻意的 ——
+/// 它让「继承」永远进不了 strong 档，读数字的人一眼能看出这条不是实测的。
+pub fn inherit_confidence(ratio_milli: u32) -> f64 {
+    let x = 0.60 + 0.15 * (ratio_milli.min(1000) as f64 / 1000.0);
+    ((x * 1000.0).round() / 1000.0).clamp(0.60, 0.75)
+}
+
+// ──────────────────────────────────────────────────────────
+// E-2 · 同名同义列继承（**五个条件只有一个实现**）
+// ──────────────────────────────────────────────────────────
+
+/// 同名列的**已验证目标**索引（第一阶段的产出）。
+///
+/// 一个列名可能出现在很多张表里（`customer_id` 有 37 处）。这个索引回答两个问题：
+/// 1. 这个列名在别处**实测**指向哪张表的哪一列？
+/// 2. 那些验证的**目标是不是唯一**？（两处不一致 = 同名不同义 ⇒ 不许继承）
+#[derive(Debug, Clone, Default)]
+pub struct VerifiedIndex {
+    by_column: BTreeMap<String, VerifiedTarget>,
+}
+
+/// 一个列名对应的已验证目标。
+#[derive(Debug, Clone, Default)]
+pub struct VerifiedTarget {
+    pub to_table: String,
+    pub to_key_column: String,
+    pub target_kind: Option<TargetKind>,
+    /// 所有指向**同一个目标**的验证来源（按来源表名排序后取第一个作为引用）。
+    pub sources: Vec<InheritSource>,
+    /// **目标不唯一**：同名列在别处被验到了不同的目标（或不同列）⇒ 不许继承。
+    pub conflict: bool,
+}
+
+impl VerifiedIndex {
+    /// 登记一条实测结论。目标与已有登记不一致 ⇒ 标 `conflict`（**不覆盖**）。
+    pub fn add(
+        &mut self,
+        column: &str,
+        source: InheritSource,
+        to_table: &str,
+        to_key_column: &str,
+        target_kind: TargetKind,
+    ) {
+        let e = self.by_column.entry(column.to_string()).or_default();
+        if e.sources.is_empty() {
+            e.to_table = to_table.to_string();
+            e.to_key_column = to_key_column.to_string();
+            e.target_kind = Some(target_kind);
+            e.sources.push(source);
+            return;
+        }
+        if e.to_table != to_table
+            || e.to_key_column != to_key_column
+            || e.target_kind != Some(target_kind)
+        {
+            e.conflict = true;
+        }
+        e.sources.push(source);
+    }
+
+    pub fn get(&self, column: &str) -> Option<&VerifiedTarget> {
+        self.by_column.get(column)
+    }
+
+    /// 有冲突的列名数（报告里要数出来：这些列**明确拒绝**继承）。
+    pub fn conflicts(&self) -> usize {
+        self.by_column.values().filter(|t| t.conflict).count()
+    }
+}
+
+/// `plan_inherit` 的两种结局。
+#[derive(Debug, Clone, PartialEq)]
+pub enum InheritPlan {
+    Propose(Box<FkProposal>),
+    /// 不继承，附原因（写进报告/统计，**不静默**）。
+    Skip(InheritSkip),
+}
+
+impl InheritPlan {
+    pub fn skip_reason(&self) -> Option<InheritSkip> {
+        match self {
+            InheritPlan::Propose(_) => None,
+            InheritPlan::Skip(s) => Some(*s),
+        }
+    }
+}
+
+/// 不继承的原因（分类，便于报告与统计）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InheritSkip {
+    /// 同名列在别处**没有**实测结论。
+    NoVerifiedNamesake,
+    /// 同名列的目标**不唯一**（同名不同义）。
+    AmbiguousTarget,
+    /// 目标表**不在本列候选里**（名字证据对不上）。
+    TargetNotInCandidates,
+    /// 唯一的验证来源就是本表自己（不许自证）。
+    SelfSource,
+}
+
+impl InheritSkip {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InheritSkip::NoVerifiedNamesake => "no_verified_namesake",
+            InheritSkip::AmbiguousTarget => "ambiguous_target",
+            InheritSkip::TargetNotInCandidates => "target_not_in_candidates",
+            InheritSkip::SelfSource => "self_source",
+        }
+    }
+}
+
+/// **E-2 的判决**：能不能继承、继承到什么、证据怎么写。
+///
+/// 纯函数（不碰数据库）⇒ 「五个条件」可以被单测逐条钉住。
+///
+/// | # | 条件 | 落点 |
+/// | --- | --- | --- |
+/// | 1 | 同名列在**别处**实测通过（不是继承链） | `index` 只收 `strong/medium` |
+/// | 2 | 目标**唯一**（表 + 列都一致） | `VerifiedTarget::conflict` |
+/// | 3 | 目标表在本列候选里 | [`InheritSkip::TargetNotInCandidates`] |
+/// | 4 | `confidence ∈ [0.60, 0.75]` | [`inherit_confidence`]（上限 0.75） |
+/// | 5 | 必须人签 | `load_signed`（这里只造**未签**提案） |
+pub fn plan_inherit(
+    table: &str,
+    column: &str,
+    candidates: &[Candidate],
+    code: UnresolvedCode,
+    code_reason: &str,
+    index: &VerifiedIndex,
+) -> InheritPlan {
+    let Some(t) = index.get(column) else {
+        return InheritPlan::Skip(InheritSkip::NoVerifiedNamesake);
+    };
+    if t.conflict {
+        return InheritPlan::Skip(InheritSkip::AmbiguousTarget);
+    }
+    // 条件 3：目标 (表, 列) 必须在本列候选里 —— 名字证据与数据证据都指向它。
+    let Some(cand) = candidates.iter().find(|c| {
+        c.table == t.to_table && c.key_column.as_deref() == Some(t.to_key_column.as_str())
+    }) else {
+        return InheritPlan::Skip(InheritSkip::TargetNotInCandidates);
+    };
+    // 来源：**证据最强的那个**（命中率 → 命中数 → 表名），并记「另有 N 处一致」。
+    //
+    // 为什么不是「表名字典序第一个」：引用哪一条决定了证据长什么样。字典序会
+    // 让「3/3 的一条」压过「5/5 的一条」，读的人以为继承来的证据很弱。
+    // 排序键全部是确定量 ⇒ 两次运行引用同一条（AC-009）。
+    let mut sorted = t.sources.clone();
+    sorted.sort_by(|a, b| {
+        b.ratio_milli
+            .cmp(&a.ratio_milli)
+            .then_with(|| b.matched.cmp(&a.matched))
+            .then_with(|| a.from_table.cmp(&b.from_table))
+            .then_with(|| a.from_column.cmp(&b.from_column))
+    });
+    let mut src = sorted[0].clone();
+    if src.from_table == table {
+        // 唯一来源就是自己 ⇒ 要么找第二个来源，要么不继承。
+        match sorted.iter().find(|s| s.from_table != table) {
+            Some(other) => src = other.clone(),
+            None => return InheritPlan::Skip(InheritSkip::SelfSource),
+        }
+    }
+    src.peers = sorted.iter().filter(|s| s.from_table != table).count().saturating_sub(1);
+    let facts = FkFacts {
+        to_table: t.to_table.clone(),
+        to_key_column: t.to_key_column.clone(),
+        target_kind: t.target_kind.unwrap_or(TargetKind::Primary),
+        matched: src.matched,
+        sampled: src.sampled,
+        window_rows: src.sampled,
+        window_distinct: src.sampled,
+        ratio_milli: src.ratio_milli,
+        samples: vec![],
+        sample_unique: false,
+        // 本列在不在唯一约束里**与这条推断无关**：1:1 需要本列实测，
+        // 继承只给 N:1（宁少勿多）。
+        unique_column: false,
+        match_kind: cand.kind,
+        stem: cand.stem.clone(),
+        inherit: Some(src.clone()),
+    };
+    let conf = inherit_confidence(src.ratio_milli);
+    let claim = format!(
+        "列 {}.{} 与 {}.{} 同名同义（后者已验证指向 {}.{}），本表该列无有效数据，\
+         因此按**继承**判定它指向 {}",
+        table, column, src.from_table, src.from_column, t.to_table, t.to_key_column, t.to_table
+    );
+    let reason = format!(
+        "同名同义列继承：{}.{} 实测 {}/{}（{}‰）；本列 {}（{}）⇒ 继承，\
+         confidence {:.3} ∈ [0.60, 0.75]，**必须人签**（AC-002 的强证据不成立）",
+        src.from_table,
+        src.from_column,
+        src.matched,
+        src.sampled,
+        src.ratio_milli,
+        code.as_str(),
+        code_reason,
+        conf
+    );
+    let evidence = vec![
+        facts.evidence_line(),
+        format!(
+            "inherited from {}.{} (verified {}/{}){}",
+            src.from_table,
+            src.from_column,
+            src.matched,
+            src.sampled,
+            if src.peers > 0 {
+                format!("；另有 {} 处同名列验证目标一致", src.peers)
+            } else {
+                String::new()
+            }
+        ),
+        format!(
+            "本列未实测的原因：{} —— 继承**不是**实测，TTL 里记 `joinVerified \"inherit\"`",
+            code.cn()
+        ),
+        format!(
+            "候选 {} 个：{}",
+            candidates.len(),
+            candidates.iter().map(|c| c.table.as_str()).collect::<Vec<_>>().join(", ")
+        ),
+    ];
+    InheritPlan::Propose(Box::new(FkProposal::new(
+        format!("{table}.{column}"),
+        claim,
+        evidence,
+        facts,
+        conf,
+        Band::Inherit,
+        "N:1".to_string(),
+        reason,
+    )))
 }
 
 // ──────────────────────────────────────────────────────────
@@ -1218,6 +1726,9 @@ pub struct SignedEdge {
     pub confidence: f64,
     /// 签名人（AC-001 的 `reviewed_by`）。
     pub reviewed_by: String,
+    /// **三态**：实测 `Verified` / 继承 `Inherited`。`NamingOnly` 永远不该出现在这里
+    /// （没人能"签"一条纯命名推断）。
+    pub state: JoinState,
     /// 明明没签字、却被写进 `proposals` 的条目（只用于报告，不注入）。
     pub skipped_unsigned: usize,
 }
@@ -1289,9 +1800,41 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
             .ok_or_else(|| anyhow::anyhow!("{subject} 缺 facts（无法复核命中率）"))?;
         let fixed: FkFacts = serde_json::from_value(facts)
             .with_context(|| format!("{subject} 的 facts 解析失败"))?;
+        // ── 三态中的哪一态？`band` 说了算（生成端只有这三种取值）──────────
+        let band = it.get("band").and_then(|b| b.as_str()).unwrap_or("");
+        let state = match band {
+            "strong" | "medium" => JoinState::Verified,
+            "inherit" => JoinState::Inherited,
+            other => bail!(
+                "{subject} 的 band = {other:?} —— 只有 strong / medium / inherit 可签（vetoed 不许签）"
+            ),
+        };
+        if state == JoinState::Inherited {
+            // E-2 的四道闸（继承比实测更容易被伪造，所以更严）。
+            let Some(src) = fixed.inherit.as_ref() else {
+                bail!("{subject} 标成 inherit 却没有 facts.inherit（说不出继承自哪条验证）");
+            };
+            let from_table = subject.rsplit_once('.').map(|x| x.0).unwrap_or("");
+            if src.from_table == from_table {
+                bail!("{subject} 的继承来源就是它自己 —— 不许自证");
+            }
+            if src.matched > src.sampled {
+                bail!("{subject} 的继承来源证据不成立（{}/{}）", src.matched, src.sampled);
+            }
+            let conf = it.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
+            if !(0.60..=0.75).contains(&conf) {
+                // AC 原文：继承的 confidence 必须落在 0.60–0.75（明确低于 strong）。
+                bail!(
+                    "{subject} 的 confidence = {conf} 不在继承区间 [0.60, 0.75] —— 继承**不许**冒充 strong"
+                );
+            }
+            if !fixed.ttl_evidence().starts_with("inherited from ") {
+                bail!("{subject} 的继承证据没写成 `inherited from …`，读的人会当成实测");
+            }
+        }
         // 复核用的是**分母**：不同值的个数。`distinct` 缺省（旧文件）时退回 `sampled`。
         let denom = fixed.sampled;
-        if fixed.sampled < MIN_SAMPLES || denom < MIN_SAMPLES {
+        if state == JoinState::Verified && fixed.sampled < MIN_SAMPLES {
             bail!(
                 "{subject} 的样本不足（{} 行 / {} 个不同值 < {}），不许签",
                 fixed.sampled,
@@ -1303,7 +1846,7 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
             bail!("{subject} 的命中数 {} > 样本值域 {}，文件被改过", fixed.matched, denom);
         }
         let milli = ratio_milli(fixed.matched, denom);
-        if classify_milli(milli) == Band::Vetoed {
+        if state == JoinState::Verified && classify_milli(milli) == Band::Vetoed {
             bail!(
                 "{subject} 的命中率 {}/{} = {}‰ < {}‰ —— 被值域重叠否决的候选不许靠签字放行（AC-002）",
                 fixed.matched,
@@ -1332,6 +1875,7 @@ pub fn load_signed(text: &str) -> Result<SignedFk> {
                 .and_then(|c| c.as_f64())
                 .unwrap_or_else(|| confidence_of(milli)),
             reviewed_by: reviewer.to_string(),
+            state,
             skipped_unsigned: 0,
         });
     }
@@ -1410,7 +1954,10 @@ pub fn inject_signed(
                 // `apply` 那条路只拿得到 `payload`，条目顶层的副本永远进不了快照，
                 // 于是 TTL 里会「看着有标记、实际没有」。**一个真相，不搞两份**。
                 if let Some(p) = it.get_mut("payload").and_then(|p| p.as_object_mut()) {
-                    p.insert("join_verified".into(), serde_json::Value::Bool(true));
+                    p.insert(
+                        "join_verified".into(),
+                        serde_json::Value::String(e.state.as_str().to_string()),
+                    );
                     p.insert(
                         "join_evidence".into(),
                         serde_json::Value::String(e.join_evidence.clone()),
@@ -1437,7 +1984,7 @@ pub fn inject_signed(
                 "to_type": e.to_table,
                 "cardinality": e.cardinality,
                 "semantic": "belongs_to",
-                "join_verified": true,
+                "join_verified": e.state.as_str(),
                 "join_evidence": e.join_evidence,
                 "evidence": [{
                     "table": e.from_table,
@@ -1553,9 +2100,50 @@ pub fn stamp_naming_only(items: &mut [serde_json::Value]) -> usize {
         if p.get("join_verified").is_some() {
             continue;
         }
-        p.insert("join_verified".into(), serde_json::Value::Bool(false));
+        p.insert(
+            "join_verified".into(),
+            serde_json::Value::String(JoinState::NamingOnly.as_str().to_string()),
+        );
         n += 1;
     }
+    n
+}
+
+/// **已签字的边不参与「按置信度丢弃」**（REQ-120 rev.2 · E-2 的必要条件）。
+///
+/// # 为什么必须有这一条
+///
+/// `route_items`（REQ-108）按置信度分档：低档进「待查」、拒绝档**不进提案**。
+/// 那是给「机器猜的」做分诊用的。而**人签过字的边**不是机器猜的：
+///
+/// - `--fk-sign` 的语义是「人已经判断过这条关系成立」；
+/// - 若它因为没有数据证据（`api_call_logs` 那种 **0 行表**）被打成低分，
+///   就会被静默丢进待查清单 —— **签了字却进不了本体**，而屏幕上一切正常。
+///
+/// 这正是 E-2 要解的那类问题：`api_call_logs` 永远拿不到实测证据
+/// （表是空的），继承 + 人签是唯一出路；若路由再把它丢掉，整条路就白走了。
+///
+/// 返回被**捞回来**的条数（打印出来，别让读者以为分档数字对不上是 bug）。
+pub fn retain_signed(routing: &mut crate::extract::propose::Routing) -> usize {
+    fn rescue(items: &mut Vec<serde_json::Value>, rescued: &mut Vec<serde_json::Value>) {
+        let mut i = 0;
+        while i < items.len() {
+            let signed = items[i]["payload"]["join_verified"]
+                .as_str()
+                .map(|s| s == JoinState::Verified.as_str() || s == JoinState::Inherited.as_str())
+                .unwrap_or(false);
+            if signed {
+                rescued.push(items.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let mut rescued: Vec<serde_json::Value> = Vec::new();
+    rescue(&mut routing.pending, &mut rescued);
+    rescue(&mut routing.rejected, &mut rescued);
+    let n = rescued.len();
+    routing.kept.extend(rescued);
     n
 }
 
@@ -1578,7 +2166,7 @@ mod tests {
             name: name.to_string(),
             display_cn: None,
             column_count: columns.len(),
-            key_column: key.map(str::to_string),
+            primary_key: key.map(str::to_string),
             unique_columns: unique.iter().map(|s| s.to_string()).collect(),
             columns: columns.iter().map(|s| s.to_string()).collect(),
         }
@@ -1698,7 +2286,14 @@ mod tests {
     // ── ② 判决（AC-002 / AC-008）──────────────────────────────
 
     fn cand(name: &str, key: &str, kind: MatchKind) -> Candidate {
-        Candidate { table: name.to_string(), key_column: Some(key.to_string()), kind, stem: "x".into() }
+        Candidate {
+            table: name.to_string(),
+            key_column: Some(key.to_string()),
+            target_kind: TargetKind::Primary,
+            key_priority: 0,
+            kind,
+            stem: "x".into(),
+        }
     }
 
     /// **AC-008 构造例一：名字像但值域不重叠 ⇒ 必须被否决。**
@@ -1730,7 +2325,14 @@ mod tests {
     /// **AC-008 构造例三：候选表无主键 ⇒ 不产出。**
     #[test]
     fn fk_skips_candidates_without_a_key_column() {
-        let cs = vec![Candidate { table: "no_pk".into(), key_column: None, kind: MatchKind::Exact, stem: "x".into() }];
+        let cs = vec![Candidate {
+            table: "no_pk".into(),
+            key_column: None,
+            target_kind: TargetKind::Primary,
+            key_priority: 0,
+            kind: MatchKind::Exact,
+            stem: "x".into(),
+        }];
         let v = decide_column("t", "foo_id", &sample(&["1", "2", "3"]), &cs, &[None], false);
         match v {
             Verdict::Unresolved(u) => assert_eq!(u.code, "candidate_no_pk"),
@@ -1916,6 +2518,384 @@ mod tests {
         assert!(err.contains("一条都没签"), "{err}");
     }
 
+    // ── E-1：join 目标不只主键（`llm_model.model_id` 那一路）──────────
+
+    /// 唯一列也要出候选：`llm_model` 的 `id` / `model_id` / `model_name` 都是可 join 目标。
+    #[test]
+    fn unique_columns_are_join_targets_too() {
+        let mut llm = table(
+            "llm_model",
+            Some("id"),
+            &["id", "model_id", "model_name"],
+            &["id", "model_id", "model_name"],
+        );
+        llm.display_cn = Some("大模型".into());
+        let c = catalog(vec![llm]);
+        let got = c.candidates("api_call_logs", &col("model_id", None));
+        let pairs: Vec<(&str, &str)> = got
+            .iter()
+            .map(|x| (x.table.as_str(), x.key_column.as_deref().unwrap_or("")))
+            .collect();
+        assert!(pairs.contains(&("llm_model", "id")), "{pairs:?}");
+        assert!(pairs.contains(&("llm_model", "model_id")), "{pairs:?}");
+        assert!(pairs.contains(&("llm_model", "model_name")), "{pairs:?}");
+        // 目标列档次：主键 vs 唯一列
+        let model = got.iter().find(|x| x.key_column.as_deref() == Some("model_id")).unwrap();
+        assert_eq!(model.target_kind, TargetKind::Unique);
+        let pk = got.iter().find(|x| x.key_column.as_deref() == Some("id")).unwrap();
+        assert_eq!(pk.target_kind, TargetKind::Primary);
+    }
+
+    /// 命中率选的是**唯一列**而不是主键，并且证据里写明 `via unique_column`。
+    ///
+    /// 这正是 BA 报的 `llm_model` 案子：`kimi-k2.5` 撞 `id`（uuid）是 0 命中，
+    /// 撞 `model_id`（业务键）是 5/5。
+    #[test]
+    fn the_best_target_may_be_a_unique_column_and_the_evidence_says_so() {
+        let cs = vec![
+            Candidate {
+                table: "llm_model".into(),
+                key_column: Some("id".into()),
+                target_kind: TargetKind::Primary,
+                key_priority: 0,
+                kind: MatchKind::Substring,
+                stem: "model".into(),
+            },
+            Candidate {
+                table: "llm_model".into(),
+                key_column: Some("model_id".into()),
+                target_kind: TargetKind::Unique,
+                key_priority: 1,
+                kind: MatchKind::Substring,
+                stem: "model".into(),
+            },
+        ];
+        let v = decide_column(
+            "api_call_logs",
+            "model_id",
+            &sample(&["kimi-k2.5", "qwen3.5", "doubao"]),
+            &cs,
+            &[Some(0), Some(3)],
+            false,
+        );
+        let Verdict::Propose(p) = v else { panic!("必须产出提案") };
+        assert_eq!(p.facts.to_table, "llm_model");
+        assert_eq!(p.facts.to_key_column, "model_id");
+        assert_eq!(p.facts.target_kind, TargetKind::Unique);
+        let ttl = p.facts.ttl_evidence();
+        assert!(
+            ttl.contains("-> llm_model.model_id via unique_column"),
+            "E-1 要求的写法：{ttl}"
+        );
+        assert!(p.confidence >= 0.9, "5/5 仍是强证据：{}", p.confidence);
+        // 被压过的主键候选要进「被否决」清单（superseded），不是静默丢弃
+        assert!(
+            p.evidence.join("\n").contains("候选 2 个"),
+            "{}",
+            p.evidence.join("\n")
+        );
+    }
+
+    /// 复数第三种写法：`policy` → `policies`（抽查 `no_candidate` 时抓到的漏提名）。
+    #[test]
+    fn consonant_y_plural_is_recognised() {
+        assert_eq!(
+            match_column_to_table("policy", "customer_provider_permission_policies"),
+            Some(MatchKind::Suffix),
+            "`_policies` 必须认出来"
+        );
+        assert_eq!(match_column_to_table("policy", "policies"), Some(MatchKind::Plural));
+        assert!(plural_forms("policy").contains(&"policies".to_string()));
+        // 不多认：`polic` 之类不能靠 y→ies 混进来
+        assert_eq!(match_column_to_table("polic", "policies"), None);
+    }
+
+    // ── E-2：同名同义列继承 ──────────────────────────────────
+
+    fn verified_source(table: &str, column: &str, matched: u32, sampled: u32) -> InheritSource {
+        InheritSource {
+            from_table: table.into(),
+            from_column: column.into(),
+            matched,
+            sampled,
+            ratio_milli: ratio_milli(matched, sampled),
+            peers: 0,
+        }
+    }
+
+    fn inherit_index() -> VerifiedIndex {
+        let mut idx = VerifiedIndex::default();
+        // 两处同名列、同一个目标 ⇒ 目标唯一，可以继承
+        idx.add(
+            "license_id",
+            verified_source("usage_details", "license_id", 4, 4),
+            "licenses",
+            "id",
+            TargetKind::Primary,
+        );
+        idx.add(
+            "license_id",
+            verified_source("license_quota", "license_id", 5, 5),
+            "licenses",
+            "id",
+            TargetKind::Primary,
+        );
+        idx
+    }
+
+    fn api_candidates() -> Vec<Candidate> {
+        vec![
+            Candidate {
+                table: "licenses".into(),
+                key_column: Some("id".into()),
+                target_kind: TargetKind::Primary,
+                key_priority: 0,
+                kind: MatchKind::Plural,
+                stem: "license".into(),
+            },
+            Candidate {
+                table: "license_quota".into(),
+                key_column: Some("id".into()),
+                target_kind: TargetKind::Primary,
+                key_priority: 0,
+                kind: MatchKind::Substring,
+                stem: "license".into(),
+            },
+        ]
+    }
+
+    /// **E-2 的主用例**：`api_call_logs.license_id`（0 行、本表无法实测）继承
+    /// `usage_details.license_id` 的 4/4，confidence 落 0.60–0.75，证据写明来源。
+    #[test]
+    fn inherit_produces_a_medium_confidence_proposal_with_its_source() {
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!("应当继承：{plan:?}") };
+        assert_eq!(p.subject, "api_call_logs.license_id");
+        assert_eq!(p.band, "inherit");
+        assert_eq!(p.cardinality, "N:1", "继承只给 N:1（宁少勿多）");
+        assert!(
+            (0.60..=0.75).contains(&p.confidence),
+            "confidence 必须在 0.60–0.75：{}",
+            p.confidence
+        );
+        assert_eq!(p.reviewed_by(), None, "继承也必须人签（P2）");
+        let joined = p.evidence.join("\n");
+        // 引用**证据最强**的那条（5/5 压过 4/4），不是字典序第一条
+        assert!(joined.contains("inherited from license_quota.license_id (verified 5/5)"), "{joined}");
+        assert!(joined.contains("另有 1 处同名列验证目标一致"), "{joined}");
+        // ⛔ 证据里不许出现「实测」的口吻
+        assert!(!p.facts.ttl_evidence().starts_with("value-overlap"), "{}", p.facts.ttl_evidence());
+        assert!(p.facts.ttl_evidence().starts_with("inherited from "), "{}", p.facts.ttl_evidence());
+    }
+
+    /// ⛔ 同名但**目标不唯一** ⇒ 不许继承（那正是「同名不同义」）。
+    #[test]
+    fn inherit_refuses_ambiguous_targets() {
+        let mut idx = inherit_index();
+        idx.add(
+            "license_id",
+            verified_source("other_table", "license_id", 5, 5),
+            "license_quota", // 不同目标！
+            "id",
+            TargetKind::Primary,
+        );
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "x",
+            &idx,
+        );
+        assert_eq!(plan.skip_reason(), Some(InheritSkip::AmbiguousTarget), "{plan:?}");
+    }
+
+    #[test]
+    fn inherit_needs_a_verified_namesake_and_a_matching_candidate() {
+        let empty = VerifiedIndex::default();
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "x",
+            &empty,
+        );
+        assert_eq!(plan.skip_reason(), Some(InheritSkip::NoVerifiedNamesake));
+
+        // 目标表不在本列候选里 ⇒ 名字证据对不上，不继承
+        let mut idx = VerifiedIndex::default();
+        idx.add(
+            "license_id",
+            verified_source("usage_details", "license_id", 4, 4),
+            "licenses_archive",
+            "id",
+            TargetKind::Primary,
+        );
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "x",
+            &idx,
+        );
+        assert_eq!(plan.skip_reason(), Some(InheritSkip::TargetNotInCandidates));
+    }
+
+    /// 唯一来源就是本表自己 ⇒ 不许自证。
+    #[test]
+    fn inherit_refuses_self_reference() {
+        let mut idx = VerifiedIndex::default();
+        idx.add(
+            "license_id",
+            verified_source("api_call_logs", "license_id", 4, 4),
+            "licenses",
+            "id",
+            TargetKind::Primary,
+        );
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "x",
+            &idx,
+        );
+        assert_eq!(plan.skip_reason(), Some(InheritSkip::SelfSource));
+    }
+
+    /// 继承的置信度区间：上限 0.75，永远够不着 strong。
+    #[test]
+    fn inherit_confidence_stays_below_strong() {
+        assert_eq!(inherit_confidence(1000), 0.75);
+        assert!(inherit_confidence(1000) < 0.9, "继承不许冒充 strong");
+        assert_eq!(inherit_confidence(0), 0.60);
+        for m in [0u32, 250, 500, 750, 900, 1000] {
+            let c = inherit_confidence(m);
+            assert!((0.60..=0.75).contains(&c), "{m}‰ ⇒ {c}");
+        }
+    }
+
+    /// 签发文件：inherit 必须带 `facts.inherit`、confidence 在区间内、证据以
+    /// `inherited from` 开头；否则**拒绝整份文件**。
+    #[test]
+    fn signing_an_inherit_proposal_is_gated() {
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!() };
+        let mut v = serde_json::to_value(&*p).unwrap();
+        v["reviewed_by"] = serde_json::Value::String("ba-alice".into());
+        let doc = |v: &serde_json::Value| {
+            serde_json::json!({
+                "kind": FkReport::KIND,
+                "proposals": [v],
+                "rejected": [],
+                "unresolved": [],
+            })
+            .to_string()
+        };
+
+        // 正常：能签，且 state = Inherited
+        let s = load_signed(&doc(&v)).expect("继承提案应当可签");
+        assert_eq!(s.edges.len(), 1);
+        assert_eq!(s.edges[0].state, JoinState::Inherited);
+        assert!(s.edges[0].join_evidence.starts_with("inherited from "));
+
+        // 置信度越界（冒充 strong）⇒ 拒绝
+        let mut bad = v.clone();
+        bad["confidence"] = serde_json::json!(0.95);
+        let err = load_signed(&doc(&bad)).unwrap_err().to_string();
+        assert!(err.contains("不在继承区间"), "{err}");
+
+        // 缺 facts.inherit ⇒ 拒绝
+        let mut bad2 = v.clone();
+        bad2["facts"].as_object_mut().unwrap().remove("inherit");
+        let err = load_signed(&doc(&bad2)).unwrap_err().to_string();
+        assert!(err.contains("没有 facts.inherit"), "{err}");
+
+        // band 被改成 strong ⇒ 当成实测走另一套闸（5/5 会过），但 state 变了 ——
+        // 这里断言的是「band 决定三态」，不是「数据能骗过阈值」。
+        let mut strong_claim = v.clone();
+        strong_claim["band"] = serde_json::json!("strong");
+        let s2 = load_signed(&doc(&strong_claim)).expect("band=strong 走实测闸");
+        assert_eq!(s2.edges[0].state, JoinState::Verified);
+    }
+
+    /// 注入：继承边写 `join_verified: "inherit"`（⛔ 不许写 `"true"`）。
+    #[test]
+    fn injection_marks_inherited_edges_as_inherit_not_true() {
+        let plan = plan_inherit(
+            "api_call_logs",
+            "license_id",
+            &api_candidates(),
+            UnresolvedCode::InsufficientSample,
+            "取样失败（all_null）",
+            &inherit_index(),
+        );
+        let InheritPlan::Propose(p) = plan else { panic!() };
+        let mut v = serde_json::to_value(&*p).unwrap();
+        v["reviewed_by"] = serde_json::Value::String("ba-alice".into());
+        let doc = serde_json::json!({
+            "kind": FkReport::KIND,
+            "proposals": [v],
+            "rejected": [],
+            "unresolved": [],
+        })
+        .to_string();
+        let signed = load_signed(&doc).unwrap();
+        let mut items: Vec<serde_json::Value> = vec![];
+        let known: BTreeSet<String> =
+            ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
+        inject_signed(&mut items, &signed, &known).unwrap();
+        assert_eq!(
+            items[0]["payload"]["join_verified"],
+            serde_json::Value::String("inherit".into())
+        );
+        assert!(
+            items[0]["payload"]["join_evidence"].as_str().unwrap().starts_with("inherited from "),
+            "{}",
+            items[0]["payload"]["join_evidence"]
+        );
+    }
+
+    /// **签字边不被分档器丢掉**（E-2 的必要条件：否则 Q4 那条路白走）。
+    #[test]
+    fn signed_edges_survive_confidence_routing() {
+        use crate::extract::propose::Routing;
+        let mut routing = Routing::default();
+        routing.rejected.push(serde_json::json!({
+            "kind": "add_link_type",
+            "payload": {"from_type": "a", "to_type": "b", "join_verified": "inherit"}
+        }));
+        routing.pending.push(serde_json::json!({
+            "kind": "add_link_type",
+            "payload": {"from_type": "c", "to_type": "d", "join_verified": "true"}
+        }));
+        routing.pending.push(serde_json::json!({
+            "kind": "add_link_type",
+            "payload": {"from_type": "e", "to_type": "f", "join_verified": "false"}
+        }));
+        let rescued = retain_signed(&mut routing);
+        assert_eq!(rescued, 2, "两条签过的边被捞回来，命名推断的留在待查");
+        assert_eq!(routing.kept.len(), 2);
+        assert_eq!(routing.pending.len(), 1);
+        assert!(routing.rejected.is_empty());
+    }
+
     #[test]
     fn signed_proposals_become_edges_with_ttl_evidence() {
         let s = load_signed(&report_json(Some("ba-alice"))).unwrap();
@@ -1981,7 +2961,11 @@ mod tests {
         assert_eq!(st.added, 0);
         assert_eq!(st.marked_existing, 1, "同一条边只补标记，不新增");
         // ⚠️ 标记只落在 payload（`apply` 唯一读得到的那层），顶层**没有**副本
-        assert_eq!(items[0]["payload"]["join_verified"], serde_json::Value::Bool(true));
+        assert_eq!(
+            items[0]["payload"]["join_verified"],
+            serde_json::Value::String("true".into()),
+            "三态用字符串（true / inherit / false）"
+        );
         assert!(
             items[0].get("join_verified").is_none(),
             "顶层不许有第二份真相：{items:?}"
@@ -2017,16 +3001,19 @@ mod tests {
             link_item("a", "b_id", "c", "N:1"),
             {
                 let mut x = link_item("d", "e_id", "f", "N:1");
-                x["payload"]["join_verified"] = serde_json::Value::Bool(true);
+                x["payload"]["join_verified"] = serde_json::Value::String("true".into());
                 x
             },
         ];
         let n = stamp_naming_only(&mut items);
         assert_eq!(n, 1);
-        assert_eq!(items[0]["payload"]["join_verified"], serde_json::Value::Bool(false));
+        assert_eq!(
+            items[0]["payload"]["join_verified"],
+            serde_json::Value::String("false".into())
+        );
         assert_eq!(
             items[1]["payload"]["join_verified"],
-            serde_json::Value::Bool(true),
+            serde_json::Value::String("true".into()),
             "已验的边不许被改回 false"
         );
     }

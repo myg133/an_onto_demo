@@ -18,12 +18,12 @@
 //!  于是「提案里有、TTL 里没有」；单测全绿，端到端空。）
 
 use ontok::domain::model_view::ModelLinkView;
-use ontok::domain::snapshot::{Evidence, LinkType};
+use ontok::domain::snapshot::{Evidence, JoinState, LinkType};
 use ontok::domain::ttl::{serialize_model, TtlOptions, DEFAULT_BASE};
 use ontok::extract::fk::{
     classify_milli, confidence_of, inject_signed, load_signed, promote_unique_cardinality,
     render_report, render_unresolved, stamp_naming_only, Band, FkFacts, FkProposal, FkReport,
-    FkSource, FkStats, MatchKind, UnresolvedCode, FK_METHOD,
+    FkSource, FkStats, MatchKind, TargetKind, UnresolvedCode, FK_METHOD,
 };
 use ontok::extract::introspect::KeyCatalog;
 use serde_json::json;
@@ -37,6 +37,7 @@ fn facts(to_table: &str, matched: u32, sampled: u32) -> FkFacts {
     FkFacts {
         to_table: to_table.to_string(),
         to_key_column: "id".to_string(),
+        target_kind: TargetKind::Primary,
         matched,
         sampled,
         window_rows: sampled,
@@ -47,6 +48,7 @@ fn facts(to_table: &str, matched: u32, sampled: u32) -> FkFacts {
         unique_column: false,
         match_kind: MatchKind::Plural,
         stem: "x".into(),
+        inherit: None,
     }
 }
 
@@ -105,7 +107,7 @@ fn link_view(
     to: &str,
     card: &str,
     column: Option<&str>,
-    join: Option<bool>,
+    join: Option<JoinState>,
     evidence: Option<&str>,
 ) -> ModelLinkView {
     ModelLinkView {
@@ -247,10 +249,20 @@ fn ttl_renders_the_three_states_of_join_verification() {
                 "x",
                 "N:1",
                 Some("x_id"),
-                Some(true),
-                Some("value-overlap 5/5 (100.00%) -> x.id via plural"),
+                Some(JoinState::Verified),
+                Some("value-overlap 5/5 (100.00%) -> x.id via primary_key (plural)"),
             ),
-            link_view("b_y_id__y", "b", "y", "N:1", Some("y_id"), Some(false), None),
+            link_view("b_y_id__y", "b", "y", "N:1", Some("y_id"), Some(JoinState::NamingOnly), None),
+            // E-2 的第三态：继承
+            link_view(
+                "d_w_id__w",
+                "d",
+                "w",
+                "N:1",
+                Some("w_id"),
+                Some(JoinState::Inherited),
+                Some("inherited from e.w_id (verified 4/4) -> w.id via primary_key (plural)"),
+            ),
             link_view("c_z_id__z", "c", "z", "N:1", Some("z_id"), None, None),
         ],
         action_types: vec![],
@@ -259,19 +271,30 @@ fn ttl_renders_the_three_states_of_join_verification() {
     view.link_types.sort_by(|a, b| a.key.cmp(&b.key));
     let doc = serialize_model(&view, &opts()).into_doc();
 
-    // verified=true：两行都在（正反各一条，共 2 处 true）
+    // verified：正反各一条 ⇒ 2 处 true
     assert_eq!(
         doc.matches("ontok:joinVerified \"true\"").count(),
         2,
         "verified 的边正反两条都要标：{doc}"
     );
     assert!(doc.contains("ontok:joinEvidence \"value-overlap 5/5"), "{doc}");
-    // verified=false：只有标记，没有证据
+    // naming-only：只有标记，没有证据
     assert_eq!(doc.matches("ontok:joinVerified \"false\"").count(), 2, "{doc}");
+    // E-2 的第三态：inherit 出现，且证据说的是 inherited from
+    assert_eq!(
+        doc.matches("ontok:joinVerified \"inherit\"").count(),
+        2,
+        "继承也要正反各标一条：{doc}"
+    );
+    assert!(
+        doc.contains("ontok:joinEvidence \"inherited from e.w_id (verified 4/4)"),
+        "{doc}"
+    );
+    // c→z 是 None（旧快照）⇒ 一个标记都不许写
     assert_eq!(
         doc.matches("ontok:joinVerified").count(),
-        4,
-        "c→z 是 None（旧快照）⇒ 一个标记都不许写：{doc}"
+        6,
+        "三条边 × 正反 = 6 处；None 的边一处都不许有：{doc}"
     );
     // 三态在正文里可区分
     assert!(!doc.contains("ontok:joinEvidence \"\""), "空证据不该出现：{doc}");
@@ -291,7 +314,7 @@ fn two_edges_between_the_same_pair_never_share_an_iri() {
                 "customers",
                 "N:1",
                 Some("main_customer_id"),
-                Some(true),
+                Some(JoinState::Verified),
                 Some("value-overlap 5/5"),
             ),
             link_view(
@@ -300,7 +323,7 @@ fn two_edges_between_the_same_pair_never_share_an_iri() {
                 "customers",
                 "N:1",
                 Some("sub_customer_id"),
-                Some(true),
+                Some(JoinState::Verified),
                 Some("value-overlap 5/5"),
             ),
         ],
@@ -343,13 +366,18 @@ fn injection_writes_the_payload_layer_that_apply_reads() {
     assert!(it.get("join_verified").is_none(), "{it}");
     assert_eq!(it["payload"]["from_type"], "cab");
     assert_eq!(it["payload"]["to_type"], "customers");
-    assert_eq!(it["payload"]["join_verified"], serde_json::Value::Bool(true));
+    assert_eq!(
+        it["payload"]["join_verified"],
+        serde_json::Value::String("true".into()),
+        "三态用字符串"
+    );
     assert!(it["payload"]["join_evidence"].as_str().unwrap().contains("5/5"));
     assert_eq!(it["payload"]["cardinality"], "N:1");
 
     // 与 `domain::apply` 的读法对齐：payload 直接能映射成快照的 LinkType 字段
     let p = &it["payload"];
-    let jv = p.get("join_verified").and_then(|v| v.as_bool());
+    // 与 `apply::join_state_from_payload` 同一读法：字符串三态
+    let jv = p.get("join_verified").and_then(|v| v.as_str()).and_then(JoinState::parse);
     let je = p.get("join_evidence").and_then(|v| v.as_str()).map(str::to_string);
     let lt = LinkType {
         key: p["key"].as_str().unwrap().to_string(),
@@ -362,7 +390,7 @@ fn injection_writes_the_payload_layer_that_apply_reads() {
         join_verified: jv,
         join_evidence: je,
     };
-    assert_eq!(lt.join_verified, Some(true));
+    assert_eq!(lt.join_verified, Some(JoinState::Verified));
     assert!(lt.join_evidence.unwrap().contains("customers.id"));
 }
 
@@ -371,12 +399,18 @@ fn injection_writes_the_payload_layer_that_apply_reads() {
 fn stamping_marks_naming_only_edges_and_keeps_verified_ones() {
     let mut items: Vec<serde_json::Value> = vec![
         json!({"kind":"add_link_type","target":"a→b","payload":{"from_type":"a","to_type":"b","cardinality":"N:1","evidence":[]}}),
-        json!({"kind":"add_link_type","target":"c→d","payload":{"from_type":"c","to_type":"d","cardinality":"N:1","join_verified":true}}),
+        json!({"kind":"add_link_type","target":"c→d","payload":{"from_type":"c","to_type":"d","cardinality":"N:1","join_verified":"true"}}),
         json!({"kind":"add_entity_type","target":"e","payload":{"key":"e"}}),
     ];
     assert_eq!(stamp_naming_only(&mut items), 1);
-    assert_eq!(items[0]["payload"]["join_verified"], serde_json::Value::Bool(false));
-    assert_eq!(items[1]["payload"]["join_verified"], serde_json::Value::Bool(true));
+    assert_eq!(
+        items[0]["payload"]["join_verified"],
+        serde_json::Value::String("false".into())
+    );
+    assert_eq!(
+        items[1]["payload"]["join_verified"],
+        serde_json::Value::String("true".into())
+    );
     assert!(items[2].get("join_verified").is_none(), "实体条目不许被盖章");
 }
 

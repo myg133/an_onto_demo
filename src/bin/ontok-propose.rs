@@ -619,9 +619,16 @@ async fn main() -> Result<()> {
             st.columns_considered, st.candidates_generated, st.candidates_tested
         );
         println!(
-            "  补出关系    : {} 条（strong {} · medium {}，**未签，不进快照**）",
-            st.proposals, st.proposals_strong, st.proposals_medium
+            "  补出关系    : {} 条（strong {} · medium {} · inherit {}，**未签，不进快照**）",
+            st.proposals, st.proposals_strong, st.proposals_medium, st.proposals_inherited
         );
+        if st.proposals_inherited > 0 || st.inherit_conflicts > 0 {
+            println!(
+                "  继承（E-2） : {} 条（同名同义列，confidence 0.60–0.75，必须人签）· \
+                 目标不唯一被拒 {} 列",
+                st.proposals_inherited, st.inherit_conflicts
+            );
+        }
         println!(
             "  值域否决    : {} 个候选（命中率 < 0.5，一条关系都不产出）",
             st.rejected
@@ -1101,7 +1108,15 @@ async fn main() -> Result<()> {
     // 三份 items **互不相交**：高+中进提案 · 低进待查 · 拒绝不提案。
     // 「不提案」档必须**在 proposal.json 里一条都找不到**（AC-009 的原话），
     // 所以这里不是「标记一下」，而是真的把它们从 items 里移出去。
-    let routing = ontok::extract::propose::route_items(outcome.proposal.items, &scored);
+    let mut routing = ontok::extract::propose::route_items(outcome.proposal.items, &scored);
+    // ⭐ REQ-120 rev.2 · **人签过的边不参与按置信度丢弃**（E-2 的必要条件）：
+    // `api_call_logs` 那种 0 行表永远拿不到实测证据 ⇒ 打分必然低 ⇒ 会被静默
+    // 丢进待查清单。签字是人做的判断，不该被分诊器推翻。
+    let rescued = ontok::extract::fk::retain_signed(&mut routing);
+    if rescued > 0 {
+        println!();
+        println!("REQ-120 保留已签字的边: {rescued} 条（分档器本会把它们丢进待查/拒绝）");
+    }
     outcome.proposal.items = routing.kept;
     let base_version = outcome.proposal.base_version;
     let pending_path = pending_out.clone().unwrap_or_else(|| {
@@ -1159,11 +1174,19 @@ async fn main() -> Result<()> {
 
     println!();
     println!("分档路由（AC-009）");
+    // 主提案里的**实测**关系条数（= 真正会进快照的那一批）。
+    // ⚠️ 不能只报 `counts.high + counts.middle`：`--fk-sign` 之后，人签过字的边
+    // 会从待查/拒绝档被捞回来（`retain_signed`），它们的 band 仍然是 low/rejected。
+    // 只报分档数会打出「主提案 0 条关系」而实际有 74 条 —— 那是**误导**。
+    let kept_links = outcome
+        .proposal
+        .items
+        .iter()
+        .filter(|i| i["kind"] == "add_link_type")
+        .count();
     println!(
-        "  主提案      : {} 条关系（高 {} · 中 {}）+ 非关系条目",
-        routing.counts.high + routing.counts.middle,
-        routing.counts.high,
-        routing.counts.middle
+        "  主提案      : {} 条关系（高 {} · 中 {} · 已签字保留 {}）+ 非关系条目",
+        kept_links, routing.counts.high, routing.counts.middle, rescued
     );
     println!("  待查清单    : {} 条（低档，不进主提案）→ {pending_path}", routing.counts.low);
     println!("  不提案      : {} 条（拒绝档，proposal.json 里一条都没有）→ {rejected_path}", routing.counts.rejected);

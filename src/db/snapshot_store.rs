@@ -230,7 +230,7 @@ impl PgStore {
         // ⚠️ 读的是**整份评分卡**（`confidence_signals` 里存的是完整对象，
         // 含 signals / veto / band）—— score 与 method 两栏是给 SQL 查询与
         // 校准用的冗余列，不参与重建。
-        let rows: Vec<(String, String, String, String, String, Value, Option<Value>, Option<bool>, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, String, String, Value, Option<Value>, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT key, from_type, to_type, cardinality, semantic, evidence, confidence_signals,
                     join_verified, join_evidence
              FROM link_types WHERE version_id = $1 ORDER BY ordinal",
@@ -251,7 +251,8 @@ impl PgStore {
                 // **不伪造分数**：不知道就是不知道。
                 confidence: conf.and_then(|j| crate::domain::confidence::from_untrusted(&j).ok()),
                 // REQ-120 · 同上，三态：NULL = 这一版没有连接验证信息。
-                join_verified: jv,
+                // REQ-120 · TEXT 三态（`true` / `inherit` / `false`）；认不出的值 ⇒ None（不猜）。
+                join_verified: jv.as_deref().and_then(crate::domain::snapshot::JoinState::parse),
                 join_evidence: je,
             })
             .collect())
@@ -427,7 +428,7 @@ pub(crate) async fn insert_snapshot_rows(
         )
         // REQ-120 · 连接验证两栏。`None` ⇒ SQL NULL（**不回填 false**：
         // 「没有这条信息」与「确定只是命名推断」是两件事）。
-        .bind(l.join_verified)
+        .bind(l.join_verified.map(|v| v.as_str()))
         .bind(l.join_evidence.as_deref())
         .execute(&mut **tx)
         .await
