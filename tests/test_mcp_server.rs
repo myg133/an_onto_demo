@@ -108,6 +108,8 @@ fn base_snapshot(vid: Uuid) -> Snapshot {
         semantic: "belongs_to".into(),
         evidence: vec![],
         confidence: None,
+        join_verified: None,
+        join_evidence: None,
     }];
     s.concept_groups = vec![unconfirmed_group(
         "concept_customer",

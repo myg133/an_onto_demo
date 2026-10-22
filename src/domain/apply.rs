@@ -7,7 +7,7 @@
 //! 拆开的好处：apply 的正确性可以脱离数据库单测。
 
 use crate::domain::review::{EntryState, ItemKind, ItemView};
-use crate::domain::snapshot::{EntityType, LinkType, Property, Snapshot};
+use crate::domain::snapshot::{EntityType, Evidence, LinkType, Property, Snapshot};
 use uuid::Uuid;
 
 /// apply 的输入。
@@ -297,7 +297,22 @@ fn link_from_payload(key: &str, p: &serde_json::Value) -> Result<LinkType, Apply
             .unwrap_or("1:N")
             .to_string(),
         semantic: obj.get("semantic").and_then(|v| v.as_str()).unwrap_or("has").to_string(),
-        evidence: vec![],
+        // ⭐ REQ-120 · **关系侧证据原来是丢的**（这里写死 `vec![]`）。
+        //
+        // 后果不是「少一栏说明」，而是建模视图拿不到「这条关系由哪一列实现」：
+        // `ModelLinkView.column` 的唯一来源就是它（`evidence[0].column`）。
+        // 没有它，同一对 (from, to) 的两条边（`customer_account_binding` 的
+        // `main_customer_id` / `sub_customer_id` 都指向 `customers`）在 TTL 里
+        // 会写成**同一个 IRI** —— 两条 `owl:inverseOf` 挤在一个主语上。
+        //
+        // 读不懂的条目**不丢整条关系**：只保留能读出 `table/column/claim` 的项。
+        // （与 `confidence` 的 fail-closed 不同：证据是**附加信息**，
+        //   缺了它关系本身仍然成立；而分数读不懂时「这一版到底多可信」是无解的。）
+        evidence: obj
+            .get("evidence")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(evidence_from_json).collect())
+            .unwrap_or_default(),
         // REQ-108 · 置信度随条目进快照（`--model-view` 要显示它，客户视图**不读**它）。
         //
         // 缺 `confidence` ⇒ `None`（人工写的提案 / 旧提案）。
@@ -310,6 +325,48 @@ fn link_from_payload(key: &str, p: &serde_json::Value) -> Result<LinkType, Apply
                     .map_err(ApplyError::BadConfidence)?,
             ),
         },
+        // REQ-120 · 连接验证（AC-007）：**提案说什么就落什么**，三态原样透传。
+        //
+        // | 提案里 | 快照里 |
+        // | --- | --- |
+        // | `"true"` / `"inherit"` / `"false"`（字符串，当前写法） | 对应三态 |
+        // | `true` / `false`（布尔，rev.1 的写法 / 手写提案） | `Verified` / `NamingOnly` |
+        // | 缺席 / `null` | `None`（**不**默认成 `"false"`） |
+        // | 认不出的字符串 | `None`（不猜；TTL 少一行标注是**可见**的失败） |
+        join_verified: join_state_from_payload(obj.get("join_verified")),
+        join_evidence: obj
+            .get("join_evidence")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    })
+}
+
+/// 提案条目里的**一条证据** → 快照 [`Evidence`]（缺字段 ⇒ `None`，不是空串占位）。
+///
+/// 为什么不用空串兜底：`{table: "", column: "", claim: ""}` 会让「这条关系
+/// 有 1 条证据」变成一句没有任何信息的断言 —— 与「没有证据」必须可区分。
+fn join_state_from_payload(v: Option<&serde_json::Value>) -> Option<crate::domain::snapshot::JoinState> {
+    use crate::domain::snapshot::JoinState;
+    match v? {
+        serde_json::Value::String(s) => JoinState::parse(s),
+        serde_json::Value::Bool(true) => Some(JoinState::Verified),
+        serde_json::Value::Bool(false) => Some(JoinState::NamingOnly),
+        _ => None,
+    }
+}
+
+fn evidence_from_json(v: &serde_json::Value) -> Option<Evidence> {
+    let obj = v.as_object()?;
+    let table = obj.get("table").and_then(|x| x.as_str())?;
+    let column = obj.get("column").and_then(|x| x.as_str())?;
+    let claim = obj.get("claim").and_then(|x| x.as_str())?;
+    if table.is_empty() || column.is_empty() || claim.is_empty() {
+        return None;
+    }
+    Some(Evidence {
+        table: table.to_string(),
+        column: column.to_string(),
+        claim: claim.to_string(),
     })
 }
 

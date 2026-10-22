@@ -1942,6 +1942,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "propose"),
     // REQ-108 · 只读确定性采样器（AC-002 / AC-003）
     ("src/extract/mod.rs", "sample"),
+    // ⭐ REQ-120 · FK 边补全（提名 / 值域重叠判决 / ADR-005 提案 / 签字注入）。
+    // 独立成文件而不并进 `propose`：`retained_names.req084.tsv` 钉着后者的行号。
+    ("src/extract/mod.rs", "fk"),
     ("src/mcp/mod.rs", "protocol"),
     ("src/mcp/mod.rs", "serve"),
     ("src/mcp/mod.rs", "tools"),

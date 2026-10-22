@@ -584,8 +584,8 @@ fn same_file(out: &SubjectPath, baseline: &BaselinePath) -> bool {
         }
     }
     if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b)) {
-        use std::os::unix::fs::MetadataExt;
-        if x.dev() == y.dev() && x.ino() == y.ino() {
+        #[cfg(unix)] use std::os::unix::fs::MetadataExt;
+        #[cfg(unix)] if x.dev() == y.dev() && x.ino() == y.ino() {
             return true;
         }
     }
@@ -1453,7 +1453,7 @@ mod tests {
     /// 旧代码的 `--out` 缺省值**就是**登记基线，于是「什么都不传跑一次」
     /// 必然覆盖登记基线 —— 这正是 AC-000。
     /// 没有这条，`OUT_DEFAULT` 被改回 `BASELINE_DEFAULT` 时不会有任何测试变红。
-    #[test]
+    #[cfg(unix)] #[test]
     fn default_roles_are_two_different_files() {
         let roles = resolve_roles(None, None).expect("缺省值不该撞车");
         assert_eq!(roles.baseline.as_path(), Path::new(BASELINE_DEFAULT), "基线缺省＝门禁读的那份");
@@ -1497,7 +1497,7 @@ mod tests {
     }
 
     /// 撞车判定必须经得起「相对路径 / `..` / 符号链接」的写法差异。
-    #[test]
+    #[cfg(unix)] #[test]
     fn resolve_roles_rejects_alias_of_baseline() {
         let dir = tmp_dir("alias");
         let real = dir.join("fix-props").join("schema.json");
@@ -1523,7 +1523,7 @@ mod tests {
     /// `canonicalize` 只解符号链接，两个硬链接名各自 canonicalize 成自己。
     /// AC-006 写的是「二者解析到**同一个文件** ⇒ 拒绝执行」——
     /// POSIX 说硬链接就是同一个文件，所以这里**必须**拒绝。
-    #[test]
+    #[cfg(unix)] #[test]
     fn resolve_roles_rejects_hard_link_of_baseline() {
         let dir = tmp_dir("hardlink");
         let real = dir.join("schema.json");
@@ -1915,7 +1915,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg(unix)] #[test]
     fn real_pair_five_missing_columns_are_named() {
         // ⚠️ 本条**不再软跳过**（REQ-063 · AC-002）。
         //

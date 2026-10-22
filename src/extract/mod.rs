@@ -25,3 +25,9 @@ pub mod propose;
 // REQ-108 · **只读、确定性、不落原值**的关系采样器（AC-002 / AC-003）。
 // 与 `introspect` 共用同一条只读池，不另开连接策略。
 pub mod sample;
+// ⭐ REQ-120 · **FK 边补全**（候选提名 + 值域重叠判决 + ADR-005 提案 + 签字注入）。
+// 为什么独立成文件：REQ-084 用 `tests/retained_names.req084.tsv` 把
+// `propose.rs` 里 130 处真实表名的**行号**钉死 —— 在 `propose.rs` 里增删一行，
+// 那些行号整批平移、门禁立刻变红（REQ-087 的 `cardinality.rs` 是同一条理由）。
+// 采样复用 `sample` 的只读池与两个 SQL 构造器，不另开连接策略。
+pub mod fk;

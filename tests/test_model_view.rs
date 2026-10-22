@@ -92,6 +92,8 @@ fn fixture_snapshot() -> Snapshot {
             claim: "外键指向 t_customer".into(),
         }],
         confidence: None,
+        join_verified: None,
+        join_evidence: None,
     }];
     s
 }

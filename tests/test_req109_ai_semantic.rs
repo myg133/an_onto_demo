@@ -679,6 +679,8 @@ fn ac010_customer_view_has_zero_ai_leakage() {
             claim: "列名推断".into(),
         }],
         confidence: Some(c),
+        join_verified: None,
+        join_evidence: None,
     });
 
     // ① 客户视图：结构上就读不到 confidence（SnapshotView 里没有这一栏）
