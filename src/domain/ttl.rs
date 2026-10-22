@@ -59,9 +59,9 @@
 //! | `EntityView.note` | `rdfs:comment` | 过闸（客户可见文案） |
 //! | `EntityView.belongs_to` | `rdfs:subClassOf` | 父对象的**名字** |
 //! | `EntityView.aliases` | `skos:altLabel` | 与参照脚本同口径 |
-//! | `PropertyView` | `owl:DatatypeProperty` + `rdfs:domain` + `rdfs:range rdfs:Literal` | `nullable = !required` |
+//! | `PropertyView` | `owl:DatatypeProperty` + `rdfs:domain` + `rdfs:range`（xsd） | `nullable = !required` |
 //! | `RelationView` | `owl:ObjectProperty` + `rdfs:domain` / `rdfs:range` | 见下方基数映射 |
-//! | `RelationView.how_many` | `owl:FunctionalProperty` / `owl:InverseFunctionalProperty` | 1:N ⇒ Functional；N:1 ⇒ InverseFunctional；1:1 ⇒ 两者 |
+//! | `RelationView.how_many` | `owl:FunctionalProperty` / `owl:InverseFunctionalProperty` | **N:1 ⇒ Functional；1:N ⇒ InverseFunctional**；1:1 ⇒ 两者（B-1 已修正） |
 //! | `RelationView.meaning` | `rdfs:comment` | **降级**（AC-008 已声明有损） |
 //! | 样例值（`sample`） | **不导出** | 那是实例面的东西（G1：只导 TBox） |
 //!
@@ -84,6 +84,8 @@
 //! | 反向属性 + 双向 `owl:inverseOf` | ✅ | ✅ | AC-001 |
 //! | `rdfs:range` 按 xsd 类型落 | ✅ | ✅ | AC-002 |
 //! | `ontok:instanceIri` IRI 模板 | ✅ | ✅ | AC-003 |
+//! | 主键列 `ontok:primaryKeyColumn` / `ontok:isPrimaryKey` | ⛔ **无**（无列名） | ✅（有 `--schema` 时） | B-2 |
+//! | 值域 `ontok:allowedValue`（从注释解析） | ⛔ **无** | ✅ | B-3 |
 //! | 租户标注（`ontok:tenantKey` / `ontok:tenantColumn`） | ⛔ **无** | ✅ | AC-004 / AC-007 |
 //!
 //! ## 1. 反向属性（R1 / R2 / AC-001）
@@ -227,13 +229,16 @@ impl<'a> TtlOptions<'a> {
 
 /// `ontok-introspect` 产出的 schema 报告里，**本模块真正用到的那部分**。
 ///
-/// 只收 `tables[].name` / `tables[].columns[].{name,data_type}`；其余字段
-/// （server_version / 注释 / 主键 …）反序列化时忽略 —— 这样同一份 `--schema`
+/// 收 `tables[].name` / `tables[].columns[].{name,data_type,is_primary_key}` /
+/// `tables[].primary_key` / `tables[].composite_primary_key`；其余字段
+/// （server_version / 注释 / 外键 …）反序列化时忽略 —— 这样同一份 `--schema`
 /// 也可以直接吃 `code/out/schema.json`，不需要另做一份裁剪文件。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemaTypes {
     /// `(表名, 列名)` → 原始 SQL 类型（都已 trim + 小写）。
     columns: BTreeMap<(String, String), String>,
+    /// 表名 → **单列主键列名**（trim + 小写）。复合主键 / 没主键的表不登记。
+    primary_keys: BTreeMap<String, String>,
 }
 
 impl SchemaTypes {
@@ -250,21 +255,29 @@ impl SchemaTypes {
             name: String,
             #[serde(default)]
             columns: Vec<Col>,
+            #[serde(default)]
+            primary_key: Option<String>,
+            #[serde(default)]
+            composite_primary_key: Vec<String>,
         }
         #[derive(Deserialize)]
         struct Col {
             name: String,
             #[serde(default)]
             data_type: String,
+            #[serde(default)]
+            is_primary_key: bool,
         }
 
         let doc: Doc = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let mut columns = BTreeMap::new();
+        let mut primary_keys = BTreeMap::new();
         for t in doc.tables {
             let table = t.name.trim().to_ascii_lowercase();
             if table.is_empty() {
                 continue;
             }
+            let mut flagged_pk: Vec<String> = Vec::new();
             for c in t.columns {
                 let column = c.name.trim().to_ascii_lowercase();
                 if column.is_empty() {
@@ -272,11 +285,29 @@ impl SchemaTypes {
                 }
                 let ty = c.data_type.trim().to_ascii_lowercase();
                 if !ty.is_empty() {
-                    columns.insert((table.clone(), column), ty);
+                    columns.insert((table.clone(), column.clone()), ty);
+                }
+                if c.is_primary_key {
+                    flagged_pk.push(column);
+                }
+            }
+            // 复合主键不导出（AC-119 B-2 只要求单列主键；⛔ 不把多个列拼成一个假列）。
+            if t.composite_primary_key.is_empty() {
+                let from_field = t
+                    .primary_key
+                    .as_deref()
+                    .map(|k| k.trim().to_ascii_lowercase())
+                    .filter(|k| !k.is_empty());
+                let pk = from_field
+                    .or_else(|| if flagged_pk.len() == 1 { flagged_pk.pop() } else { None });
+                if let Some(pk) = pk {
+                    if columns.contains_key(&(table.clone(), pk.clone())) {
+                        primary_keys.insert(table, pk);
+                    }
                 }
             }
         }
-        Ok(Self { columns })
+        Ok(Self { columns, primary_keys })
     }
 
     /// 查真实 `data_type`（SQL 原始串）。表名 / 列名按 trim + 小写比对。
@@ -284,6 +315,11 @@ impl SchemaTypes {
         self.columns
             .get(&(table.trim().to_ascii_lowercase(), column.trim().to_ascii_lowercase()))
             .map(|s| s.as_str())
+    }
+
+    /// 查**单列主键**列名（B-2）。复合主键 / 无主键 ⇒ `None`。
+    pub fn primary_key(&self, table: &str) -> Option<&str> {
+        self.primary_keys.get(&table.trim().to_ascii_lowercase()).map(|s| s.as_str())
     }
 
     /// 已收录的列数（回执用）。
@@ -331,6 +367,251 @@ pub fn xsd_for_sql_type(data_type: &str) -> Option<XsdType> {
         | "citext" | "name" | "uuid" | "json" | "jsonb" | "bytea" => Some(XsdType::String),
         _ => None,
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// REQ-119 B-3 · 值域（从列注释确定性解析，不引模型）
+// ══════════════════════════════════════════════════════════════
+
+/// 从列注释里解析**允许值**。解析不出 ⇒ `None`（⛔ 不编）。
+///
+/// 只认注释里**明写的枚举形态**：
+///
+/// | 注释形态 | 输出 |
+/// | --- | --- |
+/// | `状态(0-未开始,1-活动中,2-已结束)` | `0=未开始;1=活动中;2=已结束` |
+/// | `状态：1=成功，0=失败` | `0=失败;1=成功` |
+/// | `状态 0: 禁用 1: 启用` | `0=禁用;1=启用` |
+/// | `充值币种: RMB-人民币, USD-美元, POINT-免费点数` | `POINT=免费点数;RMB=人民币;USD=美元` |
+/// | `计费周期：monthly/quarterly/semi_yearly/yearly` | `monthly;quarterly;semi_yearly;yearly` |
+/// | `操作结果(success/failed)` | `failed;success` |
+///
+/// 拒绝：只有一个值、`NULL` / `REQ` 这类伪码、`IPv4/IPv6`（兼容性说明）、
+/// `tokens/minute`（单位）、`模型系列(如: GPT, Claude, GLM)`（举例）。
+pub fn parse_allowed_values(note: &str) -> Option<String> {
+    let normalized: Vec<char> = note
+        .chars()
+        .map(|c| match c {
+            '，' => ',',
+            '；' => ';',
+            '：' => ':',
+            '（' => '(',
+            '）' => ')',
+            _ => c,
+        })
+        .collect();
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(v) = scan_numeric_pairs(&normalized) {
+        return Some(v);
+    }
+    if let Some(v) = scan_code_pairs(&normalized) {
+        return Some(v);
+    }
+    scan_slash_codes(&normalized)
+}
+
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic()
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn read_ident(chars: &[char], mut i: usize) -> (String, usize) {
+    let start = i;
+    while i < chars.len() && is_ident_char(chars[i]) {
+        i += 1;
+    }
+    (chars[start..i].iter().collect(), i)
+}
+
+fn prev_nonspace(chars: &[char], i: usize) -> Option<char> {
+    let mut j = i;
+    while j > 0 {
+        j -= 1;
+        if chars[j] != ' ' && chars[j] != '\t' {
+            return Some(chars[j]);
+        }
+    }
+    None
+}
+
+fn push_pair(
+    seen: &mut Vec<(String, String)>,
+    code: String,
+    label: String,
+) -> bool {
+    let code_upper = code.to_ascii_uppercase();
+    if code_upper == "NULL" || code_upper == "REQ" || label.contains("NULL") || label.starts_with('/')
+    {
+        return false;
+    }
+    match seen.iter().find(|(c, _)| *c == code) {
+        Some((_, old)) if *old != label => false,
+        Some(_) => true,
+        None => {
+            seen.push((code, label));
+            true
+        }
+    }
+}
+
+fn pairs_to_value(pairs: &[(String, String)]) -> Option<String> {
+    if pairs.len() < 2 {
+        return None;
+    }
+    Some(pairs.iter().map(|(c, l)| format!("{c}={l}")).collect::<Vec<_>>().join(";"))
+}
+
+/// `0-未开始` / `1=成功` / `0: 禁用` / `-1-已删除` 形态。
+fn scan_numeric_pairs(chars: &[char]) -> Option<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let start = i;
+        let mut j = i;
+        if chars[j] == '-' {
+            j += 1;
+        }
+        let digits_start = j;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits_start {
+            i += 1;
+            continue;
+        }
+        // 左边界：前面不能是字母/数字/下划线（避免把 `x1` 当 code）。
+        if start > 0 && (chars[start - 1].is_ascii_alphanumeric() || chars[start - 1] == '_') {
+            i = j;
+            continue;
+        }
+        let mut k = j;
+        while k < chars.len() && chars[k] == ' ' {
+            k += 1;
+        }
+        if k < chars.len() && matches!(chars[k], ':' | '=' | '-') {
+            k += 1;
+            while k < chars.len() && chars[k] == ' ' {
+                k += 1;
+            }
+            let label_start = k;
+            while k < chars.len()
+                && !matches!(chars[k], ',' | ';' | '(' | ')' | ' ' | '\t' | '\n' | '|')
+            {
+                k += 1;
+            }
+            if k > label_start {
+                let code: String = chars[start..j].iter().collect();
+                let label: String = chars[label_start..k].iter().collect();
+                // `1:1` 这类比例不是枚举：label 以数字开头就丢。
+                if !label.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && !push_pair(&mut pairs, code, label)
+                {
+                    return None;
+                }
+                i = k;
+                continue;
+            }
+        }
+        i = j;
+    }
+    pairs_to_value(&pairs)
+}
+
+/// `RMB-人民币` / `true=启用` / `chain=国内` / `rech:成功` 形态。
+fn scan_code_pairs(chars: &[char]) -> Option<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !is_ident_start(chars[i]) || (i > 0 && is_ident_char(chars[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let (code, mut j) = read_ident(chars, i);
+        let mut k = j;
+        while k < chars.len() && chars[k] == ' ' {
+            k += 1;
+        }
+        if k < chars.len() && matches!(chars[k], ':' | '=' | '-') {
+            k += 1;
+            while k < chars.len() && chars[k] == ' ' {
+                k += 1;
+            }
+            let label_start = k;
+            while k < chars.len()
+                && !matches!(chars[k], ',' | ';' | '(' | ')' | ' ' | '\t' | '\n' | '|')
+            {
+                k += 1;
+            }
+            if k > label_start {
+                let label: String = chars[label_start..k].iter().collect();
+                if !push_pair(&mut pairs, code, label) {
+                    return None;
+                }
+                i = k;
+                continue;
+            }
+        }
+        let _ = start;
+        j = j.max(i + 1);
+        i = j;
+    }
+    pairs_to_value(&pairs)
+}
+
+/// `monthly/quarterly/...` / `POINT/RMB/USD` / `success/failed` 形态。
+///
+/// 只认**值域位置**的斜杠串：串首必须是注释开头、`:` 或 `(`；`兼容IPv4/IPv6`
+/// （前面是「容」）、`tokens/minute`（前面是「始」）会被挡掉。
+fn scan_slash_codes(chars: &[char]) -> Option<String> {
+    let mut best: Option<Vec<String>> = None;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !is_ident_start(chars[i]) || (i > 0 && is_ident_char(chars[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let (first, mut j) = read_ident(chars, i);
+        let mut tokens = vec![first];
+        loop {
+            let mut k = j;
+            while k < chars.len() && chars[k] == ' ' {
+                k += 1;
+            }
+            if k < chars.len() && chars[k] == '/' {
+                k += 1;
+                while k < chars.len() && chars[k] == ' ' {
+                    k += 1;
+                }
+                if k < chars.len() && is_ident_start(chars[k]) {
+                    let (token, next) = read_ident(chars, k);
+                    tokens.push(token);
+                    j = next;
+                    continue;
+                }
+            }
+            break;
+        }
+        if tokens.len() >= 2 {
+            let prev = prev_nonspace(chars, start);
+            let in_value_position = matches!(prev, None | Some(':') | Some('('));
+            let is_ip_version = tokens.iter().any(|t| t.starts_with("IPv"));
+            if in_value_position
+                && !is_ip_version
+                && best.as_ref().is_none_or(|b| tokens.len() > b.len())
+            {
+                best = Some(tokens);
+            }
+        }
+        i = j.max(i + 1);
+    }
+    best.map(|tokens| tokens.join(";"))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1063,27 +1344,41 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
         } else {
             Vec::new()
         };
+        let pk: Option<String> =
+            opts.schema.and_then(|s| s.primary_key(&e.key)).map(str::to_string);
         class_blocks.push(model_class_block(
             &class_local,
             e,
             &iri_template,
             &tenant_columns,
+            pk.as_deref(),
         ));
         let mut props: Vec<&ModelPropertyView> = e.properties.iter().collect();
         props.sort_by(|a, b| a.column.cmp(&b.column).then_with(|| a.name.cmp(&b.name)));
+        let mut emitted_pk = false;
         for p in props {
             let tenant_key = tenancy.annotated()
                 && tenancy
                     .hits
                     .get(&e.key)
                     .is_some_and(|cols| cols.contains(effective_column(p)));
+            let is_pk = pk.as_deref() == Some(effective_column(p));
+            emitted_pk |= is_pk;
             prop_blocks.push(model_datatype_block(
                 &class_local,
                 p,
                 &e.key,
                 tenant_key,
+                is_pk,
                 opts.schema,
             ));
+        }
+        // B-2：主键列通常被抽取侧从 `properties` 里剥掉了（`licenses` 没有 `id`）。
+        // 有 schema 的真实主键、且属性清单里没有 ⇒ **补一条**属性块，否则 FK 串无法还原成 IRI。
+        if let Some(pk) = pk.as_deref() {
+            if !emitted_pk {
+                prop_blocks.push(model_pk_block(&class_local, &e.key, pk, opts.schema));
+            }
         }
     }
 
@@ -1564,8 +1859,11 @@ impl Cardinality {
 
 fn cardinality_features(how_many: &str) -> Cardinality {
     match how_many {
-        "一对多" => Cardinality::Functional,        // 1:N
-        "多对一" => Cardinality::InverseFunctional, // N:1
+        // REQ-119 B-1（修正）：N:1（多对一）= 每个 subject 至多一个 object ⇒ Functional；
+        // 1:N（一对多）= 每个 object 至多一个 subject ⇒ InverseFunctional。
+        // 之前整体反了：开推理会把一个套餐下的所有订阅合并成一条。
+        "多对一" => Cardinality::Functional,        // N:1
+        "一对多" => Cardinality::InverseFunctional, // 1:N
         "唯一对应" => Cardinality::Both,            // 1:1
         _ => Cardinality::None,                     // 多对多 / 认不出
     }
@@ -1575,8 +1873,9 @@ fn cardinality_features(how_many: &str) -> Cardinality {
 fn model_cardinality(cardinality: &str) -> Cardinality {
     match cardinality {
         "1:1" => Cardinality::Both,
-        "1:N" => Cardinality::Functional,
-        "N:1" => Cardinality::InverseFunctional,
+        // B-1：N:1 ⇒ Functional；1:N ⇒ InverseFunctional（与 `cardinality_features` 同口径）。
+        "N:1" => Cardinality::Functional,
+        "1:N" => Cardinality::InverseFunctional,
         _ => Cardinality::None,
     }
 }
@@ -1666,6 +1965,7 @@ fn model_class_block(
     e: &ModelEntityView,
     iri_template: &str,
     tenant_columns: &[String],
+    primary_key: Option<&str>,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("a owl:Class".to_string());
@@ -1674,6 +1974,10 @@ fn model_class_block(
     lines.push(format!("ontok:key {}", plain(&e.key)));
     // REQ-119 · 实例 IRI 模板（AC-003）。
     lines.push(format!("ontok:instanceIri {}", plain(iri_template)));
+    // REQ-119 B-2 · 主键列（只在有真实 schema 时写；⛔ 不猜）。
+    if let Some(pk) = primary_key {
+        lines.push(format!("ontok:primaryKeyColumn {}", plain(pk)));
+    }
     if let Some(d) = e.description.as_deref().filter(|d| !d.trim().is_empty()) {
         lines.push(format!("rdfs:comment {}", zh(d)));
     }
@@ -1720,6 +2024,7 @@ fn model_datatype_block(
     p: &ModelPropertyView,
     entity_key: &str,
     tenant_key: bool,
+    is_primary_key: bool,
     schema: Option<&SchemaTypes>,
 ) -> String {
     let column = effective_column(p);
@@ -1740,6 +2045,10 @@ fn model_datatype_block(
             lines.push(format!("rdfs:comment {}", zh(n)));
         }
     }
+    // REQ-119 B-3 · 值域：只从注释里**明写的枚举**解析；解析不出就不写（⛔ 不编）。
+    if let Some(values) = p.note.as_deref().and_then(parse_allowed_values) {
+        lines.push(format!("ontok:allowedValue {}", plain(&values)));
+    }
     if let Some(s) = p.sample.as_deref() {
         lines.push(format!("ontok:sample {}", plain(s)));
     }
@@ -1747,6 +2056,38 @@ fn model_datatype_block(
     if tenant_key {
         lines.push("ontok:tenantKey true".to_string());
     }
+    // REQ-119 B-2 · 主键（schema 给的 is_primary_key / primary_key）。
+    if is_primary_key {
+        lines.push("ontok:isPrimaryKey true".to_string());
+    }
+    if basis == RangeBasis::Unmapped {
+        lines.push("ontok:rangeUnmapped true".to_string());
+    }
+    block(&subject, lines)
+}
+
+/// REQ-119 B-2 · **补出来的主键属性块**（抽取侧把主键列剥掉了的情况）。
+///
+/// 例：`licenses` 的属性里只有 `license_key` / `name`，没有 `id`；没有 `id` 属性，
+/// 字符串 FK（`license_id`）就无法还原成 IRI，SPARQL 不能 join。这里用 schema 的
+/// 真实主键补一条 `owl:DatatypeProperty`，并标 `ontok:isPrimaryKey true`。
+fn model_pk_block(
+    class_local: &str,
+    entity_key: &str,
+    column: &str,
+    schema: Option<&SchemaTypes>,
+) -> String {
+    let subject = format!(":{class_local}__{}", local_model(column));
+    let (xsd, basis, source) = xsd_range(Some(entity_key), Some(column), schema, column, None);
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("a owl:DatatypeProperty".to_string());
+    lines.push(format!("rdfs:domain :{class_local}"));
+    lines.push(format!("rdfs:range {}", xsd.iri()));
+    lines.push(format!("ontok:rangeSource \"{}\"", source.key()));
+    lines.push(format!("rdfs:label {}", zh(column)));
+    lines.push(format!("ontok:column {}", plain(column)));
+    lines.push("ontok:nullable false".to_string());
+    lines.push("ontok:isPrimaryKey true".to_string());
     if basis == RangeBasis::Unmapped {
         lines.push("ontok:rangeUnmapped true".to_string());
     }
@@ -2050,7 +2391,15 @@ mod tests {
         assert!(d.contains("ontok:nullable false"), "{d}");
         assert!(d.contains("ontok:cardinality \"N:1\""), "{d}");
         assert!(d.contains("ontok:semantic \"belongs_to\""), "{d}");
-        assert!(d.contains("owl:InverseFunctionalProperty"), "N:1 必须是 inverse-functional：{d}");
+        // B-1：N:1（每个 subject 至多一个 object）⇒ FunctionalProperty。
+        assert!(
+            block_of(d, ":order__customer a ").contains("a owl:FunctionalProperty"),
+            "N:1 必须是 functional：{d}"
+        );
+        assert!(
+            block_of(d, ":customer__order a ").contains("a owl:InverseFunctionalProperty"),
+            "N:1 的反向是 1:N ⇒ inverse-functional：{d}"
+        );
         assert!(d.contains("rdfs:subClassOf :root"), "{d}");
         assert!(d.contains("owl:disjointWith :customer"), "{d}");
         // REQ-119：`created_at` 是时间列 ⇒ dateTime，不再是 rdfs:Literal。
@@ -2146,12 +2495,19 @@ mod tests {
         let inv = block_of(&d, ":客户__订单 a ");
         assert!(fwd.contains("rdfs:domain :订单"), "{fwd}");
         assert!(fwd.contains("rdfs:range :客户"), "{fwd}");
+        assert!(
+            fwd.contains("a owl:FunctionalProperty"),
+            "多对一（N:1）的前向必须是 Functional：{fwd}"
+        );
         assert!(fwd.contains("owl:inverseOf :客户__订单"), "{fwd}");
         // 反向：domain/range 对调 + 基数特征 1:N ↔ N:1 对调。
         assert!(inv.contains("rdfs:domain :客户"), "{inv}");
         assert!(inv.contains("rdfs:range :订单"), "{inv}");
         assert!(inv.contains("owl:inverseOf :订单__客户"), "{inv}");
-        assert!(inv.contains("a owl:FunctionalProperty"), "N:1 的反向是 1:N：{inv}");
+        assert!(
+            inv.contains("a owl:InverseFunctionalProperty"),
+            "一对多（1:N）的反向必须是 InverseFunctional：{inv}"
+        );
         assert_eq!(d.matches("owl:inverseOf").count(), 2, "双向各一条：{d}");
     }
 
@@ -2305,6 +2661,42 @@ mod tests {
             assert_eq!(xsd_for_sql_type(sql), Some(want), "SQL {sql:?} 的映射不对");
         }
         assert_eq!(xsd_for_sql_type("custom_enum"), None, "认不出的 SQL 类型不许瞎猜");
+    }
+
+    #[test]
+    fn schema_primary_key_is_single_column_only() {
+        let s = SchemaTypes::parse(
+            r#"{"tables":[
+              {"name":"t1","primary_key":"id","columns":[{"name":"id","data_type":"uuid"}]},
+              {"name":"t2","primary_key":null,"columns":[
+                {"name":"a","data_type":"uuid","is_primary_key":true},
+                {"name":"b","data_type":"uuid","is_primary_key":true}
+              ],"composite_primary_key":["a","b"]},
+              {"name":"t3","columns":[{"name":"k","data_type":"uuid","is_primary_key":true}]}
+            ]}"#,
+        )
+        .expect("合法");
+        assert_eq!(s.primary_key("T1"), Some("id"), "单列主键 + 大小写归一");
+        assert_eq!(s.primary_key("t2"), None, "复合主键不导出（⛔ 不拼假列）");
+        assert_eq!(s.primary_key("t3"), Some("k"), "只有 is_primary_key 标记也能认");
+        assert_eq!(s.primary_key("nope"), None);
+    }
+
+    #[test]
+    fn allowed_value_parser_never_invents() {
+        assert_eq!(
+            parse_allowed_values("状态(0-未开始,1-活动中)").as_deref(),
+            Some("0=未开始;1=活动中")
+        );
+        assert_eq!(
+            parse_allowed_values("币种：POINT/RMB/USD").as_deref(),
+            Some("POINT;RMB;USD")
+        );
+        assert_eq!(parse_allowed_values("模型系列(如: GPT, Claude, GLM)"), None);
+        assert_eq!(parse_allowed_values("IP地址（兼容IPv4/IPv6）"), None);
+        assert_eq!(parse_allowed_values("保存原始tokens/minute"), None);
+        assert_eq!(parse_allowed_values("只有 1-正常运行"), None);
+        assert_eq!(parse_allowed_values(""), None);
     }
 
     fn opts_with_schema(schema: &SchemaTypes) -> TtlOptions<'_> {

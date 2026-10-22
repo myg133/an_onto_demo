@@ -16,6 +16,8 @@
 | 反向属性命名 | `ttl.rs::inverse_candidate` | 唯一入口；两版视图共用 |
 | 反向属性块 | `ttl.rs::inverse_object_block` | 唯一入口；domain/range 对调 + `owl:inverseOf` |
 | xsd 推断 | `ttl.rs::xsd_range` / `classify_column` / `classify_text` | 列名优先、中文业务名次之 |
+| 主键（B-2） | `ttl.rs::SchemaTypes::primary_key` / `model_pk_block` | `--schema` 的单列主键；抽取侧剥掉了就补一条属性 |
+| 值域（B-3） | `ttl.rs::parse_allowed_values` | 只从列注释里明写的枚举解析；解析不出不导出 |
 | 租户落点 | `ttl.rs::tenancy_report` | 序列化器与 CLI 共用同一份计算 |
 | range 统计 | `ttl.rs::range_stats` | 从**最终正文**数；`TtlDocument::stats` 携带 |
 | 真实列类型 | `ttl.rs::SchemaTypes::parse` / `xsd_for_sql_type` | `--schema`：SQL `data_type` → xsd；`ontok:rangeSource` 标来源 |
@@ -30,6 +32,15 @@
 - **domain/range 对调**：反向的 `rdfs:domain` = 正向的 `rdfs:range`，反之亦然。
 - **基数特征对调**：`1:N ↔ N:1`（`owl:FunctionalProperty ↔ owl:InverseFunctionalProperty`），
   `1:1` / 多对多不变。
+- **B-1 已修正的方向**（之前整体反了，开推理会把一个套餐下的所有订阅合并成一条）：
+
+  | 基数 | 语义 | 前向标注 | 反向标注 |
+  | --- | --- | --- | --- |
+  | `N:1`（`deductions → customers`） | 每个 subject 至多一个 object | **`owl:FunctionalProperty`** | `owl:InverseFunctionalProperty` |
+  | `1:N`（`customers → deductions`） | 每个 object 至多一个 subject | **`owl:InverseFunctionalProperty`** | `owl:FunctionalProperty` |
+
+  实测分布：`('N:1','Functional') = 52` + `('1:N','InverseFunctional') = 52`。
+  客户视图同口径：`多对一` ⇒ Functional、`一对多` ⇒ InverseFunctional。
 - **计数**：52 条对象属性 ⇒ **52 条反向属性 + 104 条 `owl:inverseOf`**（双向各一）。
 - **撞名裁定**：若 `<宾语>__<主语>` 已经是另一条正向属性的 IRI，反向名追加
   `__inverse`（还撞 ⇒ `__inverse2`…）。
@@ -43,14 +54,14 @@
 例（客户视图）：
 
 ```turtle
-:订单__客户 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+:订单__客户 a owl:FunctionalProperty, owl:ObjectProperty ;
     rdfs:label "订单 → 客户"@zh ;
     rdfs:comment "语义：归属于（多对一）"@zh ;
     rdfs:domain :订单 ;
     rdfs:range :客户 ;
     owl:inverseOf :客户__订单 .
 
-:客户__订单 a owl:FunctionalProperty, owl:ObjectProperty ;
+:客户__订单 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
     rdfs:label "客户 → 订单（反向）"@zh ;
     rdfs:domain :客户 ;
     rdfs:range :订单 ;
@@ -226,12 +237,22 @@ ontok:instanceIri "https://ontok.local/anspire_grouped#{class}/{id}"
 
 | 文件 | 字节 | SHA-256（两次相同） |
 | --- | --- | --- |
-| 客户视图（启发式） | 277,289（基线 220,696，**+25.6%**） | `AD357799…4E87FA` |
-| 建模视图（启发式 + tenancy） | 297,533 | `623E6D68…041A2D` |
-| 建模视图（`--schema` + tenancy） | 294,955 | `71908295…4083B4` |
-| 客户视图（带 `--tenancy`） | 277,289（**与不带逐字节相同**） | `AD357799…4E87FA` |
+| 客户视图（启发式） | 277,289（基线 220,696，**+25.6%**） | `4BBD623F…D64AA3` |
+| 建模视图（启发式 + tenancy） | 302,798 | `81DCF0F3…E6F332` |
+| 建模视图（`--schema` + tenancy） | 323,965 | `058CBA10…70576C` |
+| 客户视图（带 `--tenancy`） | 277,289（**与不带逐字节相同**） | `4BBD623F…D64AA3` |
 
-体积上限 40%（≤ 308,974 字节）—— 实测 +25.6%（`rangeSource` 逐属性标注约 +15 KB）。
+体积上限 40%（客户视图 ≤ 308,974 字节）—— 实测 **+25.6%**。
+建模视图相对 REQ-110 基线 232,921 字节为 **+39.1%**（同样 ≤ 40%）。
+
+### 7.1 · 替身实验修订（B-1 / B-2 / B-3）实测
+
+| 项 | 判据 | 实测 |
+| --- | --- | --- |
+| B-1 基数方向 | `('N:1','Functional')` / `('1:N','InverseFunctional')` | **52 / 52**（修正前 0 / 0 + 52 条错标 Functional） |
+| B-2 主键 | 每个类 `ontok:primaryKeyColumn`；主键属性 `ontok:isPrimaryKey true` | **84 / 84**；`__id` 属性 **82** 条（另 2 个类主键不叫 `id`） |
+| B-3 值域 | 从注释确定性解析出的列 | **104** 条 `ontok:allowedValue`（清单见 `out/allowed-values.txt`） |
+| FK 边缺失 | 抽取词干匹配问题（`product_id` → `products` ≠ `package_products`） | **登记不修**（另开需求改抽取） |
 
 ## 8 · 已知限制 / 风险（登记，不粉饰）
 
@@ -250,8 +271,9 @@ Agent 只读的 TTL（**真实列类型 + 租户标注**）：
 （本次工作区：`D:\MyCodes\AI\an_onto_demo\feature-REQ-119\out\REQ-119-model-view.ttl`；
 `out/` 按仓库纪律不入库，可用下方命令重新生成）。
 
-⚠️ 这份 TTL 是 `--schema` 模式：870/870 属性带 `ontok:rangeSource "schema"`，
-`SUM(?扣费金额)` 这类聚合的类型前提成立。
+⚠️ 这份 TTL 是 `--schema` 模式：**952** 条数据类型属性全部带 `ontok:rangeSource "schema"`
+（870 原始 + 82 补出的主键），84 条主键声明、104 条 `ontok:allowedValue`；
+`SUM(?扣费金额)` 这类聚合的类型前提成立，`status` 的魔数也有值域可对照。
 
 预期能力与落点：
 

@@ -21,8 +21,8 @@ use ontok::domain::model_view::{
     ModelEntityView, ModelLinkView, ModelPropertyView, ModelTrackView,
 };
 use ontok::domain::ttl::{
-    range_stats, serialize_customer, serialize_model, tenancy_report, xsd_for_sql_type, SchemaTypes,
-    TenancyDecl, TtlOptions, DEFAULT_BASE,
+    parse_allowed_values, range_stats, serialize_customer, serialize_model, tenancy_report,
+    xsd_for_sql_type, SchemaTypes, TenancyDecl, TtlOptions, DEFAULT_BASE,
 };
 use ontok::domain::view::{CustomerView, EntityView, PropertyView, RelationView};
 
@@ -567,6 +567,131 @@ fn a2_collision_suffix_keeps_the_required_52_and_104_counts() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// B-1 / B-2 / B-3 · 替身实验抓到的三处
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn b1_n_to_one_is_functional_and_one_to_n_is_inverse_functional() {
+    let d = serialize_model(&model_view(), &opts()).into_doc();
+    assert_eq!(
+        d.matches("a owl:FunctionalProperty, owl:ObjectProperty").count(),
+        3,
+        "3 条 N:1 正向必须全是 Functional"
+    );
+    assert_eq!(
+        d.matches("a owl:InverseFunctionalProperty, owl:ObjectProperty").count(),
+        3,
+        "3 条 1:N 反向必须全是 InverseFunctional"
+    );
+    assert!(
+        block_of(&d, ":deductions__customers a ").contains("a owl:FunctionalProperty"),
+        "N:1（deductions → customers）必须 Functional：{d}"
+    );
+    assert!(
+        block_of(&d, ":customers__deductions a ").contains("a owl:InverseFunctionalProperty"),
+        "1:N（反向）必须 InverseFunctional：{d}"
+    );
+
+    // 客户视图同一口径：多对一 ⇒ Functional；一对多 ⇒ InverseFunctional。
+    let c = serialize_customer(&customer_view(), &opts()).into_doc();
+    assert!(block_of(&c, ":订单__客户 a ").contains("a owl:FunctionalProperty"), "{c}");
+    assert!(
+        block_of(&c, ":客户__订单 a ").contains("a owl:InverseFunctionalProperty"),
+        "{c}"
+    );
+}
+
+const SCHEMA_PK: &str = r#"{"tables":[
+  {"name":"customers","primary_key":"customer_id","columns":[
+    {"name":"customer_id","data_type":"character varying","is_primary_key":true},
+    {"name":"amount","data_type":"numeric"}
+  ]},
+  {"name":"deductions","primary_key":"id","columns":[
+    {"name":"id","data_type":"character varying","is_primary_key":true},
+    {"name":"amount","data_type":"numeric"}
+  ]},
+  {"name":"order","primary_key":"id","columns":[
+    {"name":"id","data_type":"character varying","is_primary_key":true}
+  ]},
+  {"name":"customer_subscriptions","primary_key":"id","columns":[
+    {"name":"id","data_type":"character varying","is_primary_key":true}
+  ]}
+]}"#;
+
+#[test]
+fn b2_primary_key_is_exported_even_when_extraction_dropped_it() {
+    let schema = SchemaTypes::parse(SCHEMA_PK).expect("schema 合法");
+    let d = serialize_model(&model_view(), &schema_opts(&schema)).into_doc();
+
+    // 每个类一条主键列；84 条类在真库上的判据在 live 测试里。
+    assert_eq!(d.matches("ontok:primaryKeyColumn").count(), 4, "{d}");
+    assert_eq!(d.matches("ontok:isPrimaryKey true").count(), 4, "{d}");
+    assert!(
+        block_of(&d, ":customers a owl:Class").contains("ontok:primaryKeyColumn \"customer_id\""),
+        "{d}"
+    );
+    // 抽取侧没有 `id` 属性 ⇒ 必须补一条，否则 FK 串无法还原成 IRI。
+    let pk = block_of(&d, ":deductions__id a ");
+    assert!(pk.contains("rdfs:range xsd:string"), "{pk}");
+    assert!(pk.contains("ontok:column \"id\""), "{pk}");
+    assert!(pk.contains("ontok:nullable false"), "{pk}");
+    assert!(pk.contains("ontok:isPrimaryKey true"), "{pk}");
+    assert!(pk.contains("ontok:rangeSource \"schema\""), "{pk}");
+    // 已在属性清单里的主键不重复造块，只加标记。
+    assert_eq!(d.matches(":deductions__id a owl:DatatypeProperty").count(), 1, "{d}");
+    assert!(
+        block_of(&d, ":customers__customer_id a ").contains("ontok:isPrimaryKey true"),
+        "{d}"
+    );
+}
+
+#[test]
+fn b3_allowed_values_come_only_from_explicit_comments() {
+    assert_eq!(
+        parse_allowed_values("状态(0-未开始,1-活动中,2-已结束,3-已暂停,-1-已删除)").as_deref(),
+        Some("0=未开始;1=活动中;2=已结束;3=已暂停;-1=已删除")
+    );
+    assert_eq!(
+        parse_allowed_values("扣减币种：实际扣减的币种（POINT/RMB/USD）").as_deref(),
+        Some("POINT;RMB;USD")
+    );
+    assert_eq!(
+        parse_allowed_values("充值币种: RMB-人民币, USD-美元, POINT-免费点数").as_deref(),
+        Some("RMB=人民币;USD=美元;POINT=免费点数")
+    );
+    assert_eq!(
+        parse_allowed_values("计费周期：monthly/quarterly/semi_yearly/yearly").as_deref(),
+        Some("monthly;quarterly;semi_yearly;yearly")
+    );
+    // ⛔ 解析不出就不导出：举例 / IPv4 兼容 / 单位 / NULL 伪码全部拒绝。
+    for bad in [
+        "模型系列(如: GPT, Claude, GLM)",
+        "最后一次登录IP地址（兼容IPv4/IPv6）",
+        "客户模型级TPM覆盖配置，保存原始tokens/minute",
+        "客户ID；NULL=全局放行；非NULL=仅对该客户放行",
+        "运行状态：1-正常运行，其他值待定义",
+    ] {
+        assert_eq!(parse_allowed_values(bad), None, "不该从 `{bad}` 编出值域");
+    }
+
+    let mut v = model_view();
+    v.entity_types[0].properties.push(ModelPropertyView {
+        name: "状态".into(),
+        column: "status".into(),
+        nullable: false,
+        note: Some("状态(0-未开始,1-活动中,2-已结束)".into()),
+        sample: None,
+    });
+    let d = serialize_model(&v, &opts()).into_doc();
+    assert!(
+        block_of(&d, ":customers__status a ")
+            .contains("ontok:allowedValue \"0=未开始;1=活动中;2=已结束\""),
+        "{d}"
+    );
+    assert_eq!(d.matches("ontok:allowedValue").count(), 1, "{d}");
+}
+
+// ══════════════════════════════════════════════════════════════
 // AC-010 · 文档
 // ══════════════════════════════════════════════════════════════
 
@@ -582,6 +707,8 @@ fn ac010_module_header_documents_the_three_conventions() {
         "--schema",
         "ontok:rangeSource",
         "xsd_for_sql_type",
+        "ontok:primaryKeyColumn",
+        "ontok:allowedValue",
     ] {
         assert!(src.contains(keyword), "ttl.rs 模块头缺少 `{keyword}` 的说明");
     }
@@ -727,9 +854,27 @@ async fn live_schema_makes_all_ranges_match_real_data_types() {
     let stats = range_stats(&m);
     let total: usize = model.entity_types.iter().map(|e| e.properties.len()).sum();
     assert_eq!(total, 870, "数据前提：870 条数据类型属性");
-    assert_eq!(stats.source("schema"), total, "所有属性都必须来自真实 schema：{stats:?}");
+    // B-2：主键通常被抽取侧剥掉 ⇒ 由 schema 补 82 条；全部仍是 schema 来源。
+    let datatype_props = m.matches("a owl:DatatypeProperty").count();
+    assert_eq!(datatype_props, 952, "870 + 补出的 82 条主键属性");
+    assert_eq!(stats.source("schema"), datatype_props, "所有属性都必须来自真实 schema：{stats:?}");
     assert_eq!(stats.source("heuristic"), 0, "schema 模式不许回退启发式：{stats:?}");
     assert_eq!(stats.unmapped.len(), 0, "schema 模式不应有未映射：{stats:?}");
+
+    // B-2：84 个类都有单列主键；`id` 属性 82 条（另 2 个类主键不叫 id）。
+    assert_eq!(m.matches("ontok:primaryKeyColumn").count(), 84, "每个类一条主键列声明");
+    assert_eq!(m.matches("ontok:isPrimaryKey true").count(), 84, "84 条主键属性");
+    let id_props = m.matches("__id a owl:DatatypeProperty").count();
+    assert_eq!(id_props, 82, "82 个类的主键列名是 `id`：{id_props}");
+
+    // B-1：52 条 N:1 全部 Functional；52 条反向（1:N）全部 InverseFunctional。
+    let fwd_functional = m.matches("a owl:FunctionalProperty, owl:ObjectProperty").count();
+    let inv_functional = m.matches("a owl:InverseFunctionalProperty, owl:ObjectProperty").count();
+    assert_eq!(fwd_functional, 52, "N:1 正向必须 Functional");
+    assert_eq!(inv_functional, 52, "1:N 反向必须 InverseFunctional");
+
+    // B-3：注释里能确定性解析出的值域列。
+    assert_eq!(m.matches("ontok:allowedValue").count(), 104, "值域列数");
 
     let mut mismatched: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
