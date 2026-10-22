@@ -1280,6 +1280,9 @@ fn bad_customer_writes(code: &str) -> Vec<String> {
                 let allowed = tail.starts_with(".dropped_object_count()")
                     || tail.starts_with(".report()")
                     || tail.starts_with(".outlet()")
+                    // ⭐ REQ-119 · 纯访问器：返回 `Option<&RangeStats>`，不是字节，
+                    // 也不做判定 —— 与 `dropped_object_count` 同一类（回执用）。
+                    || tail.starts_with(".range_stats()")
                     || (tail.starts_with(".as_str()")
                         && (l.contains("fs::write(") || l.contains("err(")));
                 if !allowed {
@@ -1620,6 +1623,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/cli.rs", "emit_domain_text_with", "写出机制（类型层只收 OutletRender）"),
     ("src/cli.rs", "write_stdout", "写出机制（类型层只收 OutletRender）"),
     ("src/cli.rs", "publish_customer", "管线适配器（Err → 退出码）"),
+    // ⭐ REQ-119 · 可查询化：TTL 导出后的 range 分布回执。
+    // 只读序列化器给出的分布（`domain::ttl::range_stats` 是纯函数），不改产物。
+    (
+        "src/cli.rs",
+        "eprint_ttl_stats",
+        "运维回执（REQ-119：TTL 的 xsd range 分布 / 未映射清单，只打 stderr）",
+    ),
     ("src/cli.rs", "run", "入口分发"),
     ("src/cli.rs", "concept_cmd", "子命令 handler"),
     // ⭐ REQ-115 · 建议层：只读快照、只写声明文件，**不写库**（AC-004）。

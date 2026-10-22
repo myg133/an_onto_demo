@@ -424,6 +424,10 @@ async fn get_ttl(State(state): State<AppState>) -> Result<impl IntoResponse, Res
         version: state.version,
         base: crate::domain::ttl::DEFAULT_BASE,
         action_type_count: state.action_type_count,
+        // REQ-119：HTTP 出口只发客户视图，租户标注只在建模视图。
+        tenancy: None,
+        // REQ-119 A-1：HTTP 出口没有 schema 入参 ⇒ 只能启发式（文件头会明说）。
+        schema: None,
     };
     let rendered = match crate::domain::pipeline::render(
         crate::domain::pipeline::OutletId::H4,
@@ -1605,6 +1609,8 @@ mod tests {
             version: 2,
             base: crate::domain::ttl::DEFAULT_BASE,
             action_type_count: 0,
+            tenancy: None,
+            schema: None,
         };
         let cli_bytes = crate::domain::pipeline::render(
             crate::domain::pipeline::OutletId::C6,
