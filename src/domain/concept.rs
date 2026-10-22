@@ -438,9 +438,11 @@ pub struct ConceptDeclaration {
     /// 业务确认人。`None` = **还没人确认**（过渡声明的常态）
     #[serde(default)]
     pub confirmed_by: Option<String>,
-    /// 这份声明**从哪来**（REQ-115 · AC-010）。
+    /// 这份声明**从哪来**（REQ-115 · AC-010 / REQ-118 · AC-007）。
     ///
-    /// - `Some("algorithm-suggest")` = `concept suggest` 从关系拓扑算出来的**建议**；
+    /// - `Some("rule")` = 规则算出来的**建议**（`concept suggest` 算法版；
+    ///   REQ-115 时期的值是 `algorithm-suggest`，REQ-118 统一成 `rule`）；
+    /// - `Some("ai")` = 模型提的（`concept suggest --ai`）；
     /// - `None` = 旧声明（那时还没有这一栏）。
     ///
     /// ⚠️ **它不进 [`content_digest`]**：来源记的是「谁算的」，不是「内容是什么」。

@@ -76,6 +76,40 @@ pub enum Cmd {
     /// 指纹缓存也是本地文件（默认 `<out>.cache.json`）。
     #[command(verbatim_doc_comment)]
     Doc { #[command(subcommand)] cmd: DocCmd },
+    /// REQ-118 · **名字提案**（决策点一：表名 / 属性名的中文名）
+    ///
+    /// ADR-005：涉及决策的先让 AI 提案，**提案永不权威**。本命令只产出提案文件，
+    /// ⛔ 不写库、不改本体、不喂任何下游 —— 名字要进本体，必须人评审后
+    /// 显式走 `ontok-propose --names` 与既有的双轨审核链路。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok name suggest --schema out/schema.json --out out/names.proposal.json --as-names out/table_names.json
+    ///
+    /// ⚠️ 每条提案都带 `claim / evidence / confidence / reason / decided_by / reviewed_by`；
+    /// `evidence` 必须是**输入里能查到**的表名 / 列名 / 注释片段（对不上的条目丢弃并计数）。
+    /// ⚠️ `reviewed_by` 恒为 `null`（P2）；`decided_by` 是 `ai:<model>`（P4）。
+    /// ⚠️ 同一份 schema 第二次运行 **0 token**、输出**逐字节相同**（指纹缓存，P3）。
+    /// ⚠️ `--as-names` 输出的 `TableNames` 形状可直接喂 `ontok-propose --names`（AC-002）。
+    #[command(verbatim_doc_comment)]
+    Name { #[command(subcommand)] cmd: NameCmd },
+    /// REQ-118 · **排除提案**（决策点二：哪些表不进本体）
+    ///
+    /// ADR-005：AI 逐表判「该不该进本体」，判断落成**可评审的提案**；
+    /// 本命令 ⛔ 不写库、⛔ 不直接过滤任何东西 —— 要真的排除，仍需把产物喂给
+    /// `ontok-propose --exclude`（决定是人的显式动作）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok exclude suggest --schema out/schema.json --out out/excl.proposal.json
+    /// ontok-propose --schema out/schema.json --names out/table_names.json --exclude out/excl.proposal.json --out out/proposal.json --no-sample
+    ///
+    /// ⚠️ 一份文件装两种形状：`proposals[]`（ADR-005 提案）与 `exclude[]`
+    /// （REQ-113 的 `--exclude` 形状）—— 后者可被 `ontok-propose` **直接消费**（AC-003）。
+    /// ⚠️ `category` 只能是 REQ-113 的七类枚举之一；⛔ 不许自由发挥。
+    /// ⚠️ 「保留」也是判断，也会进 `proposals[]`；拿不准的保留标 `low_confidence`。
+    #[command(verbatim_doc_comment)]
+    Exclude { #[command(subcommand)] cmd: ExcludeCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -164,18 +198,26 @@ pub enum ConceptCmd {
         #[arg(long)]
         file: PathBuf,
     },
-    /// REQ-115 · 从关系拓扑算**建议**分组（不写库，只产出一份声明文件）
+    /// REQ-115 / REQ-118 · 从关系拓扑算**建议**分组（不写库，只产出一份声明文件）
     ///
     /// 产物可以直接喂给 `concept import`，之后仍需双轨审核 + `proposal apply`
     /// 才会进本体。⛔ 本命令**不写库**：跑前跑后库里的概念组/提案/版本行不变。
     ///
-    /// 【可以照抄的一整条】
+    /// 【可以照抄的一整条】（算法版 = 降级路径，`source = "rule"`）
     ///
     /// ontok concept suggest --project demo3 --version 2 --out d.json
     /// ontok concept import --file d.json --project demo3 --base-version 3
     ///
-    /// ⚠️ 建议 ≠ 结论：声明文件里 `source` = `algorithm-suggest`、
-    /// `reviewed_by` / `confirmed_by` = `null`。审核界面据此显示来源。
+    /// 【可以照抄的一整条】（AI 语义版，`source = "ai"`，REQ-118 · AC-004/AC-007）
+    ///
+    /// ontok concept suggest --ai --project demo3 --version 2 --out groups.proposal.json --budget-tokens 100000
+    /// ontok concept import --file groups.proposal.json --project demo3 --base-version 3
+    ///
+    /// ⚠️ 建议 ≠ 结论：声明文件里 `reviewed_by` / `confirmed_by` = `null`。
+    /// 算法版的 `source` 是 `rule`；`--ai` 版是 `ai` —— ⛔ 算法版不得冒充 `ai`。
+    /// ⚠️ `--ai` 时 `--out` **必填**（ADR-005 P1：提案必须落盘）；
+    /// 算法版省略 `--out` 时把声明打到 stdout（管道友好）。
+    #[command(verbatim_doc_comment)]
     Suggest {
         /// 项目名
         #[arg(long)]
@@ -183,9 +225,19 @@ pub enum ConceptCmd {
         /// 从哪一版的关系拓扑算（该版必须有快照）
         #[arg(long)]
         version: i32,
-        /// 输出路径。省略则把声明 JSON 打到标准输出（两次运行逐字节相同）
+        /// 输出路径。`--ai` 时必填；算法版省略则把声明 JSON 打到标准输出
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// ⭐ REQ-118：用**模型**做语义分组（AC-004），而不是算法版的贪心模块度。
+        /// 需要 `ONTOK_LLM_BASE_URL` / `ONTOK_LLM_API_KEY` / `ONTOK_LLM_MODEL` 三件套。
+        #[arg(long)]
+        ai: bool,
+        /// 预算闸（token，仅 `--ai`）。越限即停且不产出声明文件（AC-006）。
+        #[arg(long)]
+        budget_tokens: Option<u64>,
+        /// 指纹缓存落点（仅 `--ai`）。默认 `<out>.cache.json`。
+        #[arg(long)]
+        cache: Option<PathBuf>,
     },
 }
 
@@ -227,6 +279,65 @@ pub enum DocCmd {
         /// 不需要 LLM 三件套、不需要预算。
         #[arg(long)]
         chunks_only: bool,
+    },
+}
+
+/// REQ-118 · 名字提案（`ontok name suggest`）。
+#[derive(Subcommand)]
+pub enum NameCmd {
+    /// AI 为每张表提一个**带证据与置信度**的中文名（只产提案，不写库）
+    ///
+    /// 与 `ontok-translate-names`（REQ-090）的分工：那条命令维护**增量翻译表**
+    /// （保护人工旧译、缺口闸、退化自检），本命令产出**从零评审的提案**
+    /// （每条可 diff、可签字）。两者通过 `--as-names` 搭桥。
+    Suggest {
+        /// 源库勘查产物（`ontok-introspect` 写出的 `schema.json`）
+        #[arg(long)]
+        schema: PathBuf,
+        /// 提案落点（**必填**：ADR-005 P1 —— 提案必须落盘、可 diff、可评审）
+        #[arg(long)]
+        out: PathBuf,
+        /// 同时把名字转成 `ontok-propose --names` 可直接消费的 `TableNames` 形状（AC-002）
+        #[arg(long)]
+        as_names: Option<PathBuf>,
+        /// 预算闸（token）。越限即**停**并按「已用 / 上限 / 停在第几批」报告，
+        /// 且**不产出提案文件**（AC-006：不产半份文件）。
+        #[arg(long)]
+        budget_tokens: Option<u64>,
+        /// 指纹缓存的落点。默认 `<out>.cache.json`。
+        /// 删掉它 ⇒ 下次重新调用模型（重新计费）；保留它 ⇒ 同输入 0 token。
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// 每次请求送几张表（默认 12）。只影响请求切分，不改变判据。
+        #[arg(long)]
+        batch_size: Option<usize>,
+    },
+}
+
+/// REQ-118 · 排除提案（`ontok exclude suggest`）。
+#[derive(Subcommand)]
+pub enum ExcludeCmd {
+    /// AI 逐表判「这张表该不该进本体」，产出可评审、且能被 `--exclude` 直接消费的提案
+    Suggest {
+        /// 源库勘查产物（`schema.json`）
+        #[arg(long)]
+        schema: PathBuf,
+        /// 提案落点（**必填**：P1）
+        #[arg(long)]
+        out: PathBuf,
+        /// 已有排除清单（REQ-113 形状）：其中**仍在 schema 里**的条目原样沿用、
+        /// 不再送模型；schema 里已消失的条目进 `stale_excluded_tables`（⚠️ 只报不删）。
+        #[arg(long)]
+        exclusions: Option<PathBuf>,
+        /// 预算闸（token）。越限即停且不产出提案文件（AC-006）。
+        #[arg(long)]
+        budget_tokens: Option<u64>,
+        /// 指纹缓存落点。默认 `<out>.cache.json`。
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// 每次请求送几张表（默认 10）。
+        #[arg(long)]
+        batch_size: Option<usize>,
     },
 }
 
@@ -1055,6 +1166,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     // 是两件完全不相干的事 —— 报错必须指向真原因。
     let cmd = match cli.cmd {
         Cmd::Doc { cmd } => return doc_cmd(cmd).await,
+        // ⭐ REQ-118：两条**提案**命令也**不连产品库**（ADR-005 P2：提案不写库）。
+        // 与 `doc ingest` 同一条理由：输入是本地 schema 文件、产物是本地文件、
+        // 指纹缓存也是本地文件 —— 若仍先建连接池，「没配库」会抢在
+        // 「没配 LLM 三件套」前面报，而后者才是真原因。
+        Cmd::Name { cmd } => return name_cmd(cmd).await,
+        Cmd::Exclude { cmd } => return exclude_cmd(cmd).await,
         cmd => cmd,
     };
 
@@ -1078,6 +1195,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         //    删掉，得到的是一条「内部错误」而不是一个 panic 栈。
         Cmd::Doc { .. } => anyhow::bail!(
             "内部错误：`doc` 子命令应当在连库之前处理（它不需要产品库）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
+        // 同上：这两条也在连库之前返回。
+        Cmd::Name { .. } | Cmd::Exclude { .. } => anyhow::bail!(
+            "内部错误：`name` / `exclude` 子命令应当在连库之前处理（它们不写库）。\
              请把 `run()` 开头的提前返回恢复回去。"
         ),
         Cmd::McpServer { project, version } => {
@@ -1401,6 +1523,447 @@ fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ══════════════════════════════════════════════════════════════
+// REQ-118 · AI 提案（ADR-005）
+//
+// 两条命令（`name suggest` / `exclude suggest`）**不连产品库**：
+// 输入是本地 `schema.json`、产物是本地文件、指纹缓存也是本地文件。
+// 它们在 `run()` 里**连库之前**就被分派（与 `doc ingest` 同一个理由）——
+// 否则「没配 ONTOK_DATABASE_URL」会抢在「没配 LLM 三件套」前面报，而后者才是真原因。
+//
+// 落盘顺序是刻意的：**先写缓存、再判预算、最后写产物**。
+// 已花掉的钱对应的回答必须落盘（否则越预算后重跑要再付一次）；
+// 越预算则**一个产物都不写**（AC-006：不产半份文件）。
+// ══════════════════════════════════════════════════════════════
+
+/// 读 `schema.json` 的**唯一**入口（两条提案命令共用）。
+fn load_schema_report(
+    path: &std::path::Path,
+) -> anyhow::Result<crate::extract::introspect::SchemaReport> {
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "读不到 schema JSON：{}（先跑 ontok-introspect 产出它）",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("{} 不是合法的 SchemaReport JSON", path.display()))
+}
+
+/// `<out>.cache.json` —— 两条提案命令共用的默认缓存落点。
+fn default_cache_path(out: &std::path::Path) -> PathBuf {
+    let mut s = out.to_path_buf().into_os_string();
+    s.push(".cache.json");
+    PathBuf::from(s)
+}
+
+/// 提案通道的输出上限：运维显式设了 `ONTOK_LLM_MAX_TOKENS` 就以它为准（部署事实），
+/// 否则用 `doc_ingest` 那条通道的默认值（4096）—— **不另立第二份默认值**。
+fn proposal_max_tokens(configured: u32) -> u32 {
+    let explicitly_set = std::env::var(crate::agent::llm::MAX_TOKENS_ENV)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    crate::extract::doc_ingest::resolve_max_tokens(configured, explicitly_set)
+}
+
+/// 打开 LLM 三件套 + 真 HTTP 传输（校验复用 REQ-109 的 `LlmSettings::from_env`）。
+struct ProposalLlm {
+    transport: Box<dyn crate::agent::llm::LlmTransport>,
+    model: String,
+    max_tokens: u32,
+}
+
+fn open_proposal_llm() -> anyhow::Result<ProposalLlm> {
+    let settings = crate::extract::ai_semantic::LlmSettings::from_env()?;
+    let transport = settings.transport()?;
+    let max_tokens = proposal_max_tokens(settings.config.max_tokens);
+    Ok(ProposalLlm {
+        transport,
+        model: settings.config.model.clone(),
+        max_tokens,
+    })
+}
+
+/// 置信度分箱一行（三条命令同一句话 —— 唯一实现在 `proposal` 模块）。
+fn confidence_line(values: &[f64]) -> String {
+    crate::extract::proposal::confidence_histogram_line(values)
+}
+
+/// **`ontok name suggest`** —— 决策点一：中文名提案。
+async fn name_cmd(cmd: NameCmd) -> anyhow::Result<()> {
+    use crate::extract::name_suggest as ns;
+    use crate::extract::proposal as prop;
+
+    let NameCmd::Suggest {
+        schema,
+        out,
+        as_names,
+        budget_tokens,
+        cache,
+        batch_size,
+    } = cmd;
+
+    prop::require_out_is_file(&out)?;
+    let report = load_schema_report(&schema)?;
+    if report.tables.is_empty() {
+        anyhow::bail!(
+            "schema JSON 里一张表都没有（{}）—— 没有可提案的对象。\
+             先确认 ontok-introspect 跑在对的源库/schema 上。",
+            schema.display()
+        );
+    }
+    let budget = prop::require_proposal_budget(budget_tokens)?;
+    if budget_tokens.is_none() {
+        eprintln!("· {}", prop::default_budget_notice(budget));
+    }
+    let batches = ns::plan_batches(&report, batch_size.unwrap_or(ns::DEFAULT_BATCH_SIZE))?;
+    let mut llm = open_proposal_llm()?;
+    let cache_path = cache.unwrap_or_else(|| default_cache_path(&out));
+    let mut mem_cache = prop::load_cache_file(&cache_path)?;
+    let prompts = crate::extract::ai_semantic::Prompts::from_system(ns::SYSTEM_PROMPT);
+
+    let (suggestions, stats) = ns::suggest_all(
+        llm.transport.as_mut(),
+        &mut mem_cache,
+        &batches,
+        &llm.model,
+        &prompts,
+        budget,
+        llm.max_tokens,
+    );
+
+    // ① 先落缓存（花掉的钱对应的回答必须留在盘上）。
+    let cache_json = prop::cache_to_json(&mem_cache)?;
+    write_local(&cache_path, cache_json.as_bytes())?;
+
+    // ② 预算闸：越限 ⇒ **不产出任何提案文件**（AC-006）。
+    prop::ensure_within_budget("name suggest", &stats, budget, &cache_path)?;
+
+    // ②' N-1 失败闸（全部批次失败）：**一个字节都不写**。
+    // 空提案的 JSON 完全合法，导入方会当成「真的、恰好 0 条」—— 那是装作处理过。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "name suggest",
+            &stats,
+            &cache_path,
+        ));
+    }
+
+    // ③ 产物：提案（主）+ `--as-names`（可选，AC-002）。
+    let header = ns::header(&report, &llm.model, &prompts.sha256)?;
+    let text = ns::render_proposal(&suggestions, &report, &header, &stats)?;
+    let proposal_sha = prop::sha256_text(&text);
+    write_local(&out, text.as_bytes())?;
+
+    // ③' N-1 失败闸（部分批次失败）：文件可留（里面 `complete: false`），但退出码非零，
+    // 且 **`--as-names` 不落盘** —— 一份缺了 N 批的名字表喂给 `ontok-propose`
+    // 会让那些表被静默丢弃（REQ-090 的老毛病），正是 N-1 要堵的 fail-open。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("name suggest", &stats, &out));
+    }
+
+    let mut names_written: Option<PathBuf> = None;
+    if let Some(p) = &as_names {
+        let names_text = ns::as_names(
+            &suggestions,
+            &report,
+            &llm.model,
+            &out.display().to_string(),
+            &proposal_sha,
+            &prompts.sha256,
+        )?;
+        write_local(p, names_text.as_bytes())?;
+        names_written = Some(p.clone());
+    }
+
+    // ④ 屏幕报告（stderr：本命令默认不写 stdout）。
+    let values: Vec<f64> = suggestions.iter().map(|s| s.item.confidence).collect();
+    let low: Vec<String> = suggestions
+        .iter()
+        .filter(|s| s.item.is_low_confidence())
+        .map(|s| format!("{}={:.2}", s.table, s.item.confidence))
+        .collect();
+    let missing = ns::missing_tables(&report, &suggestions);
+    eprintln!("✓ 名字提案（AI 先提，人审核后才会进本体）");
+    eprintln!(
+        "  输入        : {}（{} 张表 → {} 批 · 每批 {} 张）",
+        schema.display(),
+        report.tables.len(),
+        batches.len(),
+        batch_size.unwrap_or(ns::DEFAULT_BATCH_SIZE)
+    );
+    eprintln!(
+        "  提案        : {} 条（丢 {} 条）"
+        , stats.proposed, stats.rejected_total()
+    );
+    if !stats.rejected.is_empty() {
+        let parts: Vec<String> = stats
+            .rejected
+            .iter()
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect();
+        eprintln!("  丢弃明细    : {}", parts.join(" · "));
+        for s in stats.rejection_samples.iter().take(3) {
+            eprintln!("                {s}");
+        }
+    }
+    eprintln!(
+        "  置信度      : {}（低置信 < {}：{} 条）",
+        confidence_line(&values),
+        prop::low_confidence_label(),
+        stats.low_confidence
+    );
+    if !low.is_empty() {
+        eprintln!("  低置信清单  : {}", low.join(" · "));
+    }
+    eprintln!(
+        "  缓存        : 命中 {} / {} 批（调用 {} 次 · 失败 {} 次）",
+        stats.cache_hits, stats.requested, stats.calls, stats.failed_calls
+    );
+    eprintln!(
+        "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {}",
+        stats.tokens_spent, budget, stats.tokens_replayed, llm.max_tokens
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
+    );
+    eprintln!("  模型        : {}（decided_by = ai:{}）", llm.model, llm.model);
+    if !missing.is_empty() {
+        eprintln!(
+            "  ⚠ 未提案    : {} 张（{}）—— ⛔ 静默丢表比错名更坏，这里点名",
+            missing.len(),
+            missing.join(", ")
+        );
+    }
+    eprintln!("  产物        : {}", out.display());
+    eprintln!("  提案 sha256 : {proposal_sha}");
+    eprintln!("  缓存文件    : {}", cache_path.display());
+    if let Some(p) = &names_written {
+        eprintln!("  名字表      : {}", p.display());
+        if !missing.is_empty() {
+            eprintln!(
+                "  ⚠ 喂给 --names 前请注意：有 {} 张表没有提案，\
+                 `ontok-propose` 会把这些表**静默丢弃**（它只在 stats 里计数）",
+                missing.len()
+            );
+        }
+    }
+    eprintln!(
+        "  提示        : 未签字的提案不权威（reviewed_by = null）；\
+         要生效请显式走 ontok-propose --names + 双轨审核"
+    );
+    Ok(())
+}
+
+/// **`ontok exclude suggest`** —— 决策点二：该不该进本体。
+async fn exclude_cmd(cmd: ExcludeCmd) -> anyhow::Result<()> {
+    use crate::extract::exclude_suggest as es;
+    use crate::extract::proposal as prop;
+
+    let ExcludeCmd::Suggest {
+        schema,
+        out,
+        exclusions,
+        budget_tokens,
+        cache,
+        batch_size,
+    } = cmd;
+
+    prop::require_out_is_file(&out)?;
+    let report = load_schema_report(&schema)?;
+    if report.tables.is_empty() {
+        anyhow::bail!(
+            "schema JSON 里一张表都没有（{}）—— 没有可判定的对象。",
+            schema.display()
+        );
+    }
+    let existing = match &exclusions {
+        Some(p) => {
+            let s = p
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("--exclusions 路径不是合法 UTF-8：{p:?}"))?;
+            Some(crate::extract::exclusions::Exclusions::load(s)?)
+        }
+        None => None,
+    };
+    let budget = prop::require_proposal_budget(budget_tokens)?;
+    if budget_tokens.is_none() {
+        eprintln!("· {}", prop::default_budget_notice(budget));
+    }
+    let (batches, carried, stale) = es::plan_batches(
+        &report,
+        existing.as_ref(),
+        batch_size.unwrap_or(es::DEFAULT_BATCH_SIZE),
+    )?;
+    let cache_path = cache.unwrap_or_else(|| default_cache_path(&out));
+    let mut mem_cache = prop::load_cache_file(&cache_path)?;
+
+    let (decisions, stats, model, prompt_sha) = if batches.is_empty() {
+        // 全部沿用已有清单 ⇒ **一次模型都不调**（也不要求 LLM 三件套）。
+        eprintln!("· 全部表都已在 --exclusions 里 ⇒ 不调用模型（沿用 {} 条）", carried.len());
+        (
+            Vec::new(),
+            prop::ProposalStats {
+                budget,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+    } else {
+        let mut llm = open_proposal_llm()?;
+        let prompts = crate::extract::ai_semantic::Prompts::from_system(es::SYSTEM_PROMPT);
+        let (decisions, stats) = es::suggest_all(
+            llm.transport.as_mut(),
+            &mut mem_cache,
+            &batches,
+            &llm.model,
+            &prompts,
+            budget,
+            llm.max_tokens,
+        );
+        // 先落缓存（即使后面越预算，这一轮的钱也不白花）。
+        let cache_json = prop::cache_to_json(&mem_cache)?;
+        write_local(&cache_path, cache_json.as_bytes())?;
+        prop::ensure_within_budget("exclude suggest", &stats, budget, &cache_path)?;
+        (
+            decisions,
+            stats,
+            Some(llm.model.clone()),
+            Some(prompts.sha256.clone()),
+        )
+    };
+
+    let model_text = model.clone().unwrap_or_else(|| "（未调用模型）".to_string());
+    let input_sha = crate::extract::name_suggest::schema_digest(&report)?;
+    // 全部沿用已有清单时**没有 AI 提案**：`source` / `decided_by` 必须说 `rule`，
+    // ⛔ 不许写成 `ai:（未调用模型）` —— 那是把「没跑模型」伪装成「模型提的」。
+    let header = match (&model, &prompt_sha) {
+        (Some(m), Some(p)) => es::header(m, p, input_sha),
+        _ => prop::ProposalHeader {
+            kind: "exclude",
+            source: prop::SOURCE_RULE,
+            model: None,
+            prompt_sha: None,
+            agent_version: es::AGENT_VERSION.to_string(),
+            input_sha256: input_sha,
+            decided_by: prop::RULE_DECIDED_BY.to_string(),
+        },
+    };
+
+    // N-1：全部批次失败 ⇒ **一个字节都不写**。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "exclude suggest",
+            &stats,
+            &cache_path,
+        ));
+    }
+
+    let text = es::render_proposal(&decisions, &carried, &stale, &header, &stats)?;
+    let proposal_sha = prop::sha256_text(&text);
+    write_local(&out, text.as_bytes())?;
+
+    // N-1：部分批次失败 ⇒ 文件可留（`complete: false`），但退出码非零。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("exclude suggest", &stats, &out));
+    }
+
+    let excluded = es::excluded_tables(&decisions);
+    let kept = es::kept_tables(&decisions);
+    let values: Vec<f64> = decisions.iter().map(|d| d.item.confidence).collect();
+    let low: Vec<String> = decisions
+        .iter()
+        .filter(|d| d.item.is_low_confidence())
+        .map(|d| {
+            format!(
+                "{}={:.2}{}",
+                d.table,
+                d.item.confidence,
+                if d.excluded { "（排除）" } else { "（保留）" }
+            )
+        })
+        .collect();
+    eprintln!("✓ 排除提案（AI 先判，人审核后才会真的被排除）");
+    eprintln!(
+        "  输入        : {}（{} 张表 → 待判 {} 张 / 沿用 {} 张{}）",
+        schema.display(),
+        report.tables.len(),
+        report.tables.len() - carried.len(),
+        carried.len(),
+        if stale.is_empty() {
+            String::new()
+        } else {
+            format!(" / 陈旧 {} 张", stale.len())
+        }
+    );
+    eprintln!(
+        "  判定        : {} 张（排除 {} · 保留 {}）· 丢 {} 条",
+        decisions.len(),
+        excluded.len(),
+        kept.len(),
+        stats.rejected_total()
+    );
+    if !stats.rejected.is_empty() {
+        let parts: Vec<String> = stats.rejected.iter().map(|(k, n)| format!("{k} {n}")).collect();
+        eprintln!("  丢弃明细    : {}", parts.join(" · "));
+        for s in stats.rejection_samples.iter().take(3) {
+            eprintln!("                {s}");
+        }
+    }
+    if !excluded.is_empty() {
+        eprintln!("  排除清单    : {}", excluded.join(", "));
+    }
+    if !stale.is_empty() {
+        let names: Vec<String> = stale.iter().map(|e| e.table.clone()).collect();
+        eprintln!(
+            "  ⚠ 陈旧排除  : {} 张在 schema 里已不存在（{}）—— 只报不删，删除是人的显式动作",
+            stale.len(),
+            names.join(", ")
+        );
+    }
+    eprintln!(
+        "  置信度      : {}（低置信 < {}：{} 条）",
+        confidence_line(&values),
+        prop::low_confidence_label(),
+        stats.low_confidence
+    );
+    if !low.is_empty() {
+        eprintln!("  低置信清单  : {}", low.join(" · "));
+    }
+    eprintln!(
+        "  缓存        : 命中 {} / {} 批（调用 {} 次 · 失败 {} 次）",
+        stats.cache_hits, stats.requested, stats.calls, stats.failed_calls
+    );
+    eprintln!(
+        "  token       : 本轮 {} / 上限 {}（回放历史 {}）",
+        stats.tokens_spent, budget, stats.tokens_replayed
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
+    );
+    eprintln!("  模型        : {model_text}");
+    eprintln!("  产物        : {}", out.display());
+    eprintln!("  提案 sha256 : {proposal_sha}");
+    eprintln!("  缓存文件    : {}", cache_path.display());
+    if excluded.is_empty() && carried.is_empty() {
+        eprintln!(
+            "  ⚠ 本次没有排除项：文件仍是一份合法提案，但 `ontok-propose --exclude` 会拒绝空 exclude\
+             （REQ-113：一份不排除任何表的文件等于没做出决定）"
+        );
+    } else {
+        eprintln!(
+            "  下一步      : ontok-propose --schema <same> --names <names.json> \
+             --exclude {} --out out/proposal.json --no-sample",
+            out.display()
+        );
+    }
+    eprintln!("  提示        : reviewed_by = null；⛔ 本命令没有过滤任何表，也没有写库");
+    Ok(())
+}
+
 /// REQ-010 · 概念声明通道。
 ///
 /// # 为什么必须过提案，不许「读文件直接生效」
@@ -1552,7 +2115,37 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
     // ⭐ REQ-115 · **建议层**先分流：它只读快照、只产出声明文件，绝不写库。
     // 放在这里而不是塞进下面那段 import 逻辑里，是为了让「建议」与「权威」
     // 在代码上也分得开（(R1)：算法不得冒充人签过的声明）。
-    if let ConceptCmd::Suggest { project, version, out } = &cmd {
+    if let ConceptCmd::Suggest {
+        project,
+        version,
+        out,
+        ai,
+        budget_tokens,
+        cache,
+    } = &cmd
+    {
+        if *ai {
+            // REQ-118 · AC-004 / AC-007：AI 语义分组。
+            return concept_suggest_ai(
+                pool,
+                project,
+                *version,
+                out.as_deref(),
+                *budget_tokens,
+                cache.as_deref(),
+            )
+            .await;
+        }
+        // 算法版是**降级路径**：预算/缓存参数只对 `--ai` 有意义。
+        // ⛔ 不静默忽略 —— 给了就必须起作用，否则调用方会以为这些闸生效了。
+        if budget_tokens.is_some() || cache.is_some() {
+            anyhow::bail!(
+                "--budget-tokens / --cache 只对 `concept suggest --ai` 有意义：\n\
+                 算法版（`source = rule`）是**确定性**的，不调用模型、没有 token 可省、\
+                 也没有指纹缓存可命中。\n\
+                 要跑 AI 语义分组请加 `--ai`（同时需要 --out 与 LLM 三件套）。"
+            );
+        }
         return concept_suggest(pool, project, *version, out.as_deref()).await;
     }
 
@@ -1560,8 +2153,14 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
         let ConceptCmd::Import { file, project, base_version, round } = cmd else {
             unreachable!("ConceptCmd 只有三个变体；Suggest 已在上面分流")
         };
-        let text = std::fs::read_to_string(&file)
+        // ⭐ REQ-118 · A-1（P4）：溯源要记**文件本身**的 sha256，所以先按字节读，
+        // 再解析。`read_to_string` 拿不到「文件原始字节」这个身份（BOM/行尾差异会漂）。
+        let file_bytes = std::fs::read(&file)
             .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
+        let file_sha256 = crate::extract::sample::sha256_hex(&file_bytes);
+        let text = String::from_utf8(file_bytes).map_err(|e| {
+            anyhow::anyhow!("概念声明 {} 不是 UTF-8 文本，拒绝解析：{e}", file.display())
+        })?;
         let decl = crate::domain::concept::ConceptDeclaration::parse(&text)?;
         // **fail-closed**：指纹对不上 = 有人改了内容没升版本。
         // 不静默接受，也不「顺手帮他升一级」—— 那等于替他做版本决定。
@@ -1618,6 +2217,27 @@ async fn concept_cmd(pool: &PgPool, cmd: ConceptCmd) -> anyhow::Result<()> {
                     extracted_by: Some(eb.clone()),
                 },
                 &items,
+            )
+            .await?;
+
+        // ⭐ REQ-118 · A-1（P4）：**产物侧**记下「这份提案用的是哪份声明、谁签的」。
+        //
+        // 形状与 `inputs.exclusions` 同构：`file` / `sha256` / `declared_by` / `reviewed_by`，
+        // 外加声明自己的 `version` 与 `confirmed_by`。四个「签名类」字段**必须存在**，
+        // 值可以是 `null`（现在没人签）—— 「没人签」与「没有这一栏」是两件事。
+        proposals
+            .set_inputs(
+                row.id,
+                &serde_json::json!({
+                    "concepts": {
+                        "file": file.display().to_string(),
+                        "sha256": file_sha256,
+                        "version": &decl.version,
+                        "declared_by": &decl.declared_by,
+                        "confirmed_by": &decl.confirmed_by,
+                        "reviewed_by": &decl.reviewed_by,
+                    }
+                }),
             )
             .await?;
         let rows = proposals.items(row.id).await?;
@@ -1738,7 +2358,7 @@ async fn concept_suggest(
                 receipt.push_str(&format!("  {} ← {} 个对象\n", g.display_name, g.members.len()));
             }
             receipt.push_str(&format!(
-                "  来源：{}（source = algorithm-suggest · reviewed_by = null，没人审过）\n",
+                "  来源：{}（source = rule · reviewed_by = null，没人审过）\n",
                 decl.declared_by
             ));
             receipt.push_str(&format!(
@@ -1751,6 +2371,183 @@ async fn concept_suggest(
         // 管道友好：只打 JSON 本体（回执会混进 `> d.json`）。
         None => print!("{text}"),
     }
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+// REQ-118 · `concept suggest --ai` —— 决策点三：AI 语义分组
+//
+// 与上一条（算法版）的**唯一**相同点是「读同一版快照、产同一形状的声明」；
+// 其余的差别都要在产物里看得见（AC-007）：`source = "ai"`、`decided_by = "ai:<model>"`、
+// `reviewed_by = null`、文件顶层多一个 `proposals[]`（ADR-005 的形状）。
+//
+// ⛔ 它**不写库**：只有 get_by_name / version_by_seq / get_snapshot 三条读。
+// ══════════════════════════════════════════════════════════════
+
+/// **`concept suggest --ai`** —— AI 语义分组提案。
+async fn concept_suggest_ai(
+    pool: &PgPool,
+    project: &str,
+    version: i32,
+    out: Option<&std::path::Path>,
+    budget_tokens: Option<u64>,
+    cache: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    use crate::extract::ai_group as ag;
+    use crate::extract::proposal as prop;
+
+    // P1：提案必须落盘。算法版可以只打 stdout，AI 版不行 —— 一份没落盘的提案
+    // 进不了评审记录，而 `reviewed_by` 要能回到一个具体文件。
+    let out = out.ok_or_else(|| prop::missing_out_error("concept suggest --ai"))?;
+    prop::require_out_is_file(out)?;
+    let budget = prop::require_proposal_budget(budget_tokens)?;
+    if budget_tokens.is_none() {
+        eprintln!("· {}", prop::default_budget_notice(budget));
+    }
+
+    let projects = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+    let p = projects
+        .get_by_name(project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}"))?;
+    let v = projects.version_by_seq(p.id, &p.name, version).await?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照 —— 先从源库抽取并落库"))?;
+    if snap.entity_types.is_empty() {
+        anyhow::bail!(
+            "v{version} 的快照里没有任何实体 —— 没有可分组的对象。\
+             先确认抽取真的产出了实体（看 proposal.json / stats）；空快照上跑分组\
+             会得到一份「0 个组」的声明，那不是判断，是没数据。"
+        );
+    }
+
+    let input = ag::GroupInput::from_snapshot(&snap);
+    let cache_path = cache
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| default_cache_path(out));
+    let mut mem_cache = prop::load_cache_file(&cache_path)?;
+    let mut llm = open_proposal_llm()?;
+    let prompts = crate::extract::ai_semantic::Prompts::from_system(ag::SYSTEM_PROMPT);
+
+    let (groups, stats) = ag::suggest_all(
+        llm.transport.as_mut(),
+        &mut mem_cache,
+        &input,
+        &llm.model,
+        &prompts,
+        budget,
+        llm.max_tokens,
+    )?;
+    // 先落缓存，再判预算（花掉的钱对应的回答必须留在盘上）。
+    let cache_json = prop::cache_to_json(&mem_cache)?;
+    write_local(&cache_path, cache_json.as_bytes())?;
+    prop::ensure_within_budget("concept suggest --ai", &stats, budget, &cache_path)?;
+
+    // N-1：全部批次失败 ⇒ 不写声明（空声明 = 0 个组，导入后会显示成功）。
+    if stats.completeness() == prop::Completeness::AllFailed {
+        return Err(prop::all_batches_failed_error(
+            "concept suggest --ai",
+            &stats,
+            &cache_path,
+        ));
+    }
+
+    let decl = ag::build_declaration(&groups, &llm.model);
+    let header = ag::header(&llm.model, &prompts.sha256, input.digest());
+    let text = ag::render_proposal(&decl, &groups, &header, &stats)?;
+    write_local(out, text.as_bytes())?;
+
+    // N-1：部分失败 ⇒ 文件留、退出码非零；⛔ 下面「可直接 import」的提示也不会打印。
+    if stats.completeness() == prop::Completeness::Partial {
+        return Err(prop::partial_failure_error("concept suggest --ai", &stats, out));
+    }
+
+    let members_total: usize = groups.iter().map(|g| g.members.len()).sum();
+    let values: Vec<f64> = groups.iter().map(|g| g.item.confidence).collect();
+    let low: Vec<String> = groups
+        .iter()
+        .filter(|g| g.item.is_low_confidence())
+        .map(|g| format!("{}={:.2}", g.display_name, g.item.confidence))
+        .collect();
+    let ungrouped: Vec<&str> = {
+        let grouped: std::collections::BTreeSet<&str> = groups
+            .iter()
+            .flat_map(|g| g.members.iter().map(String::as_str))
+            .collect();
+        input
+            .entities
+            .iter()
+            .map(|e| e.key.as_str())
+            .filter(|k| !grouped.contains(k))
+            .collect()
+    };
+    eprintln!("✓ AI 语义分组提案（AI 先提，人审核后才会进本体）");
+    eprintln!(
+        "  输入        : 项目 {} v{}（{} 个实体 · {} 条关系）",
+        p.name,
+        version,
+        input.entities.len(),
+        input.links.len()
+    );
+    eprintln!(
+        "  提案        : {} 个组 / {} 个成员（丢 {} 条）",
+        groups.len(),
+        members_total,
+        stats.rejected_total()
+    );
+    if !stats.rejected.is_empty() {
+        let parts: Vec<String> = stats.rejected.iter().map(|(k, n)| format!("{k} {n}")).collect();
+        eprintln!("  丢弃明细    : {}", parts.join(" · "));
+        for s in stats.rejection_samples.iter().take(3) {
+            eprintln!("                {s}");
+        }
+    }
+    for g in &groups {
+        eprintln!("    {} ← {} 个对象", g.display_name, g.members.len());
+    }
+    if !ungrouped.is_empty() {
+        eprintln!(
+            "  未分组      : {} 个（模型没把握的不硬凑 —— 图上照常显示为未分组）",
+            ungrouped.len()
+        );
+    }
+    eprintln!(
+        "  置信度      : {}（低置信 < {}：{} 条）",
+        confidence_line(&values),
+        prop::low_confidence_label(),
+        stats.low_confidence
+    );
+    if !low.is_empty() {
+        eprintln!("  低置信清单  : {}", low.join(" · "));
+    }
+    eprintln!(
+        "  缓存        : 命中 {} / {} 批（调用 {} 次 · 失败 {} 次）",
+        stats.cache_hits, stats.requested, stats.calls, stats.failed_calls
+    );
+    eprintln!(
+        "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {}",
+        stats.tokens_spent, budget, stats.tokens_replayed, llm.max_tokens
+    );
+    eprintln!(
+        "  完整性      : complete = true（失败批次 0 / {}）",
+        stats.requested
+    );
+    eprintln!(
+        "  模型        : {}（source = ai · decided_by = ai:{} · reviewed_by = null）",
+        llm.model, llm.model
+    );
+    eprintln!("  声明契约    : digest 一致（可直接 concept import）");
+    eprintln!("  产物        : {}", out.display());
+    eprintln!("  提案 sha256 : {}", prop::sha256_text(&text));
+    eprintln!("  缓存文件    : {}", cache_path.display());
+    eprintln!(
+        "  下一步      : ontok concept import --file {} --project {} --base-version <未冻结的版本>",
+        out.display(),
+        p.name
+    );
     Ok(())
 }
 
@@ -1968,12 +2765,21 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
                     rec.declared_by,
                     rec.reviewed_by.as_deref().unwrap_or("—")
                 );
+                // ⭐ REQ-118 · A-1：**保留 `inputs` 里的其它键**（`names` 等）。
+                // 上一版这里只写 `{ "exclusions": rec }` —— 于是「既给 --names 又给
+                // --exclude」的提案，落库后**名字溯源整块消失**（只剩排除那一段）。
+                // 现在把校验后的 `exclusions` 写回**原对象**，其它输入记录原样保留。
+                let mut stored = inputs.as_object().cloned().unwrap_or_default();
+                stored.insert(
+                    "exclusions".to_string(),
+                    serde_json::to_value(&rec).context("排除记录序列化失败")?,
+                );
                 proposals
-                    .set_inputs(row.id, &serde_json::json!({ "exclusions": rec }))
+                    .set_inputs(row.id, &Value::Object(stored))
                     .await?;
             }
             None => {
-                // 有 `inputs` 但没有 `exclusions`（将来的其它输入记录）：原样留档，不丢。
+                // 有 `inputs` 但没有 `exclusions`（例如只有 `names`）：原样留档，不丢。
                 proposals.set_inputs(row.id, inputs).await?;
             }
         }
@@ -2620,3 +3426,5 @@ pub fn snapshot_to_view(
             .collect(),
     }
 }
+
+
