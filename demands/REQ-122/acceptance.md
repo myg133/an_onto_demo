@@ -157,7 +157,7 @@ dim_customer_binding: 17851 行 · 非空 29 条（0.16%）
 | 声明覆盖 | 42 perTable + 27 publicDimensions + 1 tenantSubject = 70；余 14 张「口径未定 ⇒ 不可查」 |
 | 泄漏对拍 | 8 项 PASS，**交集 0**（107 vs 76；balances 1:1；两跳 107；`FILTER != 自己` / `FILTER = 别人` 均 0 行） |
 | 拒绝用例 | **26 条**（超出 AC-002 要求） |
-| 测试 | lib **509**（+74）/ doc 4 / 新增集成 15 + 真库 2 |
+| 测试 | lib **520**（第 2 轮 +74；第 5 轮 +4 = N1 三条 + N3 一条）/ doc 4 / `test_req122_sparql` **17** + `test_req122_live` **4**（真库 3 + 库内泄漏 1） |
 
 ---
 
@@ -180,15 +180,30 @@ QA 正向变异：**把 echo 里的租户条件全删掉（执行不变）⇒ li
 ⇒ 「echo 就是执行的 SQL」**没人守**，而我们所有「注入可视化」验收都建立在它上面。
 要求：补断言（echo 含注入条件 + 含 `LIMIT N+1`），并**变异验证**（删 echo 的注入 ⇒ 测试红）。
 
+**→ 第 5 轮已修**：回执组装抽成纯函数 `sparql::receipt()`（`sql_echo` 只从 `planned.sql` 逐字取）；
+lib 三条判据把 echo 钉住（`sparql::tests::*`）。同一变异（echo 删注入、执行不变）复跑：
+**lib 3 red**（`sql_echo_is_the_executed_sql_…` / `every_applied_tenant_condition_…` / `the_echo_does_not_invent_…`），
+`test_req122_live::ac005_testdb_…` 也红。库内测试另含「echo 原样再执行 ⇒ 行集不变」的端到端判据。
+
 ### M-2 · N2 **改判必修**：泄漏测试缺 env 时静默 SKIP 且算 pass
 
 AC-005 是**最重要的判据**，CI 上很可能根本没跑。
 要求：① SKIP 必须**响亮**（打印「AC-005 未执行」）；② 补一条**不依赖源库**的库内泄漏测试（用测试库造两个租户夹具），保证常规 CI 也能覆盖。
 
+**→ 第 5 轮已修**：① SKIP 四重可见，含**子进程回显**（绕过 libtest 的线程级 output capture）⇒
+默认 `cargo test` 输出里就有 `*** SKIP: <测试名> -- missing <ENV> *** … NOT a pass ***`；
+② 新增 `ac005_testdb_a_tenant_never_sees_another_tenants_rows`（只需 `ONTOK_TEST_DATABASE_URL`：
+自建专属 schema + 两表 + 两租户，走完整 `run_query`，A/B 交集 0、越权 FILTER 0 行）。
+空转自证：把 `orders` 改成公共维度 ⇒ A 拿到 4 行 ⇒ 该测试红。
+
 ### M-3 · N3 **改判必修**：CLI 的「只读回执」是**写死的字符串**
 
 QA 实测：打印的「`transaction_read_only = on`」是硬编码，不是读回值。——**这是假回执**，与「失败路径不许装作做完了」同一类。
 要求：真读回（`SHOW transaction_read_only`）或删掉该断言，⛔ 不许保留没验证的断言。
+
+**→ 第 5 轮选 (a) 真读回**：`connect_read_only` 返回 `ReadOnlyConnection { pool, facts }`，
+`SessionFacts::receipt()` 打印的就是 `SHOW` 的实际值（CLI 输出「只读会话（读回）：…」）。
+变异自证：把 `receipt()` 里的值换回写死的 `"on"` ⇒ lib 单测红（喂 `off` 时回执必须写 `off`）。
 
 ### M-4 · 登记
 
@@ -196,3 +211,6 @@ QA 实测：打印的「`transaction_read_only = on`」是硬编码，不是读�
 | --- | --- |
 | N4 | 声明登记「不存在的表」只 warning ⇒ **下轮改成拒绝**（与「无法确定 ⇒ 拒绝」一致） |
 | N5 | acceptance I-5 数字滞后（509/15+2 → 516/17+3）、`.feature/manifest.json` 仍是 REQ-116 ⇒ **本轮顺手更新** |
+
+**→ 第 5 轮已更新**：I-5 的「测试」行改为 lib **520** / doc 4 / sparql **17** / live **4**；
+`feature-REQ-122/.feature/manifest.json` 已按 REQ-122 重写（不再是 REQ-116 的内容）。
