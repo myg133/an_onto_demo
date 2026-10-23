@@ -242,3 +242,12 @@
 - 回收：feature worktree + 分支
 - 结果：84 TriplesMap / 70 join；true→join、inherit 默认不生成、false 永不成 join；类集双向差集 0；中文 IRI 0 处
 - 新修：AC-008 三条 guard 补夹具 + 逐条变异证明有牙；`.scratch/`（1.4 MB 真名 TTL）进 `.gitignore`
+
+
+## 2026-10-23 — REQ-122 合并与回收
+
+- 合并：`feature/REQ-122` → `develop` **`e3da616`**（6 个提交）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：84/952/70 与映射逐数相同；泄漏对拍交集 0（含「公共维度当驱动表」攻击）；echo 与 `pg_stat_activity` 逐字相同；26 条拒绝用例；库内泄漏测试只需测试库
+- **两条新规程**：① 派单前查 `list_agents`（我制造过一次双写冲突）② 「声称必须有判据」（5 轮里 5 次同类问题）
