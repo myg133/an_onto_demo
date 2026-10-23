@@ -251,3 +251,12 @@
 - 回收：feature worktree + 分支
 - 结果：84/952/70 与映射逐数相同；泄漏对拍交集 0（含「公共维度当驱动表」攻击）；echo 与 `pg_stat_activity` 逐字相同；26 条拒绝用例；库内泄漏测试只需测试库
 - **两条新规程**：① 派单前查 `list_agents`（我制造过一次双写冲突）② 「声称必须有判据」（5 轮里 5 次同类问题）
+
+
+## 2026-10-23 — REQ-123 合并与回收
+
+- 合并：`feature/REQ-123` → `develop` **`fbae80a`**（2 个提交：`5ecca46` + `09526b0`）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：REST 四端点 + MCP(JSON-RPC/SSE)；**两协议 8 组 sha256 全等**；租户攻击 6 项全挡；`futures-util` 无新 crate（260→260）；审计 111 行无明文
+- **新规程**：提交前必须验「分支上真的有东西」（REQ-123 首轮分支 0 commit，合并会丢功能）
