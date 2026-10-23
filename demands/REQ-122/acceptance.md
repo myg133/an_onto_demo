@@ -108,3 +108,53 @@
 - **H** 租户注入只许一处实现（不许 planner 一处、执行器一处）
 - **G** 变异三元组：把注入改成 OR / 跳过公共维度判断 / 允许未知属性返回空 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+---
+
+## 三 · Dev 交付与裁定（I-1~I-4）
+
+### Dev 抛回的问题：声明为什么用 `customer_id` 而不是 `main_customer_id`
+
+BA 实查源库：
+
+```
+deductions:           4 行   · main_customer_id 非空 0 条（0%）
+dim_customer_binding: 17851 行 · 非空 29 条（0.16%）
+```
+
+按 `main_customer_id` 过滤 ⇒ 这 4 条扣费**对任何租户都不可见** ⇒ AC-001/AC-005 都会变空洞。
+
+**裁定：接受 `customer_id`**（Dev 的判断成立）。
+
+### I-1 · **不完整必须让调用方知道**（要加）
+
+`customer_id = :tenant` 的后果：**子账号产生的扣费查不到，且不会报错**。
+数字员工会答「您上个月扣费 0 元」，而实际有子账号的扣费——**这比查不到更危险**。
+
+要求（仍声明驱动）：
+
+1. `perTable` 增加可选 `coverage: "complete" | "main_only"`
+2. 回执 `warnings[]`：被命中的表若 `coverage != complete` ⇒ 输出可读警告（说明用哪列过滤、可能漏什么）
+3. 判据：查 `deductions` ⇒ 有警告；查 `balances`（complete）⇒ **无警告**
+
+### I-2 · `LIMIT N+1` 接受
+
+用 `LIMIT N+1` 判 `truncated` 比 `LIMIT N` 更正确（能区分「正好 N 行」与「被截断」）。
+裁定：接受；AC-009 订正为「`LIMIT <= max_rows + 1`」，且 `sql_echo` 要能看出是探针。
+
+### I-3 / I-4 · 接受
+
+| 项 | 裁定 |
+| --- | --- |
+| 回执多 `public_dimensions[]` | ✅ 保留（否则 AC-004 无法机检） |
+| 支持 `SELECT DISTINCT` | ✅ 接受，但必须写进「支持列表」文档，⛔ 不许再悄悄扩 |
+
+### I-5 · Dev 交付的关键数字（待 QA 独立复验）
+
+| 项 | 值 |
+| --- | --- |
+| 映射一致性 | 84 TriplesMap / 952 属性 / 70 join，与 `r2rml generate` 的 TTL **逐数相同** |
+| 声明覆盖 | 42 perTable + 27 publicDimensions + 1 tenantSubject = 70；余 14 张「口径未定 ⇒ 不可查」 |
+| 泄漏对拍 | 8 项 PASS，**交集 0**（107 vs 76；balances 1:1；两跳 107；`FILTER != 自己` / `FILTER = 别人` 均 0 行） |
+| 拒绝用例 | **26 条**（超出 AC-002 要求） |
+| 测试 | lib **509**（+74）/ doc 4 / 新增集成 15 + 真库 2 |
