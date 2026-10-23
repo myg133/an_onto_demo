@@ -393,6 +393,14 @@ impl SchemaTypes {
         self.tables.contains(&table.trim().to_ascii_lowercase())
     }
 
+    /// ⭐ REQ-121 · **按名遍历** schema 里的表（已 trim + 小写，BTreeSet ⇒ 有序）。
+    ///
+    /// 用途：审计「被 `exclusions.json` 排除、因而没有 TriplesMap」的类 ——
+    /// 这些类**不在快照里**，只能从 schema 与排除声明两头求差。
+    pub fn table_names(&self) -> impl Iterator<Item = &str> {
+        self.tables.iter().map(|s| s.as_str())
+    }
+
     /// ⭐ REQ-121 · 这张表有没有这一列（`rr:columnName` / `rr:child` / `rr:parent` 的判据）。
     pub fn has_column(&self, table: &str, column: &str) -> bool {
         self.table_columns

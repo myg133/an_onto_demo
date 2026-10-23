@@ -439,6 +439,19 @@ pub enum R2rmlCmd {
         /// `ontok:tenantColumn`，供 REQ-122 注入过滤。省略 ⇒ 文件头 + stderr 明说「未标注」。
         #[arg(long)]
         tenancy: Option<PathBuf>,
+        /// **审计**（A-2.4）：`exclusions.json`。给了才核对「已排除的表是否混进映射」。
+        ///
+        /// ⛔ 不会因此删掉任何 TriplesMap —— 它只做**可见性**：
+        /// 映射里出现已排除表 ⇒ stderr 警告 + 文件头点名「本映射包含 N 张已排除的表」。
+        /// 生产口径应当是**快照**里就不含这些表（`ontok-propose --exclude`）。
+        #[arg(long)]
+        exclude: Option<PathBuf>,
+        /// **审计**（A-2.3）：已签字的 FK 提案（`fk-proposals.json`）。
+        ///
+        /// 给了才点名「端点被排除、因而没有生成」的已签关系 —— 这些边在快照里
+        /// 已经不存在（`apply` 拒绝悬空关系），只有这份文件还留着它们。
+        #[arg(long)]
+        fk_signed: Option<PathBuf>,
     },
 }
 
@@ -3470,7 +3483,17 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
 /// ⛔ stdout 与 `--out` 写的是**同一份**字节（`r2rml_doc`）：出口只有一处序列化，
 /// 与 C6/C7、D9/D10 同一条口径。
 async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
-    let R2rmlCmd::Generate { project, version, schema, out, include_inherit, base, tenancy } = cmd;
+    let R2rmlCmd::Generate {
+        project,
+        version,
+        schema,
+        out,
+        include_inherit,
+        base,
+        tenancy,
+        exclude,
+        fk_signed,
+    } = cmd;
 
     let projects = PgProjectStore::new(pool.clone());
     let store = PgStore::new(pool.clone());
@@ -3513,8 +3536,65 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
         schema: Some(&schema_types),
     };
     let model = crate::domain::model_view::project_model_track(&snap);
+
+    // ── A-2.4 · 审计输入（只影响文件头/文件尾，不改变映射）──────────
+    //
+    // `--exclude` 是**核对**，不是过滤：生产口径应当让快照本身不带这些表
+    // （`ontok-propose --exclude`）。这里能做的只是「有人拿未排除的快照来生成」
+    // 时把它**喊出来**（不阻断，但必须让人看见）。
+    let excluded_names: Option<Vec<String>> = match &exclude {
+        Some(path) => {
+            let ex = crate::extract::exclusions::Exclusions::load(&path.to_string_lossy())
+                .with_context(|| format!("读不出排除文件 {path:?}"))?;
+            Some(ex.entries().iter().map(|e| e.table.clone()).collect())
+        }
+        None => None,
+    };
+    // `--fk-signed` 是**审计**：端点被排除的已签关系在快照里已经不存在
+    // （`apply` 拒绝悬空关系），只有这份签字产物还留着它们。
+    let signed_edges: Option<Vec<(String, String)>> = match &fk_signed {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("读不出签字产物 {path:?}"))?;
+            let v: serde_json::Value = serde_json::from_str(&raw)
+                .with_context(|| format!("签字产物 {path:?} 不是合法 JSON"))?;
+            let mut edges: Vec<(String, String)> = Vec::new();
+            if let Some(arr) = v.get("proposals").and_then(|x| x.as_array()) {
+                for p in arr {
+                    // 只认**签过字**的（`reviewed_by` 非空）—— 未签的本来就不进快照。
+                    let signed = p.get("reviewed_by").is_some_and(|x| !x.is_null());
+                    if !signed {
+                        continue;
+                    }
+                    let subject = p.get("subject").and_then(|x| x.as_str()).unwrap_or("");
+                    let to = p
+                        .pointer("/facts/to_table")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    if let Some((from, _)) = subject.split_once('.') {
+                        if !from.is_empty() && !to.is_empty() {
+                            edges.push((from.to_string(), to.to_string()));
+                        }
+                    }
+                }
+            }
+            edges.sort();
+            edges.dedup();
+            Some(edges)
+        }
+        None => None,
+    };
+
     // 对账失败 ⇒ Display 里逐条点名（表.列），退出码非零，**不写文件**。
-    let doc = crate::domain::r2rml::generate(&model, &opts, include_inherit)?;
+    let doc = crate::domain::r2rml::generate_audited(
+        &model,
+        &opts,
+        include_inherit,
+        crate::domain::r2rml::R2rmlAudit {
+            excluded_tables: excluded_names.as_deref(),
+            signed_edges: signed_edges.as_deref(),
+        },
+    )?;
 
     let st = doc.stats();
     // ⛔ `false` 与 `未标` 分开报：前者是**有据**的「仅名字推断」，后者是
@@ -3524,15 +3604,25 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
     eprintln!(
         "· R2RML（{project} v{version}）：{} · \
          三态 true {} / inherit {}（生成 {}）/ false（仅名字推断，有据）{} · \
-         未标（无验证信息）{} · 复合主键跳过 {} · schema 对账 0 失败",
+         未标（无验证信息）{} · 复合主键跳过 {} · 跳过已签关系 {} · schema 对账 0 失败",
         st.summary(),
         st.verified_edges,
         st.inherited_edges,
         st.inherited_emitted,
         st.naming_only_edges,
         st.unverified_edges,
-        st.skipped_classes.len()
+        st.skipped_classes.len(),
+        st.skipped_signed_edges.len()
     );
+    // ── A-2.4 · fail-visible：映射里混进了已排除表 ──────────────
+    if !st.excluded_tables_in_mapping.is_empty() {
+        eprintln!(
+            "⚠ 排除表：本映射包含 {} 张已排除的表（{}）—— 这份快照没带 --exclude；\
+             生产口径应重建快照（本文件仅供对照，不阻断）",
+            st.excluded_tables_in_mapping.len(),
+            st.excluded_tables_in_mapping.join("、")
+        );
+    }
     if !crate::domain::ttl::tenancy_report(&model, tenancy_decl.as_ref()).annotated() {
         eprintln!(
             "⚠ 租户列未标注：TriplesMap 上一条 ontok:tenantColumn 都没有 —— \

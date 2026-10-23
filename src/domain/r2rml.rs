@@ -159,6 +159,19 @@ pub struct R2rmlStats {
     pub skipped_classes: Vec<(String, String)>,
     /// 被排除的边：`(关系 key, 原因)`，已排序。
     pub excluded_edges: Vec<(String, String)>,
+    /// ⭐ A-2.4（fail-visible）：映射里**出现**、但 `exclusions.json` 判定不进本体的表。
+    ///
+    /// 不阻断（有人拿未排除的快照来生成时，仍出一份可对照的映射），
+    /// 但**必须**进文件头 + stderr —— 数字员工不该能查到同步残留表。
+    pub excluded_tables_in_mapping: Vec<String>,
+    /// 被 `exclusions.json` 排除、因而**没有** TriplesMap 的表（已排序）。
+    ///
+    /// 与 [`Self::excluded_tables_in_mapping`] 互斥：同一个表只可能落在一边。
+    pub excluded_tables_skipped: Vec<String>,
+    /// 已签关系里因**端点不在建模视图**而被跳过的边：`(from → to, 原因)`，已排序。
+    ///
+    /// 只在调用方给了 `R2rmlAudit::signed_edges` 时才有内容（快照本身已不含这些边）。
+    pub skipped_signed_edges: Vec<(String, String)>,
 }
 
 impl R2rmlStats {
@@ -267,6 +280,20 @@ struct JoinPlan {
     evidence: String,
 }
 
+/// ⭐ A-2.4 · **审计输入**（只影响文件头 / 文件尾 / 回执，不改变「查库」逻辑）。
+///
+/// 为什么审计要和生成分开：快照里**没有**的表不可能出现在映射里，
+/// 「已排除的表混进来了」只能靠**外部声明**（`exclusions.json`）来判。
+/// 同理，「已签关系因端点被排除而没生成」在快照里已经不存在，
+/// 只能靠**已签字的 FK 文件**（`fk-proposals.json`）来点名。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct R2rmlAudit<'a> {
+    /// `exclusions.json` 里点名的表（原始大小写即可）。给了才核对。
+    pub excluded_tables: Option<&'a [String]>,
+    /// 已签字的 FK 边 `(from_table, to_table)`。给了才点名被跳过关系。
+    pub signed_edges: Option<&'a [(String, String)]>,
+}
+
 /// 生成 R2RML 映射。
 ///
 /// `opts.schema` **必填**（主键 / 唯一列 / 列存在性只能来自真实 schema）。
@@ -275,6 +302,16 @@ pub fn generate(
     view: &ModelTrackView,
     opts: &TtlOptions<'_>,
     include_inherit: bool,
+) -> Result<R2rmlDocument, R2rmlError> {
+    generate_audited(view, opts, include_inherit, R2rmlAudit::default())
+}
+
+/// 生成 + **审计**（A-2.4 的 fail-visible 判据）。
+pub fn generate_audited(
+    view: &ModelTrackView,
+    opts: &TtlOptions<'_>,
+    include_inherit: bool,
+    audit: R2rmlAudit<'_>,
 ) -> Result<R2rmlDocument, R2rmlError> {
     let Some(schema) = opts.schema else {
         return Err(R2rmlError::one(
@@ -545,6 +582,64 @@ pub fn generate(
         return Err(R2rmlError::of(failures));
     }
 
+    // ── A-2.4 · 审计（只影响可见性，不改变上面任何一条映射）─────────
+    //
+    // 归一化：表名按 trim + 小写比较（与 `SchemaTypes` 同一口径）。
+    let excluded_norm: BTreeSet<String> = audit
+        .excluded_tables
+        .unwrap_or(&[])
+        .iter()
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    // ① 映射里**出现**的已排除表（fail-visible：不阻断，但必须报）。
+    let mut excluded_tables_in_mapping: Vec<String> = maps
+        .iter()
+        .map(|m| m.key.clone())
+        .filter(|k| excluded_norm.contains(&k.to_ascii_lowercase()))
+        .collect();
+    excluded_tables_in_mapping.sort();
+
+    // ② 被排除、因而**没有** TriplesMap 的表（只列 schema 里真实存在的）。
+    let mapped_norm: BTreeSet<String> =
+        maps.iter().map(|m| m.key.to_ascii_lowercase()).collect();
+    let mut excluded_tables_skipped: Vec<String> = Vec::new();
+    if audit.excluded_tables.is_some() {
+        for t in schema.table_names() {
+            let lower = t.to_ascii_lowercase();
+            if excluded_norm.contains(&lower) && !mapped_norm.contains(&lower) {
+                excluded_tables_skipped.push(t.to_string());
+            }
+        }
+        excluded_tables_skipped.sort();
+        excluded_tables_skipped.dedup();
+    }
+
+    // ③ 已签关系里端点不在建模视图的（快照已不含这些边，只能靠审计输入点名）。
+    let mut skipped_signed_edges: Vec<(String, String)> = Vec::new();
+    if let Some(edges) = audit.signed_edges {
+        let view_keys: BTreeSet<String> = view
+            .entity_types
+            .iter()
+            .map(|e| e.key.to_ascii_lowercase())
+            .collect();
+        for (from, to) in edges {
+            let missing = [from, to]
+                .into_iter()
+                .find(|t| !view_keys.contains(&t.to_ascii_lowercase()));
+            let Some(m) = missing else { continue };
+            let why = if excluded_norm.contains(&m.to_ascii_lowercase()) {
+                format!("端点 {m} 被 exclusions.json 排除（不在建模视图）")
+            } else {
+                format!("端点 {m} 不在建模视图（未抽取 / 已排除）")
+            };
+            skipped_signed_edges.push((format!("{from} → {to}"), why));
+        }
+        skipped_signed_edges.sort();
+        skipped_signed_edges.dedup();
+    }
+
     skipped_classes.sort();
     excluded.sort();
     let stats = R2rmlStats {
@@ -558,9 +653,21 @@ pub fn generate(
         unverified_edges,
         skipped_classes: skipped_classes.clone(),
         excluded_edges: excluded.clone(),
+        excluded_tables_in_mapping: excluded_tables_in_mapping.clone(),
+        excluded_tables_skipped: excluded_tables_skipped.clone(),
+        skipped_signed_edges: skipped_signed_edges.clone(),
     };
 
-    let doc = render(view, opts, &maps, &skipped_classes, &excluded, &stats, include_inherit);
+    let doc = render(
+        view,
+        opts,
+        &maps,
+        &skipped_classes,
+        &excluded,
+        &stats,
+        include_inherit,
+        audit,
+    );
     Ok(R2rmlDocument { doc, stats })
 }
 
@@ -640,6 +747,7 @@ fn render(
     excluded: &[(String, String)],
     stats: &R2rmlStats,
     include_inherit: bool,
+    audit: R2rmlAudit<'_>,
 ) -> String {
     let mut out = String::new();
 
@@ -682,6 +790,8 @@ fn render(
         "# ⚠ 口径：false ≠「验过但失败」。false 只表示「仅有名字推断、没有数据证据」（REQ-120 的 NamingOnly）；\n\
          #   「未标」表示根本没有验证信息。两者都不生成 join，但读法不同 —— 别把未标读成 false。\n",
     );
+    // ── A-2.4 · 排除表（fail-visible）────────────────────────
+    out.push_str(&exclusion_headline(stats, audit));
     let tenant_note = if !tenancy_report(view, opts.tenancy).annotated() {
         "未标注（没给 --tenancy / 未签）—— 这份映射不能直接给数字员工用（REQ-122 无从注入租户过滤）"
             .to_string()
@@ -713,11 +823,25 @@ fn render(
         out.push_str(&triples_map(opts, m, maps));
     }
 
-    // ── 文件尾：未生成清单 + 被排除的边（AC-006 / AC-011）────
+    // ── 文件尾：未生成清单 + 被排除的边（AC-006 / AC-011 / A-2）────
     if !skipped_classes.is_empty() {
         out.push_str("\n# ── 未生成清单：复合主键 / 无单列主键（R2RML 模板要拼多列，本轮不做）──\n");
         for (key, reason) in skipped_classes {
             out.push_str(&format!("# · {key} —— {reason}\n"));
+        }
+    }
+    if !stats.excluded_tables_skipped.is_empty() {
+        out.push_str("\n# ── 未生成清单：被 exclusions.json 排除（REQ-113 决定这些表不进本体）──\n");
+        for table in &stats.excluded_tables_skipped {
+            out.push_str(&format!("# · {table} —— 被 exclusions.json 排除（不生成 TriplesMap）\n"));
+        }
+    }
+    if !stats.skipped_signed_edges.is_empty() {
+        out.push_str(
+            "\n# ── 未生成的关系：端点不在建模视图（被排除 / 未抽取）—— 跳过，不影响其余映射 ──\n",
+        );
+        for (edge, why) in &stats.skipped_signed_edges {
+            out.push_str(&format!("# · {edge}：{why} —— 已签关系，跳过（不是整份失败）\n"));
         }
     }
     if !excluded.is_empty() {
@@ -731,6 +855,35 @@ fn render(
         }
     }
     out
+}
+
+/// A-2.4 · 文件头里「排除表」那一行。三种状态必须分得开：
+///
+/// 1. 没给 `--exclude` ⇒ **未核对**（别让人以为「核过了、0 张」）；
+/// 2. 给了、且映射里混进了已排除表 ⇒ **⚠ 点名**（不阻断，但必须看见）；
+/// 3. 给了、且 0 张混进来 ⇒ 一致（并报「被排除、未生成」的张数）。
+fn exclusion_headline(stats: &R2rmlStats, audit: R2rmlAudit<'_>) -> String {
+    match audit.excluded_tables {
+        None => "# 排除表：未核对（没给 --exclude）\n".to_string(),
+        Some(_) if !stats.excluded_tables_in_mapping.is_empty() => format!(
+            "# 排除表：⚠ 本映射包含 {} 张已排除的表（{}）—— 这份快照没带 --exclude，\
+             生产口径应重建；本文件仅供对照{}\n",
+            stats.excluded_tables_in_mapping.len(),
+            stats.excluded_tables_in_mapping.join("、"),
+            if stats.excluded_tables_skipped.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "（另有 {} 张已排除的表因复合主键/无主键未生成）",
+                    stats.excluded_tables_skipped.len()
+                )
+            }
+        ),
+        Some(_) => format!(
+            "# 排除表：与 exclusions.json 一致（0 张已排除的表进入映射；{} 张被排除、未生成）\n",
+            stats.excluded_tables_skipped.len()
+        ),
+    }
 }
 
 /// 一个 `rr:TriplesMap` 块（主语行 + 三件套 + 全部谓词-宾语映射）。
@@ -1135,6 +1288,84 @@ mod tests {
             "{}",
             doc.doc()
         );
+    }
+
+    // ── A-2 · 排除表 / 已签关系的可见性 ─────────────────────────
+
+    #[test]
+    fn excluded_tables_in_the_mapping_are_fail_visible_but_do_not_block() {
+        let f = fixture();
+        let excluded = vec!["orders".to_string()];
+        let doc = generate_audited(
+            &f.view,
+            &opts(&f.schema, None),
+            false,
+            R2rmlAudit { excluded_tables: Some(&excluded), signed_edges: None },
+        )
+        .expect("审计不得阻断生成");
+        assert_eq!(doc.stats().excluded_tables_in_mapping, vec!["orders".to_string()]);
+        // 映射照旧完整（不因为「混进了排除表」就删掉它）
+        assert_eq!(doc.stats().triples_maps, 2);
+        assert!(
+            doc.doc().contains("# 排除表：⚠ 本映射包含 1 张已排除的表（orders）"),
+            "{}",
+            doc.doc()
+        );
+    }
+
+    #[test]
+    fn a_signed_edge_with_an_excluded_endpoint_is_named_not_fatal() {
+        let f = fixture();
+        let excluded = vec!["rpt_dim_customer".to_string()];
+        let edges = vec![("rpt_dim_customer".to_string(), "customers".to_string())];
+        let doc = generate_audited(
+            &f.view,
+            &opts(&f.schema, None),
+            false,
+            R2rmlAudit { excluded_tables: Some(&excluded), signed_edges: Some(&edges) },
+        )
+        .expect("端点被排除的已签关系不许 fail-closed");
+        assert_eq!(doc.stats().skipped_signed_edges.len(), 1);
+        assert_eq!(doc.stats().skipped_signed_edges[0].0, "rpt_dim_customer → customers");
+        assert!(
+            doc.doc().contains(
+                "# · rpt_dim_customer → customers：端点 rpt_dim_customer 被 exclusions.json 排除\
+                 （不在建模视图） —— 已签关系，跳过（不是整份失败）"
+            ),
+            "{}",
+            doc.doc()
+        );
+        // 其余映射一个字节都不受影响。
+        assert_eq!(doc.stats().join_maps, 1);
+    }
+
+    #[test]
+    fn excluded_tables_absent_from_the_view_are_listed_as_not_generated() {
+        let mut f = fixture();
+        let mut json: serde_json::Value = serde_json::from_str(&schema_json()).unwrap();
+        json["tables"].as_array_mut().unwrap().push(serde_json::json!({
+            "name": "audit_logs",
+            "primary_key": "id",
+            "composite_primary_key": [],
+            "unique_columns": ["id"],
+            "columns": [{"name": "id", "data_type": "bigint"}]
+        }));
+        f.schema = SchemaTypes::parse(&json.to_string()).expect("schema");
+        let excluded = vec!["audit_logs".to_string(), "ghost".to_string()];
+        let doc = generate_audited(
+            &f.view,
+            &opts(&f.schema, None),
+            false,
+            R2rmlAudit { excluded_tables: Some(&excluded), signed_edges: None },
+        )
+        .expect("generate");
+        assert!(doc.stats().excluded_tables_in_mapping.is_empty());
+        // 只列 schema 里真实存在的（"ghost" 是陈旧排除，由 propose 报）。
+        assert_eq!(doc.stats().excluded_tables_skipped, vec!["audit_logs".to_string()]);
+        assert!(doc.doc().contains("# · audit_logs —— 被 exclusions.json 排除（不生成 TriplesMap）"));
+        assert!(doc
+            .doc()
+            .contains("# 排除表：与 exclusions.json 一致（0 张已排除的表进入映射；1 张被排除、未生成）"));
     }
 
     #[test]
