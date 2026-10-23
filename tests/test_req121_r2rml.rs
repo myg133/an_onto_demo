@@ -402,6 +402,97 @@ fn ac008_schema_reconciliation_names_every_failure_and_emits_no_document() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// AC-008 · 对账的三条细粒度 guard（H-1：删掉任一条必须红）
+//
+// 上面 `ac008_*` 钉的是「表不在 schema / 数据类型列不存在」；这三条钉的是
+// **join 的两个端点**：`rr:child` 在子表、`rr:parent` 在父表、证据表 == 关系终点。
+// 三者共用一个 `Err`，所以只有各自的夹具能证明**每一条**都在起作用 ——
+// 少了哪条，只是失败文案换一句，或者干脆静默生成一条连错表的 join。
+// ══════════════════════════════════════════════════════════════
+
+/// guard ①：`rr:child` 必须存在于**子表**。
+///
+/// 夹具：快照说这条 join 靠 `orders.ghost_child` 连接，但 schema 里 orders 没有这一列。
+#[test]
+fn ac008_a_child_column_absent_from_the_child_table_is_a_named_failure() {
+    let s = schema();
+    let mut v = view();
+    v.link_types[0].column = Some("ghost_child".into());
+
+    let err = generate(&v, &opts(&s, None), false).unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("表 orders 缺子列 ghost_child"),
+        "必须点名「表 X 缺子列 Y」：{text}"
+    );
+    assert!(
+        text.contains("rr:child"),
+        "失败文案必须点明是哪一条 join 条件（rr:child）：{text}"
+    );
+    assert!(
+        err.failures().iter().any(|m| m.contains("orders_customer_id__customers")),
+        "必须点名到关系 key：{text}"
+    );
+}
+
+/// guard ②：`rr:parent` 必须存在于**父表**。
+///
+/// 夹具：证据说连 `customers.ghost_parent`（唯一列），但 customers 没有这一列。
+/// ⚠️ 这条故意让「缺列」比「不唯一」先命中 —— 若删掉 guard ②，失败会退化成
+/// 「不是主键也不是唯一列」，断言照样红：证明这条 guard 才是点名「缺父列」的那一条。
+#[test]
+fn ac008_a_parent_column_absent_from_the_parent_table_is_a_named_failure() {
+    let s = schema();
+    let mut v = view();
+    v.link_types[0].join_evidence = Some(
+        "value-overlap 5/5 (100.00%) -> customers.ghost_parent via unique_column (exact)".into(),
+    );
+
+    let err = generate(&v, &opts(&s, None), false).unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("表 customers 缺父列 ghost_parent"),
+        "必须点名「表 X 缺父列 Y」：{text}"
+    );
+    assert!(
+        text.contains("rr:parent"),
+        "失败文案必须点明是哪一条 join 条件（rr:parent）：{text}"
+    );
+    assert!(
+        err.failures().iter().any(|m| m.contains("orders_customer_id__customers")),
+        "必须点名到关系 key：{text}"
+    );
+}
+
+/// guard ③：**证据表 == 关系终点表**。
+///
+/// 夹具：关系终点是 `customers`，证据却写 `-> licenses.id`。
+/// 若删掉这条 guard，`has_column(customers, "id")` 与唯一性检查都会通过 ——
+/// 于是一条「审核时看的是 licenses、生成时连的是 customers」的 join 会静默落盘。
+#[test]
+fn ac008_join_evidence_pointing_at_a_different_table_than_the_edge_target_is_a_named_failure() {
+    let s = schema();
+    let mut v = view();
+    v.link_types[0].join_evidence =
+        Some("value-overlap 5/5 (100.00%) -> licenses.id via primary_key (plural)".into());
+
+    let err = generate(&v, &opts(&s, None), false).unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("证据指向 licenses"),
+        "必须点名证据指向的表：{text}"
+    );
+    assert!(
+        text.contains("关系终点是 customers"),
+        "必须点名关系实际的终点表：{text}"
+    );
+    assert!(
+        err.failures().iter().any(|m| m.contains("orders_customer_id__customers")),
+        "必须点名到关系 key：{text}"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // AC-010 / AC-011
 // ══════════════════════════════════════════════════════════════
 
