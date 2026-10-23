@@ -1,7 +1,7 @@
 {
   "version": "0.1.0-draft",
   "reviewed_by": null,
-  "note": "草案：给 REQ-126 的 Dev 做启动校验与实测用。reviewed_by 为 null 是故意的——真正上线必须由业务负责人签字（签了才允许启动）。",
+  "note": "草案（已被 REQ-126 实现修订）：⚠️ 本文件的原始版本有两处泄漏——① `SELECT ?subscription ?package` 会投影实例 IRI（形如 `…/anspire_r2rml_excl#licenses/<uuid>`，一个字段同时泄漏项目名与表名）；② id `my_licenses` 里含表名（会出现在 URL / 问题列表 / 审计行）。现行实现改为「业务列投影 + 不含表名的 id」，并把这两类问题列为**启动期拒绝条件**。本文件保留原样作为**反例**，不要当模板复制。reviewed_by 为 null 是故意的——上线必须业务负责人真签。",
   "questions": [
     {
       "id": "deduction_by_currency",
@@ -25,13 +25,13 @@
       "id": "my_subscriptions",
       "title": "我的订阅与套餐",
       "sparql": "SELECT ?subscription ?package WHERE { ?subscription <https://ontok.local/anspire_r2rml_excl#customer_subscriptions__package_templates> ?package . }",
-      "note": "当前订阅关联的套餐模板。"
+      "note": "当前订阅关联的套餐模板。 ⚠️ 反例：这里投影了实例 IRI（会泄漏项目名+表名），生产必须改成业务列。"
     },
     {
       "id": "my_licenses",
       "title": "我的授权（API Key）",
       "sparql": "SELECT ?license ?name WHERE { ?license <https://ontok.local/anspire_r2rml_excl#licenses__name> ?name . }",
-      "note": "不返回密钥本身，只返回授权名称。"
+      "note": "不返回密钥本身，只返回授权名称。 ⚠️ 反例：id 含表名 `licenses`；且投影了实例 IRI。生产应改成业务标签 + 业务 id。"
     }
   ]
 }
