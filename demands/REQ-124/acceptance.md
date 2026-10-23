@@ -92,3 +92,46 @@
 - **H** 每个写端点必须调**既有领域函数**（`path:line` 指明调的是哪个），⛔ 不许重写
 - **G** 变异三元组：让 import 绕过领域函数 / 让 config PUT 跳过校验 / 让 query token 能调管理端点 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 交付与裁定（K-1 ~ K-4）
+
+### K-1 · TTL 导出有**两处 render 调用点**：接受，但口径要写死
+
+Dev 自报：CLI `ontology export` 走 `publish_customer`，控制面走 `console::ops::render_ttl_export`。
+
+**根因**：`publish_customer` 命中发布闸会 `process::exit(2)` —— **服务进程不能因为一次导出请求退出**。
+而 REQ-107 的 T2/T8 要求「写点与管线调用同函数」。
+
+**裁定：接受**，因为**实现是共用的**（`prepare_ttl_export` 的投影 + `domain::pipeline::render` + 同一个序列化器），只有**末端 publish/exit 的包装**不同。
+
+**但必须满足**：
+
+1. 报告里列明「哪一段共用、哪一段不同」（Dev 已列）
+2. **自动对拍**持续存在：`test_req124_live` 必须断言 TTL（客户/建模）与 R2RML（含 `--include-inherit`）的 sha256 与 CLI **相等**
+3. 登记为**已知偏离**：若将来有人把 T2/T8 改成「一个调用点」，必须同时解决「服务进程不许 exit」——这是**需求冲突**，不是疏忽
+
+⛔ 不许把它写成「完全一致没有偏离」。
+
+### K-2 · 验收口径用「产物 + 输入」而不是「调用点数量」
+
+- 判据：`sha256(API 产物) == sha256(CLI 产物)`，且两者消费同一份 `TtlPrepared`
+- 判据：`console/ops.rs` 里**没有一条写 SQL**（Dev 说只有两个写调用：apply/freeze）
+
+### K-3 · 三处设计取舍：接受
+
+| # | 项 | 裁定 |
+| --- | --- | --- |
+| 1 | `POST /api/import` 的内联 `proposal.project` 仍必填且须等于请求 project | **接受**（AC-003 明写「缺 project ⇒ 400」） |
+| 2 | `GET /api/export/ttl` 的 `schema`/`tenancy` 是**服务端路径** | **接受**（与 CLI 同义；admin 本就能读） |
+| 3 | `POST /api/decide` 的 body 比 `review serve` 多 `project`/`proposal`；成功正文 `via` 记 `console` | **接受**：控制面是多提案常驻服务，且 `via` 区分入口是设计 |
+
+⚠️ 但 **GET 侧必须逐字节一致**（Dev 实测 1076 B sha 相同，QA 要复核）。
+
+### K-4 · 审计范围：接受当前口径
+
+Dev：审计覆盖**写操作 + export/r2rml + 鉴权失败**；`GET /api/projects` / `GET /api/review` 不记（避免读放大）。
+
+**裁定：接受**，但必须写进文档（哪些记、哪些不记），并保留 `GET /api/audit` 能查到「401/403 次数」这一事实。
