@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "tenantSubject": "customers",
+  "tenantIdColumn": "id",
+  "perTable": {
+    "some_customer_table": {
+      "tenantColumn": "customer_id",
+      "reason": "这张表的一行属于一个客户：customer_id 就是租户列"
+    },
+    "some_sub_account_table": {
+      "tenantColumn": "main_customer_id",
+      "coverage": "main_only",
+      "coverageNote": "主账号按自己的 id 过滤时看不到子账号产生的行，金额可能偏低",
+      "reason": "子账号的数据归主账号：按 main_customer_id 过滤。若这一列在本库经常为空 / 你要改用子账号 id 列，就把 coverage 写成 main_only —— 那意味着**子账号产生的数据不在结果内**，查询回执会点名警告（别让调用方把偏小的金额读成「没有业务」）"
+    }
+  },
+  "publicDimensions": [
+    {
+      "table": "some_public_catalog",
+      "reason": "产品目录 / 全局配置：对所有客户都一样，过滤它只会把正常数据挡掉"
+    }
+  ],
+  "reviewed_by": "（填上审这份口径的人）",
+  "notes": "这是模板：机制是产品的（读这份声明 → 逐表决定过滤列 / 公共维度 / 不可查 → 注入），口径是项目的（本文件）。换一个客户库只改这里，不改代码。⛔ 没登记、又不在 publicDimensions 的表 = 不可查（整条查询拒绝）。 coverage 只有两个值：complete（默认，声明者保证「过滤列填的就是租户主体、不漏行」）与 main_only（只覆盖主账号；子账号产生的数据不在结果内 —— 命中它的查询会在 warnings 里点名）。"
+}

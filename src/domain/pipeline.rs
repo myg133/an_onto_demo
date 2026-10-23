@@ -85,7 +85,7 @@
 //! - ② 双粒度，但由 [`Granularity`] **声明**，不由出口自决；
 //! - ③ stderr 报告形状唯一（[`DropReport::stderr_line`]），客户正文只报数量。
 //!
-//! # 47 条出口登记表（AC-002 / AC-007）
+//! # 48 条出口登记表（AC-002 / AC-007）
 //!
 //! [`OUTLETS`] 是**机读**的：每条带 `path` + `call_site`（该出口调用管线的源码片段
 //! 唯一子串）+ 轨道 + 格式。判据在 `tests/test_req107_*` 里做**双向对账**
@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1）。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -293,6 +293,13 @@ pub enum OutletId {
     I11,
     /// ⭐ REQ-121 · `r2rml generate --out` → 文件（与 I11 写**同一份字节**）。
     I12,
+    /// ⭐ REQ-122 · `sparql query` → **stdout**（JSON 回执：columns/rows/sql_echo/…）。
+    ///
+    /// 为什么是**内部轨**：它不是「视图」，而是**按 Agent 的查询取回的业务数据**——
+    /// 客户发布闸判的是「建模术语有没有混进客户视图」，在这里没有可判的对象
+    /// （投影由查询写、值来自客户库）。真正的隔离保证是**租户注入 + 只读 + 行数上限**，
+    /// 不是词汇闸。它仍然必须登记：不登记 = 没人管的客户数据出口（REQ-107 收的就是这个洞）。
+    I13,
 }
 
 impl OutletId {
@@ -325,6 +332,7 @@ impl OutletId {
             OutletId::R5 => "R5",
             OutletId::I11 => "I11",
             OutletId::I12 => "I12",
+            OutletId::I13 => "I13",
         }
     }
 }
@@ -393,6 +401,7 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         // （映射层，不是本体视图），把它塞进建模轨会改宽那条既有不变量。
         OutletId::I11 => OutletSpec::of("I11", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I12 => OutletSpec::of("I12", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I13 => OutletSpec::of("I13", Track::Internal, Format::Json, Granularity::Whole),
     }
 }
 
@@ -945,7 +954,7 @@ fn gate_both(spec: OutletSpec, json_text: &str, text: &str) -> Result<(), Pipeli
 }
 
 // ══════════════════════════════════════════════════════════════
-// 47 条出口登记表（AC-002 / AC-007 / AC-010-1）
+// 48 条出口登记表（AC-002 / AC-007 / AC-010-1）
 // ══════════════════════════════════════════════════════════════
 
 /// 一条出口在管线里的**执行形态**。
@@ -1008,7 +1017,7 @@ impl Outlet {
 
 const CUSTOMER: &str = "";
 
-/// ⭐ **47 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
+/// ⭐ **48 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
 /// + REQ-116 的 1 条文档摄取产物写出点）。
 ///
 /// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 14 +
@@ -1426,6 +1435,20 @@ pub const OUTLETS: &[Outlet] = &[
          （`r2rml_doc`）写到文件 —— 与 I11 同一份产物，只是落点不同（同 C6/C7 的口径）。",
     },
     Outlet {
+        id: "I13",
+        path: "src/cli.rs",
+        // ⚠️ 同 I11：call_site **只钉实参片段、不写宏名**（T7 按原文扫本文件）。
+        // 这个片段是 `src/cli.rs` 里 `sparql query` 唯一那处 stdout 写出的子串。
+        call_site: "\"{}\", serde_json::to_string_pretty(&result)?)",
+        spec: spec_of(OutletId::I13),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-122）：`ontok sparql query` 的 stdout —— JSON 回执\\
+         （columns / rows / row_count / truncated / sql_echo / tenant_applied / tables /\\
+         public_dimensions / warnings）。它是**查询结果**，不是客户视图（客户视图零读取）；\\
+         隔离由「声明驱动的租户注入 + 只读会话 + 行数上限」保证，不是词汇闸；\\
+         内部轨 ⇒ 不过客户发布闸（与 I11/I12 同一条口径）。",
+    },
+    Outlet {
         id: "Z1",
         path: "src/server/http.rs",
         call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
@@ -1493,22 +1516,23 @@ mod tests {
     /// REQ-111 新增 5 条审核界面出口（R1–R5，**全部内部轨**）⇒ 44（17/10/14/2/1）；
     /// REQ-116 新增 1 条文档摄取的产物写出点（I10，**内部轨**）⇒ 45（17/10/15/2/1）；
     /// REQ-121 新增 2 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）
-    /// ⇒ 47（17/10/17/2/1）。
+    /// ⇒ 47（17/10/17/2/1）；REQ-122 再加 I13 ⇒ 48（内部 18）。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            47,
+            48,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
-             + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）"
+             + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
+             + 1（REQ-122 的 SPARQL 回执）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            17,
-            "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12"
+            18,
+            "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

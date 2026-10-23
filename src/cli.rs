@@ -128,6 +128,28 @@ pub enum Cmd {
     /// ⚠️ 同一 project+version 两次生成**逐字节相同**（不写时间）。
     #[command(verbatim_doc_comment)]
     R2rml { #[command(subcommand)] cmd: R2rmlCmd },
+    /// ⭐ REQ-122 · **SPARQL 查询**（按 R2RML 映射生成 SQL + 租户强制注入）
+    ///
+    /// 数字员工写 SPARQL，服务端把它变成一条**只读** SQL，并在 `WHERE` 最前面
+    /// 按声明注入租户条件 —— Agent 看不见也改不了。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok sparql query --project anspire_r2rml_excl --version 2 --schema code/out/schema.json --policy query-policy.json --tenant <租户id> --query 'SELECT ?o ?a WHERE { ?o :orders__amount ?a }'
+    ///
+    /// ⚠️ **映射来自 `r2rml generate` 的同一个函数**（`r2rml::build_mapping`），
+    /// ⛔ 不解析生成的 TTL —— 两份实现会漂移，而漂移的那次不报错。
+    /// ⚠️ **租户口径在声明里**（`--policy query-policy.json`，ADR-006）：租户主体、
+    /// 逐表过滤列、公共维度 + 理由。⛔ 代码里没有 `customer_id` 这类字面量；
+    /// 换库只改声明。没登记、又不在公共维度的表 ⇒ **整条查询拒绝**（点名表）。
+    /// ⚠️ 不支持的语法（OPTIONAL / UNION / 子查询 / BIND / 属性路径 / CONSTRUCT / ASK /
+    /// REGEX / 函数）**一律报错**，不会静默忽略。
+    /// ⚠️ **覆盖范围也会报警**：声明里标了 `coverage: "main_only"` 的表（例如子账号产生的
+    /// 扣费主账号看不到），命中时 `warnings[]` 会点名 —— 别把偏小的金额读成「没有业务」。
+    /// ⚠️ 源库连接串走环境变量 `ONTOK_SOURCE_DATABASE_URL`（口令不入库），
+    /// 连上后**读回** `transaction_read_only = on` 才执行。
+    #[command(verbatim_doc_comment)]
+    Sparql { #[command(subcommand)] cmd: SparqlCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -452,6 +474,68 @@ pub enum R2rmlCmd {
         /// 已经不存在（`apply` 拒绝悬空关系），只有这份文件还留着它们。
         #[arg(long)]
         fk_signed: Option<PathBuf>,
+    },
+}
+
+/// ⭐ REQ-122 · SPARQL 查询。
+#[derive(Subcommand)]
+pub enum SparqlCmd {
+    /// 执行一条 SPARQL SELECT（v1 子集），返回 JSON（`sql_echo` 里能看见注入条件）
+    ///
+    /// 输出（stdout）：`{columns, rows, row_count, truncated, sql_echo, tenant_applied[],
+    /// tables[], public_dimensions[], warnings[]}`。
+    /// 诊断一律走 stderr（映射规模 / 声明摘要 / 注入了哪几张表 / 只读回执）。
+    ///
+    /// ⚠️ **`sql_echo` 就是真正执行的那条 SQL**（字面量已内联），所以
+    /// 「租户条件在不在里面」用文本断言即可，不需要相信任何注释。
+    /// ⚠️ `LIMIT` 是 `--max-rows + 1`：第 N+1 行只用来判断 `truncated`，不进结果。
+    /// ⚠️ 超时有**两道**：服务端 `statement_timeout` + 客户端兜底（+2s）。
+    Query {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 第几版
+        #[arg(long)]
+        version: i32,
+        /// **必填**：真实 schema（`ontok-introspect` 产物）。
+        ///
+        /// 主键 / 列存在性 / 列类型都只能来自它（⛔ 不猜；数值去重、类型不匹配也要靠它）。
+        #[arg(long)]
+        schema: PathBuf,
+        /// 租户声明（`query-policy.json`，ADR-006）—— **没有默认值**。
+        ///
+        /// 租户主体 / 逐表过滤列 / 公共维度 + 理由。省略 ⇒ **整条拒绝**并打印模板
+        /// （没有声明就不知道哪张表按哪一列过滤 —— ⛔ 不许猜一个列名）。
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        /// 租户 id（会原样写进 `WHERE <声明里的列> = '<这个值>'`）。
+        ///
+        /// ⛔ 不是「可选过滤」：空值直接拒绝（`--tenant` 必填）。
+        #[arg(long)]
+        tenant: String,
+        /// SPARQL 查询（v1 子集：BGP / 基本 FILTER / LIMIT / OFFSET / ORDER BY 单列 /
+        /// COUNT·SUM·MIN·MAX·AVG + GROUP BY 单列；唯一的清单外额外项是 `SELECT DISTINCT`，
+        /// 它只去重、不改变「取哪些行」）。
+        #[arg(long)]
+        query: String,
+        /// 最多返回多少行（超出 ⇒ `truncated: true` 并明确告知）。
+        ///
+        /// 这是**硬上限**：查询里写更大的 LIMIT 会被压到这个值并给 warning。
+        #[arg(long, default_value_t = 1000)]
+        max_rows: u64,
+        /// 超时（毫秒）。服务端 `statement_timeout` 用它，客户端兜底 +2s。
+        #[arg(long, default_value_t = 10_000)]
+        timeout_ms: u64,
+        /// IRI 基（本体 IRI = `<base><project>`，默认前缀 `:` = 本体 IRI + `#`）。
+        ///
+        /// 必须与 `ontok r2rml generate` 用的是同一个值，否则属性 IRI 对不上。
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
+        /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成）。
+        ///
+        /// 生成时会带 `ontok:joinState "inherit"` 标（这些 join 本表没实测）。
+        #[arg(long)]
+        include_inherit: bool,
     },
 }
 
@@ -1340,6 +1424,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Ontology { cmd } => ontology_cmd(&pool, cmd).await,
         // ⭐ REQ-121 · R2RML 映射（内部轨：表名/列名/join 证据 —— 不是客户视图）
         Cmd::R2rml { cmd } => r2rml_cmd(&pool, cmd).await,
+        // ⭐ REQ-122 · SPARQL → SQL（按声明注入租户；只读源库由本命令自己连）
+        Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -3648,8 +3734,206 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ── 提案指法 ────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// REQ-122 · SPARQL 查询
+// ══════════════════════════════════════════════════════════════
 
+/// `ontok sparql query` —— 规划 + 注入 + 只读执行。
+///
+/// # 顺序是刻意的（每一条失败都要**在干活之前**报出来）
+///
+/// | # | 步骤 | 为什么在这个位置 |
+/// | --- | --- | --- |
+/// | ① | 参数闸（`--max-rows` / `--timeout-ms` / `--tenant`） | 最便宜的失败先报 |
+/// | ② | 读声明并解析 | 没有声明就**没有口径** —— 此时连库、算什么都在浪费，而且会给出「看起来成功」的空结果 |
+/// | ③ | 项目 / 版本 / 快照 | 元数据库只读 |
+/// | ④ | `--schema` 对账 | 列存在性 / 类型只能来自真实 schema |
+/// | ⑤ | **映射**（与 `r2rml generate` 同一个 `build_mapping`） | ⛔ 不解析 TTL；同源才不会有第二份读法 |
+/// | ⑥ | 连**源库**（只读，读回 `transaction_read_only` / `standard_conforming_strings`） | 客户资产：只读不成立就一条都不查；回执里那两个值就是**这里读回来的**，⛔ 不写死 |
+/// | ⑦ | 规划（含注入）→ 执行 | 注入在 SQL 生成之后、执行之前 |
+///
+/// # 为什么先连元数据库再连源库
+///
+/// 元数据库（`ONTOK_DATABASE_URL`）只存本体快照，源库（`ONTOK_SOURCE_DATABASE_URL`）
+/// 才是客户数据。前者连不上是「本体没准备好」，后者连不上是「数据源不可用」——
+/// 报错必须指向真原因，不能一句「连不上库」把两者混在一起。
+async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
+    use crate::sparql::{plan::PlanInput, policy::QueryPolicy};
+
+    let SparqlCmd::Query {
+        project,
+        version,
+        schema,
+        policy,
+        tenant,
+        query,
+        max_rows,
+        timeout_ms,
+        base,
+        include_inherit,
+    } = cmd;
+
+    // ── ① 参数闸 ────────────────────────────────────────────
+    if max_rows == 0 {
+        anyhow::bail!(
+            "--max-rows 是 0：0 行等于「什么都没查」，与「查了没有」混淆。要查就给 ≥1。"
+        );
+    }
+    if timeout_ms == 0 {
+        anyhow::bail!("--timeout-ms 是 0：等于「不许它跑」，那是禁用不是超时。要跑就给 ≥1。");
+    }
+    if tenant.trim().is_empty() {
+        anyhow::bail!(
+            "--tenant 是空的：⛔ 没有租户就没有隔离。本命令不会退化成「查全部」——\
+             宁可拒绝，也不给出一个看起来正常的全量结果。"
+        );
+    }
+
+    // ── ② 声明（缺失时给模板，而不是「猜一个列」）──────────────
+    let policy = match &policy {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("读不出租户声明 {path:?}"))?;
+            QueryPolicy::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("租户声明 {path:?} 不合法：{e}"))?
+        }
+        None => anyhow::bail!(
+            "缺少租户声明（--policy）—— ⛔ 没有声明 ⇒ 所有表不可查（不会猜一个列名，也不会不过滤放行）。\n\
+             {}\n\
+             模板（{}）：\n{}",
+            "声明决定「哪张表按哪一列过滤 / 哪张表是公共维度」。请把它另存为 query-policy.json 后改写：",
+            crate::sparql::policy::TEMPLATE_FILE,
+            crate::sparql::policy::TEMPLATE
+        ),
+    };
+
+    // ── ③ 项目 / 版本 / 快照 ─────────────────────────────────
+    let projects = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+    let p = projects
+        .get_by_name(&project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目 {project:?} 不存在"))?;
+    let v = projects.version_by_seq(p.id, &p.name, version).await?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("{project} v{version} 没有快照"))?;
+
+    // ── ④ schema ────────────────────────────────────────────
+    let raw = std::fs::read_to_string(&schema)
+        .with_context(|| format!("读不出 schema 文件 {schema:?}"))?;
+    let schema_types = crate::domain::ttl::SchemaTypes::parse(&raw)
+        .map_err(|e| anyhow::anyhow!("schema 文件 {schema:?} 不合法：{e}"))?;
+    if schema_types.is_empty() {
+        anyhow::bail!("--schema 里一列都没读到 —— 这份 schema 无法对账（⛔ 不猜列类型）");
+    }
+
+    // ── ⑤ 映射（**与 `r2rml generate` 同一个函数**）────────────
+    let opts = crate::domain::ttl::TtlOptions {
+        project: project.as_str(),
+        version,
+        base: base.as_str(),
+        action_type_count: snap.action_types.len(),
+        tenancy: None,
+        schema: Some(&schema_types),
+    };
+    let model = crate::domain::model_view::project_model_track(&snap);
+    let mapping = crate::domain::r2rml::build_mapping(
+        &model,
+        &opts,
+        include_inherit,
+        crate::domain::r2rml::R2rmlAudit::default(),
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "按 R2RML 生成 SQL 的前置对账失败（映射与 schema 不一致，⛔ 一个字节都不产出）：\n{e}"
+        )
+    })?;
+
+    // ── ⑥ 源库（只读；读回校验）───────────────────────────────
+    let url = crate::config::require_env(crate::extract::introspect::SOURCE_DATABASE_URL_ENV)
+        .map_err(|e| anyhow::anyhow!("{e}（SPARQL 查的是源库，不是元数据库）"))?;
+    let src = crate::sparql::exec::connect_read_only(&url)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // ── ⑦ 规划 + 执行 ───────────────────────────────────────
+    let ontology_iri = opts.ontology_iri();
+    let input = PlanInput {
+        mapping: &mapping,
+        schema: &schema_types,
+        ontology_iri: &ontology_iri,
+        policy: &policy,
+        tenant: tenant.as_str(),
+        max_rows,
+    };
+    let result = match crate::sparql::run_query(&src.pool, &input, &query, timeout_ms).await {
+        Ok(r) => r,
+        Err(e) => {
+            src.pool.close().await;
+            return Err(anyhow::anyhow!("{e}"));
+        }
+    };
+    src.pool.close().await;
+
+    // ── ⑧ 回执（stderr 给人，stdout 给脚本）──────────────────
+    let st = mapping.stats();
+    eprintln!(
+        "· SPARQL（{project} v{version}）：映射 {} —— 与 r2rml generate 同源（build_mapping）",
+        st.summary()
+    );
+    eprintln!(
+        "· 声明：v{} · 租户主体 {}.{}（{}）· 逐表登记 {} 张 · 公共维度 {} 张 · reviewed_by {}",
+        policy.version,
+        policy.tenant_subject,
+        policy.tenant_id_column,
+        tenant,
+        policy.per_table.len(),
+        policy.public_dimensions.len(),
+        policy.reviewed_by.as_deref().unwrap_or("（未签）")
+    );
+    if result.tenant_applied.is_empty() {
+        eprintln!(
+            "· 注入：0 张表（这条查询只碰公共维度 {}）",
+            result
+                .public_dimensions
+                .iter()
+                .map(|p| p.table.as_str())
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+    } else {
+        eprintln!(
+            "· 注入 {} 张表：{}",
+            result.tenant_applied.len(),
+            result
+                .tenant_applied
+                .iter()
+                .map(|t| format!("{}.{} = {:?}", t.table, t.column, t.value))
+                .collect::<Vec<_>>()
+                .join("、")
+        );
+    }
+    // ⛔ 这一行**不许**写死 `on`（REQ-122 · N3）：两个会话值都来自 ⑥ 里
+    // `SHOW` 在**这条**连接上读回的结果（`ReadOnlyConnection::facts`）。
+    // 曾经的「只读会话：transaction_read_only = on」是硬编码字符串 —— 那是假回执。
+    eprintln!("{}", src.facts.receipt(timeout_ms, max_rows));
+    eprintln!(
+        "· 返回 {} 行（truncated: {}）· 涉及 {} 张表",
+        result.row_count,
+        result.truncated,
+        result.tables.len()
+    );
+    for w in &result.warnings {
+        eprintln!("⚠ {w}");
+    }
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+// ── 提案指法 ────────────────────────────────────────────
 /// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；
 /// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
 ///

@@ -408,6 +408,16 @@ impl SchemaTypes {
             .is_some_and(|cols| cols.contains(&column.trim().to_ascii_lowercase()))
     }
 
+    /// ⭐ REQ-122 · 这张表的**全部列名**（已排序；表不存在 ⇒ `None`）。
+    ///
+    /// 用途只有一处：**报错时列出可用列**（「声明里写的列在 schema 里不存在」、
+    /// 「表里有哪几列可以当租户列」）。⛔ 不用于任何「猜一列」的逻辑。
+    pub fn column_names(&self, table: &str) -> Option<Vec<String>> {
+        self.table_columns
+            .get(&table.trim().to_ascii_lowercase())
+            .map(|cols| cols.iter().cloned().collect())
+    }
+
     /// ⭐ REQ-121 · 这张表的**复合主键**列（空 = 不是复合主键）。返回已排序的去重列名。
     pub fn composite_primary_key(&self, table: &str) -> &[String] {
         self.composite_primary_keys
