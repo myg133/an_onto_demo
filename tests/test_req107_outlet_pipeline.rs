@@ -692,13 +692,15 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        + 2（REQ-121 的 R2RML 映射出口 I11/I12）
     //        + 1（REQ-122 的 SPARQL 查询回执出口 I13）
     //        + 4（REQ-123 的查询服务出口 I14–I17）
-    //        + 4（REQ-124 的控制面出口 I18–I21）= 56。
+    //        + 4（REQ-124 的控制面出口 I18–I21）
+    //        + 1（REQ-125 的工作台页面壳出口 I22）= 57。
     assert_eq!(
         OUTLETS.len(),
-        56,
+        57,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
-         + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）"
+         + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）\
+         + 1（REQ-125 工作台页面壳）"
     );
 
     // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
@@ -720,9 +722,10 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // （同一条口径：Agent 面的数据与通道，不是客户视图）。
     // REQ-124 内部 22→26（I18–I21）：控制面的 JSON / TTL / R2RML / 声明落盘
     // （管理通道，只有 admin token 能到；内容侧的闸在生成那一侧）。
+    // REQ-125 内部 26→27（I22）：工作台的**页面壳**（零数据、匿名可达的 HTML 骨架）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 26);
+    assert_eq!(outlet_count(Track::Internal), 27);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -740,8 +743,9 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=10).map(|i| format!("D{i}")));
     // REQ-121 · I11/I12（R2RML 映射：stdout / `--out`）；REQ-122 · I13（SPARQL 回执）；
     // REQ-123 · I14–I17（查询服务：REST / MCP / SSE / 审计）；
-    // REQ-124 · I18–I21（控制面：JSON / TTL / R2RML / 声明落盘）
-    want.extend((1..=21).map(|i| format!("I{i}")));
+    // REQ-124 · I18–I21（控制面：JSON / TTL / R2RML / 声明落盘）；
+    // REQ-125 · I22（工作台页面壳：匿名可达、零数据）
+    want.extend((1..=22).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());

@@ -34,7 +34,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Extension, Path as AxumPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::de::DeserializeOwned;
@@ -49,6 +49,12 @@ use crate::review_ui::http::{decide_json, review_json, scope_for, ReviewFailure}
 /// 唯一免 token 的路径（AC-001：只给版本，零数据）。
 pub const HEALTH_PATH: &str = "/api/health";
 
+/// ⭐ REQ-125 · 工作台页面壳（**免 token、零数据**）。
+///
+/// 浏览器导航带不了 `Authorization` 头，所以 `/` 必须匿名可取；它只回界面骨架，
+/// 任何项目名 / 版本号 / 对象名都在拿到口令后走 `/api/*`（见 `console::page`）。
+pub const PAGE_PATH: &str = "/";
+
 /// 请求体上限。内联提案（`{project, proposal}`）可能有几十万字节；
 /// 4 MiB 足够放下最大的提案，同时挡住「用超大 body 拖垮进程」。
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -60,6 +66,8 @@ pub struct Auth(pub super::tokens::TokenEntry);
 /// 组装路由。
 pub fn build_router(svc: Arc<ConsoleService>) -> Router {
     Router::new()
+        // ⭐ REQ-125 · 工作台页面壳：**在身份门之外**（只回零数据的界面骨架）。
+        .route(PAGE_PATH, get(index))
         .route(HEALTH_PATH, get(health))
         .route("/api/projects", get(get_projects))
         .route("/api/import", post(post_import))
@@ -174,7 +182,10 @@ async fn require_token(
     mut req: Request,
     next: Next,
 ) -> Response {
-    if req.uri().path() == HEALTH_PATH {
+    let path = req.uri().path();
+    // ⭐ REQ-125：`/` 是**页面壳**（零数据）—— 浏览器导航带不了头，必须匿名可达。
+    // ⛔ 只豁免这两个**精确**路径；别的一律过门（拼错的路径也先得到 401）。
+    if path == HEALTH_PATH || path == PAGE_PATH {
         return next.run(req).await;
     }
     let started = Instant::now();
@@ -278,6 +289,28 @@ fn read_json_file(path: &Path, code: &'static str, what: &'static str) -> Result
             "body/文件必须是 JSON 对象；serde 的错误里带行列号。",
         )
     })
+}
+
+// ══════════════════════════════════════════════════════════════
+// GET / · 工作台页面壳（免 token · 零数据）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ REQ-125 · `GET /` —— **自包含**的工作台页面壳。
+///
+/// 三件事各自只在一处：
+/// - 正文：`console::page::CONSOLE_HTML`（壳里零数据，AC-001）；
+/// - 响应头：`console::page::security_headers()`（CSP / nosniff / no-referrer，AC-011）；
+/// - 入口：本函数（`require_token` 对 `/` 放行）。
+///
+/// ⛔ 不许在这里拼任何数据（项目名 / 版本 / 声明路径）：`/` 是匿名的。
+async fn index() -> Response {
+    // ⚠️ `Html` 的写点由 OUTLETS 的 I22 登记；`(headers, Html)` 的顺序保证
+    // `content-type` 由 `Html` 给，三个安全头另外叠上去。
+    let mut res = Html(crate::console::page::CONSOLE_HTML).into_response();
+    for (name, value) in crate::console::page::security_headers() {
+        res.headers_mut().insert(name, value);
+    }
+    res
 }
 
 // ══════════════════════════════════════════════════════════════

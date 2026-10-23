@@ -17,6 +17,11 @@
 //! | `GET/PUT /api/config/*` | 三份声明的既有解析器（`Exclusions` / `QueryPolicy` / `TenancyDecl`） |
 //! | `GET /api/review` · `POST /api/decide` | [`crate::review_ui::http::review_json`] / [`decide_json`]（`review serve` 的同一份序列化与同一个 `decide_item`） |
 //!
+//! ⭐ REQ-125 · `GET /` 是**工作台页面壳**（[`page`]）：自包含单文件、零外部依赖、
+//! **壳内零数据**、免 token（浏览器导航带不了 `Authorization`）。七个视图只消费上面
+//! 这些端点（外加 REQ-123 查询服务的 `/api/sparql` / `/api/catalog` / `/api/describe`，
+//! 按**同源**路径调用）—— ⛔ 本模块没有为前端新开端点。
+//!
 //! ⛔ 本模块**没有**「直接改对象」的端点：只暴露 import → review → apply → freeze
 //! 这条既有流程（需求风险 1）。HTTP 层只做「解析 → 调上面那个函数 → 序列化」。
 //!
@@ -45,6 +50,7 @@ pub mod audit;
 pub mod decl;
 pub mod http;
 pub mod ops;
+pub mod page;
 pub mod serve;
 pub mod tokens;
 
