@@ -34,6 +34,11 @@
 判定有没有踩到：抽取输出的 `⚠ 无中文名（会被客户视图过滤）` 这一行。
 **超过 5 张就说明翻译表没对上。**
 
+⚠️ **REQ-128 起 `--names` 是必填参数**：不再回落到仓库里这份脱敏样例 ——
+不传直接失败（退出码非 0，错误里给生成方式）；**显式**传了这份占位表会在 stderr 告警，
+但**继续跑完**（本地测试需要它）。所以「漏传 `--names`」现在是一开口就失败，
+而不是悄悄跑出一整轮「对象 001」。
+
 ⚠️ **两条红线测试也会替你报警**：翻译表对不上时，
 `tests/drop_rate.rs` 与 `tests/test_fk_naming.rs` 必红（丢弃率闸被击穿）。
 
@@ -291,7 +296,7 @@ ontok mcp-server --project P --version V
 ontok-introspect       --out <schema.json>        # 源库只读勘查
 ontok-translate-names  --schema --out [--endpoint] [--names --overwrite|--regenerate-all]
                                                  # 生成翻译表（REQ-090）
-ontok-propose          --schema --names --out --stats --project
+ontok-propose          --schema --names（必填） --out --stats --project
 ontok-gate-preflight                            # 抽取质量门禁
 ```
 
