@@ -110,6 +110,7 @@ function nodeOf(id) {
 }
 
 const FETCHES = [];
+let nextReply = null;
 const sandbox = {
   console,
   setTimeout,
@@ -130,8 +131,23 @@ const sandbox = {
   })(),
   fetch: (url, init) => {
     FETCHES.push({ url: String(url), init: init || {} });
+    // 有预置回复就先回它（测 404 / 403 / 401 分支），否则当作「网络不可达」。
+    if (nextReply) {
+      const r = nextReply;
+      nextReply = null;
+      return Promise.resolve(r);
+    }
     return Promise.reject(new TypeError("probe: network disabled"));
   }
+};
+// 预置一次 HTTP 回复（模拟真实服务端返回的 JSON 错误体）。
+sandbox.__reply = (status, body) => {
+  nextReply = {
+    ok: false,
+    status,
+    headers: { get: () => "application/json" },
+    text: () => Promise.resolve(body)
+  };
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
@@ -333,6 +349,98 @@ function includesAll(lines, needles, label) {
   req(sandbox.sessionStorage.getItem("ontok.console.query") === "PROBE-QUERY", "query 口令进了 sessionStorage");
   req(typeof sandbox.localStorage === "undefined", "沙箱里没有 localStorage（页面也没引用它）");
   req(!/localStorage/.test(SCRIPT), "页面脚本里 localStorage 出现 0 次");
+
+  // ── B-1 · 查询端点没接入：404 / 403 必须是「未接入」而不是「口令错」────
+  console.log("\n[B-1] 查询端点 404/403 ⇒ 固定文案「查询服务未接入」+ **不清任何口令**");
+  async function errOf(promise) {
+    try {
+      await promise;
+      return null;
+    } catch (e) {
+      return e;
+    }
+  }
+  const NOT_FOUND_BODY = JSON.stringify({
+    code: "NOT_FOUND",
+    message: "没有这个路径。",
+    hint: "可用：GET /api/health（免 token）、GET /api/projects、POST /api/import、…"
+  });
+  const FORBIDDEN_BODY = JSON.stringify({
+    code: "TOKEN_KIND_FORBIDDEN",
+    message: "这是一张 query token，不能调用管理端点。",
+    hint: "管理端点只接受 kind = \"admin\" 的 token；查询 token 请用于 `ontok query serve`。"
+  });
+
+  W.state.at = "ADMIN-KEEP";
+  W.state.qt = "QUERY-KEEP";
+  W.remember();
+  sandbox.sessionStorage.setItem("ontok.console.admin", "ADMIN-KEEP");
+  sandbox.sessionStorage.setItem("ontok.console.query", "QUERY-KEEP");
+
+  // 情形 ①：只填管理口令（或没填查询口令）⇒ console 返回 404。
+  sandbox.__reply(404, NOT_FOUND_BODY);
+  const e404 = await errOf(W.request("api/sparql", { method: "POST", query: true, json: true, body: "{}" }));
+  req(!!e404, "404 被当作错误抛出（没有假装成功）");
+  req(e404 && e404.code === "QUERY_NOT_WIRED", "404 ⇒ code=QUERY_NOT_WIRED", e404 && e404.code);
+  req(
+    e404 && e404.message.indexOf("查询服务未接入") >= 0 &&
+      e404.message.indexOf("query serve") >= 0 &&
+      e404.message.indexOf("dev_proxy.ps1") >= 0,
+    "404 ⇒ 文案写明「查询服务未接入」+ query serve + 接法",
+    e404 && e404.message
+  );
+  req(
+    e404 && e404.message.indexOf("GET /api/projects") < 0,
+    "404 ⇒ **不再**把用户引去管理端点清单（那是误导）",
+    e404 && e404.message
+  );
+  req(W.state.qt === "QUERY-KEEP", "404 后 query token **仍在数组状态**", W.state.qt);
+  req(sandbox.sessionStorage.getItem("ontok.console.query") === "QUERY-KEEP", "404 后 sessionStorage 里的 query token 仍在");
+  req(W.state.at === "ADMIN-KEEP", "404 后管理口令仍在");
+
+  // 情形 ②：两个口令都填 ⇒ console 以 403 TOKEN_KIND_FORBIDDEN 拒绝（直连拓扑）。
+  sandbox.__reply(403, FORBIDDEN_BODY);
+  const e403 = await errOf(W.request("api/catalog?page=1", { query: true }));
+  req(e403 && e403.code === "QUERY_NOT_WIRED", "403 ⇒ 同一套 code=QUERY_NOT_WIRED", e403 && e403.code);
+  req(
+    e403 && e403.message.indexOf("查询服务未接入") >= 0,
+    "403 ⇒ 文案仍是「查询服务未接入」（不是「token 类型不对」）",
+    e403 && e403.message
+  );
+  req(W.state.qt === "QUERY-KEEP", "403 后 query token **没有被清**（否则死循环）", W.state.qt);
+  req(
+    sandbox.sessionStorage.getItem("ontok.console.query") === "QUERY-KEEP",
+    "403 后 sessionStorage 的 query token 仍在"
+  );
+  req(W.state.at === "ADMIN-KEEP", "403 后管理口令也仍在");
+
+  // 情形 ③：查询服务在、但缺 / 错 query token ⇒ 401 只提示，不动管理口令。
+  sandbox.__reply(401, JSON.stringify({ code: "UNAUTHORIZED", message: "没有可用的访问口令。", hint: "" }));
+  const e401q = await errOf(W.request("api/describe?name=:x", { query: true }));
+  req(e401q && e401q.code === "QUERY_UNAUTHORIZED", "查询端点 401 ⇒ code=QUERY_UNAUTHORIZED", e401q && e401q.code);
+  req(W.state.at === "ADMIN-KEEP", "查询端点 401 不清管理口令");
+
+  // ── 普通请求的 401/403：**照旧**清口令 + 回登录态（安全语义没被改坏）──
+  console.log("\n[B-1 回归] 管理端点的 401/403 仍然清口令 + 回登录态");
+  nodeOf("login").hidden = true;
+  sandbox.__reply(401, JSON.stringify({ code: "UNAUTHORIZED", message: "没有可用的访问口令。", hint: "" }));
+  const e401 = await errOf(W.request("api/projects"));
+  req(!!e401, "管理端点 401 抛出错误");
+  req(W.state.at === "" && W.state.qt === "", "管理端点 401 ⇒ 内存里的口令被清空");
+  req(sandbox.sessionStorage.getItem("ontok.console.admin") === null, "管理端点 401 ⇒ sessionStorage 的 admin 被删");
+  req(nodeOf("login").hidden === false, "管理端点 401 ⇒ 回到登录态（登录框可见）");
+  req(nodeOf("msg").textContent.indexOf("口令无效或权限不够") >= 0, "管理端点 401 ⇒ 显示原因", nodeOf("msg").textContent);
+  req(nodeOf("token").value === "" && nodeOf("qtoken").value === "", "管理端点 401 ⇒ 输入框被清空");
+
+  nodeOf("login").hidden = true;
+  W.state.at = "ADMIN-KEEP";
+  W.state.qt = "QUERY-KEEP";
+  sandbox.__reply(403, FORBIDDEN_BODY);
+  await errOf(W.request("api/projects"));
+  req(W.state.at === "" && nodeOf("login").hidden === false, "管理端点 403 ⇒ 同样清口令 + 回登录态");
+
+  // 反向自证：这两条普通请求**没有**被上面的「查询未接入」分支吞掉。
+  req(W.state.qt === "", "管理端点 403 也清 query token（旧行为不变）");
 
   // ── 报告 ────────────────────────────────────────────────────
   console.log("");

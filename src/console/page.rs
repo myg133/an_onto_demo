@@ -46,8 +46,10 @@
 //! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
 //! 本页只按**同源**路径调用（`connect-src 'self'`）。⇒ 部署时把控制面与查询服务
 //! 放在**一个源**后面（反向代理按路径分流）；直连两个端口时浏览器会用同源策略拦掉，
-//! 页面会**明确**报「无法连接 / 404」并给出该怎么做，而不是假装加载成功。
-//! 开发期用 `tests/fixtures/req125/dev_proxy.ps1`（同一个分流口径，仅本机调试）。
+//! 页面会**明确**报「查询服务未接入」+ 接法（本机 `tests/fixtures/req125/dev_proxy.ps1`），
+//! 而不是把 404/403 说成「口令不对」——那两个状态在这条拓扑下**不是口令问题**，
+//! 所以查询端点出错时页面**不清任何口令**（清掉就是死循环）；管理端点仍按 401/403
+//! 清口令回登录态。开发期用 `tests/fixtures/req125/dev_proxy.ps1`（同一个分流口径）。
 //!
 //! # 查询台**必须**显示四件事（AC-008）
 //!
@@ -409,6 +411,13 @@ function authHeader(useQuery) {
   var t = useQuery ? (S.qt || S.at) : S.at;
   return t ? { "Authorization": "Bearer " + t } : {};
 }
+// 查询端点「没接入」时的**固定文案**（404 与 403 共用）。
+// 为什么两个状态说同一句话：直连 :8899 时，只填管理口令 ⇒ 404（console 没有这个路径）；
+// 两个口令都填 ⇒ 403（console 认得 query token，但不接受它调管理端点）。两者都不是
+// 「口令填错」，而是「查询端点不在此服务」——把用户引去改口令是死循环（L-1）。
+var QUERY_WIRING = "查询服务未接入：这三个端点属于 query serve（另一进程）。" +
+  "请把 query serve 挂到同源 /api/sparql、/api/catalog、/api/describe 下" +
+  "（本机可用 tests/fixtures/req125/dev_proxy.ps1，部署指南见 BA/runbook/ontology-e2e.md §7.3）";
 function request(path, opts) {
   opts = opts || {};
   var headers = authHeader(!!opts.query);
@@ -419,16 +428,20 @@ function request(path, opts) {
     return r.text().then(function (raw) {
       if (r.ok) return { status: r.status, text: raw, ctype: r.headers.get("content-type") || "" };
       var err = httpError(r.status, raw);
-      if (r.status === 401 || r.status === 403) {
-        if (opts.query) {
-          // 查询端点只认 query token：**不要**因为查询口令不对就把管理口令一起清掉。
-          if (S.qt) { S.qt = ""; try { sessionStorage.removeItem(QUERY_KEY); } catch (e) {} }
-          err.hint = (err.hint ? (err.hint + " ") : "") +
-            "查询台 / 目录浏览要的是**查询口令**（query token，含租户），不是管理口令；" +
-            "在页面顶部第二个输入框填入后重试。";
-        } else {
-          logout("口令无效或权限不够（HTTP " + r.status + " " + err.code + "）：" + err.message);
-        }
+      if (opts.query && (r.status === 404 || r.status === 403)) {
+        // ⛔ **不清任何口令**：L-1 拓扑下两个口令都填了也还是 403，清掉就再也填不回来。
+        err.code = "QUERY_NOT_WIRED";
+        err.message = QUERY_WIRING;
+        err.hint = "这不是口令问题：管理口令仍然有效，页面不会清空任何口令。" +
+          "（用 query token 直连控制面时，控制面会以 403 拒绝「query token 调管理端点」——同上处理。）";
+      } else if (opts.query && r.status === 401) {
+        // 查询服务真的在、但缺 / 错 query token：只提示，**不动管理口令**。
+        err.code = "QUERY_UNAUTHORIZED";
+        err.message = "查询服务拒绝了这张口令（401）：查询台 / 目录浏览要的是 query token（含租户）。";
+        err.hint = "在页面顶部第二个输入框填入 query token 后重试；⛔ 不会清掉你已经填的管理口令。";
+      } else if (r.status === 401 || r.status === 403) {
+        // 管理端点：照旧——清口令 + 回登录态 + 显示原因（安全语义不变）。
+        logout("口令无效或权限不够（HTTP " + r.status + " " + err.code + "）：" + err.message);
       }
       throw err;
     });
@@ -1231,6 +1244,7 @@ if (typeof window !== "undefined") {
     el: el,
     makeTable: makeTable,
     remember: remember,
+    request: request,
     state: S,
     tabs: TABS,
     actions: { apply: applyProposal, freeze: freezeVersion, saveConfig: saveConfig }
