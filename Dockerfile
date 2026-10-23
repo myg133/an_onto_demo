@@ -31,11 +31,13 @@ RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories \
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
+    RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup \
+    RUSTUP_DIST_SERVER=https://rsproxy.cn \
     PATH=/usr/local/cargo/bin:$PATH
 
 # 官方 rustup（走代理）
-RUN curl -sSf https://sh.rustup.rs -o /tmp/rustup.sh \
- && sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain 1.86.0 \
+RUN curl -sSf https://rsproxy.cn/rustup-init.sh -o /tmp/rustup.sh \
+ && sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain 1.96.0 \
  && rm -f /tmp/rustup.sh \
  && rustc --version && cargo --version
 

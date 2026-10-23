@@ -3,7 +3,13 @@ name = "ontok"
 version = "0.1.0"
 edition = "2021"
 # MSRV —— 让 cargo 自动挑选兼容本机工具链的依赖版本，避免解析到要更高 rustc 的包
-rust-version = "1.86"   # 实际工具链 1.98.1；此处保留较低 MSRV 以便他人复现
+#
+# 1.88 是**依赖给出的硬下限**，不是我们挑的：
+#   home 0.5.12 / icu_collections 2.3 / icu_provider 2.3.1 等都声明 rustc >= 1.88。
+# 之前写 1.86 与实际锁文件不符，导致镜像构建报
+#   "rustc 1.86.0 is not supported by the following packages: home@0.5.12 requires rustc 1.88"
+# 本机实测工具链 1.96.0；镜像里也用 1.96.0（与本地一致，保证同一份代码两边都能编）。
+rust-version = "1.88"
 
 [workspace]
 
