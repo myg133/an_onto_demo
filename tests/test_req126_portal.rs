@@ -436,6 +436,23 @@ async fn ac001_a_tenant_in_the_body_or_url_is_rejected() {
     let v: Value = serde_json::from_str(&r.body).unwrap();
     assert_eq!(v["code"], "QUERY_PARAM_FORBIDDEN");
 
+    // ⭐ N-2：**页面壳也拒绝查询串** —— AC-001 没有例外。
+    // 「壳零数据所以带上 tenant 无害」不成立：规则留一个例外，就等于给了
+    // 「先试试 / 会不会放行」一个探针，AC 也从「一律 400/403」退化成「除两处以外」。
+    let r = call(app(), get(&format!("/?tenant={TENANT_B}"), None)).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "GET /?tenant= 必须 400");
+    let v: Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(v["code"], "QUERY_PARAM_FORBIDDEN");
+    // 反向自证：拒的是**参数**，不是页面 —— 不带查询串的 `/` 照常 200。
+    assert_eq!(
+        call(app(), get("/", None)).await.status,
+        StatusCode::OK,
+        "不带查询串的 / 必须照常可打开"
+    );
+    // 任意查询参数都拒（不止 tenant）。
+    let r = call(app(), get("/?x=1", None)).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "GET /?x=1 也必须 400");
+
     let log = read(&audit);
     assert!(log.contains("code=TENANT_FROM_CLIENT"), "{log}");
     assert!(log.contains("code=QUERY_PARAM_FORBIDDEN"), "{log}");

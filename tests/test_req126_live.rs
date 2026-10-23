@@ -178,8 +178,163 @@ fn post_q(uri: &str, token: &str) -> Request<Body> {
         .unwrap()
 }
 
-fn rowset(body: &str) -> Vec<String> {
+
+// ══════════════════════════════════════════════════════════════
+// N-1 · **真值对拍**（取代「两个租户行值交集」这条会假红的判据）
+// ══════════════════════════════════════════════════════════════
+//
+// # 为什么不能用「A 的行 ∩ B 的行 = ∅」
+//
+// 两个租户的余额**都是 `0.00000000`** 时，值级交集非空 ⇒ 判据假红。
+// 而它恰恰不是泄漏：两边本来就各有自己的那一行 0。一条会假红的判据比没有判据更糟
+// —— 它会训练人「看到红就换一组数据」，最后真泄漏没人看。
+//
+// # 换成什么：**本租户的真值**（直接 SQL 算出来，只读）
+//
+// 对每个租户、每条问题：
+// 1. 用**手写 SQL**（不复用门户的规划器）从源库算出该租户的真值集合（多重集）；
+// 2. 断言**回答 ⊆ 本租户真值**（每一行都能由他自己的记录解释）；
+// 3. 未截断时断言**回答 == 真值**（少行也是错：那是「查漏了」）；
+// 4. ⛔ 回答里出现「本租户真值里根本没有的行」⇒ 红（那就是别的租户的数据）。
+//
+// ⇒ 「两边都为 0」自然通过（他自己的真值也是 0）；真泄漏仍然被抓
+// （见 `n1_a_hardcoded_tenant_is_caught`）。
+//
+// ⚠️ 已知边界（如实登记）：如果泄漏来的行**在值上恰好等于**本租户自己的某一行，
+// 从回答里**不可能**分辨出来（投影里没有身份列）。这条边界写在报告里，⛔ 不装作已封堵。
+
+/// 交付的 5 条问题 → **手写真值 SQL**（`$1` = 租户）。
+///
+/// 列顺序必须与问题声明的投影一致（逐行对拍）。`IS NOT NULL` 与规划器的口径相同，
+/// 但**这条 SQL 不经过门户的规划器** —— 那正是它作为「真值」的意义。
+const TRUTH_SQL: &[(&str, &str)] = &[
+    (
+        "charges_by_currency",
+        "SELECT currency::text, sum(deduction_amount)::text FROM deductions \
+         WHERE customer_id = $1 AND currency IS NOT NULL AND deduction_amount IS NOT NULL \
+         GROUP BY currency",
+    ),
+    (
+        "my_balance",
+        "SELECT recharge_balance::text FROM balances \
+         WHERE customer_id = $1 AND recharge_balance IS NOT NULL",
+    ),
+    (
+        "usage_by_model",
+        "SELECT model_name::text, sum(usage_amount)::text FROM usage_details \
+         WHERE customer_id = $1 AND model_name IS NOT NULL AND usage_amount IS NOT NULL \
+         GROUP BY model_name",
+    ),
+    (
+        "my_subscriptions",
+        "SELECT status::text, billing_cycle::text, expire_at::text FROM customer_subscriptions \
+         WHERE customer_id = $1 AND status IS NOT NULL AND billing_cycle IS NOT NULL \
+           AND expire_at IS NOT NULL",
+    ),
+    (
+        "my_api_keys",
+        "SELECT name::text FROM licenses WHERE customer_id = $1 AND name IS NOT NULL",
+    ),
+];
+
+/// 用直接 SQL 算出某租户在某条问题上的**真值**（只读；走服务自己的只读池）。
+async fn truth_rows(
+    pool: &sqlx::postgres::PgPool,
+    qid: &str,
+    tenant: &str,
+) -> Vec<Vec<String>> {
+    let (_, sql) = TRUTH_SQL
+        .iter()
+        .find(|(id, _)| *id == qid)
+        .unwrap_or_else(|| panic!("没有为 {qid} 登记真值 SQL —— 新增问题必须同时登记"));
+    let rows = sqlx::query(sql)
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("真值 SQL 跑不动（{qid}）：{e}"));
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        use sqlx::Row as _;
+        let mut cells = Vec::new();
+        for i in 0..row.len() {
+            let v: Option<String> = row.try_get(i).unwrap_or(None);
+            cells.push(v.unwrap_or_default());
+        }
+        out.push(cells);
+    }
+    out
+}
+
+/// 单元格归一化：能当数字看的按数字比（`0.00011800` 与 `0.000118` 是同一个数），
+/// 其余按字符串比（时间戳 / 币种 / 模型名）。
+fn norm_cell(raw: &str) -> String {
+    let t = raw.trim();
+    match t.parse::<f64>() {
+        Ok(v) if v == 0.0 => "0".to_string(),
+        Ok(v) => format!("{v:.12e}"),
+        Err(_) => t.to_string(),
+    }
+}
+
+fn multiset(rows: &[Vec<String>]) -> std::collections::BTreeMap<Vec<String>, usize> {
+    let mut m = std::collections::BTreeMap::new();
+    for r in rows {
+        *m.entry(r.iter().map(|c| norm_cell(c)).collect()).or_insert(0) += 1;
+    }
+    m
+}
+
+/// **判据本体**：回答能不能由本租户自己的数据解释？
+///
+/// - 每一行的出现次数 ≤ 本租户真值里的次数（多重集包含）；
+/// - 未截断时还要求**相等**（少行 = 查漏了，也是错）。
+pub fn explains_tenant(
+    answer: &[Vec<String>],
+    truth: &[Vec<String>],
+    truncated: bool,
+) -> Result<(), String> {
+    let got = multiset(answer);
+    let want = multiset(truth);
+    let mut foreign: Vec<String> = Vec::new();
+    for (row, n) in &got {
+        let own = want.get(row).copied().unwrap_or(0);
+        if *n > own {
+            foreign.push(format!(
+                "{}（回答里 {} 行，本租户真值只有 {} 行）",
+                row.join(" | "),
+                n,
+                own
+            ));
+        }
+    }
+    if !foreign.is_empty() {
+        return Err(format!(
+            "回答里有**不属于本租户**的行（无法由该租户自己的记录解释）：\n  - {}",
+            foreign.join("\n  - ")
+        ));
+    }
+    if !truncated {
+        let mut missing: Vec<String> = Vec::new();
+        for (row, n) in &want {
+            let seen = got.get(row).copied().unwrap_or(0);
+            if seen < *n {
+                missing.push(format!("{}（真值 {} 行，回答里 {} 行）", row.join(" | "), n, seen));
+            }
+        }
+        if !missing.is_empty() {
+            return Err(format!(
+                "回答**少了**本租户的数据（未截断却没给全）：\n  - {}",
+                missing.join("\n  - ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 回答的 `rows` + `truncated`。
+fn rows_and_truncated(body: &str) -> (Vec<Vec<String>>, bool) {
     let v: Value = serde_json::from_str(body).expect("回答是 JSON");
+    let truncated = v["truncated"].as_bool().unwrap_or(false);
     let mut out = Vec::new();
     if let Some(rows) = v["rows"].as_array() {
         for r in rows {
@@ -187,14 +342,20 @@ fn rowset(body: &str) -> Vec<String> {
                 .as_array()
                 .map(|cs| {
                     cs.iter()
-                        .map(|c| c.as_str().unwrap_or("").to_string())
+                        .map(|c| {
+                            // 门户把 null 渲染成 `null`（JSON），测试里当空串处理。
+                            match c {
+                                Value::Null => String::new(),
+                                other => other.as_str().unwrap_or("").to_string(),
+                            }
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
-            out.push(cells.join(" | "));
+            out.push(cells);
         }
     }
-    out
+    (out, truncated)
 }
 
 fn tenants(test: &str) -> Option<(String, String)> {
@@ -287,19 +448,30 @@ async fn ac001_two_real_tenants_see_disjoint_data_and_no_internals() {
             }
         }
 
-        let sa = rowset(&a.body);
-        let sb = rowset(&b.body);
-        let inter: Vec<&String> = sa.iter().filter(|r| sb.contains(r)).collect();
-        assert!(
-            inter.is_empty(),
-            "{id}：两个租户的结果有交集（⛔ 跨租户泄漏）：{inter:?}\nA={sa:?}\nB={sb:?}"
-        );
-        if !sa.is_empty() && !sb.is_empty() {
+        // ⭐ N-1：**真值对拍**（不是「两个租户行值交集」—— 那会在「两边都为 0」时假红）。
+        let pool = l.svc.source.clone();
+        let truth_a = truth_rows(&pool, id, &tenant_a).await;
+        let truth_b = truth_rows(&pool, id, &tenant_b).await;
+        let (ra, ta) = rows_and_truncated(&a.body);
+        let (rb, tb) = rows_and_truncated(&b.body);
+        explains_tenant(&ra, &truth_a, ta).unwrap_or_else(|e| {
+            panic!("{id} (A) 的回答无法由 A 自己的数据解释：{e}\n回答={ra:?}\n真值={truth_a:?}")
+        });
+        explains_tenant(&rb, &truth_b, tb).unwrap_or_else(|e| {
+            panic!("{id} (B) 的回答无法由 B 自己的数据解释：{e}\n回答={rb:?}\n真值={truth_b:?}")
+        });
+        if !ra.is_empty() && !rb.is_empty() {
             nonempty_pairs += 1;
         }
-        eprintln!("· {id}: A {} 行 / B {} 行 / 交集 0", sa.len(), sb.len());
+        eprintln!(
+            "· {id}: A {} 行（真值 {} 行）/ B {} 行（真值 {} 行）/ 各自 ⊆ 自己的真值 ✔",
+            ra.len(),
+            truth_a.len(),
+            rb.len(),
+            truth_b.len()
+        );
     }
-    // 至少有一条问题**两边都有数据**（否则「交集为空」是空转）。
+    // 至少有一条问题**两边都有数据**（否则上面的对拍是空转）。
     assert!(
         nonempty_pairs >= 1,
         "两个租户没有任何一条问题同时有数据 —— 这次对拍证明不了什么"
@@ -316,6 +488,127 @@ async fn ac001_two_real_tenants_see_disjoint_data_and_no_internals() {
         assert!(!line.contains(TOKEN_A) && !line.contains(TOKEN_B), "{line}");
         assert!(!line.contains("SELECT") && !line.contains("FROM "), "{line}");
     }
+}
+
+/// ⭐ N-1 的反向证据：**真泄漏必须被抓**。
+///
+/// 「把某条问题的 tenant 写死成别人」在外部**可观测**的形态，就是「A 的口令拿到
+/// B 的数据」—— 所以这里把口令表换绑（`TOKEN_A → tenant_b`）来构造同一形态，
+/// 再用 A 的真值去判：必须**红**。
+///
+/// 反向自证（防「对谁都红」）：同一份回答拿去对 **B 的真值**必须**绿**。
+#[tokio::test]
+async fn n1_a_hardcoded_tenant_is_caught() {
+    let Some((tenant_a, tenant_b)) = tenants("n1_mutant") else {
+        return;
+    };
+    let questions = common::crate_root().join("portal-questions.json");
+    if !questions.is_file() {
+        missing("portal-questions.json", "n1_mutant");
+        return;
+    }
+    // ⚠️ 参数顺序**故意反着传**：TOKEN_A 现在绑的是 tenant_b。
+    let Some(l) = live("mutant", &tenant_b, &tenant_a, &questions, 200).await else {
+        return;
+    };
+    let pool = l.svc.source.clone();
+    let truth_a = truth_rows(&pool, "my_balance", &tenant_a).await;
+    let truth_b = truth_rows(&pool, "my_balance", &tenant_b).await;
+    if truth_a == truth_b {
+        // 两个租户的余额恰好相同 ⇒ 从回答里**不可能**分辨（投影里没有身份列）。
+        // 这不是判据的错，是「值级证据」的固有上限 —— 响亮地说，不假装通过。
+        eprintln!(
+            "*** SKIP: n1 的突变判据 -- 两个租户的余额真值相同（{truth_a:?}），\
+             值级判据无法分辨 ***"
+        );
+        return;
+    }
+
+    let r = call(
+        ontok::portal::http::build_router(Arc::clone(&l.svc)),
+        post_q("/q/my_balance", TOKEN_A),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let (rows, truncated) = rows_and_truncated(&r.body);
+    let verdict = explains_tenant(&rows, &truth_a, truncated);
+    assert!(
+        verdict.is_err(),
+        "⛔ 写死成别人的租户没有被抓到：回答={rows:?}，A 的真值={truth_a:?}"
+    );
+    let msg = verdict.unwrap_err();
+    assert!(msg.contains("不属于本租户"), "错误话术要说得清：{msg}");
+    eprintln!("· 突变被抓：{msg}");
+    // 反向自证：同一份回答对 **B** 的真值能解释（否则这条判据是「对谁都红」）。
+    assert!(
+        explains_tenant(&rows, &truth_b, truncated).is_ok(),
+        "同一份回答对 B 的真值也解释不了 ⇒ 判据是空转的（对谁都红）"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// N-1 · 判据本体的单测（不连库；把「假红」与「真泄漏」都钉住）
+// ══════════════════════════════════════════════════════════════
+
+fn rows(cells: &[&[&str]]) -> Vec<Vec<String>> {
+    cells
+        .iter()
+        .map(|r| r.iter().map(|c| c.to_string()).collect())
+        .collect()
+}
+
+/// ⭐ QA 的假红案例：两个租户的余额**都是 0.00000000** ⇒ 必须**通过**。
+#[test]
+fn n1_the_judge_does_not_false_red_when_both_tenants_are_zero() {
+    let answer_a = rows(&[&["0.00000000"]]);
+    let truth_a = rows(&[&["0.00000000"]]);
+    let truth_b = rows(&[&["0.00000000"]]);
+    assert!(
+        explains_tenant(&answer_a, &truth_a, false).is_ok(),
+        "两边都为 0 时，值级交集非空 —— 旧判据会假红，新判据必须通过"
+    );
+    // 旧判据的形态（值交集）对同一组数据是「非空」—— 留证：那正是被替换掉的写法。
+    assert!(answer_a.iter().any(|r| truth_b.contains(r)));
+}
+
+/// ⭐ 真泄漏：回答里有一行是**别人**的 ⇒ 必须红，并点名那一行。
+#[test]
+fn n1_a_foreign_row_is_caught() {
+    let answer = rows(&[&["85.95334115"]]);
+    let truth = rows(&[&["191.06910719"]]);
+    let e = explains_tenant(&answer, &truth, false).unwrap_err();
+    assert!(e.contains("不属于本租户"), "{e}");
+    // 判决里要能看见**那一行**（数字按归一化后的写法打印，便于比对）。
+    assert!(e.contains(&norm_cell("85.95334115")), "{e}");
+}
+
+/// 多出来的一行（本租户只有一行，回答给了两行）⇒ 也必须红（多重集计数）。
+#[test]
+fn n1_a_leaked_extra_row_is_caught_even_when_the_value_exists() {
+    let answer = rows(&[&["0"], &["0"]]);
+    let truth = rows(&[&["0"]]);
+    let e = explains_tenant(&answer, &truth, false).unwrap_err();
+    assert!(e.contains("不属于本租户"), "{e}");
+}
+
+/// 截断时允许是**前缀**（少行不算错），但⛔ 仍不许有别人的行。
+#[test]
+fn n1_a_truncated_answer_may_be_a_prefix_but_never_foreign() {
+    let truth = rows(&[&["1.0"], &["2.0"], &["3.0"]]);
+    assert!(explains_tenant(&rows(&[&["1.0"]]), &truth, true).is_ok());
+    assert!(explains_tenant(&rows(&[&["9.0"]]), &truth, true).is_err());
+    // 未截断就不许少。
+    let e = explains_tenant(&rows(&[&["1.0"]]), &truth, false).unwrap_err();
+    assert!(e.contains("少了"), "{e}");
+}
+
+/// 数字按**数值**比：`0.00011800` 与 `0.000118` 是同一个数。
+#[test]
+fn n1_numbers_are_compared_numerically_not_textually() {
+    assert!(explains_tenant(&rows(&[&["0.00011800"]]), &rows(&[&["0.000118"]]), false).is_ok());
+    assert!(explains_tenant(&rows(&[&["0"]]), &rows(&[&["0.00000000"]]), false).is_ok());
+    // 文本列仍然逐字比。
+    assert!(explains_tenant(&rows(&[&["RMB"]]), &rows(&[&["USD"]]), false).is_err());
 }
 
 /// ⭐ AC-004：查 `deductions` 那条（`main_only`）⇒ **覆盖警告可见**，且不含列名。

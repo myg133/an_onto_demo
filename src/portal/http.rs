@@ -35,7 +35,7 @@
 //!
 //! | 入口 | 结果 |
 //! | --- | --- |
-//! | URL 上任何查询参数（含 `?tenant=` / `?token=`） | **400** `QUERY_PARAM_FORBIDDEN` |
+//! | URL 上任何查询参数（含 `?tenant=` / `?token=`；**`/` 与 `/api/health` 也不例外**） | **400** `QUERY_PARAM_FORBIDDEN` |
 //! | 请求体里的 `tenant` / `customer` / `customer_id` / `owner` | **403** `TENANT_FROM_CLIENT` |
 //! | 请求体里的 `sparql` / `query` | **400** `CUSTOM_QUERY_FORBIDDEN` |
 //! | 请求体里其它不认识的字段 | **400**（`deny_unknown_fields` 的同一条口径） |
@@ -162,6 +162,22 @@ fn bearer(headers: &HeaderMap) -> &str {
     }
 }
 
+/// 「门户不接受查询参数」的**唯一**构造点。
+///
+/// 为什么连 `/` 与 `/api/health` 也要拒：**规则有例外就会被滥用**。
+/// 页面壳与健康检查确实零数据、带上查询串也无害 —— 但一条「`tenant` 在大多数
+/// 端点会被拒」的规则，留两个例外就等于给了「先试试 / 会不会放行」一个探针，
+/// 也让 AC-001 的判据从「一律 400/403」退化成「除两处以外」。
+fn query_param_forbidden() -> ApiError {
+    ApiError::with_code(
+        StatusCode::BAD_REQUEST,
+        "QUERY_PARAM_FORBIDDEN",
+        "门户端点不接受 URL 查询参数。",
+        "租户由访问口令决定：⛔ 不接受 `tenant`（或 `token` 之类的参数）。\
+         去掉查询串再试 —— 你看到的永远只有口令绑定的那个租户的数据。",
+    )
+}
+
 /// 身份门：没有 / 错的 token ⇒ 401（门户**不做** 403，见模块头）。
 async fn require_token(
     State(svc): State<Arc<PortalService>>,
@@ -169,9 +185,18 @@ async fn require_token(
     next: Next,
 ) -> Response {
     let path = req.uri().path();
+    let bad_query = req.uri().query().is_some_and(|q| !q.trim().is_empty());
+
+    // ⭐ 豁免的只有**路径**（浏览器导航带不了 `Authorization`），不豁免查询串：
+    // `/` 与 `/api/health` 带参数同样 400（与其它端点同一条规则）。
     if path == HEALTH_PATH || path == PAGE_PATH {
+        if bad_query {
+            audit::anonymize(&svc.audit, "QUERY_PARAM_FORBIDDEN", Instant::now());
+            return fail(query_param_forbidden());
+        }
         return next.run(req).await;
     }
+
     let started = Instant::now();
     let presented = bearer(req.headers());
     let Some(entry) = svc.tokens.find(presented) else {
@@ -180,16 +205,10 @@ async fn require_token(
     };
 
     // ⛔ 租户只能来自口令：URL 上的任何查询参数都不放行（含 ?tenant= / ?token=）。
-    if req.uri().query().is_some_and(|q| !q.trim().is_empty()) {
+    if bad_query {
         svc.audit
             .record(&entry, "-", None, started.elapsed(), "QUERY_PARAM_FORBIDDEN");
-        return fail(ApiError::with_code(
-            StatusCode::BAD_REQUEST,
-            "QUERY_PARAM_FORBIDDEN",
-            "门户端点不接受 URL 查询参数。",
-            "租户由访问口令决定：⛔ 不接受 `tenant`（或 `token` 之类的参数）。\
-             去掉查询串再试 —— 你看到的永远只有口令绑定的那个租户的数据。",
-        ));
+        return fail(query_param_forbidden());
     }
 
     req.extensions_mut().insert(Auth(entry.clone()));
@@ -205,7 +224,7 @@ async fn require_token(
 /// 三件事各自只在一处：
 /// - 正文：`portal::page::PORTAL_HTML`（壳里零数据，AC-005）；
 /// - 响应头：`portal::page::security_headers()`（CSP / nosniff / no-referrer，AC-007）；
-/// - 入口：本函数（`require_token` 对 `/` 放行）。
+/// - 入口：本函数（`require_token` 对 `/` 放行**路径**；带查询串照样 400）。
 ///
 /// ⛔ 不许在这里拼任何数据（项目名 / 版本 / 对象名 / 问题标题）：`/` 是匿名的。
 async fn index() -> Response {
@@ -222,6 +241,7 @@ async fn index() -> Response {
 ///
 /// 连查询参数也不接受（`?tenant=` 一律 400）：健康检查是**唯一**该免鉴权的路径，
 /// 但它不该成为「带 tenant 还能拿到 200」的那条缝。
+/// （主闸在 [`require_token`] 里对**所有路径**统一判；这里再判一次是纵深防御。）
 async fn health(uri: axum::http::Uri) -> Response {
     if uri.query().is_some_and(|q| !q.trim().is_empty()) {
         return fail(ApiError::with_code(

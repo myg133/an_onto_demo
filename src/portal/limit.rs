@@ -127,6 +127,25 @@ mod tests {
         drop(b);
     }
 
+    /// ⭐ QA 变异（N-3）：把 `acquire` 改成「等名额（≤2 s）」——
+    /// 集成判据会红（审计 `elapsed_ms=2002`），但**只断言返回值**的单测仍然绿
+    /// （它只是变慢）。所以「不排队」必须在**这一层**也有判据：**计时**。
+    #[test]
+    fn a_full_pool_refuses_without_blocking() {
+        let l = Limiter::default();
+        let _hold = l.acquire("tok-a", 1).expect("占满");
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            assert!(l.acquire("tok-a", 1).is_none(), "名额耗尽必须是 None");
+        }
+        let spent = started.elapsed();
+        assert!(
+            spent < std::time::Duration::from_millis(50),
+            "acquire 在名额耗尽时必须**立刻**返回（100 次花了 {spent:?}）—— \
+             任何「等名额」的实现都会在这里红（QA 的变异是 ≤2 s）"
+        );
+    }
+
     #[test]
     fn different_tokens_never_interfere() {
         let l = Limiter::default();
