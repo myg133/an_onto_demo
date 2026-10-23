@@ -70,9 +70,12 @@ let mut names_path = String::from("src/extract/table_names.json");
 **这个前提是错的。** Dev 实测：
 
 ```
-tests/ 里 ontok-propose 调用点：19 处
-显式传 --names 的行数：      20 行
+基线 develop       ：18 个调用点 / 16 行 --names（部分经 helper 拼参，故行数 < 调用点数）
+加了新测试后（feature）：19 个调用点 / 20 行
 ```
+
+> ⚠️ 数字更正（QA 复核）：我最初写的是「19 处 / 20 行」，那是**加了新测试之后**的 feature 数字，
+> 不是基线。基线是 **18 个调用点**；逐个人工核对实参构造（含 helper 里拼的），**全部显式传 `--names`**。
 
 ⇒ **基线里没有一条测试依赖那个默认值**，所以「改受影响测试」这件事**不存在**。
 
