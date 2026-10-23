@@ -357,6 +357,11 @@ fn outlet_sources() -> BTreeMap<&'static str, String> {
     // 那条判据要防的形态）。`tests/test_req107_source_enumeration.rs` 的 T1
     // 另从 `src/` 全目录枚举写点，两边合起来才是双向的。
     m.insert("src/review_ui/http.rs", read_source("src/review_ui/http.rs"));
+    // ⭐ REQ-123 · 查询服务（REST / MCP / SSE / 审计）也不在 `OUTLET_FILES`
+    // （不是客户出口、不走管线），但它在登记表里新增了 4 条内部轨出口（I14–I17）。
+    // 同一个理由：needle 漂移必须在这张表上看得见。
+    m.insert("src/query/http.rs", read_source("src/query/http.rs"));
+    m.insert("src/query/audit.rs", read_source("src/query/audit.rs"));
     m
 }
 
@@ -681,12 +686,14 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）
     //        + 5（REQ-111 的审核界面出口 R1–R5）+ 1（REQ-116 的文档摄取产物 I10）
     //        + 2（REQ-121 的 R2RML 映射出口 I11/I12）
-    //        + 1（REQ-122 的 SPARQL 查询回执出口 I13）= 48。
+    //        + 1（REQ-122 的 SPARQL 查询回执出口 I13）
+    //        + 4（REQ-123 的查询服务出口 I14–I17）= 52。
     assert_eq!(
         OUTLETS.len(),
-        48,
+        52,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
-         + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）"
+         + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
+         + 4（REQ-123 REST / MCP / SSE / 审计）"
     );
 
     // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
@@ -704,9 +711,11 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // （同一份 Turtle 字节，两个落点 —— 与 C6/C7 同一条口径）。
     // REQ-122 内部 17→18（I13）：`sparql query` 的 JSON 回执（查询结果不是视图；
     // 隔离由声明驱动的租户注入 + 只读 + 行数上限保证，不是词汇闸）。
+    // REQ-123 内部 18→22（I14–I17）：查询服务的 REST JSON / MCP JSON-RPC / SSE / 审计
+    // （同一条口径：Agent 面的数据与通道，不是客户视图）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 18);
+    assert_eq!(outlet_count(Track::Internal), 22);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -722,8 +731,9 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=5).map(|i| format!("H{i}")));
     want.extend((1..=5).map(|i| format!("M{i}")));
     want.extend((1..=10).map(|i| format!("D{i}")));
-    // REQ-121 · I11/I12（R2RML 映射：stdout / `--out`）；REQ-122 · I13（SPARQL 回执）
-    want.extend((1..=13).map(|i| format!("I{i}")));
+    // REQ-121 · I11/I12（R2RML 映射：stdout / `--out`）；REQ-122 · I13（SPARQL 回执）；
+    // REQ-123 · I14–I17（查询服务：REST / MCP / SSE / 审计）
+    want.extend((1..=17).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());

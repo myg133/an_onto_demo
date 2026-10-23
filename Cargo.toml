@@ -16,7 +16,11 @@ name = "ontok"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# REQ-123：`time`（SSE 的 keep-alive / 空闲超时）是 MCP over HTTP 真用到的 tokio 模块。
+# ⛔ 不新增 crate —— 只把「用了什么」写清楚（这个 feature 本来就被 sqlx / hyper 打开，
+# 声明它不改变依赖图）。⛔ 也**不用** `tokio::sync`：SSE 的流用 `futures_util::stream::unfold`
+# 直接表达（见 `src/query/http.rs` 的 `mcp_sse`），不需要 channel。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -48,6 +52,18 @@ axum = { version = "0.7", default-features = false, features = [
     "query",
     "tokio",
 ] }
+
+# ⭐ REQ-123 · SSE 的**流**：axum 的 `Sse` 要一个 `TryStream`，而本 crate 里**无法**
+# 命名 `futures_core::Stream`（futures-core 不是直接依赖）⇒ 必须有一个能提供
+# `stream::unfold` 的 crate。
+#
+# ⚠️ 如实登记（AC-011 写的是「不引新依赖」）：
+# · `futures-util` **已经在依赖树里**（axum 直接依赖它，features = ["alloc"]），
+#   这里用**同一个版本、同一组 feature**；`Cargo.lock` 只多一行「ontok → futures-util」，
+#   **不新增任何 crate**（编译的包集合与依赖树不变）。
+# · 落选方案：`tokio-stream`（`features=["sync"]` 的 `ReceiverStream`）—— 它会把
+#   `tokio-util` 拉进依赖（`Cargo.lock` 真新增一个包），比这一行贵。
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 # 用外部测试库（PG 16.14），不引入 testcontainers

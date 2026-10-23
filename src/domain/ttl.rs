@@ -226,7 +226,11 @@ impl<'a> TtlOptions<'a> {
     ///
     /// ⛔ REQ-121：R2RML 生成器也读它 —— 两边算出的本体 IRI 必须逐字相同，
     /// 否则 R2RML 产出的实例 IRI 与本体里的实例 IRI 是两套（而且不会报错）。
-    pub(crate) fn ontology_iri(&self) -> String {
+    ///
+    /// REQ-123 起是 `pub`：查询服务（`src/query`）与**现场判据**
+    /// （`tests/test_req123_live.rs` 要拼实例 IRI 去写 FILTER）都要它。
+    /// 让调用方去 `format!("{base}{project}")` 等于把这条规则抄第二份。
+    pub fn ontology_iri(&self) -> String {
         format!("{}{}", self.normalized_base(), local_model(self.project))
     }
 

@@ -85,7 +85,7 @@
 //! - ② 双粒度，但由 [`Granularity`] **声明**，不由出口自决；
 //! - ③ stderr 报告形状唯一（[`DropReport::stderr_line`]），客户正文只报数量。
 //!
-//! # 48 条出口登记表（AC-002 / AC-007）
+//! # 52 条出口登记表（AC-002 / AC-007）
 //!
 //! [`OUTLETS`] 是**机读**的：每条带 `path` + `call_site`（该出口调用管线的源码片段
 //! 唯一子串）+ 轨道 + 格式。判据在 `tests/test_req107_*` 里做**双向对账**
@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -300,6 +300,26 @@ pub enum OutletId {
     /// （投影由查询写、值来自客户库）。真正的隔离保证是**租户注入 + 只读 + 行数上限**，
     /// 不是词汇闸。它仍然必须登记：不登记 = 没人管的客户数据出口（REQ-107 收的就是这个洞）。
     I13,
+    /// ⭐ REQ-123 · 查询服务 · **REST 的 JSON 响应**（`/api/sparql` `/catalog` `/describe` `/health`）。
+    ///
+    /// 与 I13 同一条口径：查询结果 / 目录是 **Agent 面的数据**，不是客户视图；
+    /// 隔离靠 token→租户注入 + 只读 + 限额，不是词汇闸。
+    I14,
+    /// ⭐ REQ-123 · 查询服务 · **MCP over HTTP 的 JSON-RPC 响应**（`POST /mcp`）。
+    ///
+    /// 信封由 `mcp::protocol::encode_*` 生成（⛔ 不另写一套协议）；
+    /// `tools/call` 的 `content[0].text` 与 I14 的回执**逐字节相同**（同一个 `serialize`）。
+    I15,
+    /// ⭐ REQ-123 · 查询服务 · **SSE 流**（`GET /mcp`）。
+    ///
+    /// 服务端消息（ready + keep-alive 注释）；⛔ 不承载查询结果（结果走 POST）。
+    /// 它仍是外送通道：连接数 / 空闲超时 / 审计都在代码里（AC-005）。
+    I16,
+    /// ⭐ REQ-123 · 查询服务 · **审计日志**（stderr 恒写；`--audit-out` 追加文件）。
+    ///
+    /// 为什么单独登记：它是**每次调用都会写**的外送点（含失败），
+    /// 而它的两条否定判据（⛔ 无 token 明文 / ⛔ 无查询原文）正是这一轮的安全验收。
+    I17,
 }
 
 impl OutletId {
@@ -333,6 +353,10 @@ impl OutletId {
             OutletId::I11 => "I11",
             OutletId::I12 => "I12",
             OutletId::I13 => "I13",
+            OutletId::I14 => "I14",
+            OutletId::I15 => "I15",
+            OutletId::I16 => "I16",
+            OutletId::I17 => "I17",
         }
     }
 }
@@ -402,6 +426,15 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I11 => OutletSpec::of("I11", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I12 => OutletSpec::of("I12", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I13 => OutletSpec::of("I13", Track::Internal, Format::Json, Granularity::Whole),
+        // ⭐ REQ-123 · 查询服务（REST + 远程 MCP）：**内部**轨。
+        //
+        // 与 I13 同一条口径：产物是**按 Agent 的查询取回的业务数据 / 目录**，
+        // 不是客户视图（客户视图零读取）；隔离由「token→租户注入 + 只读 + 限额」保证。
+        OutletId::I14 => OutletSpec::of("I14", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::I15 => OutletSpec::of("I15", Track::Internal, Format::Json, Granularity::Whole),
+        // SSE 是文本流（`text/event-stream`）。
+        OutletId::I16 => OutletSpec::of("I16", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I17 => OutletSpec::of("I17", Track::Internal, Format::Text, Granularity::Whole),
     }
 }
 
@@ -1017,11 +1050,12 @@ impl Outlet {
 
 const CUSTOMER: &str = "";
 
-/// ⭐ **48 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
-/// + REQ-116 的 1 条文档摄取产物写出点）。
+/// ⭐ **52 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
+/// + REQ-116 的 1 条文档摄取产物写出点 + REQ-123 的 4 条查询服务出口）。
 ///
-/// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 14 +
-/// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **44**；REQ-116 再加内部 1 条（I10）⇒ 45；REQ-121 再加内部 2 条（I11/I12）⇒ **47**。
+/// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 18 +
+/// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **48**；REQ-116 再加内部 1 条（I10）⇒ 45；REQ-121 再加内部 2 条（I11/I12）⇒ **47**；
+/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ **52（17/10/22/2/1）**。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
 /// 只是被渲染函数读取的静态素材 ⇒ 单列在 [`STATIC_TEMPLATES`]。
@@ -1448,6 +1482,55 @@ pub const OUTLETS: &[Outlet] = &[
          隔离由「声明驱动的租户注入 + 只读会话 + 行数上限」保证，不是词汇闸；\\
          内部轨 ⇒ 不过客户发布闸（与 I11/I12 同一条口径）。",
     },
+    // ── REQ-123 · 查询服务对外（REST + 远程 MCP）· 内部轨 ──────────
+    //
+    // 四条出口都是**Agent 面的数据/通道**，不是客户视图（客户视图零读取）：
+    // I14 REST JSON 响应、I15 MCP JSON-RPC 响应、I16 SSE 流、I17 审计日志。
+    // 隔离由「token→租户注入 + 只读会话 + 限额」保证，不是词汇闸 —— 与 I13 同一条口径。
+    Outlet {
+        id: "I14",
+        path: "src/query/http.rs",
+        // `respond` 是**唯一**的 REST JSON 写点（其他 handler 都调它，不各自 `Json(`）。
+        call_site: "Json(body)",
+        spec: spec_of(OutletId::I14),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-123）：REST 的四个端点（/api/sparql、/api/catalog、\
+         /api/describe、/api/health）共用 `query::http::respond` 这一个 JSON 写点。\
+         产物是查询结果 / 目录 / 版本，不是客户视图；内部轨 ⇒ 不过客户发布闸。",
+    },
+    Outlet {
+        id: "I15",
+        path: "src/query/http.rs",
+        // MCP 的 JSON-RPC 信封（`p::encode_result` / `encode_error_*`）。
+        call_site: "p::encode_result(",
+        spec: spec_of(OutletId::I15),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-123）：`POST /mcp` 的 JSON-RPC 响应 —— 信封复用\
+         `mcp::protocol::encode_*`（⛔ 不另写一套协议）；`tools/call` 的 content 文本与 I14\
+         的回执逐字节相同（同一个 serialize）。内部轨 ⇒ 不过客户发布闸。",
+    },
+    Outlet {
+        id: "I16",
+        path: "src/query/http.rs",
+        // SSE 流：`Sse::new(stream)`（流由 `futures_util::stream::unfold` 表达，不用 channel）。
+        call_site: "Sse::new(",
+        spec: spec_of(OutletId::I16),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-123）：`GET /mcp` 的 SSE 流 —— 只发 ready 与 keep-alive\
+         注释，⛔ 不承载查询结果（结果走 POST）。它仍是外送通道：每 token 连接数 + 全局上限\
+         （超限 429）+ 空闲超时 + 审计。",
+    },
+    Outlet {
+        id: "I17",
+        path: "src/query/audit.rs",
+        // 审计的**唯一**行形状 + 唯一落点（stderr 恒写；文件可选追加）。
+        call_site: "writeln!(f, \"{line}\")",
+        spec: spec_of(OutletId::I17),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-123）：审计日志 —— 每次调用一行（含失败）。\
+         ⛔ 不含 token 明文、⛔ 不含查询原文（两条否定判据在 `query::audit` 的单测里）。\
+         内部轨 ⇒ 不过客户发布闸。",
+    },
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
@@ -1509,30 +1592,32 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 47，分组 17/10/17/2/1。
+    /// 登记表的口径必须**恰好**是 52，分组 17/10/22/2/1。
     ///
     /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
     /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）；
     /// REQ-111 新增 5 条审核界面出口（R1–R5，**全部内部轨**）⇒ 44（17/10/14/2/1）；
     /// REQ-116 新增 1 条文档摄取的产物写出点（I10，**内部轨**）⇒ 45（17/10/15/2/1）；
     /// REQ-121 新增 2 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）
-    /// ⇒ 47（17/10/17/2/1）；REQ-122 再加 I13 ⇒ 48（内部 18）。
+    /// ⇒ 47（17/10/17/2/1）；REQ-122 再加 I13 ⇒ 48（内部 18）；
+    /// REQ-123 再加 I14–I17（REST / MCP / SSE / 审计，**全部内部轨**）⇒ 52（内部 22）。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            48,
+            52,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
-             + 1（REQ-122 的 SPARQL 回执）"
+             + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            18,
-            "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13"
+            22,
+            "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
+             + REQ-123 的 I14–I17"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);
