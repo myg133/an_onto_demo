@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 开发/测试环境：单副本、镜像本地构建、无外部依赖
+namespace: ontok-dev
+
+resources:
+  - ../../base
+
+images:
+  - name: ontok
+    newName: ontok
+    newTag: dev
+
+replicas:
+  - { name: ontok-query,   count: 1 }
+  - { name: ontok-console, count: 1 }
+  - { name: ontok-portal,  count: 1 }
+
+patches:
+  - target: { kind: Deployment }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ONTOK_ENV, value: "dev" }

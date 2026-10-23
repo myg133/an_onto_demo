@@ -1,0 +1,113 @@
+version: "3.9"
+
+# 共用镜像，不同 command：查询 / 控制面 / 客户门户
+x-ontok: &ontok
+  image: ${ONTOK_IMAGE:-ontok:dev}
+  restart: unless-stopped
+  environment:
+    TZ: ${TZ:-Asia/Shanghai}
+    ONTOK_DATABASE_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD:-postgres}@db:5432/${PG_DB:-ontok}
+    ONTOK_SOURCE_DATABASE_URL: ${ONTOK_SOURCE_DATABASE_URL}
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_DB:-ontok}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── 查询服务：数字员工用（REST + MCP over HTTP/SSE）────────────────
+  query:
+    <<: *ontok
+    command:
+      - query
+      - serve
+      - --bind=0.0.0.0:8800
+      - --allow-public
+      - --tokens=/etc/ontok/secrets/query-tokens.json
+      - --project=${ONTOK_PROJECT}
+      - --version=${ONTOK_VERSION}
+      - --schema=/etc/ontok/config/schema.json
+      - --policy=/etc/ontok/config/query-policy.json
+    ports:
+      - "127.0.0.1:${QUERY_PORT:-8800}:8800"
+    volumes:
+      - ./config:/etc/ontok/config:ro
+      - ./secrets:/etc/ontok/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8800' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # ── 控制面：内部工作台（管理 API + 页面）────────────────────────────
+  console:
+    <<: *ontok
+    command:
+      - console
+      - serve
+      - --bind=0.0.0.0:8899
+      - --allow-public
+      - --tokens=/etc/ontok/secrets/admin-tokens.json
+      - --project=${ONTOK_PROJECT}
+      - --schema=/etc/ontok/config/schema.json
+      - --policy=/etc/ontok/config/query-policy.json
+      - --exclusions=/etc/ontok/config/exclusions.json
+      - --tenancy=/etc/ontok/config/tenancy.json
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-8899}:8899"
+    volumes:
+      - ./config:/etc/ontok/config:ro
+      - ./secrets:/etc/ontok/secrets:ro
+      - console-audit:/data/audit
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8899' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # ── 客户门户：租户锁死，只能点预置问题 ──────────────────────────────
+  portal:
+    <<: *ontok
+    command:
+      - portal
+      - serve
+      - --bind=0.0.0.0:8900
+      - --allow-public
+      - --tokens=/etc/ontok/secrets/portal-tokens.json
+      - --project=${ONTOK_PROJECT}
+      - --version=${ONTOK_VERSION}
+      - --schema=/etc/ontok/config/schema.json
+      - --policy=/etc/ontok/config/query-policy.json
+      - --questions=/etc/ontok/config/portal-questions.json
+    ports:
+      - "127.0.0.1:${PORTAL_PORT:-8900}:8900"
+    volumes:
+      - ./config:/etc/ontok/config:ro
+      - ./secrets:/etc/ontok/secrets:ro
+      - portal-audit:/data/audit
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8900' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+volumes:
+  pgdata:
+  console-audit:
+  portal-audit:

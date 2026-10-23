@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ontok-query
+  labels: { app: ontok-query }
+spec:
+  type: ClusterIP
+  selector: { app: ontok-query }
+  ports:
+    - { name: http, port: 8800, targetPort: 8800 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ontok-console
+  labels: { app: ontok-console }
+spec:
+  type: ClusterIP
+  selector: { app: ontok-console }
+  ports:
+    - { name: http, port: 8899, targetPort: 8899 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ontok-portal
+  labels: { app: ontok-portal }
+spec:
+  type: ClusterIP
+  selector: { app: ontok-portal }
+  ports:
+    - { name: http, port: 8900, targetPort: 8900 }

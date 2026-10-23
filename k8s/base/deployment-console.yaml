@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ontok-console
+  labels: { app: ontok-console, app.kubernetes.io/part-of: ontok }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ontok-console }
+  template:
+    metadata:
+      labels: { app: ontok-console }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: console
+          image: ontok:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - console
+            - serve
+            - --bind=0.0.0.0:8899
+            - --allow-public
+            - --tokens=/etc/ontok/secrets/admin-tokens.json
+            - --project=$(ONTOK_PROJECT)
+            - --schema=/etc/ontok/config/schema.json
+            - --policy=/etc/ontok/config/query-policy.json
+            - --exclusions=/etc/ontok/config/exclusions.json
+            - --tenancy=/etc/ontok/config/tenancy.json
+            - --audit-out=/data/audit/console.log
+          env:
+            - name: ONTOK_PROJECT
+              value: "anspire_prod"
+            - name: ONTOK_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: ontok-db, key: metadata-url } }
+          ports:
+            - { name: http, containerPort: 8899 }
+          readinessProbe:
+            tcpSocket: { port: 8899 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - { name: config, mountPath: /etc/ontok/config, readOnly: true }
+            - { name: secrets, mountPath: /etc/ontok/secrets, readOnly: true }
+            - { name: audit, mountPath: /data/audit }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: config
+          configMap: { name: ontok-config }
+        - name: secrets
+          secret: { secretName: ontok-secrets }
+        - name: audit
+          emptyDir: {}

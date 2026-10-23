@@ -1,0 +1,13 @@
+version: "1.0.0"
+
+# 三层：机制（产品）/ 声明（本项目）/ 决定（业务方）
+# 本文件是「声明」层：报错即拒绝启动，不会静默降级。
+
+tenantSubject: customers
+tenantIdColumn: id
+
+perTable: {}
+
+publicDimensions: []
+
+reviewed_by: null

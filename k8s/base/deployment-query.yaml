@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ontok-query
+  labels: { app: ontok-query, app.kubernetes.io/part-of: ontok }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ontok-query }
+  template:
+    metadata:
+      labels: { app: ontok-query }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: query
+          image: ontok:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - query
+            - serve
+            - --bind=0.0.0.0:8800
+            - --allow-public
+            - --tokens=/etc/ontok/secrets/query-tokens.json
+            - --project=$(ONTOK_PROJECT)
+            - --version=$(ONTOK_VERSION)
+            - --schema=/etc/ontok/config/schema.json
+            - --policy=/etc/ontok/config/query-policy.json
+          env:
+            - name: ONTOK_PROJECT
+              value: "anspire_prod"
+            - name: ONTOK_VERSION
+              value: "3"
+            - name: ONTOK_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: ontok-db, key: metadata-url } }
+            - name: ONTOK_SOURCE_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: ontok-db, key: source-url } }
+          ports:
+            - { name: http, containerPort: 8800 }
+          readinessProbe:
+            tcpSocket: { port: 8800 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8800 }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          volumeMounts:
+            - { name: config, mountPath: /etc/ontok/config, readOnly: true }
+            - { name: secrets, mountPath: /etc/ontok/secrets, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: config
+          configMap: { name: ontok-config }
+        - name: secrets
+          secret: { secretName: ontok-secrets }

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ontok-portal
+  labels: { app: ontok-portal, app.kubernetes.io/part-of: ontok }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ontok-portal }
+  template:
+    metadata:
+      labels: { app: ontok-portal }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: portal
+          image: ontok:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - portal
+            - serve
+            - --bind=0.0.0.0:8900
+            - --allow-public
+            - --tokens=/etc/ontok/secrets/portal-tokens.json
+            - --project=$(ONTOK_PROJECT)
+            - --version=$(ONTOK_VERSION)
+            - --schema=/etc/ontok/config/schema.json
+            - --policy=/etc/ontok/config/query-policy.json
+            - --questions=/etc/ontok/config/portal-questions.json
+            - --audit-out=/data/audit/portal.log
+          env:
+            - name: ONTOK_PROJECT
+              value: "anspire_prod"
+            - name: ONTOK_VERSION
+              value: "3"
+            - name: ONTOK_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: ontok-db, key: metadata-url } }
+            - name: ONTOK_SOURCE_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: ontok-db, key: source-url } }
+          ports:
+            - { name: http, containerPort: 8900 }
+          readinessProbe:
+            tcpSocket: { port: 8900 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - { name: config, mountPath: /etc/ontok/config, readOnly: true }
+            - { name: secrets, mountPath: /etc/ontok/secrets, readOnly: true }
+            - { name: audit, mountPath: /data/audit }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: config
+          configMap: { name: ontok-config }
+        - name: secrets
+          secret: { secretName: ontok-secrets }
+        - name: audit
+          emptyDir: {}

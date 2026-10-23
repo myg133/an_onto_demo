@@ -1,0 +1,34 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 生产：多副本、固定镜像 tag（⛔ 不用 latest）、资源与探针更严
+namespace: ontok
+
+resources:
+  - ../../base
+
+images:
+  - name: ontok
+    newName: registry.example.com/ontok
+    newTag: 0.1.0
+
+replicas:
+  - { name: ontok-query,   count: 3 }
+  - { name: ontok-console, count: 1 }
+  - { name: ontok-portal,  count: 2 }
+
+patches:
+  # 生产环境的基础设施差异：PodDisruptionBudget（至少保一半可用）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 2Gi
+
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "8800"

@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ontok
+  labels:
+    app.kubernetes.io/part-of: ontok

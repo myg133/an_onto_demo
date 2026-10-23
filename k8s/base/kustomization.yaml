@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ontok
+
+resources:
+  - namespace.yaml
+  - deployment-query.yaml
+  - deployment-console.yaml
+  - deployment-portal.yaml
+  - services.yaml
+
+# 声明（进版本库、可评审）
+configMapGenerator:
+  - name: ontok-config
+    files:
+      - config/query-policy.json
+      - config/tenancy.json
+      - config/exclusions.json
+      - config/portal-questions.json
+      - config/schema.json
+
+# 口令（⛔ 真实值不入库；部署时用 sealed-secrets / 外部密钥挂载替换这一节）
+secretGenerator:
+  - name: ontok-secrets
+    files:
+      - secrets/admin-tokens.json
+      - secrets/query-tokens.json
+      - secrets/portal-tokens.json
+
+generatorOptions:
+  disableNameSuffixHash: false
