@@ -260,3 +260,12 @@
 - 回收：feature worktree + 分支
 - 结果：REST 四端点 + MCP(JSON-RPC/SSE)；**两协议 8 组 sha256 全等**；租户攻击 6 项全挡；`futures-util` 无新 crate（260→260）；审计 111 行无明文
 - **新规程**：提交前必须验「分支上真的有东西」（REQ-123 首轮分支 0 commit，合并会丢功能）
+
+
+## 2026-10-23 — REQ-124 合并与回收
+
+- 合并：`feature/REQ-124` → `develop` **`eaa7c96`**（1 个提交 `881bcfd`）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：11 端点；token 双向隔离；四组 sha256 与 CLI 全等；9 类声明非法全 400 且不落盘；无后门端点
+- 合并后立即开 REQ-125（内部工作台前端），worktree 已建

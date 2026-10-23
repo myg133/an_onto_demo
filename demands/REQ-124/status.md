@@ -2,46 +2,31 @@
 
 ## 当前状态
 
-**进行中**（2026-10-23 开单）
+**已完成**（2026-10-23 · 已合并 `develop` `eaa7c96`）
 
-## 为什么
+## 结果
 
-现在 HTTP 能访问的**全是读**；管理流水线（import / apply / freeze / export / r2rml）**只有 CLI**。
-⇒ 前端做不了、CI 调不了、别的系统接不了。
-
-## v1 端点
-
-| 方法 | 路径 | 对应 CLI |
-| --- | --- | --- |
-| GET | `/api/health` | 免 token |
-| GET | `/api/projects` | 项目/版本/冻结/计数 |
-| POST | `/api/import` | `propose import` |
-| POST | `/api/apply` | `proposal apply` |
-| POST | `/api/freeze` | `version freeze` |
-| GET | `/api/export/ttl` | `ontology export` |
-| POST | `/api/r2rml` | `r2rml generate` |
-| GET/PUT | `/api/config/{exclusions,policy,tenancy}` | 声明读写（**保存前校验**） |
-| GET | `/api/audit` | 审计 |
-| GET/POST | `/api/review`、`/api/decide` | 复用领域函数 |
-
-## 不做（明确边界）
-
-- **不跑抽取**：读源库 + 调模型 + 1-2 分钟长任务 ⇒ 属任务系统，另开需求
-- 不做前端页面（REQ-125）、不做客户门户（REQ-126）
-- 不做多用户/角色体系
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **`eaa7c96`**；禁改面（`serve`/`query` 路由、四红线、`tools.rs`、`property_filter.rs`、`Cargo.*`）零 diff |
+| 端点 | 11 条：projects / import / apply / freeze / export.ttl / r2rml / config / audit / review / decide / health |
+| token 隔离 | query token 调管理端点 **403 `TOKEN_KIND_FORBIDDEN`**；admin 调 query serve **401**；同 token 双 kind ⇒ **加载即拒** |
+| 与 CLI 逐字节 | 四组 sha256 全等（TTL 客户/建模、R2RML 默认/include-inherit） |
+| 声明校验 | 9 类非法全 400 + 点名，**前后 sha256 相同**（不落盘） |
+| 冲突 | 重复 apply / 重复 freeze / 冻结后 import ⇒ 409（三码可读） |
+| 后门 | 11 条路由全枚举，**无** object/link/ontology 直改入口；`src/console` 写 SQL 命中 0 |
+| 审计 | 写成功/失败各一行；`/api/audit` 可数出 401×7 / 403×4；明文 0 |
+| 测试 | lib **583** / doc 4 / console 14 / live 2；OUTLETS 56（I18–I21） |
 
 ## 关键裁定
 
 | # | 裁定 |
 | --- | --- |
-| R1 | admin token 与 query token **分开发放**；query token 调管理端点 ⇒ **403** |
-| R2 | 默认只绑回环；公网需 `--allow-public` + 警告 |
-| R3 | 每个写端点**调既有领域函数**，⛔ 不许 HTTP 层重写 |
-| R4 | 声明保存前校验，失败**拒绝保存且原文件不变** |
-| R5 | 重复 apply / 冻结后 apply ⇒ **409** |
-| R6 | 审计记摘要，⛔ 不记 token 明文 |
+| K-1 | TTL 导出**两处 render 调用点**接受（根因：`publish_customer` 命中闸会 `exit(2)`，服务进程不能退出）；判据改为**产物 sha256 相等** + 消费同一份 `TtlPrepared`；登记为已知偏离 |
+| K-3 | import 内联时 `proposal.project` 必填；`export.ttl` 的 `schema`/`tenancy` 是服务端路径；`decide` body 多 `project`/`proposal`、`via=console` —— 全接受；但 GET `/api/review` 必须与 `review serve` 逐字节一致（QA 三时点验过：1098 B 相同） |
+| K-4 | 审计只覆盖写 + export/r2rml + 鉴权失败（不记读） |
 
-## 待办
+## 非阻断（QA 提示，登记）
 
-- [ ] Dev 实现
-- [ ] QA（重点：token 分离、声明校验、与 CLI 逐字节相同）
+1. `/api/audit` 是**进程内存窗口**（最近 1000 条），重启即丢 ⇒ 写进文档
+2. 示例 token 原样可加载 ⇒ 建议启动警告「你在用示例 token」
