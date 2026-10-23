@@ -791,6 +791,14 @@ impl Parser {
                     return Err(QueryError::at("GROUP 后面要跟 BY", self.pos()));
                 }
                 let name = self.parse_single_var("GROUP BY")?;
+                // 紧跟着还是变量 / `(` ⇒ 多列分组：**点名拒绝**，不留给「多余内容」那句含糊的话
+                if matches!(self.peek(), Tok::Var(_) | Tok::Punct('(')) {
+                    return Err(QueryError::at(
+                        "v1 的 GROUP BY 只支持**单列** —— 多列分组请拆成多条查询，\
+                         或把想要的维度合成一个表达式（v1 不支持表达式）",
+                        self.pos(),
+                    ));
+                }
                 group_by = Some(name);
                 continue;
             }
@@ -803,6 +811,17 @@ impl Parser {
                     return Err(QueryError::at("ORDER 后面要跟 BY", self.pos()));
                 }
                 order_by = Some(self.parse_order()?);
+                // 紧跟着还是变量 / `(` / ASC / DESC ⇒ 多列排序
+                if matches!(self.peek(), Tok::Var(_) | Tok::Punct('('))
+                    || self.at_kw("ASC")
+                    || self.at_kw("DESC")
+                {
+                    return Err(QueryError::at(
+                        "v1 的 ORDER BY 只支持**单列** —— 多列排序（含并列时的第二排序键）\
+                         不在子集里；需要稳定顺序请把主键或时间也投影出来再排",
+                        self.pos(),
+                    ));
+                }
                 continue;
             }
             if self.at_kw("LIMIT") {
@@ -1636,7 +1655,15 @@ mod tests {
     #[test]
     fn multiple_group_by_columns_are_rejected() {
         let e = err(r#"SELECT ?a ?b (COUNT(*) AS ?n) { ?s :a__a ?a . ?s :a__b ?b } GROUP BY ?a ?b"#);
-        assert!(e.contains("单列") || e.contains("GROUP BY") || e.contains("多余内容"), "{e}");
+        assert!(e.contains("单列"), "多列分组必须**点名**说只支持单列：{e}");
+    }
+
+    #[test]
+    fn multiple_order_by_columns_are_rejected() {
+        let e = err(r#"SELECT ?a ?b { ?s :a__a ?a . ?s :a__b ?b } ORDER BY ?a ?b"#);
+        assert!(e.contains("ORDER BY") && e.contains("单列"), "多列排序必须点名：{e}");
+        let e = err(r#"SELECT ?a ?b { ?s :a__a ?a . ?s :a__b ?b } ORDER BY DESC(?a) ?b"#);
+        assert!(e.contains("单列"), "{e}");
     }
 
     #[test]
