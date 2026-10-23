@@ -266,7 +266,8 @@ token：首次实付；第二次 0（缓存）
 
 ```powershell
 # 一个进程起两个服务 + 反代
-pwsh -File testsixtureseq125\dev_proxy.ps1
+pwsh -File testsixtures
+eq125\dev_proxy.ps1
 # 浏览器打开 http://127.0.0.1:8897/ （代理端口）
 ```
 
@@ -380,12 +381,87 @@ Remove-Item Env:ONTOK_LLM_API_KEY    # 别留在会话里
 
 ---
 
+## 12.5 · 客户门户（REQ-126）
+
+### 与工作台的根本区别
+
+| | 工作台 `console serve` | **门户 `portal serve`** |
+| --- | --- | --- |
+| 凭证 | admin token（可跨项目调试） | **portal token（绑定一个租户）** |
+| 能切项目/版本 | 可以 | **不能**（进程级固定） |
+| 写操作 | 有 | **完全没有** |
+| 写 SPARQL | 可以 | **不能**，只给预置问题 |
+| 看别人数据 | 调试时（审计） | **结构上不可能** |
+
+### 启动
+
+```powershell
+\target\debug\ontok.exe portal serve --bind 127.0.0.1:8900 `
+    --tokens portal-tokens.json `
+    --project <项目名> --version 2 `
+    --schema out\schema.json --policy query-policy.json `
+    --questions portal-questions.json --audit-out portal-audit.log
+```
+
+**端点只有四个**：`GET /`（页面壳，零数据）、`GET /api/questions`（标题+说明，不含 SPARQL）、`POST /q/<id>`、`GET /api/health`。
+⛔ 没有 `/api/sparql` —— 客户不能自由查询。
+
+### 问题声明 `portal-questions.json`
+
+```json
+{ "version": "1.0.0", "reviewed_by": "业务负责人@2026-10-23",
+  "questions": [
+    { "id": "charges_by_currency",
+      "title": "我的扣费明细（按币种汇总）",
+      "sparql": "SELECT ?cur (SUM(?amt) AS ?total) WHERE { ?d :deductions__currency ?cur . ?d :deductions__deduction_amount ?amt . } GROUP BY ?cur",
+      "note": "按币种汇总；覆盖范围见结果页警告" } ] }
+```
+
+**启动时逐题校验（fail-closed）**，任一条不合格 ⇒ **拒绝启动**并点名：
+
+| 校验 | 为什么 |
+| --- | --- |
+| `reviewed_by` 非空 | 问题本身就是业务口径 |
+| 涉及的表在 policy 里登记为租户表或公共维度 | 否则无法注入租户 |
+| 属性存在、语法可规划 | 别等客户点开才 500 |
+| **不投影实例 IRI**（`#表名/uuid`） | 会同时泄漏项目名与表名 |
+| **id 不含表名** | id 会出现在 URL / 问题列表 / 审计行 |
+| 结果列名不与真实列名同名 | 同名等于泄漏列名 |
+| 涉及的表必须有业务名（`display_name`） | 否则只能显示表名 |
+
+⚠️ **反例见 `BA/demands/REQ-126/portal-questions.draft.json`**——那份草稿正是被启动校验拦下的写法。
+
+### 页面只给业务信息
+
+- 结果列 = 业务对象名（如「扣费明细」），**不是**表名
+- 覆盖警告：`main_only` 的表 ⇒ 「只覆盖主账号：子账号产生的部分不在结果里，金额可能偏低」
+- `truncated` ⇒ 「只显示前 N 行，还有更多没有显示」
+- ⛔ 响应体里没有 `sql_echo` / 表名 / 列名 / IRI（**类型层就没有这些字段**，不是运行时删除）
+
+### 限额（两条，都来自凭证）
+
+| 字段 | 默认 | 上限 | 生效方式 |
+| --- | --- | --- | --- |
+| `max_rows` | 200 | 10000 | 截断 + 可见警告 |
+| `max_concurrency` | 2 | 64 | 超限 **立刻 429**（⛔ 不排队），按 token 隔离 |
+
+### 验证（跑完必做）
+
+```powershell
+# ① 租户锁死：body 带 tenant ⇒ 403；URL 带 tenant ⇒ 400
+# ② 两租户对拍 ⇒ 交集必须为空
+# ③ 结果体 grep 表名/SELECT/https:// ⇒ 0 命中
+# ④ 并发：同 token 三连击（cap=2）⇒ 2×200 + 1×429，且 429 的审计 elapsed_ms ≈ 0（证明没排队）
+```
+
+---
+
 ## 13 · 三个界面的分工（别混用）
 
 | 界面 | 命令 | 给谁 | 能做什么 |
 | --- | --- | --- | --- |
 | 客户视图 | `ontok serve` | 业务/客户 | 看图、看对象、看总览；导出 TTL |
 | 内部工作台 | `ontok console serve` | FDE/实施 | 项目、评审、导出、声明编辑、审计、查询台（+反代） |
-| 客户门户 | `ontok portal serve`（REQ-126） | 客户 | 只能点**预审过的问题**，租户锁死，无自由查询 |
+| 客户门户 | `ontok portal serve`（REQ-126） | 客户 | 只能点**预审过的问题**，租户锁死，无自由查询；结果只给业务名+覆盖警告 |
 
 **三套凭证、三个端口、互不复用。**
