@@ -783,6 +783,11 @@ pub enum PortalCmd {
         #[arg(long, default_value = "127.0.0.1:8900")]
         bind: String,
         /// 门户口令表（`portal-tokens.json`；示例见 `portal-tokens.example.json`）
+        ///
+        /// 每条口令绑定一个租户，并可带两个限额：`max_rows`（默认 **200**，
+        /// 上限 10000）= 单次问题最多几行；`max_concurrency`（默认 **2**，上限 64）
+        /// = 同一口令同时最多几个问题在跑 —— 超限立刻 **429** `TOO_MANY_CONCURRENT`，
+        /// ⛔ 不排队；不同口令之间互不影响。`kind` 必须是 `"portal"`。
         #[arg(long)]
         tokens: PathBuf,
         /// 本门户只服务这一个项目

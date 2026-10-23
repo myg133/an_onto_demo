@@ -90,8 +90,8 @@ fn args_for(tag: &str, tenant_a: &str, tenant_b: &str, questions: &Path, max_row
         &tokens,
         format!(
             r#"{{"version":"1.0.0","tokens":[
-                {{"label":"A","token":"{TOKEN_A}","kind":"portal","tenant":"{tenant_a}","max_rows":200}},
-                {{"label":"B","token":"{TOKEN_B}","kind":"portal","tenant":"{tenant_b}","max_rows":{max_rows_b}}}
+                {{"label":"A","token":"{TOKEN_A}","kind":"portal","tenant":"{tenant_a}","max_rows":200,"max_concurrency":2}},
+                {{"label":"B","token":"{TOKEN_B}","kind":"portal","tenant":"{tenant_b}","max_rows":{max_rows_b},"max_concurrency":1}}
             ]}}"#
         ),
     )
@@ -420,4 +420,120 @@ async fn ac010_a_truncated_answer_says_so() {
             rows.len()
         );
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// AC-010 · 并发闸（真库：N+1 ⇒ N 个 200 + 1 个 429；按口令隔离）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ 同一口令并发 N+1 ⇒ **恰好 N 个 200 + 1 个 429**。
+///
+/// 为什么这是确定性的（不是碰运气）：`tokio::join!` 把三个 future 放在**同一个任务**
+/// 里轮转，每个 future 至少会被 poll 一次；而名额是在 `run_question` 的**第一个
+/// 同步段**里拿的（早于任何 `await`）—— 于是第 3 个 future 第一次被 poll 时，
+/// 前两个已经在跑（真实查询 ~150 ms，远长于一次轮转）。
+#[tokio::test]
+async fn ac010_three_concurrent_requests_on_a_cap_2_token_are_2x200_plus_1x429() {
+    let Some((tenant_a, tenant_b)) = tenants("ac010_concurrent") else {
+        return;
+    };
+    let questions = common::crate_root().join("portal-questions.json");
+    if !questions.is_file() {
+        missing("portal-questions.json", "ac010_concurrent");
+        return;
+    }
+    let Some(l) = live("concurrent", &tenant_a, &tenant_b, &questions, 200).await else {
+        return;
+    };
+    let svc = Arc::clone(&l.svc);
+    let app = || ontok::portal::http::build_router(Arc::clone(&svc));
+    let r1 = call(app(), post_q("/q/my_balance", TOKEN_A));
+    let r2 = call(app(), post_q("/q/my_balance", TOKEN_A));
+    let r3 = call(app(), post_q("/q/my_balance", TOKEN_A));
+    let (a, b, c) = tokio::join!(r1, r2, r3);
+    let mut ok = 0;
+    let mut too_many = 0;
+    for r in [&a, &b, &c] {
+        match r.status {
+            StatusCode::OK => ok += 1,
+            StatusCode::TOO_MANY_REQUESTS => too_many += 1,
+            other => panic!("意外状态 {other}：{}", r.body),
+        }
+    }
+    assert_eq!(
+        (ok, too_many),
+        (2, 1),
+        "A 的上限是 2 ⇒ 3 个并发必须恰好 2 个 200 + 1 个 429\
+         （a={:?} b={:?} c={:?}）",
+        a.status,
+        b.status,
+        c.status
+    );
+    // 429 的正文是标准错误契约，且不含内部标识。
+    let rejected = [&a, &b, &c]
+        .into_iter()
+        .find(|r| r.status == StatusCode::TOO_MANY_REQUESTS)
+        .unwrap();
+    let v: Value = serde_json::from_str(&rejected.body).unwrap();
+    assert_eq!(v["code"], "TOO_MANY_CONCURRENT");
+    assert!(!rejected.body.contains("balances") && !rejected.body.contains("SELECT"));
+    // 审计：429 也留一行。
+    let log = std::fs::read_to_string(&l.audit).unwrap_or_default();
+    assert!(
+        log.lines().filter(|l| l.contains("code=TOO_MANY_CONCURRENT")).count() >= 1,
+        "审计里没有 429 行：\n{log}"
+    );
+    assert_eq!(svc.limiter.inflight(&svc.tokens.find(TOKEN_A).unwrap().digest), 0);
+    eprintln!("· 并发实测：A(cap=2) 三连击 ⇒ 200×{ok} / 429×{too_many}");
+}
+
+/// ⭐ A 打满时 **B 照样能取数**（名额按口令隔离，真库）。
+#[tokio::test]
+async fn ac010_a_saturated_token_does_not_starve_another_token_on_real_data() {
+    let Some((tenant_a, tenant_b)) = tenants("ac010_isolation") else {
+        return;
+    };
+    let questions = common::crate_root().join("portal-questions.json");
+    if !questions.is_file() {
+        missing("portal-questions.json", "ac010_isolation");
+        return;
+    }
+    let Some(l) = live("iso", &tenant_a, &tenant_b, &questions, 200).await else {
+        return;
+    };
+    // 占满 A（cap=2）。
+    let a = l.svc.tokens.find(TOKEN_A).unwrap().digest.clone();
+    let limit = l.svc.tokens.find(TOKEN_A).unwrap().max_concurrency;
+    let p1 = l.svc.limiter.acquire(&a, limit).expect("A 名额 1");
+    let p2 = l.svc.limiter.acquire(&a, limit).expect("A 名额 2");
+
+    let ra = call(
+        ontok::portal::http::build_router(Arc::clone(&l.svc)),
+        post_q("/q/my_balance", TOKEN_A),
+    )
+    .await;
+    assert_eq!(ra.status, StatusCode::TOO_MANY_REQUESTS, "A 应当 429：{}", ra.body);
+
+    let rb = call(
+        ontok::portal::http::build_router(Arc::clone(&l.svc)),
+        post_q("/q/my_balance", TOKEN_B),
+    )
+    .await;
+    assert_eq!(rb.status, StatusCode::OK, "B 不该被 A 拖住：{}", rb.body);
+    let vb: Value = serde_json::from_str(&rb.body).unwrap();
+    assert!(
+        vb["objects"].as_array().is_some_and(|o| !o.is_empty()),
+        "B 的回答仍然要解释对象：{}",
+        rb.body
+    );
+
+    drop(p1);
+    drop(p2);
+    let ra2 = call(
+        ontok::portal::http::build_router(Arc::clone(&l.svc)),
+        post_q("/q/my_balance", TOKEN_A),
+    )
+    .await;
+    assert_eq!(ra2.status, StatusCode::OK, "名额还回去后 A 应当能取数：{}", ra2.body);
+    eprintln!("· 隔离实测：A 占满 ⇒ A 429 / B 200 / A 释放后 200");
 }

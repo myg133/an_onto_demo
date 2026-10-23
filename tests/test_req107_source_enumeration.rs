@@ -2038,6 +2038,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/lib.rs", "portal"),
     ("src/portal/mod.rs", "audit"),
     ("src/portal/mod.rs", "http"),
+    // ⭐ 每口令并发闸（N+1 ⇒ 429，不排队；名额按 token 隔离）。
+    ("src/portal/mod.rs", "limit"),
     ("src/portal/mod.rs", "page"),
     ("src/portal/mod.rs", "questions"),
     ("src/portal/mod.rs", "serve"),

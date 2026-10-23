@@ -67,17 +67,34 @@
 //! 启动校验拒绝「投影实例 IRI」与「变量名与列名同名」的问题（见 [`questions`]），
 //! 运行期再把**单元格**里出现的本体 IRI 换成 `[内部标识已隐藏]` 并计入告警。
 //!
+//! # 限额（两道，都来自口令）
+//!
+//! | 限额 | 来自 | 超了会怎样 |
+//! | --- | --- | --- |
+//! | 行数 `max_rows` | 口令那一行 | 截断 + 页面写「只显示前 N 行」 |
+//! | 超时 `--timeout-ms` | 服务启动参数 | **504 `TIMEOUT`** + 固定话术 |
+//! | 并发 `max_concurrency` | 口令那一行 | **429 `TOO_MANY_CONCURRENT`**（[`limit`]） |
+//!
+//! ⭐ 并发闸与 `query serve`（REQ-123）对齐：**同上限、同隔离粒度（每 token）、
+//! 同一条「不排队」纪律** —— 拿不到名额就立刻 429，⛔ 不把请求挂起等到
+//! `acquire_timeout`（那会让客户看到「转 10 秒才说忙」）。
+//!
 //! # 已知限制（⛔ 不写成「已封堵」）
 //!
 //! - **没有分页**：按口令的 `max_rows` 截断，页面写「只显示前 N 行」；
-//! - **没有并发闸**：门户是「一个人点一个卡片」的场景，请求串行；`max_concurrency`
-//!   在凭据表里保留但当前不生效（与 `query serve` 的每 token 并发闸不同）；
+//! - 并发闸是**进程内**的：多副本部署时每个副本各算一份（要全局口径得上
+//!   Redis / PG advisory lock，那是另一条需求）；且它只卡「同时几个」，
+//!   **不卡速率**（每秒多少次是另一件事）；
+//! - 并发总量没有「全局上限」：上界 = 口令数 × 各自 `max_concurrency`（运维写死）。
+//!   源库只读池只有 2 条连接 ⇒ 超过 2 个并发查询会在**池上排队**（不会出错，
+//!   但延迟会上去）—— 与 `query serve` 同一条已知边界；
 //! - 错误正文是**固定话术**：真原因（含 SQL / 表名）只进 stderr 与审计 code，
 //!   客户看不到 —— 代价是「为什么失败」要靠服务方查日志；
 //! - 门户只服务**一个已冻结的版本**（与 `query serve` 同一条闸门）：换版本 = 换进程。
 
 pub mod audit;
 pub mod http;
+pub mod limit;
 pub mod page;
 pub mod questions;
 pub mod serve;
@@ -127,6 +144,9 @@ pub struct PortalService {
     /// 表 key → **业务名**（启动校验保证：问题涉及的每一张表都在这里）。
     pub names: BTreeMap<String, String>,
     pub audit: audit::AuditLog,
+    /// ⭐ **每口令并发闸**（[`limit`]）：`max_concurrency` 在这里真的生效。
+    /// 拿不到名额 ⇒ 立刻 429，⛔ 不排队。
+    pub limiter: limit::Limiter,
 }
 
 /// 构造参数（`serve` 与测试共用**这一个**构造器 —— 不另搭一份接线）。
@@ -162,6 +182,7 @@ impl PortalService {
             questions: p.questions,
             names: p.names,
             audit: p.audit,
+            limiter: limit::Limiter::default(),
         }
     }
 }
@@ -316,6 +337,9 @@ pub fn answer_of(q: &Question, r: QueryResult, ctx: &AnswerCtx<'_>) -> PortalAns
 
 /// 执行一个问题：租户来自**口令**，查询来自**声明**，注入来自 **`run_query`**。
 ///
+/// 顺序是刻意的（最便宜的失败先报，且**每个失败都留一条审计**）：
+/// ① 每口令并发名额 → ② 规划 + 注入 + 只读执行 → ③ 投影成回答。
+///
 /// 失败时返回的 [`crate::query::error::ApiError`] 是**固定话术**（⛔ 不含 SQL /
 /// 表名 / 列名）；真原因只进 stderr 与审计的 `code`。
 pub async fn run_question(
@@ -324,6 +348,16 @@ pub async fn run_question(
     q: &Question,
 ) -> Result<PortalAnswer, crate::query::error::ApiError> {
     let started = Instant::now();
+
+    // ① 并发名额：**拿不到就是 429，不排队**（等 10 秒再告诉你「太忙」比直接说更糟）。
+    //    名额按口令隔离 —— A 打满不影响 B。
+    let Some(permit) = svc.limiter.acquire(&entry.digest, entry.max_concurrency) else {
+        let elapsed = started.elapsed();
+        svc.audit
+            .record(entry, q.id(), None, elapsed, "TOO_MANY_CONCURRENT");
+        return Err(too_many_concurrent(entry.max_concurrency));
+    };
+
     let input = PlanInput {
         mapping: &svc.mapping,
         schema: &svc.schema,
@@ -336,6 +370,8 @@ pub async fn run_question(
     // ⭐ REQ-122 的 `run_query`：同一套解析 / 规划 / 注入 / 只读执行 / 探针截断。
     let out = crate::sparql::run_query(&svc.source, &input, &q.sparql, svc.timeout_ms).await;
     let elapsed: Duration = started.elapsed();
+    // `permit` 在这里显式归还：名额只覆盖「查询在跑」的那一段（投影与审计不占名额）。
+    drop(permit);
 
     match out {
         Ok(r) => {
@@ -364,6 +400,23 @@ pub async fn run_question(
             Err(err)
         }
     }
+}
+
+/// 同一口令的并发名额用完了 ⇒ **429**（唯一一处构造）。
+///
+/// ⛔ 文案里没有表名 / 列名 / SQL / IRI —— 客户只需要知道「太忙，等一下」。
+/// ⛔ 不排队：等服务**不会**把这次请求挂起再重试（那会把一次点击变成一次
+/// `acquire_timeout`，用户看到的是「转了 10 秒才说忙」）。
+fn too_many_concurrent(limit: usize) -> crate::query::error::ApiError {
+    crate::query::error::ApiError::with_code(
+        StatusCode::TOO_MANY_REQUESTS,
+        "TOO_MANY_CONCURRENT",
+        "同时在进行的问题太多了，这一次没有执行。",
+        format!(
+            "同一个访问口令同时最多 {limit} 个问题在跑。等前面的结果出来再点一次（串行最稳）；\
+             要更高的并发请让服务方调大你口令的并发上限。"
+        ),
+    )
 }
 
 /// 运行期失败的**对外翻译**（唯一一处）：只分「超时」与「其它」。

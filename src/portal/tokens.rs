@@ -32,6 +32,16 @@
 //! 于是「混进来」只能报错。⛔ 本模块不 import `console::tokens` ——
 //! 两个服务共用一个 token 解析器，会让「门户读到管理表的字段」变成一个可编译的写法。
 //!
+//! # 两个限额字段（都真的生效）
+//!
+//! | 字段 | 缺省 | 作用 | 超了会怎样 |
+//! | --- | --- | --- | --- |
+//! | `max_rows` | **200**（上限 10000） | 单次问题最多几行 | 截断 + 页面写「只显示前 N 行」 |
+//! | `max_concurrency` | **2**（上限 64） | 同一口令同时最多几个问题在跑 | **429 `TOO_MANY_CONCURRENT`**（[`crate::portal::limit`]） |
+//!
+//! 两者都是**口令级硬上限**：请求里没有对应字段（带了 ⇒ 400「不认识的字段」），
+//! 所以调用方**抬不高**。缺省值与 REQ-123 的 `tokens.json` 逐字一致。
+//!
 //! # 已知边界（⛔ 不写成「已封堵」）
 //!
 //! - 表是**启动时读一次**的（不热加载）：改口令要重启（与 REQ-123/124 同一条口径）；
@@ -93,8 +103,10 @@ pub struct PortalTokenEntry {
     pub tenant: String,
     /// 每次查询的行数上限（口令级；调用方抬不高）。
     pub max_rows: u64,
-    /// 并发上限（保留字段：门户当前串行执行，登记它是为了让 token 表与
-    /// REQ-123 的形状一致，运维换表时不会因为少一个字段被拒）。
+    /// **同一口令同时最多几个问题在跑**（口令级；不填 ⇒ 默认 2）。
+    ///
+    /// 由 [`crate::portal::limit`] 执行：名额用完 ⇒ 第 N+1 个请求**立刻** 429，
+    /// ⛔ 不排队。名额按口令隔离（A 打满不影响 B）。
     pub max_concurrency: usize,
     pub label: Option<String>,
 }
@@ -255,6 +267,15 @@ impl PortalTokens {
     /// 表里最大的 `max_rows`（横幅用；每次调用仍按**各自**口令的上限执行）。
     pub fn max_rows_cap(&self) -> u64 {
         self.entries.iter().map(|e| e.max_rows).max().unwrap_or(0)
+    }
+
+    /// 表里最大的 `max_concurrency`（横幅用；并发名额仍按**各自**口令的上限算）。
+    pub fn max_concurrency_cap(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|e| e.max_concurrency)
+            .max()
+            .unwrap_or(0)
     }
 }
 

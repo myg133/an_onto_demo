@@ -193,8 +193,8 @@ fn test_service(tag: &str) -> (Arc<PortalService>, PathBuf) {
     let (schema, mapping, policy, set, names) = fixture();
     let tokens = PortalTokens::parse(&format!(
         r#"{{"version":"1.0.0","tokens":[
-            {{"label":"A","token":"{TOKEN_A}","kind":"portal","tenant":"{TENANT_A}","max_rows":7}},
-            {{"label":"B","token":"{TOKEN_B}","kind":"portal","tenant":"{TENANT_B}","max_rows":3}}
+            {{"label":"A","token":"{TOKEN_A}","kind":"portal","tenant":"{TENANT_A}","max_rows":7,"max_concurrency":2}},
+            {{"label":"B","token":"{TOKEN_B}","kind":"portal","tenant":"{TENANT_B}","max_rows":3,"max_concurrency":1}}
         ]}}"#
     ))
     .expect("夹具凭据表");
@@ -605,6 +605,101 @@ async fn ac010_the_limits_in_the_answer_come_from_the_token() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// AC-010 · 并发闸（429 · 不排队 · 按口令隔离）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ 同一口令的第 N+1 个请求 ⇒ **立刻 429**，⛔ 不排队。
+///
+/// 手法：直接把 A 的两个名额占满（`max_concurrency = 2`），再发一个请求。
+/// 若实现是「排队等库」，这里会拿到 500（夹具池 150 ms 后超时）而不是 429 ——
+/// 状态码本身就把两种实现分开了；审计里的 `elapsed_ms` 再钉一次「它没等」。
+#[tokio::test]
+async fn ac010_the_n_plus_first_request_on_a_token_is_429_and_does_not_wait() {
+    let (svc, audit) = test_service("conc429");
+    let digest = svc.tokens.find(TOKEN_A).unwrap().digest.clone();
+    let limit = svc.tokens.find(TOKEN_A).unwrap().max_concurrency;
+    assert_eq!(limit, 2, "夹具里 A 的上限是 2");
+    let p1 = svc.limiter.acquire(&digest, limit).expect("第 1 个名额");
+    let p2 = svc.limiter.acquire(&digest, limit).expect("第 2 个名额");
+
+    let r = call(
+        ontok::portal::http::build_router(Arc::clone(&svc)),
+        post("/q/my_spend", Some(TOKEN_A), "{}"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "第 3 个必须 429：{}", r.body);
+    let v: Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(v["code"], "TOO_MANY_CONCURRENT");
+    assert!(v["message"].as_str().unwrap_or("").contains("太多"), "{}", r.body);
+    assert!(v["hint"].as_str().unwrap_or("").contains("2"), "{}", r.body);
+    // ⛔ 文案里没有表名 / 列名 / SQL / IRI。
+    for forbidden in ["orders", "customer_id", "SELECT", "https://", "sql"] {
+        assert!(!r.body.contains(forbidden), "429 正文里出现了 {forbidden:?}：{}", r.body);
+    }
+
+    // 429 也留一行审计，且**没有排队**（`elapsed_ms` 远小于夹具池的 150 ms 超时）。
+    let log = read(&audit);
+    let line = log
+        .lines()
+        .find(|l| l.contains("code=TOO_MANY_CONCURRENT"))
+        .unwrap_or_else(|| panic!("审计里没有 429 那一行：\n{log}"));
+    assert!(line.contains("qid=my_spend"), "{line}");
+    assert!(line.contains("rows=-"), "{line}");
+    assert!(!line.contains(TOKEN_A), "{line}");
+    let elapsed: u128 = line
+        .split("elapsed_ms=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .expect("审计行里有 elapsed_ms");
+    assert!(
+        elapsed < 150,
+        "429 必须是**立刻**给的（夹具池 150 ms 才超时）：{line}"
+    );
+
+    // 名额还回去之后，同一个请求就不再是 429（证明 429 只跟名额有关）。
+    drop(p1);
+    drop(p2);
+    assert_eq!(svc.limiter.inflight(&digest), 0);
+    let r2 = call(
+        ontok::portal::http::build_router(Arc::clone(&svc)),
+        post("/q/my_spend", Some(TOKEN_A), "{}"),
+    )
+    .await;
+    assert_ne!(r2.status, StatusCode::TOO_MANY_REQUESTS, "腾出名额后不该再 429");
+}
+
+/// ⭐ A 打满**不影响** B（名额按口令隔离），且请求结束后名额归零（不泄漏）。
+#[tokio::test]
+async fn ac010_a_full_token_does_not_block_another_token() {
+    let (svc, _) = test_service("conc-iso");
+    let a = svc.tokens.find(TOKEN_A).unwrap().digest.clone();
+    let b = svc.tokens.find(TOKEN_B).unwrap().digest.clone();
+    let a_limit = svc.tokens.find(TOKEN_A).unwrap().max_concurrency;
+    let b_limit = svc.tokens.find(TOKEN_B).unwrap().max_concurrency;
+    assert_eq!((a_limit, b_limit), (2, 1));
+
+    // 占满 A。
+    let _a1 = svc.limiter.acquire(&a, a_limit).unwrap();
+    let _a2 = svc.limiter.acquire(&a, a_limit).unwrap();
+    assert_eq!(svc.limiter.inflight(&a), 2);
+
+    // A 是 429，B 照常执行（夹具池连不上 ⇒ 500，但**不是** 429）。
+    let app = || ontok::portal::http::build_router(Arc::clone(&svc));
+    let ra = call(app(), post("/q/my_spend", Some(TOKEN_A), "{}")).await;
+    assert_eq!(ra.status, StatusCode::TOO_MANY_REQUESTS, "A 应当 429");
+    let rb = call(app(), post("/q/my_spend", Some(TOKEN_B), "{}")).await;
+    assert_ne!(rb.status, StatusCode::TOO_MANY_REQUESTS, "B 不该受 A 影响：{}", rb.body);
+    assert_eq!(rb.status, StatusCode::INTERNAL_SERVER_ERROR, "B 走到了执行那一步");
+
+    // B 自己的名额上限是 1：占满后再来也是 429。
+    let _b1 = svc.limiter.acquire(&b, b_limit).unwrap();
+    let rb2 = call(app(), post("/q/my_spend", Some(TOKEN_B), "{}")).await;
+    assert_eq!(rb2.status, StatusCode::TOO_MANY_REQUESTS, "B 自己满了也 429");
+    assert_eq!(svc.limiter.inflight(&a), 2, "B 的 429 不该动 A 的名额");
+}
+
+// ══════════════════════════════════════════════════════════════
 // 源码级：登记与现场一致
 // ══════════════════════════════════════════════════════════════
 
@@ -662,6 +757,39 @@ fn the_only_tenant_source_is_the_token_file() {
     let h = common::read_source("src/portal/http.rs");
     assert!(h.contains("TENANT_FROM_CLIENT"), "请求体带 tenant 必须有专门的错误码");
     assert!(h.contains("QUERY_PARAM_FORBIDDEN"), "URL 带参数必须有专门的错误码");
+}
+
+#[test]
+fn the_help_documents_the_endpoints_and_the_two_token_limits() {
+    // 真实进程的 `--help`（与 test_req121 / test_req122 同一条口径）。
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
+        .args(["portal", "serve", "--help"])
+        .output()
+        .expect("跑不起 ontok 二进制");
+    assert!(out.status.success(), "`portal serve --help` 必须成功：{out:?}");
+    let text = String::from_utf8_lossy(&out.stdout);
+    for needle in [
+        "--tokens",
+        "--questions",
+        "--policy",
+        "--schema",
+        "--timeout-ms",
+        "127.0.0.1:8900",
+        "/api/questions",
+        "/q/<id>",
+        "/api/health",
+        // ⛔ 没有自由查询入口 —— help 里必须直说。
+        "/api/sparql",
+        // 两个口令级限额与默认值（不填时给多少）。
+        "max_rows",
+        "默认 **200**",
+        "max_concurrency",
+        "默认 **2**",
+        "429",
+        "TOO_MANY_CONCURRENT",
+    ] {
+        assert!(text.contains(needle), "`--help` 里缺 {needle:?}：\n{text}");
+    }
 }
 
 #[test]

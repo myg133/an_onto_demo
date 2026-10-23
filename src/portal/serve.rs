@@ -259,6 +259,10 @@ pub fn banner(addr: SocketAddr, verdict: BindVerdict, svc: &PortalService) -> St
         svc.timeout_ms
     ));
     s.push_str(&format!(
+        "· 并发：同一口令同时最多 {} 个问题（超限立刻 429，⛔ 不排队）· 不同口令互不影响\n",
+        svc.tokens.max_concurrency_cap()
+    ));
+    s.push_str(&format!(
         "· 问题：{} 条（逐题校验通过 · 签名 \"{}\"）\n",
         svc.questions.len(),
         svc.questions.reviewed_by()
