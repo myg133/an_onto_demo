@@ -1,0 +1,37 @@
+{
+  "version": "0.1.0-draft",
+  "reviewed_by": null,
+  "note": "草案：给 REQ-126 的 Dev 做启动校验与实测用。reviewed_by 为 null 是故意的——真正上线必须由业务负责人签字（签了才允许启动）。",
+  "questions": [
+    {
+      "id": "deduction_by_currency",
+      "title": "我的扣费明细（按币种汇总）",
+      "sparql": "SELECT ?currency (SUM(?amount) AS ?total) WHERE { ?d <https://ontok.local/anspire_r2rml_excl#deductions__currency> ?currency . ?d <https://ontok.local/anspire_r2rml_excl#deductions__deduction_amount> ?amount . } GROUP BY ?currency",
+      "note": "按扣费明细的币种汇总；扣费表覆盖范围可能不完整（见回执 warnings）。"
+    },
+    {
+      "id": "my_balance",
+      "title": "我的充值余额",
+      "sparql": "SELECT ?balance WHERE { ?b <https://ontok.local/anspire_r2rml_excl#balances__recharge_balance> ?balance . }",
+      "note": "充值余额；不含赠送额度、转移额度与冻结金额。"
+    },
+    {
+      "id": "usage_by_model",
+      "title": "我用量最多的模型",
+      "sparql": "SELECT ?model (SUM(?amount) AS ?total) WHERE { ?u <https://ontok.local/anspire_r2rml_excl#usage_details__model_name> ?model . ?u <https://ontok.local/anspire_r2rml_excl#usage_details__usage_amount> ?amount . } GROUP BY ?model",
+      "note": "按用量明细的模型名汇总；模型名来自调用记录，可能与产品目录的命名不一致。"
+    },
+    {
+      "id": "my_subscriptions",
+      "title": "我的订阅与套餐",
+      "sparql": "SELECT ?subscription ?package WHERE { ?subscription <https://ontok.local/anspire_r2rml_excl#customer_subscriptions__package_templates> ?package . }",
+      "note": "当前订阅关联的套餐模板。"
+    },
+    {
+      "id": "my_licenses",
+      "title": "我的授权（API Key）",
+      "sparql": "SELECT ?license ?name WHERE { ?license <https://ontok.local/anspire_r2rml_excl#licenses__name> ?name . }",
+      "note": "不返回密钥本身，只返回授权名称。"
+    }
+  ]
+}
