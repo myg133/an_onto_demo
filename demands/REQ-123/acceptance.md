@@ -95,3 +95,34 @@
 - **H** 鉴权中间件与回执构造函数各只许一处（REST/MCP 共用）
 - **G** 变异三元组：让 MCP 跳过鉴权 / 允许 body 覆盖 tenant / 回执两条路径各构造一次 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 交付与裁定（J-1 / J-2）
+
+### J-1 · `futures-util`：**接受**，但附条件
+
+Dev 报：`Cargo.toml` 多了一行 `futures-util`，理由是把 **axum 已有的直接依赖**提升为直接依赖（同版本、同 feature），**`Cargo.lock` 只多一行 `ontok → futures-util`，没有新增 crate**。
+
+**裁定：接受**，因为 AC-011「不引新依赖」防的是**新供应链**，而这不是新 crate。
+
+**但必须满足三条**：
+
+1. `cargo tree` 证明 `futures-util` **本来就在依赖树里**（经 axum），贴出证据
+2. `Cargo.lock` 的 `[[package]]` 数量**不变**（只多一行依赖关系）
+3. 报告里写明「这是把既有传递依赖提升为直接依赖」，⛔ 不许写成「没有新增依赖」而不解释
+
+**若将来需要真正的流库**（如 tokio-stream 会拉入 tokio-util）⇒ 必须回到 BA 重新裁定。
+
+### J-2 · `join_states[]` 的口径：**接受 v1，但必须标清范围**
+
+Dev 报：`join_states[]` 给的是**涉及表之间的全部映射边**，不是 planner 实际走过的边。
+
+**裁定：接受**，但**必须在两处写清**：
+
+1. 字段文档/`--help`：`join_states` = 涉及表之间的**全部**映射边（供判断可信度用），**不等于**本次查询用到的边
+2. 回执里加一个显式说明（如 `join_states_scope: "all_edges_between_involved_tables"`），让 Agent 不会误以为「列出来的都用了」
+
+⛔ 不许让字段名暗示「本次用到的边」。
+**精确版（只列 planner 实际走过的边）** 需要给 `Planned` 加 `join_edges` —— 属 REQ-122 结构变更，**下轮再做**，本轮登记。
