@@ -66,6 +66,24 @@ fn require(test: &str, names: &[&str]) -> Option<()> {
     Some(())
 }
 
+/// 真库用例的**串行闸**（不是「测试必须单线程跑」的免责声明，是让它并行也不炸）。
+///
+/// 为什么需要：每个用例都自己 [`build_service`] 一个服务 ⇒ 一个只读池
+/// （`read_only_pool` 硬上限 `max_connections = 2`，这是客户资产，不开大）。
+/// 9 个用例并行 ⇒ 峰值 18 条连接；源库在非标准端口 30432 是**代理**，超额连接会被
+/// 重置（`src/extract/introspect.rs` 的注释里记着这条 S6）⇒ 表现为
+/// `pool timed out while waiting for an open connection` / `连不上源库`，
+/// 与代码正确性无关。闸住「建服务 + 查询」这一段，连接峰值就回到 1 个池。
+///
+/// ⚠️ 默认 `cargo test` 仍然会把 9 个用例**都**跑完（只是不并发连源库）；
+/// 想更快也没问题：`--test-threads=1` 时这把锁从不争用。
+static LIVE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    // 某个用例 panic 会毒化这把锁 —— 毒化本身不是失败原因，拿到内部值继续。
+    LIVE_GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Option<Arc<QueryService>> {
     let meta = meta_url()?;
     let source = env("ONTOK_SOURCE_DATABASE_URL")?;
@@ -171,9 +189,16 @@ async fn mcp(svc: &Arc<QueryService>, token: &str, line: &str) -> Value {
 }
 
 /// ⭐ AC-004 的核心判据：同一 token、同一查询，REST 的响应体与 MCP 的
-/// `content[0].text` **逐字节相同**（三条查询：单跳 / 两跳 / 聚合）。
+/// `content[0].text` **逐字节相同**（四条查询：单跳 / 两跳 / 聚合 / **覆盖范围不完整**）。
+///
+/// # 为什么必须有第四条（QA 变异 M1）
+///
+/// 前三条都**不产生** `warnings`。于是「MCP 路径把 `warnings` 清空」在字节上等于没变 ——
+/// lib 562 全绿、live 全绿，变异存活。第四条查 `deductions`（声明里 `coverage: main_only`）
+/// 必然带 warning，所以只要 MCP 少带/改一个字，`text != rest_body` 立刻红。
 #[tokio::test]
 async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
+    let _live = one_at_a_time();
     let test = "ac004_rest_and_mcp_receipts_are_byte_identical";
     if require(
         test,
@@ -191,39 +216,184 @@ async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
     let tenant_b = env("ONTOK_REQ123_TENANT_B").unwrap_or_else(|| tenant_a.clone());
     let svc = build_service(10_000, &tenant_a, &tenant_b).await.expect("服务可构建");
 
+    // (标签, 查询, 是否**必须**产生非空 warnings)
     let queries = [
-        "SELECT ?b ?amt WHERE { ?b :balances__recharge_balance ?amt }",
-        "SELECT ?l ?n WHERE { ?l :licenses__customers ?c . ?c :customers__customer_name ?n }",
-        "SELECT (COUNT(?b) AS ?n) WHERE { ?b a :balances }",
+        ("单跳", "SELECT ?b ?amt WHERE { ?b :balances__recharge_balance ?amt }", false),
+        ("两跳", "SELECT ?l ?n WHERE { ?l :licenses__customers ?c . ?c :customers__customer_name ?n }", false),
+        ("聚合", "SELECT (COUNT(?b) AS ?n) WHERE { ?b a :balances }", false),
+        // ⭐ `deductions` 在 `query-policy.json` 里是 `coverage: main_only`
+        // ⇒ 命中它必然产生 warning（这是判据，不是巧合）。
+        (
+            "覆盖范围不完整（main_only）",
+            "SELECT ?d ?amt WHERE { ?d :deductions__deduction_amount ?amt }",
+            true,
+        ),
     ];
-    for q in queries {
+    for (label, q, must_warn) in queries {
         let body = serde_json::json!({ "query": q }).to_string();
         let (status, rest_body) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
-        assert_eq!(status, StatusCode::OK, "REST 失败：{rest_body}");
+        assert_eq!(status, StatusCode::OK, "[{label}] REST 失败：{rest_body}");
         let line = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "sparql_query", "arguments": { "query": q } }
         })
         .to_string();
         let v = mcp(&svc, TOK_A, &line).await;
-        assert_eq!(v["result"]["isError"], false, "{v}");
+        assert_eq!(v["result"]["isError"], false, "[{label}] {v}");
         let text = v["result"]["content"][0]["text"].as_str().expect("text");
         assert_eq!(
             text, rest_body,
-            "⛔ 两协议回执不逐字节相同（AC-004）：\n REST: {rest_body}\n MCP : {text}"
+            "⛔ 两协议回执不逐字节相同（AC-004）[{label}]：\n REST: {rest_body}\n MCP : {text}"
         );
         // 前提自检：回执里有 rows 字段，且序列化不是空对象
         let parsed: Value = serde_json::from_str(&rest_body).unwrap();
         assert!(parsed.get("rows").is_some());
         assert!(parsed.get("coverage").is_some());
         assert!(parsed.get("join_states").is_some());
+        // B1：范围必须写在回执里（机器读值 + 人话），且与文档里的常量一致。
+        assert_eq!(
+            parsed["join_states_scope"], "all_edges_between_involved_tables",
+            "[{label}] 回执缺范围标签：{rest_body}"
+        );
+        assert!(
+            parsed["join_states_scope_note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("不是本次查询实际走过的那几条"),
+            "[{label}] 范围标签只有值没有解释：{rest_body}"
+        );
+        // B1-附带（M1）：这一条必须**有** warning，且两个协议的 warnings 相同。
+        let rest_warnings = parsed["warnings"].as_array().expect("warnings 数组");
+        if must_warn {
+            assert!(
+                !rest_warnings.is_empty(),
+                "[{label}] 这条查询必须产生 warning（否则它证明不了「MCP 少带 warnings」）：{rest_body}"
+            );
+            let mcp_json: Value = serde_json::from_str(text).expect("MCP text 是 JSON");
+            assert_eq!(
+                mcp_json["warnings"], parsed["warnings"],
+                "⛔ MCP 的 warnings 与 REST 不同 [{label}]：\n REST: {rest_body}\n MCP : {text}"
+            );
+            assert!(
+                !mcp_json["warnings"].as_array().unwrap().is_empty(),
+                "⛔ MCP 的 warnings 被清空了 [{label}]：{text}"
+            );
+        }
     }
+}
+
+/// B1 · **QA 实测的误读场景**（真库）：三表查询的回执里，「涉及但本次未用」的边
+/// 必须能认出来 —— 这是 `join_states_scope` + `used` 的存在理由。
+///
+/// 查询：`?l :licenses__customers ?c . ?b :balances__customers__customer_id ?c`
+/// ⇒ `tables[]` = licenses / customers / balances ⇒ `balances` 与 `customers` 之间
+/// **两条**边都在场，但本次只走了 `balances__customers__customer_id`；
+/// `balances__customers__source_customer_id` 是「涉及但未用」⇒ `used: false`。
+#[tokio::test]
+async fn b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt() {
+    let _live = one_at_a_time();
+    let test = "b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt";
+    if require(
+        test,
+        &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
+    )
+    .is_none()
+        || meta_url().is_none()
+    {
+        if meta_url().is_none() {
+            missing("ONTOK_DATABASE_URL", test);
+        }
+        return;
+    }
+    let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
+    let svc = build_service(10_000, &tenant_a, &tenant_a).await.expect("服务可构建");
+
+    let q = "SELECT ?l ?c ?b WHERE { ?l :licenses__customers ?c . \
+             ?b :balances__customers__customer_id ?c }";
+    let body = serde_json::json!({ "query": q }).to_string();
+    let (status, text) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let v: Value = serde_json::from_str(&text).expect("回执是 JSON");
+
+    // 前提：三张表都在场（否则下面「涉及但未用」的判据不成立）
+    let tables: Vec<&str> = v["tables"]
+        .as_array()
+        .expect("tables")
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    for t in ["licenses", "customers", "balances"] {
+        assert!(tables.contains(&t), "tables 缺 {t}（{tables:?}）：{text}");
+    }
+
+    // ① 范围标签在回执里（⛔ 不是「只在文档里」）
+    assert_eq!(v["join_states_scope"], "all_edges_between_involved_tables", "{text}");
+    assert!(
+        v["join_states_scope_note"]
+            .as_str()
+            .unwrap()
+            .contains("不是本次查询实际走过的那几条"),
+        "{text}"
+    );
+
+    // ② 本次写进查询的两条边 ⇒ used: true
+    let edges = v["join_states"].as_array().expect("join_states");
+    let find = |pred: &str| {
+        edges
+            .iter()
+            .find(|e| e["predicate"].as_str() == Some(pred))
+            .unwrap_or_else(|| panic!("join_states 缺 {pred}：{text}"))
+            .clone()
+    };
+    assert_eq!(find("licenses__customers")["used"], true, "{text}");
+    assert_eq!(
+        find("balances__customers__customer_id")["used"],
+        true,
+        "{text}"
+    );
+
+    // ③ ⭐ 涉及但未用 ⇒ used: false（这就是 QA 误读的那条）
+    let unused = find("balances__customers__source_customer_id");
+    assert_eq!(
+        unused["used"], false,
+        "⛔ 没写进查询的边必须标 used=false：{text}"
+    );
+    assert_eq!(unused["from"], "balances");
+    assert_eq!(unused["to"], "customers");
+    assert!(
+        !unused["evidence"].as_str().unwrap().is_empty(),
+        "每条边都要有证据原文：{text}"
+    );
+
+    // ④ 三表 ⇒ 至少有 1 条「涉及但未用」的边（这正是范围比「实走边」宽的证据）
+    assert!(
+        edges.iter().any(|e| e["used"] == false),
+        "三表查询里必须能看到「涉及但未用」的边：{text}"
+    );
+    // 证据（`--nocapture` 可见）：范围标签 + 每条边的 used
+    let mut brief = Vec::new();
+    for e in edges {
+        brief.push(serde_json::json!({
+            "from": e["from"], "to": e["to"], "predicate": e["predicate"],
+            "used": e["used"], "state": e["state"],
+        }));
+    }
+    println!(
+        "B1-SNIPPET {}",
+        serde_json::json!({
+            "tables": v["tables"],
+            "join_states_scope": v["join_states_scope"],
+            "join_states_scope_note": v["join_states_scope_note"],
+            "join_states": brief,
+        })
+    );
 }
 
 /// ⭐ AC-003 的真库判据：A 的 token 用 FILTER 写死 B 的实例 IRI ⇒ 0 行，
 /// 且 `sql_echo` 里注入的仍是 **A**（不是 B、也不是「没有条件」）。
 #[tokio::test]
 async fn ac003_a_never_sees_another_tenants_rows() {
+    let _live = one_at_a_time();
     let test = "ac003_a_never_sees_another_tenants_rows";
     if require(
         test,
@@ -280,6 +450,7 @@ async fn ac003_a_never_sees_another_tenants_rows() {
 /// AC-010：五条真实查询（单跳 / 两跳 / 聚合 / GROUP BY / ORDER BY+LIMIT）。
 #[tokio::test]
 async fn ac010_five_real_queries_return_receipts() {
+    let _live = one_at_a_time();
     let test = "ac010_five_real_queries_return_receipts";
     if require(
         test,
@@ -322,6 +493,7 @@ async fn ac010_five_real_queries_return_receipts() {
 /// AC-004 的错误侧：同一失败在 REST（HTTP code）与 MCP（`structuredContent.code`）相同。
 #[tokio::test]
 async fn ac004_the_same_error_code_on_both_protocols() {
+    let _live = one_at_a_time();
     let test = "ac004_the_same_error_code_on_both_protocols";
     if require(
         test,
@@ -360,6 +532,7 @@ async fn ac004_the_same_error_code_on_both_protocols() {
 /// catalog / describe 在两个协议上也逐字节相同（顺带覆盖 AC-001 的两个 GET）。
 #[tokio::test]
 async fn ac001_catalog_and_describe_are_identical_across_protocols() {
+    let _live = one_at_a_time();
     let test = "ac001_catalog_and_describe_are_identical_across_protocols";
     if require(
         test,
@@ -416,6 +589,7 @@ async fn ac001_catalog_and_describe_are_identical_across_protocols() {
 /// AC-007：审计行里**没有** token 明文、**没有**查询原文；失败也有一行。
 #[tokio::test]
 async fn ac007_audit_has_no_token_and_no_query_text() {
+    let _live = one_at_a_time();
     let test = "ac007_audit_has_no_token_and_no_query_text";
     if require(
         test,
@@ -464,6 +638,7 @@ async fn ac007_audit_has_no_token_and_no_query_text() {
 /// AC-005：调用方**抬不高** token 的 max_rows（真库路径）。
 #[tokio::test]
 async fn ac005_the_token_row_cap_cannot_be_raised() {
+    let _live = one_at_a_time();
     let test = "ac005_the_token_row_cap_cannot_be_raised";
     if require(
         test,
@@ -500,6 +675,7 @@ async fn ac005_the_token_row_cap_cannot_be_raised() {
 /// AC-005：超时 ⇒ `TIMEOUT`（把服务的 timeout 设成 1ms）。
 #[tokio::test]
 async fn ac005_a_timeout_is_reported_as_timeout() {
+    let _live = one_at_a_time();
     let test = "ac005_a_timeout_is_reported_as_timeout";
     if require(
         test,

@@ -14,12 +14,12 @@
 //! | --- | --- |
 //! | 鉴权（Bearer → token 表 → tenant） | [`http::require_token`]（一个中间件，挂在 `/api/*` 与 `/mcp` 上） |
 //! | 查询（规划 / 注入 / 只读执行） | [`crate::sparql::run_query`]（REQ-122 的同一个函数，⛔ 不另写） |
-//! | 回执构造 | [`SparqlReceipt`] 的 `From<QueryResult>` 那一段 + [`QueryService::join_states`] |
+//! | 回执构造 | `receipt_of()`（唯一构造函数）+ [`QueryService::join_states`]（含范围标签 [`JOIN_STATES_SCOPE_ALL_EDGES`]） |
 //! | 回执序列化 | [`SparqlReceipt::serialize`]（REST 走 `Json`、MCP 走 `content[0].text`，**同一个函数**） |
 //! | 限额 / 审计 / 错误码 | [`run_sparql`]、[`audit`]、[`error`]（两个协议都经过同一段代码） |
 //!
 //! 判据（AC-004）：同一 token、同一查询，REST 与 MCP 的回执**序列化后逐字节相同**
-//! （`tests/test_req123_query_service.rs` 对拍 sha256）。
+//! （`tests/test_req123_live.rs` 对拍 sha256）。
 //!
 //! # 租户只能来自 token（R1）
 //!
@@ -29,17 +29,42 @@
 //!
 //! # 回执扩展（AC-007 / 需求 7）
 //!
-//! 在 REQ-122 的九个字段之后追加三项：
+//! 在 REQ-122 的九个字段之后追加五项：
 //!
 //! - `coverage[]`：查询涉及的每张表 → `complete` / `main_only`（来自声明，⛔ 不推断）；
-//! - `join_states[]`：本次用到的 join 边 → `true` / `inherit` / `false` + 证据原文；
+//! - `join_states[]`：**涉及的表之间**的全部映射边 → `true` / `inherit` / `false` +
+//!   证据原文 + `used`（这条边本次有没有被查询用到）；
+//! - `join_states_scope`：`join_states[]` 的**范围标签**（机器可读，恒为
+//!   [`JOIN_STATES_SCOPE_ALL_EDGES`] = `all_edges_between_involved_tables`）；
+//! - `join_states_scope_note`：同一件事的**人话** —— 让只读回执的调用方（尤其是 AI）
+//!   不必翻文档就知道该把 `join_states[]` 读成什么；
 //! - `limits`：本次实际生效的 `max_rows` / `timeout_ms`（调用方看得出上限被谁压的）。
+//!
+//! ## `join_states[]` 的范围（⛔ 别读成「本次查询走到的边」）
+//!
+//! 范围是**「涉及的表之间的全部映射边」**：只要一张表出现在 `tables[]` 里，声明/映射里
+//! 它与另一张同样在场的表之间的**每一条** join 都会列出来 —— **不论这次查询有没有用到它**。
+//!
+//! 三表例子（真实查询，QA 实测过的误读场景）：
+//!
+//! ```sparql
+//! SELECT ?l ?c ?b WHERE { ?l :licenses__customers ?c . ?b :balances__customers__customer_id ?c }
+//! ```
+//!
+//! `tables[]` = `licenses` / `customers` / `balances`，于是
+//! `balances --balances__customers__source_customer_id--> customers` 也会出现在
+//! `join_states[]` 里（两张表都在场），尽管**本次根本没走到它**；这种条目 `used: false`。
+//!
+//! `used` 是怎么判的：planner 只会为**查询里写出来的**关系谓词生成 join
+//! （`connect_nodes` 只在已有的边上选，⛔ 不造隐式笛卡尔积），所以「该边的谓词（或它的
+//! 反向谓词）出现在查询里」⇔「这条边被 plan 用到了」。判定走的是**再解析一遍查询**
+//! （[`QueryService::used_join_predicates`]），不是字符串猜。
 //!
 //! # 已知限制（⛔ 不写成「已封堵」）
 //!
-//! - `join_states[]` 取的是**涉及的表之间**的全部映射边（不是「planner 实际走的那几条」）：
-//!   `Planned` 没有暴露用过的边，改它要动 REQ-122 的结构。多表多边时会有**冗余条目**，
-//!   但每条都是真实的映射事实，且带 `predicate` 可区分。要精确到「走过的边」是后续需求。
+//! - `join_states[]` 有**冗余条目**（多表多边时，涉及但没走的边也在里面）：这是 v1 的
+//!   范围口径（BA 裁定 J-2），不是 bug —— 靠 `used` 与 `join_states_scope` 区分。
+//!   要做到「只列走过的边」得让 `Planned` 暴露用过的边（要动 REQ-122 的结构），后续需求。
 //! - token 表**启动时读一次**（不热加载）；改 token 要重启。
 //! - 审计的 token 摘要不加盐（见 [`audit`] 的已知边界）。
 
@@ -341,16 +366,32 @@ pub struct CoverageEntry {
     pub coverage: &'static str,
 }
 
-/// 一条 join 边的**证据等级**（`true` / `inherit` / `false`）。
+/// 一条 join 边的**证据等级**（`true` / `inherit` / `false`）与**本次是否用到**。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct JoinStateEntry {
     pub from: String,
     pub to: String,
     pub predicate: String,
+    /// 这条边**本次查询用到了吗**（`false` = 涉及但未用，见 [`JOIN_STATES_SCOPE_NOTE`]）。
+    ///
+    /// 判据见 [`QueryService::used_join_predicates`]：该边的谓词（或它的反向谓词）
+    /// 是否出现在本次查询里。
+    pub used: bool,
     pub state: &'static str,
     /// 证据原文（`value-overlap 5/5 (100.00%) -> customers.id …`）。
     pub evidence: String,
 }
+
+/// `join_states[]` 的范围标签（**机器可读**）。⛔ 不要改成暗示「实走边」的名字或值。
+///
+/// 含义：`join_states[]` = 「查询涉及的表之间」的**全部**映射边。
+pub const JOIN_STATES_SCOPE_ALL_EDGES: &str = "all_edges_between_involved_tables";
+
+/// [`JOIN_STATES_SCOPE_ALL_EDGES`] 的**人话**版本（随回执一起返回）。
+///
+/// 存在的理由：MCP 的 Agent 只看回执，不看模块文档 —— 范围必须写在它看得见的地方。
+pub const JOIN_STATES_SCOPE_NOTE: &str = "join_states[] 是「查询涉及的表之间」的全部映射边（来自声明/映射），\
+不是本次查询实际走过的那几条；每条边的 used=false 表示「涉及但未用」，used=true 表示该边的谓词写进了查询。";
 
 /// 本次实际生效的限额（调用方看得出「上限是谁压下来的」）。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -379,8 +420,12 @@ pub struct SparqlReceipt {
     /// 每张表 → `complete` / `main_only`（公共维度记 `complete`，并在
     /// `public_dimensions[]` 里同时出现，两栏合看即可区分）。
     pub coverage: Vec<CoverageEntry>,
-    /// 涉及的表之间的映射边 → 证据等级。
+    /// 涉及的表之间的**全部**映射边（⛔ **不是**「本次查询走到的边」，见 `join_states_scope`）。
     pub join_states: Vec<JoinStateEntry>,
+    /// `join_states[]` 的范围（恒为 [`JOIN_STATES_SCOPE_ALL_EDGES`]，不随查询变化）。
+    pub join_states_scope: &'static str,
+    /// 范围的**人话**说明（[`JOIN_STATES_SCOPE_NOTE`]；与上一个字段同义）。
+    pub join_states_scope_note: &'static str,
     pub limits: LimitInfo,
 }
 
@@ -394,6 +439,15 @@ impl SparqlReceipt {
             // 回执里全是 String / Vec，理论上不会失败；真失败也不许 panic。
             format!("{{\"error\":\"回执序列化失败：{e}\"}}")
         })
+    }
+}
+
+/// 谓词 IRI → 本地名（`…/ontok.local/anspire_r2rml_excl#licenses__customers` →
+/// `licenses__customers`）。与 planner 的 `local_of` 同一个口径（`#` 优先，其次 `/`）。
+fn predicate_local(iri: &str) -> &str {
+    match iri.rfind('#') {
+        Some(i) => &iri[i + 1..],
+        None => iri.rsplit('/').next().unwrap_or(iri),
     }
 }
 
@@ -472,8 +526,11 @@ impl QueryService {
         }
     }
 
-    /// 查 join 证据（只覆盖**涉及的表之间**的边，见模块头的已知限制）。
-    pub fn join_states(&self, tables: &[String]) -> Vec<JoinStateEntry> {
+    /// 查 join 证据：**涉及的表之间**的**全部**映射边（范围见模块头，⛔ 不是「实走边」）。
+    ///
+    /// `used` 由 `used_predicates`（= [`Self::used_join_predicates`] 的结果）判定：
+    /// 该边的谓词或其反向谓词在本次查询里出现过 ⇒ `true`，否则 `false`（涉及但未用）。
+    pub fn join_states(&self, tables: &[String], used_predicates: &[String]) -> Vec<JoinStateEntry> {
         let mut out: Vec<JoinStateEntry> = Vec::new();
         for t in tables {
             let Some(class) = self.mapping.class(t) else { continue };
@@ -489,10 +546,14 @@ impl QueryService {
                 }) {
                     continue;
                 }
+                let used = used_predicates
+                    .iter()
+                    .any(|p| p == &j.predicate_local || p == &j.inverse_local);
                 out.push(JoinStateEntry {
                     from: j.child_table.clone(),
                     to: j.parent_table.clone(),
                     predicate: j.predicate_local.clone(),
+                    used,
                     state: j.state.as_str(),
                     evidence: j.evidence.clone(),
                 });
@@ -504,6 +565,33 @@ impl QueryService {
                 .then_with(|| a.to.cmp(&b.to))
                 .then_with(|| a.predicate.cmp(&b.predicate))
         });
+        out
+    }
+
+    /// 本次查询**写到的**关系谓词本地名（含反向写法）—— 只用来判 [`JoinStateEntry::used`]。
+    ///
+    /// 依据：planner 只为**查询里写出来的**关系谓词建 join（`connect_nodes` 只在已有的
+    /// 边上选，⛔ 不造隐式笛卡尔积），所以「谓词出现在查询里」⇔「这条边被用到」。
+    ///
+    /// 走**再解析一遍**（[`crate::sparql::query::parse`]，与 planner 同一个解析器），
+    /// ⛔ 不是对查询文本做子串匹配（那会把字面量里的同名字符串也算进来）。
+    ///
+    /// 解析失败（理论上不可能：同一条查询刚刚跑成功）⇒ 空集 ⇒ 全部 `used: false`：
+    /// 保守方向 —— 宁可说「这条边没被用到」，也不虚报「用到了」。
+    pub fn used_join_predicates(&self, sparql: &str) -> Vec<String> {
+        let Ok(q) = crate::sparql::query::parse(sparql, &self.ontology_iri) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        for pat in &q.patterns {
+            let local = predicate_local(&pat.predicate);
+            if local.is_empty() || local == "type" {
+                continue;
+            }
+            if !out.iter().any(|x| x == local) {
+                out.push(local.to_string());
+            }
+        }
         out
     }
 
@@ -742,7 +830,7 @@ async fn run_sparql_event(
 
     match result {
         Ok(r) => {
-            let receipt = receipt_of(svc, r, effective, &caller.token, warnings);
+            let receipt = receipt_of(svc, r, effective, &caller.token, warnings, &req.query);
             audit_call(
                 svc,
                 event,
@@ -774,14 +862,18 @@ async fn run_sparql_event(
 
 /// `QueryResult` → 回执（**唯一**的回执构造函数）。
 ///
-/// ⛔ 不在这里改任何 REQ-122 字段的值；只追加 `coverage` / `join_states` / `limits`
-/// 与「上限被压」的 warning。
+/// ⛔ 不在这里改任何 REQ-122 字段的值；只追加 `coverage` / `join_states`（+ 范围标签）/
+/// `limits` 与「上限被压」的 warning。
+///
+/// `sparql` 只用于判 `join_states[].used`（[`QueryService::used_join_predicates`]）——
+/// 回执的范围口径不随它变化（恒为 [`JOIN_STATES_SCOPE_ALL_EDGES`]）。
 fn receipt_of(
     svc: &QueryService,
     r: QueryResult,
     effective: u64,
     token: &TokenEntry,
     mut warnings: Vec<String>,
+    sparql: &str,
 ) -> SparqlReceipt {
     warnings.extend(r.warnings.iter().cloned());
     let coverage = r
@@ -802,7 +894,8 @@ fn receipt_of(
             TableDecision::Unregistered => None,
         })
         .collect();
-    let join_states = svc.join_states(&r.tables);
+    let used_predicates = svc.used_join_predicates(sparql);
+    let join_states = svc.join_states(&r.tables, &used_predicates);
     SparqlReceipt {
         columns: r.columns,
         rows: r.rows,
@@ -815,6 +908,8 @@ fn receipt_of(
         warnings,
         coverage,
         join_states,
+        join_states_scope: JOIN_STATES_SCOPE_ALL_EDGES,
+        join_states_scope_note: JOIN_STATES_SCOPE_NOTE,
         limits: LimitInfo {
             max_rows: effective,
             token_max_rows: token.max_rows,
@@ -1129,6 +1224,8 @@ mod tests {
             warnings: vec![],
             coverage: vec![],
             join_states: vec![],
+            join_states_scope: JOIN_STATES_SCOPE_ALL_EDGES,
+            join_states_scope_note: JOIN_STATES_SCOPE_NOTE,
             limits: LimitInfo {
                 max_rows: 10,
                 token_max_rows: 10,
@@ -1143,8 +1240,43 @@ mod tests {
         assert!(pos("\"columns\"") < pos("\"rows\""));
         assert!(pos("\"warnings\"") < pos("\"coverage\""));
         assert!(pos("\"coverage\"") < pos("\"join_states\""));
-        assert!(pos("\"join_states\"") < pos("\"limits\""));
+        assert!(pos("\"join_states\"") < pos("\"join_states_scope\""));
+        assert!(pos("\"join_states_scope\"") < pos("\"join_states_scope_note\""));
+        assert!(pos("\"join_states_scope_note\"") < pos("\"limits\""));
         assert!(a.trim_end().ends_with('}'));
+        // 范围标签本身：机器读值 + 人话说明都在回执里（⛔ 不是只在文档里）。
+        let v: serde_json::Value = serde_json::from_str(&a).expect("回执是 JSON");
+        assert_eq!(v["join_states_scope"], "all_edges_between_involved_tables");
+        assert!(v["join_states_scope_note"]
+            .as_str()
+            .unwrap()
+            .contains("全部映射边"));
+    }
+
+    /// B1：`join_states[]` 的范围**必须**在回执里标清 —— 三表查询里出现的
+    /// 「涉及但未用」的边要能被认出来（`used: false`），而不是被读成「本次走到的边」。
+    #[test]
+    fn the_scope_label_is_not_the_traversed_edges() {
+        // 值本身是判据（BA 裁定 J-2 的原文），改字即红。
+        assert_eq!(
+            JOIN_STATES_SCOPE_ALL_EDGES,
+            "all_edges_between_involved_tables"
+        );
+        // 人话说明必须明说「不是本次实际走过的那几条」——否则只加字段不解释。
+        assert!(
+            JOIN_STATES_SCOPE_NOTE.contains("不是本次查询实际走过的那几条"),
+            "{JOIN_STATES_SCOPE_NOTE}"
+        );
+        assert!(
+            JOIN_STATES_SCOPE_NOTE.contains("used=false"),
+            "{JOIN_STATES_SCOPE_NOTE}"
+        );
+        // 谓词 IRI → 本地名（`used` 的判定靠它）。
+        assert_eq!(
+            predicate_local("https://ontok.local/anspire_r2rml_excl#licenses__customers"),
+            "licenses__customers"
+        );
+        assert_eq!(predicate_local("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), "type");
     }
 
     /// 请求解析：`tenant` 是唯一允许的「额外」字段，拼错字段名要报 400 而不是忽略。
@@ -1262,7 +1394,7 @@ mod tests {
             max_concurrency: 1,
             label: None,
         };
-        let receipt = receipt_of(&svc, r, 10, &token, vec![]);
+        let receipt = receipt_of(&svc, r, 10, &token, vec![], "");
         assert_eq!(
             receipt.coverage,
             vec![
@@ -1275,8 +1407,40 @@ mod tests {
         assert_eq!(receipt.join_states[0].to, "customers");
         assert_eq!(receipt.join_states[0].state, "true");
         assert!(receipt.join_states[0].evidence.contains("value-overlap"));
+        // 空查询（= 什么都没写）⇒ 「涉及但未用」，而不是含糊的默认。
+        assert!(!receipt.join_states[0].used);
+        // 范围标签恒在（⛔ 不随查询/结果变化）。
+        assert_eq!(receipt.join_states_scope, JOIN_STATES_SCOPE_ALL_EDGES);
+        assert_eq!(receipt.join_states_scope_note, JOIN_STATES_SCOPE_NOTE);
         assert_eq!(receipt.limits.max_rows, 10);
         assert_eq!(receipt.limits.token_max_rows, 10);
+
+        // 同一条边，查询里**真的写了**这个谓词 ⇒ `used: true`（两种方向都认）。
+        let join = svc
+            .mapping
+            .class("orders")
+            .expect("夹具订单类")
+            .joins
+            .first()
+            .expect("夹具 join")
+            .clone();
+        for pred in [&join.predicate_local, &join.inverse_local] {
+            let r = QueryResult {
+                columns: vec!["n".into()],
+                rows: vec![],
+                row_count: 0,
+                truncated: false,
+                sql_echo: "SELECT 1".into(),
+                tenant_applied: vec![],
+                tables: vec!["orders".into(), "customers".into()],
+                public_dimensions: vec![],
+                warnings: vec![],
+            };
+            let q = format!("SELECT ?a ?b WHERE {{ ?a :{pred} ?b }}");
+            let receipt = receipt_of(&svc, r, 10, &token, vec![], &q);
+            assert_eq!(receipt.join_states.len(), 1, "{q}: {:?}", receipt.join_states);
+            assert!(receipt.join_states[0].used, "写了 :{pred} 就是用过：{q}");
+        }
     }
 
     /// `sample` 只把**存在**的名字翻成查询；不存在 ⇒ UNKNOWN_NAME（不拼任意字符串）。

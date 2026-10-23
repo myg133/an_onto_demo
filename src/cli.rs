@@ -573,6 +573,18 @@ pub enum QueryCmd {
     ///
     /// MCP 工具：catalog / describe / sparql_query / sample。
     ///
+    /// ⚠️ 回执里的 `join_states[]` 是**什么范围**（⛔ 别读成「本次查询走到的边」）：
+    ///
+    /// 范围 = 「**查询涉及的表之间**的全部映射边」。回执里由 `join_states_scope` 标明，
+    /// 值恒为 `all_edges_between_involved_tables`；`join_states_scope_note` 是同一件事的
+    /// 人话说明。只要两张表都出现在 `tables[]` 里，声明/映射里它们之间的**每一条** join
+    /// 都会列出来 —— 不论这次查询有没有用到它。
+    ///
+    /// 每条边带 `used`：`false` = 「涉及但本次未用」（例：三表查询
+    /// `?l :licenses__customers ?c . ?b :balances__customers__customer_id ?c` 会顺带列出
+    /// `balances__customers__source_customer_id`，本次没走到它），`true` = 该边的谓词写进了
+    /// 查询。要「只列走过的边」是后续需求（planner 的 `Planned` 暂未暴露用过的边）。
+    ///
     /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。⛔ 放 query string / cookie **不生效**。
     /// ⚠️ 限额：`max_rows`（token 级上限，调用方只能往下压）、超时、每 token 并发、
     /// SSE 连接数 + 空闲超时；超限 **429**。

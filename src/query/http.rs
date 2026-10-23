@@ -514,7 +514,13 @@ fn tool_defs() -> Vec<Value> {
             "title": "执行 SPARQL（v1 子集）",
             "description": "执行一条只读 SPARQL SELECT（租户条件由服务端按声明注入，⛔ 调用方改不了）。\
                             回执含 columns/rows/row_count/truncated/sql_echo/tenant_applied/tables/\
-                            public_dimensions/warnings/coverage/join_states/limits。",
+                            public_dimensions/warnings/coverage/join_states/join_states_scope/\
+                            join_states_scope_note/limits。\
+                            ⚠️ join_states 的范围 = 「**查询涉及的表之间**的全部映射边」\
+                            （join_states_scope 恒为 all_edges_between_involved_tables），\
+                            ⛔ 不是本次查询实际走过的那几条：只要两张表都出现在 tables 里，\
+                            映射里它们之间的每一条边都会列出，所以会有 used=false 的条目\
+                            （= 涉及但本次没用到；人话说明见 join_states_scope_note）。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -850,6 +856,29 @@ mod tests {
         for t in v["result"]["tools"].as_array().unwrap() {
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         }
+        // B1：Agent 只看 `tools/list` 的 description ⇒ `join_states` 的范围必须写在这里
+        // （⛔ 只列字段名不够；改坏措辞即红）。
+        let q_desc = v["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "sparql_query")
+            .expect("sparql_query 工具")["description"]
+            .as_str()
+            .expect("description 是字符串")
+            .to_string();
+        assert!(
+            q_desc.contains("all_edges_between_involved_tables"),
+            "MCP description 必须写明 join_states 的范围值：{q_desc}"
+        );
+        assert!(
+            q_desc.contains("不是本次查询实际走过的那几条"),
+            "MCP description 必须明说「不是本次查询走到的边」：{q_desc}"
+        );
+        assert!(
+            q_desc.contains("join_states_scope_note"),
+            "MCP description 必须提到人话说明字段：{q_desc}"
+        );
     }
 
     /// 通知不许回响应（HTTP 侧是空 202）。
