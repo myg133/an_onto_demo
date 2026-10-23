@@ -362,6 +362,10 @@ fn outlet_sources() -> BTreeMap<&'static str, String> {
     // 同一个理由：needle 漂移必须在这张表上看得见。
     m.insert("src/query/http.rs", read_source("src/query/http.rs"));
     m.insert("src/query/audit.rs", read_source("src/query/audit.rs"));
+    // ⭐ REQ-124 · 控制面也不在 `OUTLET_FILES`（管理通道，不是客户出口），
+    // 但它在登记表里新增了 4 条内部轨出口（I18–I21）。同一个理由：needle 漂移要看得见。
+    m.insert("src/console/http.rs", read_source("src/console/http.rs"));
+    m.insert("src/console/decl.rs", read_source("src/console/decl.rs"));
     m
 }
 
@@ -687,13 +691,14 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        + 5（REQ-111 的审核界面出口 R1–R5）+ 1（REQ-116 的文档摄取产物 I10）
     //        + 2（REQ-121 的 R2RML 映射出口 I11/I12）
     //        + 1（REQ-122 的 SPARQL 查询回执出口 I13）
-    //        + 4（REQ-123 的查询服务出口 I14–I17）= 52。
+    //        + 4（REQ-123 的查询服务出口 I14–I17）
+    //        + 4（REQ-124 的控制面出口 I18–I21）= 56。
     assert_eq!(
         OUTLETS.len(),
-        52,
+        56,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
-         + 4（REQ-123 REST / MCP / SSE / 审计）"
+         + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）"
     );
 
     // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
@@ -713,9 +718,11 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // 隔离由声明驱动的租户注入 + 只读 + 行数上限保证，不是词汇闸）。
     // REQ-123 内部 18→22（I14–I17）：查询服务的 REST JSON / MCP JSON-RPC / SSE / 审计
     // （同一条口径：Agent 面的数据与通道，不是客户视图）。
+    // REQ-124 内部 22→26（I18–I21）：控制面的 JSON / TTL / R2RML / 声明落盘
+    // （管理通道，只有 admin token 能到；内容侧的闸在生成那一侧）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 22);
+    assert_eq!(outlet_count(Track::Internal), 26);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -732,8 +739,9 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=5).map(|i| format!("M{i}")));
     want.extend((1..=10).map(|i| format!("D{i}")));
     // REQ-121 · I11/I12（R2RML 映射：stdout / `--out`）；REQ-122 · I13（SPARQL 回执）；
-    // REQ-123 · I14–I17（查询服务：REST / MCP / SSE / 审计）
-    want.extend((1..=17).map(|i| format!("I{i}")));
+    // REQ-123 · I14–I17（查询服务：REST / MCP / SSE / 审计）；
+    // REQ-124 · I18–I21（控制面：JSON / TTL / R2RML / 声明落盘）
+    want.extend((1..=21).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());

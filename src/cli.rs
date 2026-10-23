@@ -15,6 +15,7 @@
 //! 审核动作因此只会落在**本次导入的那个项目**里。
 
 use crate::db::apply::PgApplier;
+use crate::console::OpError;
 
 use crate::db::project::PgProjectStore;
 use crate::db::proposal::{NewItem, NewProposal, PgProposalStore};
@@ -150,6 +151,29 @@ pub enum Cmd {
     /// 连上后**读回** `transaction_read_only = on` 才执行。
     #[command(verbatim_doc_comment)]
     Sparql { #[command(subcommand)] cmd: SparqlCmd },
+    /// ⭐ REQ-124 · **控制面 API**（管理流水线的 HTTP 化）
+    ///
+    /// 把 `propose import` / `proposal apply` / `version freeze` / `ontology export` /
+    /// `r2rml generate` / `review show|decide` 各变成一个端点。
+    /// ⛔ **不是后门**：只暴露既有流程（import → review → apply → freeze），
+    /// 没有「直接改对象」的端点，也没有抽取（抽取属任务系统，另开需求）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok console serve --bind 127.0.0.1:8899 --tokens admin-tokens.json --project anspire_r2rml_excl --schema code/out/schema.json
+    ///
+    /// ⚠️ `--tokens` 里装**两套**凭据（`kind: "admin" | "query"`）：query token 调管理端点
+    /// ⇒ **403**（不是 401），没有 token ⇒ 401；⛔ 同一个 token 不许两用（加载时拒绝）。
+    /// ⚠️ 默认只绑**回环**：`0.0.0.0` / 任何非回环地址都要显式 `--allow-public`（启动警告）。
+    /// ⚠️ 三份声明（`--exclusions` / `--policy` / `--tenancy`）的 PUT **保存前校验**：
+    /// 表 / 列必须存在于 `--schema`；`main_only` 必须带 `reason`；`publicDimensions`
+    /// 必须带 `reason`；exclusions 的 `category` 要在枚举内且 `reason`/`decided_by` 非空。
+    /// 失败 ⇒ 400 + 点名，**原文件一个字节都不变**。
+    /// ⚠️ `GET /api/export/ttl` 与 `POST /api/r2rml` 的产物与对应 CLI 命令**逐字节相同**
+    /// （同一个渲染/生成函数，不是第二次实现）。
+    /// ⚠️ 审计：每个写操作一行（含失败），token 只记摘要。
+    #[command(verbatim_doc_comment)]
+    Console { #[command(subcommand)] cmd: ConsoleCmd },
     /// ⭐ REQ-123 · **查询服务对外**（REST + 远程 MCP；一个进程、两种协议、一份鉴权）
     ///
     /// 数字员工链路的最后一块：把 REQ-122 的 `sparql query` 做成**服务**，
@@ -634,6 +658,69 @@ pub enum QueryCmd {
         /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 `r2rml generate` 一致）
         #[arg(long)]
         include_inherit: bool,
+    },
+}
+
+/// ⭐ REQ-124 · 控制面（`ontok console serve`）。
+#[derive(Subcommand)]
+pub enum ConsoleCmd {
+    /// 起控制面 API：管理流水线的每一步一个端点（⛔ 只暴露既有流程）
+    ///
+    /// 端点：
+    ///
+    /// GET  /api/health                       免 token，只给版本
+    /// GET  /api/projects                     项目 / 版本 / 冻结状态 / 对象·关系计数
+    /// POST /api/import                       body {project, path} 或 {project, proposal}
+    /// POST /api/apply                        body {project, proposal}
+    /// POST /api/freeze                       body {project, version}
+    /// GET  /api/export/ttl                   ?project&version&model_view=1&schema=&tenancy=
+    /// POST /api/r2rml                        body {project, version, schema, exclude?, include_inherit?}
+    /// GET/PUT /api/config/{exclusions|policy|tenancy}   读原文 / 保存前校验后写入
+    /// GET  /api/audit                        ?limit=
+    /// GET  /api/review                       ?project&proposal
+    /// POST /api/decide                       body {project, proposal, item, track, decision}
+    ///
+    /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。`--tokens` 里装两套凭据
+    /// （`kind: "admin" | "query"`）：query token 调管理端点 ⇒ **403**；无 token ⇒ 401。
+    /// ⛔ 同一个 token 不许两用 —— 加载时直接拒绝整份表。
+    /// ⚠️ 默认只绑回环；`0.0.0.0` / 公网地址必须显式 `--allow-public`（启动警告）。
+    /// ⚠️ 声明 PUT 的校验对照 `--schema`（真实 schema）：表 / 列必须存在；
+    /// `main_only` 与 `publicDimensions` 必须带 `reason`；exclusions 的 `category`
+    /// 要在枚举内且 `reason` / `decided_by` 非空。校验失败 ⇒ 400 + 点名，
+    /// **原文件一个字节都不变**（校验在写之前）。
+    /// ⚠️ `GET /api/export/ttl` / `POST /api/r2rml` 与 CLI 的产物**逐字节相同**。
+    #[command(verbatim_doc_comment)]
+    Serve {
+        /// 监听地址。默认 `127.0.0.1:8899`；非回环地址必须加 `--allow-public`
+        #[arg(long, default_value = "127.0.0.1:8899")]
+        bind: String,
+        /// 两套凭据的静态表（`admin-tokens.json`；示例见 `admin-tokens.example.json`）
+        #[arg(long)]
+        tokens: PathBuf,
+        /// 本服务只服务这一个项目
+        #[arg(long)]
+        project: String,
+        /// 真实 schema（`ontok-introspect` 产物）—— 声明校验的「表 / 列必须存在」只能来自它
+        #[arg(long, default_value = crate::console::DEFAULT_SCHEMA)]
+        schema: PathBuf,
+        /// 排除声明（GET / PUT 的目标）
+        #[arg(long, default_value = crate::console::DEFAULT_EXCLUSIONS)]
+        exclusions: PathBuf,
+        /// 租户声明（GET / PUT 的目标）
+        #[arg(long, default_value = crate::console::DEFAULT_POLICY)]
+        policy: PathBuf,
+        /// 租户标注声明（GET / PUT 的目标）
+        #[arg(long, default_value = crate::console::DEFAULT_TENANCY)]
+        tenancy: PathBuf,
+        /// 允许绑非回环地址（`0.0.0.0` / 公网）。⛔ 不加就只能绑回环
+        #[arg(long)]
+        allow_public: bool,
+        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+        /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
     },
 }
 
@@ -1420,7 +1507,7 @@ fn write_stdout(text: &str, newline: bool) {
 ///
 /// 分布是序列化器**从最终正文数出来的**（`TtlDocument::stats`），出口这里只读，
 /// 不碰产物字节、也不重算 —— 客户视图在序列化前有属性级剔除，按视图重算会多算。
-fn eprint_ttl_stats(
+pub(crate) fn eprint_ttl_stats(
     track: &str,
     stats: Option<&crate::domain::ttl::RangeStats>,
     schema_given: bool,
@@ -1526,6 +1613,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
         // ⭐ REQ-123 · 查询服务对外（REST + MCP over HTTP；一个进程、一份鉴权）
         Cmd::Query { cmd } => query_cmd(&pool, cmd).await,
+        // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化；⛔ 只暴露既有流程）
+        Cmd::Console { cmd } => console_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -2939,9 +3028,12 @@ async fn version_cmd(pool: &PgPool, cmd: VersionCmd) -> anyhow::Result<()> {
             }
         }
         VersionCmd::Freeze { version, .. } => {
-            let v = s.version_by_seq(p.id, &p.name, version).await?;
-            let f = s.freeze(v.id).await?;
-            println!("已冻结 v{}", f.seq);
+            // ⭐ REQ-124 · 与 `POST /api/freeze` **同一个**实现
+            // （[`crate::console::ops::freeze_version_core`]，内部调
+            // `PgProjectStore::freeze`）。重复冻结在 CLI 仍是幂等成功（历史行为），
+            // HTTP 层把它翻成 409（R5）。
+            let out = crate::console::ops::freeze_version_core(pool, &pname, version).await?;
+            println!("已冻结 v{}", out.version);
         }
     }
     Ok(())
@@ -2981,6 +3073,92 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("读不到 {}：{e}", file.display()))?;
     let doc: Value = serde_json::from_str(&text)?;
 
+    // ⭐ REQ-124 · 主体逻辑搬到 [`import_proposal_core`]（控制面的 `POST /api/import`
+    // 调**同一个**函数）。本函数只剩「读文件 → 打印回执」：打印的几行与搬走前逐字相同
+    // （`tests/test_req107_source_enumeration.rs` 的 `NON_CUSTOMER_WRITES` 钉着它们）。
+    let receipt = import_proposal_core(pool, &doc, &file, None, false).await?;
+
+    if let Some(rec) = &receipt.exclusions {
+        println!(
+            "  排除记录    : {} 张 · {} v{} · sha256 {}…（判的人 {}；签的人 {}）",
+            rec.count,
+            rec.file,
+            rec.version,
+            &rec.sha256[..12.min(rec.sha256.len())],
+            rec.declared_by,
+            rec.reviewed_by.as_deref().unwrap_or("—")
+        );
+    }
+    println!(
+        "提案 {alias} 已导入，共 {} 个条目：",
+        receipt.items.len(),
+        alias = receipt.alias
+    );
+    for r in &receipt.items {
+        println!("  [{}] {} {}", r.seq, r.kind, r.target_key);
+    }
+    match &receipt.extracted_by {
+        None => println!("  （本提案无 extracted_by = 人工修订）"),
+        Some(eb) => println!("  （抽取来源：{} {}）", eb.agent, eb.version),
+    }
+    Ok(())
+}
+
+/// 一条已导入条目的**回执**（序号 / 类型 / 目标 key）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportItemReceipt {
+    pub seq: i32,
+    pub kind: String,
+    pub target_key: String,
+}
+
+/// 提案里带的**抽取来源**（`extracted_by` 的两栏）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExtractedByReceipt {
+    pub agent: String,
+    pub version: String,
+}
+
+/// 提案里带的**排除记录摘要**（REQ-113 的 `inputs.exclusions`）。
+///
+/// 只放**溯源元数据**（文件 / 版本 / sha / 判的人 / 签的人 / 条数），
+/// 不放逐条明细（那是提案载荷的一部分，`GET /api/review` 的 `exclusions` 块才给全）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportExclusionsReceipt {
+    pub count: usize,
+    pub file: String,
+    pub version: String,
+    pub sha256: String,
+    pub declared_by: String,
+    pub reviewed_by: Option<String>,
+}
+
+/// `propose import` / `POST /api/import` 的**同一个**实现。
+///
+/// # 参数
+///
+/// - `source`：提案来源（文件路径，或 `"<inline>"`）—— 只用于错误文案与 `importable` 闸；
+/// - `expected_project`：控制面给的 `{project}`。给了就**必须**与文件里的 `project`
+///   一致（⛔ 不静默把 A 项目的提案导进 B 项目）；CLI 传 `None`（项目名只在文件里）；
+/// - `strict`：控制面为 `true` —— AC-003 要求「提案缺 `project` / `items` ⇒ 400 + 点名」。
+///   CLI 保持历史行为（缺 `items` = 空提案），所以这个差异是**请求契约**的差异，
+///   不是两份实现。
+///
+/// # 它做的每一件事都是原来 `propose_cmd` 里的
+///
+/// ① `importable: false` 硬闸（AC-015）；② 项目取得/新建；③ 基版本未冻结；
+/// ④ `extracted_by` 逐字段取并标 `Declared`；⑤ 条目 → `NewItem`；
+/// ⑥ `PgProposalStore::create`；⑦ `inputs`（含 `exclusions`）再过一遍
+/// `Record::from_inputs` 后落库。
+pub async fn import_proposal_core(
+    pool: &PgPool,
+    doc: &Value,
+    source: &std::path::Path,
+    expected_project: Option<&str>,
+    strict: bool,
+) -> Result<ImportReceipt, crate::console::OpError> {
+    use crate::console::OpError;
+
     // ★ AC-015：`importable: false` 必须是**硬闸**，不是文件里的约定。
     //
     // 背景（QA `qa-review.md` §7 N2）：`ontok-propose` 把「不提案」的关系写进
@@ -2988,19 +3166,64 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
     // 完全不看这个字段 —— 原样导入 **EXIT=0**，10 条已知错误照样进提案表，
     // 再来一次 `review decide --accept-all` + `apply` 就进了本体。
     // **声明了却不管，比不声明更糟**：读文件的人会以为已经挡住了。
-    ensure_importable(&file, &doc)?;
+    ensure_importable(source, doc).map_err(|e| {
+        OpError::bad_request(
+            "PROPOSAL_NOT_IMPORTABLE",
+            format!("{e:#}"),
+            "这是一份**被拒绝档**的产物（`importable: false`）。\
+             可导入的是主提案 `proposal.json` 与待查清单 `proposal-pending.json`。",
+        )
+    })?;
 
     let projects = PgProjectStore::new(pool.clone());
     let proposals = PgProposalStore::new(pool.clone());
-    let _ = &projects;
 
-    let pname = doc["project"].as_str().ok_or_else(|| anyhow::anyhow!("提案缺 project"))?;
-    let p = projects.get_or_create(pname).await?;
+    let pname = doc["project"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            OpError::bad_request(
+                "PROPOSAL_MISSING_PROJECT",
+                format!("提案 {} 缺顶层 `project`（或它不是非空字符串）。", source.display()),
+                "提案 JSON 顶层要写 `project: \"<项目名>\"`。⛔ 不猜项目 —— \
+                 猜错会把 A 的提案导进 B 的项目。",
+            )
+        })?;
+    if let Some(want) = expected_project {
+        if want.trim() != pname {
+            return Err(OpError::bad_request(
+                "PROJECT_MISMATCH",
+                format!(
+                    "请求里的 project = {want:?}，而提案里的 project = {pname:?} —— 不一致。"
+                ),
+                "控制面只服务 `--project` 指定的那个项目：把提案的 `project` 改成它，\
+                 或换一个 `--project` 再起服务。⛔ 不会把 A 的提案静默导进 B。",
+            ));
+        }
+    }
+    if strict && !doc.get("items").is_some_and(|v| v.is_array()) {
+        return Err(OpError::bad_request(
+            "PROPOSAL_MISSING_ITEMS",
+            format!("提案 {} 缺 `items`（或它不是数组）。", source.display()),
+            "提案 JSON 顶层要有 `items: [...]`；空提案不是「导入成功」，是「还没做决定」。",
+        ));
+    }
+
+    let p = projects.get_or_create(pname).await.map_err(OpError::db)?;
 
     let base_seq = doc["base_version"].as_i64().unwrap_or(1) as i32;
-    let base = projects.version_by_seq(p.id, &p.name, base_seq).await?;
+    let base = projects
+        .version_by_seq(p.id, &p.name, base_seq)
+        .await
+        .map_err(OpError::db)?;
     if base.frozen_at.is_some() {
-        anyhow::bail!("base 版本 v{base_seq} 已冻结，不能在其上提案");
+        return Err(OpError::conflict(
+            "BASE_VERSION_FROZEN",
+            format!("提案基于 v{base_seq}，而 v{base_seq} 已冻结，不能在其上提案。"),
+            "冻结的版本只读。新开一版再提案：`ontok version new --project …`，\
+             然后把提案的 `base_version` 改成新版本。",
+        ));
     }
 
     // ★ REQ-022 / ADR-003 (b)：**逐字段**取，并给溯源值**标注来源通道**。
@@ -3019,64 +3242,86 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
     // **把「勘查留痕」当成「来源通道」写进库** ——
     // 后者就是一次静默的语义错位，正是 ADR-003 要消灭的那一类。
     // 逐字段取 = 两个形状的区别**写在代码里**，不靠谁记得。
-    let eb = doc.get("extracted_by").filter(|v| !v.is_null()).map(|v| -> anyhow::Result<ExtractedBy> {
-        let agent = v["agent"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("提案的 extracted_by.agent 缺失或不是字符串"))?
-            .to_string();
-        let version = v["version"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("提案的 extracted_by.version 缺失或不是字符串（§8.4：必须是具体版本号）"))?
-            .to_string();
-        let round = v["round"]
-            .as_i64()
-            .ok_or_else(|| anyhow::anyhow!("提案的 extracted_by.round 缺失或不是整数"))?
-            as i32;
-        // failed_groups 两种形状都收：快照侧的字符串，或提案侧的结构化对象
-        // （取 `group_id`）。收结构化对象是为了让**本工具自己产出的**提案
-        // （`ontok-propose` 写出来的就是对象数组）能导得进来 ——
-        // 之前这里会整块反序列化失败，于是「工具产的提案导不进去、
-        // 只有手写的能导」，那是个没人明说的反向激励。
-        // ⚠️ 收下不等于担保：ADR-003 D2 说得很清楚，这条通道的声明
-        // **系统无法验证**，所以下面一律标 `Declared`。
-        let mut failed_groups = Vec::new();
-        for f in v["failed_groups"].as_array().into_iter().flatten() {
-            let id = match f {
-                serde_json::Value::String(s) => s.clone(),
-                other => other["group_id"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "提案的 extracted_by.failed_groups 里有一项既不是字符串也没有 group_id：{other}"
-                        )
-                    })?
-                    .to_string(),
+    let eb = doc
+        .get("extracted_by")
+        .filter(|v| !v.is_null())
+        .map(|v| -> Result<ExtractedBy, crate::console::OpError> {
+            let bad = |msg: String| {
+                OpError::bad_request(
+                    "PROPOSAL_BAD_EXTRACTED_BY",
+                    format!("提案 {} 的 {msg}", source.display()),
+                    "`extracted_by` 要么整块省略（= 人工修订），要么给全 \
+                     `{agent, version, round, failed_groups?}`；`version` 必须是具体版本号。",
+                )
             };
-            failed_groups.push(id);
-        }
-        Ok(ExtractedBy {
-            agent,
-            version,
-            round,
-            failed_groups,
-            // ★ ADR-003 (b)：这条值来自**外部 JSON 文件**，不是本工具跑出来的。
-            source: Some(ProvenanceSource::Declared),
+            let agent = v["agent"]
+                .as_str()
+                .ok_or_else(|| bad("extracted_by.agent 缺失或不是字符串".into()))?
+                .to_string();
+            let version = v["version"]
+                .as_str()
+                .ok_or_else(|| bad("extracted_by.version 缺失或不是字符串（§8.4：必须是具体版本号）".into()))?
+                .to_string();
+            let round = v["round"]
+                .as_i64()
+                .ok_or_else(|| bad("extracted_by.round 缺失或不是整数".into()))? as i32;
+            // failed_groups 两种形状都收：快照侧的字符串，或提案侧的结构化对象
+            // （取 `group_id`）。收结构化对象是为了让**本工具自己产出的**提案
+            // （`ontok-propose` 写出来的就是对象数组）能导得进来 ——
+            // 之前这里会整块反序列化失败，于是「工具产的提案导不进去、
+            // 只有手写的能导」，那是个没人明说的反向激励。
+            // ⚠️ 收下不等于担保：ADR-003 D2 说得很清楚，这条通道的声明
+            // **系统无法验证**，所以下面一律标 `Declared`。
+            let mut failed_groups = Vec::new();
+            for f in v["failed_groups"].as_array().into_iter().flatten() {
+                let id = match f {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other["group_id"]
+                        .as_str()
+                        .ok_or_else(|| {
+                            bad(format!(
+                                "extracted_by.failed_groups 里有一项既不是字符串也没有 group_id：{other}"
+                            ))
+                        })?
+                        .to_string(),
+                };
+                failed_groups.push(id);
+            }
+            Ok(ExtractedBy {
+                agent,
+                version,
+                round,
+                failed_groups,
+                // ★ ADR-003 (b)：这条值来自**外部 JSON 文件**，不是本工具跑出来的。
+                source: Some(ProvenanceSource::Declared),
+            })
         })
-    })
-    .transpose()?;
+        .transpose()?;
 
     let mut items = Vec::new();
     for (i, it) in doc["items"].as_array().into_iter().flatten().enumerate() {
-        items.push(NewItem::from_json(it, i)?);
+        items.push(NewItem::from_json(it, i).map_err(|e| {
+            OpError::bad_request(
+                "PROPOSAL_BAD_ITEM",
+                format!("提案 {} 的第 {} 条条目不合法：{e:#}", source.display(), i + 1),
+                "条目的形状由 `ontok-propose` 决定：kind / target_key / payload 三类字段；\
+                 手改过的提案请对照一份工具产物。",
+            )
+        })?);
     }
 
     let row = proposals
         .create(
             p.id,
-            NewProposal { base_version_id: base.id, round: doc["round"].as_i64().unwrap_or(1) as i32, extracted_by: eb.clone() },
+            NewProposal {
+                base_version_id: base.id,
+                round: doc["round"].as_i64().unwrap_or(1) as i32,
+                extracted_by: eb.clone(),
+            },
             &items,
         )
-        .await?;
+        .await
+        .map_err(OpError::db)?;
 
     // ── REQ-113 · 提案的排除审计段（`inputs.exclusions`）落库 ─────────────
     //
@@ -3087,23 +3332,31 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
     // ⭐ BA 裁定「单一文件」：逐条明细**就在 proposal.json 里**
     // （`inputs.exclusions = {file, version, sha256, declared_by, reviewed_by,
     //   rule, counts, excluded[], flagged[], stale[]}`）。
-    // 所以这里**没有**侧车、也没有第二个文件的 sha 绑定 —— 只读 `--file` 那一份。
+    // 所以这里**没有**侧车、也没有第二个文件的 sha 绑定 —— 只读那一份。
     //
     // ⚠️ 落库前**再过一遍校验**（与 `--exclude` 那侧同一套判据，`Record::from_inputs`）：
     // 这份 JSON 是**别人给的**，可能被手改过。一条 `reason` 被清空、
     // 或 `counts` 与明细对不上的记录若进了库，审核界面会把一份假审计当成真的显示出来。
+    let mut exclusions = None;
     if let Some(inputs) = doc.get("inputs").filter(|v| v.is_object()) {
-        match crate::extract::exclusions::Record::from_inputs(inputs)? {
+        let rec = crate::extract::exclusions::Record::from_inputs(inputs).map_err(|e| {
+            OpError::bad_request(
+                "PROPOSAL_BAD_INPUTS",
+                format!("提案 {} 的 `inputs.exclusions` 不合法：{e:#}", source.display()),
+                "排除记录必须与抽取那一轮一致（条数 / sha256 / 逐条理由）。\
+                 ⛔ 被手改过的记录不能进库 —— 界面会把它当成真审计显示。",
+            )
+        })?;
+        match rec {
             Some(rec) => {
-                println!(
-                    "  排除记录    : {} 张 · {} v{} · sha256 {}…（判的人 {}；签的人 {}）",
-                    rec.count(),
-                    rec.file,
-                    rec.version,
-                    &rec.sha256[..12.min(rec.sha256.len())],
-                    rec.declared_by,
-                    rec.reviewed_by.as_deref().unwrap_or("—")
-                );
+                exclusions = Some(ImportExclusionsReceipt {
+                    count: rec.count(),
+                    file: rec.file.clone(),
+                    version: rec.version.clone(),
+                    sha256: rec.sha256.clone(),
+                    declared_by: rec.declared_by.clone(),
+                    reviewed_by: rec.reviewed_by.clone(),
+                });
                 // ⭐ REQ-118 · A-1：**保留 `inputs` 里的其它键**（`names` 等）。
                 // 上一版这里只写 `{ "exclusions": rec }` —— 于是「既给 --names 又给
                 // --exclude」的提案，落库后**名字溯源整块消失**（只剩排除那一段）。
@@ -3111,31 +3364,57 @@ async fn propose_cmd(pool: &PgPool, cmd: ProposeCmd) -> anyhow::Result<()> {
                 let mut stored = inputs.as_object().cloned().unwrap_or_default();
                 stored.insert(
                     "exclusions".to_string(),
-                    serde_json::to_value(&rec).context("排除记录序列化失败")?,
+                    serde_json::to_value(&rec)
+                        .context("排除记录序列化失败")
+                        .map_err(OpError::db)?,
                 );
                 proposals
                     .set_inputs(row.id, &Value::Object(stored))
-                    .await?;
+                    .await
+                    .map_err(OpError::db)?;
             }
             None => {
                 // 有 `inputs` 但没有 `exclusions`（例如只有 `names`）：原样留档，不丢。
-                proposals.set_inputs(row.id, inputs).await?;
+                proposals
+                    .set_inputs(row.id, inputs)
+                    .await
+                    .map_err(OpError::db)?;
             }
         }
     }
 
-    let rows = proposals.items(row.id).await?;
+    let rows = proposals.items(row.id).await.map_err(OpError::db)?;
     let alias = proposal_alias(pool, p.id, row.id).await;
-    println!("提案 {alias} 已导入，共 {} 个条目：", rows.len());
-    for r in &rows {
-        println!("  [{}] {} {}", r.seq, r.kind, r.target_key);
-    }
-    if eb.is_none() {
-        println!("  （本提案无 extracted_by = 人工修订）");
-    } else {
-        println!("  （抽取来源：{}）", eb.as_ref().map(|e| format!("{} {}", e.agent, e.version)).unwrap_or_default());
-    }
-    Ok(())
+    Ok(ImportReceipt {
+        project: p.name,
+        proposal_id: row.id,
+        alias,
+        items: rows
+            .iter()
+            .map(|r| ImportItemReceipt {
+                seq: r.seq,
+                kind: r.kind.clone(),
+                target_key: r.target_key.clone(),
+            })
+            .collect(),
+        extracted_by: eb.map(|e| ExtractedByReceipt {
+            agent: e.agent,
+            version: e.version,
+        }),
+        exclusions,
+    })
+}
+
+/// `propose import` / `POST /api/import` 的回执（**同一个**类型）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportReceipt {
+    pub project: String,
+    pub proposal_id: Uuid,
+    /// 提案别名（`p1` / `p2` …，与 `review show` 的抬头同源）。
+    pub alias: String,
+    pub items: Vec<ImportItemReceipt>,
+    pub extracted_by: Option<ExtractedByReceipt>,
+    pub exclusions: Option<ImportExclusionsReceipt>,
 }
 
 async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
@@ -3342,6 +3621,156 @@ async fn proposal_cmd(pool: &PgPool, cmd: ProposalCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// ⭐ REQ-124 · `ontology export` / `GET /api/export/ttl` 的**共用参数**。
+///
+/// `tenancy` / `schema` 是**服务端路径**：CLI 来自 `--tenancy` / `--schema`，
+/// 控制面来自 query string 的同名参数（文档里写明它是服务端路径）。
+pub struct TtlExportParams<'a> {
+    pub project: &'a str,
+    pub version: i32,
+    pub model_view: bool,
+    pub base: &'a str,
+    pub tenancy: Option<&'a std::path::Path>,
+    pub schema: Option<&'a std::path::Path>,
+}
+
+
+
+/// ⭐ REQ-124 · `ontology export` 与 `GET /api/export/ttl` 的**共用读取段**。
+///
+/// 顺序与搬走前的 `ontology_cmd` Export 分支逐项一致（失败都是 fail-closed）：
+/// 项目 → 版本 → 快照 → 租户声明 → schema → 投影。
+///
+/// 返回的 [`crate::console::ops::TtlPrepared`] 只装**已经准备好的输入**；
+/// 渲染在两侧各自发生（CLI 走 `publish_customer`，控制面走
+/// `console::ops::render_ttl_export`），但输入是同一份、渲染器是同一个。
+pub async fn prepare_ttl_export(
+    pool: &PgPool,
+    p: TtlExportParams<'_>,
+) -> Result<crate::console::ops::TtlPrepared, OpError> {
+    let s = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+
+    let proj = s
+        .get_by_name(p.project)
+        .await
+        .map_err(OpError::db)?
+        .ok_or_else(|| {
+            OpError::not_found(
+                "PROJECT_NOT_FOUND",
+                format!("项目 {:?} 不存在。", p.project),
+                "检查 `--project`；项目要先由 `ontok project new` 建出来。",
+            )
+        })?;
+    let v = s
+        .version_by_seq(proj.id, &proj.name, p.version)
+        .await
+        .map_err(|e| {
+            OpError::not_found(
+                "VERSION_NOT_FOUND",
+                format!("项目 {:?} 没有第 {} 版：{e}", p.project, p.version),
+                "`GET /api/projects` 里有每一版的 seq。",
+            )
+        })?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await
+        .map_err(OpError::db)?
+        .ok_or_else(|| {
+            OpError::not_found(
+                "SNAPSHOT_NOT_FOUND",
+                format!("v{} 没有快照，导不出东西。", p.version),
+                "快照由 `proposal apply` 产出；空版本导出的「空本体」会被当成真的没有业务。",
+            )
+        })?;
+
+    // ⭐ REQ-119 · 租户声明：**读文件 + 解析**在这里，判定/落点全在
+    // `domain::ttl`（纯函数）。解析失败 ⇒ 直接报错（fail-closed），
+    // 不静默当成「没有声明」——那会产出一份看着有标注的本体。
+    let tenancy = match p.tenancy {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path).map_err(|e| {
+                OpError::bad_request(
+                    "DECLARATION_UNREADABLE",
+                    format!("读不出租户声明文件 {path:?}：{e}"),
+                    "`tenancy` 是**服务端路径**；文件不存在时不会退回「未标注」——\
+                     那会产出一份看着像没要求标注的本体。",
+                )
+            })?;
+            Some(crate::domain::ttl::TenancyDecl::parse(&raw).map_err(|e| {
+                OpError::bad_request(
+                    "DECLARATION_INVALID",
+                    format!("租户声明文件 {path:?} 不合法：{e}"),
+                    "形状：{\"columns\":[\"…\"],\"tables\":[\"…\"]?,\"reviewed_by\":\"…\"?}。",
+                )
+            })?)
+        }
+        None => None,
+    };
+
+    // ⭐ REQ-119 A-1 · 真实列类型（`schema`）。解析失败 ⇒ 直接报错（fail-closed）：
+    // 悄悄退回启发式会让调用方以为「用的是真实类型」。
+    let schema = match p.schema {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path).map_err(|e| {
+                OpError::bad_request(
+                    "SCHEMA_UNREADABLE",
+                    format!("读不出 schema 文件 {path:?}：{e}"),
+                    "`schema` 是**服务端路径**（`ontok-introspect` 的产物）。",
+                )
+            })?;
+            Some(crate::domain::ttl::SchemaTypes::parse(&raw).map_err(|e| {
+                OpError::bad_request(
+                    "SCHEMA_INVALID",
+                    format!("schema 文件 {path:?} 不合法：{e}"),
+                    "schema 必须是 `ontok-introspect` 写出的形状（tables[].columns[]）。",
+                )
+            })?)
+        }
+        None => None,
+    };
+    if schema.as_ref().is_some_and(|s| s.is_empty()) {
+        eprintln!("⚠ --schema 里一列都没读到：本次仍全部走启发式（检查 tables/columns）");
+    }
+
+    // 客户视图：`--tenancy` / `--schema` 对它不生效 —— 在**渲染之前**说清楚，
+    // 不让它们看起来「生效了」（R4 / AC-007）。
+    if !p.model_view {
+        if tenancy.is_some() {
+            eprintln!("⚠ --tenancy 只在建模视图生效：客户视图 TTL 不含租户标注（R4）");
+        }
+        if schema.is_some() {
+            eprintln!(
+                "⚠ 客户视图不含列名，--schema 无法按列匹配：本文件仍走启发式（类型以建模视图为准）"
+            );
+        }
+    }
+
+    let model = if p.model_view {
+        Some(crate::domain::model_view::project_model_track(&snap))
+    } else {
+        None
+    };
+    let customer = if p.model_view {
+        None
+    } else {
+        let sv = snapshot_to_view(&snap);
+        Some(crate::domain::view::project(&sv))
+    };
+
+    Ok(crate::console::ops::TtlPrepared {
+        project: proj.name,
+        version: p.version,
+        base: p.base.to_string(),
+        model_view: p.model_view,
+        snapshot: snap,
+        tenancy,
+        schema,
+        model,
+        customer,
+    })
+}
+
 async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
     let s = PgProjectStore::new(pool.clone());
     let store = PgStore::new(pool.clone());
@@ -3522,71 +3951,35 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                     "只支持 --format ttl（Turtle）。收到 {format:?} —— 本轮不做 RDF 导入，也没有别的导出格式。"
                 );
             }
-            let p = s.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;
-            let v = s.version_by_seq(p.id, &p.name, version).await?;
-            let snap = store
-                .get_snapshot(v.id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照"))?;
+            // ⭐ REQ-124 · **读取/投影**在 [`prepare_ttl_export`]（`GET /api/export/ttl`
+            // 调**同一个**函数）⇒ 两份出口拿到的是同一份投影 + 同一个 `TtlOptions`。
+            // ⚠️ 渲染这一步留在本函数里：T2/T8 要求「写出的绑定直接来自
+            // `publish_customer(…)`，且 OutletId 的管线调用与写点同函数」。
+            let prepared = prepare_ttl_export(
+                pool,
+                TtlExportParams {
+                    project: &project,
+                    version,
+                    model_view,
+                    base: &base,
+                    tenancy: tenancy.as_deref(),
+                    schema: schema.as_deref(),
+                },
+            )
+            .await?;
+            let object_count = prepared.object_count();
+            let relation_count = prepared.relation_count();
 
-            // ⭐ REQ-119 · 租户声明：**读文件 + 解析**在这里，判定/落点全在
-            // `domain::ttl`（纯函数）。解析失败 ⇒ 直接报错（fail-closed），
-            // 不静默当成「没有声明」——那会产出一份看着有标注的本体。
-            let tenancy_decl = match &tenancy {
-                Some(path) => {
-                    let raw = std::fs::read_to_string(path)
-                        .with_context(|| format!("读不出租户声明文件 {path:?}"))?;
-                    Some(
-                        crate::domain::ttl::TenancyDecl::parse(&raw).map_err(|e| {
-                            anyhow::anyhow!("租户声明文件 {path:?} 不合法：{e}")
-                        })?,
-                    )
-                }
-                None => None,
-            };
-
-            // ⭐ REQ-119 A-1 · 真实列类型（`--schema`）。解析失败 ⇒ 直接报错（fail-closed）：
-            // 悄悄退回启发式会让调用方以为「用的是真实类型」。
-            let schema_types = match &schema {
-                Some(path) => {
-                    let raw = std::fs::read_to_string(path)
-                        .with_context(|| format!("读不出 schema 文件 {path:?}"))?;
-                    Some(
-                        crate::domain::ttl::SchemaTypes::parse(&raw).map_err(|e| {
-                            anyhow::anyhow!("schema 文件 {path:?} 不合法：{e}")
-                        })?,
-                    )
-                }
-                None => None,
-            };
-            if schema_types.as_ref().is_some_and(|s| s.is_empty()) {
-                eprintln!("⚠ --schema 里一列都没读到：本次仍全部走启发式（检查 tables/columns）");
-            }
-
-            // 动作层条数：**只**用于文件头的有损声明（内容一个字节都不导出）。
-            let action_type_count = snap.action_types.len();
-            let opts = crate::domain::ttl::TtlOptions {
-                project: project.as_str(),
-                version,
-                base: base.as_str(),
-                action_type_count,
-                tenancy: tenancy_decl.as_ref(),
-                schema: schema_types.as_ref(),
-            };
-
-            if model_view {
+            if prepared.model_view {
                 // 建模视图：`Track::Modeling` ⇒ 显式豁免发布闸（`spec_of(D9)` 查表）。
-                let model = crate::domain::model_view::project_model_track(&snap);
                 let model_ttl = publish_customer(
                     crate::domain::pipeline::OutletId::D9,
-                    crate::domain::pipeline::Product::ModelTurtle { view: &model, opts },
+                    crate::domain::pipeline::Product::ModelTurtle {
+                        view: prepared.model(),
+                        opts: prepared.opts(),
+                    },
                 );
-                // REQ-119 · 租户落点与 range 分布：与序列化器同一份计算（不另写一套）。
-                let tenancy = crate::domain::ttl::tenancy_report(&model, tenancy_decl.as_ref());
-                if let Some(warning) = tenancy.warning() {
-                    eprintln!("{warning}");
-                }
-                eprint_ttl_stats("建模视图", model_ttl.range_stats(), schema_types.is_some());
+                crate::console::ops::report_ttl_export(&prepared, model_ttl.range_stats());
                 match &out {
                     Some(p) => {
                         std::fs::write(p, model_ttl.as_str())
@@ -3595,8 +3988,8 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                         eprintln!(
                             "· 已写出建模视图 TTL：{}（{} 类 / {} 关系 · 有损项见文件头）",
                             p.display(),
-                            model.entity_types.len(),
-                            model.link_types.len()
+                            object_count,
+                            relation_count
                         );
                     }
                     None => crate::cli::emit_domain_text(model_ttl),
@@ -3605,23 +3998,14 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
             }
 
             // 客户视图（默认）：与页面看到的是**同一份**客户视图。
-            // ⭐ REQ-119 · 租户标注**不**进客户视图（R4 / AC-007）：这里显式说一声，
-            // 不让 `--tenancy` 看起来「生效了」。
-            if tenancy_decl.is_some() {
-                eprintln!("⚠ --tenancy 只在建模视图生效：客户视图 TTL 不含租户标注（R4）");
-            }
-            if schema_types.is_some() {
-                eprintln!(
-                    "⚠ 客户视图不含列名，--schema 无法按列匹配：本文件仍走启发式（类型以建模视图为准）"
-                );
-            }
-            let sv = snapshot_to_view(&snap);
-            let cv = crate::domain::view::project(&sv);
             let customer_ttl = publish_customer(
                 crate::domain::pipeline::OutletId::C6,
-                crate::domain::pipeline::Product::CustomerTurtle { view: &cv, opts },
+                crate::domain::pipeline::Product::CustomerTurtle {
+                    view: prepared.customer(),
+                    opts: prepared.opts(),
+                },
             );
-            eprint_ttl_stats("客户视图", customer_ttl.range_stats(), false);
+            crate::console::ops::report_ttl_export(&prepared, customer_ttl.range_stats());
             match &out {
                 Some(p) => {
                     std::fs::write(p, customer_ttl.as_str())
@@ -3629,8 +4013,8 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                     eprintln!(
                         "· 已写出客户视图 TTL：{}（{} 个对象 / {} 条关系 · 有损项见文件头）",
                         p.display(),
-                        cv.objects.len(),
-                        cv.relations.len()
+                        object_count,
+                        relation_count
                     );
                 }
                 None => crate::cli::emit_domain_text(customer_ttl),
@@ -3658,65 +4042,126 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
 
 // ── R2RML 映射（REQ-121）────────────────────────────────
 
-/// ⭐ REQ-121 · `r2rml generate` 的**唯一入口**。
-///
-/// 生成逻辑全在 [`crate::domain::r2rml`]（纯函数、零 I/O）；这里只做三件事：
-/// 读快照 / schema / 租户声明，把**对账失败**变成非零退出，写出产物。
-///
-/// ⛔ 对账失败时**一个字节都不写**（fail-closed）：半份映射比没有映射更危险 ——
-/// 它会被 R2RML 引擎当成完整映射用，查出来的结果是错的，而且不报错。
-///
-/// ⛔ stdout 与 `--out` 写的是**同一份**字节（`r2rml_doc`）：出口只有一处序列化，
-/// 与 C6/C7、D9/D10 同一条口径。
-async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
-    let R2rmlCmd::Generate {
-        project,
-        version,
-        schema,
-        out,
-        include_inherit,
-        base,
-        tenancy,
-        exclude,
-        fk_signed,
-    } = cmd;
+/// ⭐ REQ-124 · `r2rml generate` / `POST /api/r2rml` 的**共用参数**。
+pub struct R2rmlParams<'a> {
+    pub project: &'a str,
+    pub version: i32,
+    /// **必填**：主键 / 唯一列 / 列存在性只能来自真实 schema。
+    pub schema: &'a std::path::Path,
+    pub include_inherit: bool,
+    pub base: &'a str,
+    pub tenancy: Option<&'a std::path::Path>,
+    pub exclude: Option<&'a std::path::Path>,
+    pub fk_signed: Option<&'a std::path::Path>,
+}
 
+/// 生成结果：**同一份 Turtle 字节** + 生成它的项目/版本（回执用）。
+pub struct R2rmlOut {
+    pub project: String,
+    pub version: i32,
+    pub doc: crate::domain::r2rml::R2rmlDocument,
+}
+
+/// ⭐ REQ-124 · `r2rml generate` 与 `POST /api/r2rml` 的**同一个**实现。
+///
+/// ⛔ 不写任何字节：stdout / `--out` 仍是出口的事（I11 / I12 的登记点在
+/// [`r2rml_cmd`]）。诊断（三态统计 / 排除表 / 租户未标注）走 stderr ——
+/// 两个入口看到的是同一批事实，不是「HTTP 版少报几条警告」。
+///
+/// ⛔ 对账失败 ⇒ 返回错误，**一个字节都不产出**（fail-closed）：半份映射比没有映射
+/// 更危险 —— 它会被 R2RML 引擎当成完整映射用。
+#[allow(clippy::too_many_arguments)]
+pub async fn r2rml_core(
+    pool: &PgPool,
+    p: R2rmlParams<'_>,
+) -> Result<R2rmlOut, OpError> {
     let projects = PgProjectStore::new(pool.clone());
     let store = PgStore::new(pool.clone());
-    let p = projects.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;
-    let v = projects.version_by_seq(p.id, &p.name, version).await?;
+    let proj = projects
+        .get_by_name(p.project)
+        .await
+        .map_err(OpError::db)?
+        .ok_or_else(|| {
+            OpError::not_found(
+                "PROJECT_NOT_FOUND",
+                format!("项目 {:?} 不存在。", p.project),
+                "检查 `--project`。",
+            )
+        })?;
+    let v = projects
+        .version_by_seq(proj.id, &proj.name, p.version)
+        .await
+        .map_err(|e| {
+            OpError::not_found(
+                "VERSION_NOT_FOUND",
+                format!("项目 {:?} 没有第 {} 版：{e}", p.project, p.version),
+                "`GET /api/projects` 里有每一版的 seq。",
+            )
+        })?;
     let snap = store
         .get_snapshot(v.id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照"))?;
+        .await
+        .map_err(OpError::db)?
+        .ok_or_else(|| {
+            OpError::not_found(
+                "SNAPSHOT_NOT_FOUND",
+                format!("v{} 没有快照，生成不了映射。", p.version),
+                "快照由 `proposal apply` 产出。",
+            )
+        })?;
 
     // 租户声明与 `ontology export --model-view` **同一份解析**（fail-closed：
     // 解析失败不当成「没有声明」，否则会得到一份看着有标注的映射）。
-    let tenancy_decl = match &tenancy {
+    let tenancy_decl = match p.tenancy {
         Some(path) => {
-            let raw = std::fs::read_to_string(path)
-                .with_context(|| format!("读不出租户声明文件 {path:?}"))?;
+            let raw = std::fs::read_to_string(path).map_err(|e| {
+                OpError::bad_request(
+                    "DECLARATION_UNREADABLE",
+                    format!("读不出租户声明文件 {path:?}：{e}"),
+                    "`tenancy` 是**服务端路径**；读不到时不会当成「未标注」。",
+                )
+            })?;
             Some(
-                crate::domain::ttl::TenancyDecl::parse(&raw)
-                    .map_err(|e| anyhow::anyhow!("租户声明文件 {path:?} 不合法：{e}"))?,
+                crate::domain::ttl::TenancyDecl::parse(&raw).map_err(|e| {
+                    OpError::bad_request(
+                        "DECLARATION_INVALID",
+                        format!("租户声明文件 {path:?} 不合法：{e}"),
+                        "形状：{\"columns\":[\"…\"],\"tables\":[\"…\"]?,\"reviewed_by\":\"…\"?}。",
+                    )
+                })?,
             )
         }
         None => None,
     };
 
     // `--schema` 必填：主键 / 唯一列 / 列存在性只能来自真实。
-    let raw = std::fs::read_to_string(&schema)
-        .with_context(|| format!("读不出 schema 文件 {schema:?}"))?;
-    let schema_types = crate::domain::ttl::SchemaTypes::parse(&raw)
-        .map_err(|e| anyhow::anyhow!("schema 文件 {schema:?} 不合法：{e}"))?;
+    let raw = std::fs::read_to_string(p.schema).map_err(|e| {
+        OpError::bad_request(
+            "SCHEMA_UNREADABLE",
+            format!("读不出 schema 文件 {:?}：{e}", p.schema),
+            "`schema` 是**服务端路径**（`ontok-introspect` 的产物），必填：\
+             ⛔ 不猜主键，也不拿启发式顶替。",
+        )
+    })?;
+    let schema_types = crate::domain::ttl::SchemaTypes::parse(&raw).map_err(|e| {
+        OpError::bad_request(
+            "SCHEMA_INVALID",
+            format!("schema 文件 {:?} 不合法：{e}", p.schema),
+            "schema 必须是 `ontok-introspect` 写出的形状（tables[].columns[]）。",
+        )
+    })?;
     if schema_types.is_empty() {
-        anyhow::bail!("--schema 里一列都没读到（检查 tables/columns）—— 这份 schema 无法对账");
+        return Err(OpError::bad_request(
+            "SCHEMA_EMPTY",
+            "--schema 里一列都没读到（检查 tables/columns）—— 这份 schema 无法对账。",
+            "换一份真实 schema：主键 / 唯一列 / 列存在性只能来自它。",
+        ));
     }
 
     let opts = crate::domain::ttl::TtlOptions {
-        project: project.as_str(),
-        version,
-        base: base.as_str(),
+        project: p.project,
+        version: p.version,
+        base: p.base,
         action_type_count: snap.action_types.len(),
         tenancy: tenancy_decl.as_ref(),
         schema: Some(&schema_types),
@@ -3728,32 +4173,48 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
     // `--exclude` 是**核对**，不是过滤：生产口径应当让快照本身不带这些表
     // （`ontok-propose --exclude`）。这里能做的只是「有人拿未排除的快照来生成」
     // 时把它**喊出来**（不阻断，但必须让人看见）。
-    let excluded_names: Option<Vec<String>> = match &exclude {
+    let excluded_names: Option<Vec<String>> = match p.exclude {
         Some(path) => {
             let ex = crate::extract::exclusions::Exclusions::load(&path.to_string_lossy())
-                .with_context(|| format!("读不出排除文件 {path:?}"))?;
+                .map_err(|e| {
+                    OpError::bad_request(
+                        "EXCLUSIONS_UNREADABLE",
+                        format!("读不出排除文件 {path:?}：{e:#}"),
+                        "`exclude` 是**服务端路径**；给了它就会核对「已排除的表是否混进映射」。",
+                    )
+                })?;
             Some(ex.entries().iter().map(|e| e.table.clone()).collect())
         }
         None => None,
     };
     // `--fk-signed` 是**审计**：端点被排除的已签关系在快照里已经不存在
     // （`apply` 拒绝悬空关系），只有这份签字产物还留着它们。
-    let signed_edges: Option<Vec<(String, String)>> = match &fk_signed {
+    let signed_edges: Option<Vec<(String, String)>> = match p.fk_signed {
         Some(path) => {
-            let raw = std::fs::read_to_string(path)
-                .with_context(|| format!("读不出签字产物 {path:?}"))?;
-            let v: serde_json::Value = serde_json::from_str(&raw)
-                .with_context(|| format!("签字产物 {path:?} 不是合法 JSON"))?;
+            let raw = std::fs::read_to_string(path).map_err(|e| {
+                OpError::bad_request(
+                    "FK_SIGNED_UNREADABLE",
+                    format!("读不出签字产物 {path:?}：{e}"),
+                    "`fk_signed` 是**服务端路径**。",
+                )
+            })?;
+            let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                OpError::bad_request(
+                    "FK_SIGNED_INVALID",
+                    format!("签字产物 {path:?} 不是合法 JSON：{e}"),
+                    "签字产物是 `fk proposals` 的 JSON。",
+                )
+            })?;
             let mut edges: Vec<(String, String)> = Vec::new();
-            if let Some(arr) = v.get("proposals").and_then(|x| x.as_array()) {
-                for p in arr {
+            if let Some(arr) = value.get("proposals").and_then(|x| x.as_array()) {
+                for prop in arr {
                     // 只认**签过字**的（`reviewed_by` 非空）—— 未签的本来就不进快照。
-                    let signed = p.get("reviewed_by").is_some_and(|x| !x.is_null());
+                    let signed = prop.get("reviewed_by").is_some_and(|x| !x.is_null());
                     if !signed {
                         continue;
                     }
-                    let subject = p.get("subject").and_then(|x| x.as_str()).unwrap_or("");
-                    let to = p
+                    let subject = prop.get("subject").and_then(|x| x.as_str()).unwrap_or("");
+                    let to = prop
                         .pointer("/facts/to_table")
                         .and_then(|x| x.as_str())
                         .unwrap_or("");
@@ -3771,16 +4232,24 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
         None => None,
     };
 
-    // 对账失败 ⇒ Display 里逐条点名（表.列），退出码非零，**不写文件**。
+    // 对账失败 ⇒ Display 里逐条点名（表.列），**不写文件**。
     let doc = crate::domain::r2rml::generate_audited(
         &model,
         &opts,
-        include_inherit,
+        p.include_inherit,
         crate::domain::r2rml::R2rmlAudit {
             excluded_tables: excluded_names.as_deref(),
             signed_edges: signed_edges.as_deref(),
         },
-    )?;
+    )
+    .map_err(|e| {
+        OpError::bad_request(
+            "R2RML_RECONCILE_FAILED",
+            format!("R2RML 生成失败（⛔ 一个字节都没产出）：{e}"),
+            "映射与 schema 对不上：按错误里点名的 表.列 修 schema 或快照。\
+             ⛔ 不会写出半份映射 —— 那会被当成完整映射用，查出来的结果是错的。",
+        )
+    })?;
 
     let st = doc.stats();
     // ⛔ `false` 与 `未标` 分开报：前者是**有据**的「仅名字推断」，后者是
@@ -3788,9 +4257,11 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
     // 把 52 条「没验」读成「52 条验过但失败」。
     // ⚠️ joinCondition 数在 `summary()` 里已经有了 —— 不再重复一遍。
     eprintln!(
-        "· R2RML（{project} v{version}）：{} · \
+        "· R2RML（{} v{}）：{} · \
          三态 true {} / inherit {}（生成 {}）/ false（仅名字推断，有据）{} · \
          未标（无验证信息）{} · 复合主键跳过 {} · 跳过已签关系 {} · schema 对账 0 失败",
+        p.project,
+        p.version,
         st.summary(),
         st.verified_edges,
         st.inherited_edges,
@@ -3816,6 +4287,58 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
         );
     }
 
+    Ok(R2rmlOut {
+        project: proj.name,
+        version: p.version,
+        doc,
+    })
+}
+
+/// ⭐ REQ-121 · `r2rml generate` 的**唯一入口**。
+///
+/// 生成逻辑全在 [`crate::domain::r2rml`]（纯函数、零 I/O）；这里只做三件事：
+/// 读快照 / schema / 租户声明，把**对账失败**变成非零退出，写出产物。
+///
+/// ⛔ 对账失败时**一个字节都不写**（fail-closed）：半份映射比没有映射更危险 ——
+/// 它会被 R2RML 引擎当成完整映射用，查出来的结果是错的，而且不报错。
+///
+/// ⛔ stdout 与 `--out` 写的是**同一份**字节（`r2rml_doc`）：出口只有一处序列化，
+/// 与 C6/C7、D9/D10 同一条口径。
+///
+/// ⭐ REQ-124 · 生成整段在 [`r2rml_core`]：CLI 与 `POST /api/r2rml` 调**同一个**函数
+
+async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
+    let R2rmlCmd::Generate {
+        project,
+        version,
+        schema,
+        out,
+        include_inherit,
+        base,
+        tenancy,
+        exclude,
+        fk_signed,
+    } = cmd;
+
+    // ⭐ REQ-124 · 生成整段在 [`r2rml_core`]（`POST /api/r2rml` 调**同一个**函数）
+    // ⇒ 两个出口的字节由同一份代码产生（AC-006：sha256 相等）。
+    // ⛔ 本分支只负责「写到哪」（stdout / `--out`）。
+    let generated = r2rml_core(
+        pool,
+        R2rmlParams {
+            project: &project,
+            version,
+            schema: &schema,
+            include_inherit,
+            base: &base,
+            tenancy: tenancy.as_deref(),
+            exclude: exclude.as_deref(),
+            fk_signed: fk_signed.as_deref(),
+        },
+    )
+    .await?;
+    let R2rmlOut { doc, .. } = generated;
+    let st = doc.stats();
     let r2rml_doc = doc.doc();
     match &out {
         Some(path) => {
@@ -4074,8 +4597,39 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
     crate::query::serve::serve(pool, args).await
 }
 
-// ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；
-/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
+/// ⭐ REQ-124 · `ontok console serve` —— 参数只在这里翻译，逻辑全在 `console::serve`。
+///
+/// ⚠️ 这里**不做**任何鉴权 / 绑定判断：那些在 `console::http` 与 `console::serve`
+/// 里（一处实现）。本函数只做「clap 参数 → ServeArgs」的搬运 —— 与 `query_cmd` 同一条分工。
+async fn console_cmd(pool: &PgPool, cmd: ConsoleCmd) -> anyhow::Result<()> {
+    let ConsoleCmd::Serve {
+        bind,
+        tokens,
+        project,
+        schema,
+        exclusions,
+        policy,
+        tenancy,
+        allow_public,
+        audit_out,
+        base,
+    } = cmd;
+    let args = crate::console::serve::ServeArgs {
+        bind,
+        tokens,
+        project,
+        schema,
+        exclusions,
+        policy,
+        tenancy,
+        allow_public,
+        audit_out,
+        base,
+    };
+    crate::console::serve::serve(pool, args).await
+}
+
+// ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
 ///
 /// # 别名是「项目内序号」—— 必须带 `WHERE project_id = $1`
 ///

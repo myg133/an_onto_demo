@@ -231,7 +231,19 @@ impl AuditSink {
     /// 写一条。**永不 panic、永不返回错误** —— 审计失败不该让一次已经成功的查询变成 500；
     /// 但写失败会再往 stderr 喊一句（`✗`），运维能看见。
     pub fn record(&self, rec: &AuditRecord) {
-        let line = rec.line();
+        self.record_line(&rec.line());
+    }
+
+    /// ⭐ REQ-124 · **已成形的一行**（控制面审计复用同一个落点）。
+    ///
+    /// 为什么不让控制面另开一个 sink：`writeln!(f, …)` 是审计的**唯一**写点
+    /// （OUTLETS 的 I17）。控制面条目多两个字段（`action` / `target`），
+    /// 但落点、追加语义、「stderr 恒写」这三件事与查询面**必须**是同一份 ——
+    /// 两个 sink 意味着「一个文件里两种行、其中一种忘了 flush」这类问题。
+    ///
+    /// 行的**形状**由调用方给（控制面在 `console::audit` 里定义它的字段），
+    /// 本函数只负责写出。
+    pub fn record_line(&self, line: &str) {
         eprintln!("{line}");
         let Some(lock) = &self.file else { return };
         let mut f = match lock.lock() {

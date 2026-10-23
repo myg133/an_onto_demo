@@ -85,7 +85,7 @@
 //! - ② 双粒度，但由 [`Granularity`] **声明**，不由出口自决；
 //! - ③ stderr 报告形状唯一（[`DropReport::stderr_line`]），客户正文只报数量。
 //!
-//! # 52 条出口登记表（AC-002 / AC-007）
+//! # 56 条出口登记表（AC-002 / AC-007）
 //!
 //! [`OUTLETS`] 是**机读**的：每条带 `path` + `call_site`（该出口调用管线的源码片段
 //! 唯一子串）+ 轨道 + 格式。判据在 `tests/test_req107_*` 里做**双向对账**
@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -320,6 +320,24 @@ pub enum OutletId {
     /// 为什么单独登记：它是**每次调用都会写**的外送点（含失败），
     /// 而它的两条否定判据（⛔ 无 token 明文 / ⛔ 无查询原文）正是这一轮的安全验收。
     I17,
+    /// ⭐ REQ-124 · 控制面 · **JSON 响应**（`console::http::respond` 是唯一写点）。
+    ///
+    /// 内部轨：管理回执（别名 / 版本 / 冲突原因）与审核只读正文。⛔ 不是客户视图。
+    I18,
+    /// ⭐ REQ-124 · 控制面 · **TTL 导出响应**（`GET /api/export/ttl` 的 `text/turtle`）。
+    ///
+    /// 与 C6/C7 / D9/D10 写的是**同一份字节**（同一组 `prepare_ttl_export` + `pipeline::render`）；
+    /// 轨道仍按**控制面**登记为内部轨：能调它的是 admin token，不是客户浏览器。
+    I19,
+    /// ⭐ REQ-124 · 控制面 · **R2RML 响应**（`POST /api/r2rml` 的 `text/turtle`）。
+    ///
+    /// 与 I11/I12 写的是**同一份字节**（同一个 `r2rml_core`）。
+    I20,
+    /// ⭐ REQ-124 · 控制面 · **声明保存**（`PUT /api/config/*` 的 `fs::write`）。
+    ///
+    /// 三份声明（exclusions / policy / tenancy）共用这一个写点；写之前必须过
+    /// `console::decl::validate`（R4），失败时原文件一个字节都不变。
+    I21,
 }
 
 impl OutletId {
@@ -357,6 +375,10 @@ impl OutletId {
             OutletId::I15 => "I15",
             OutletId::I16 => "I16",
             OutletId::I17 => "I17",
+            OutletId::I18 => "I18",
+            OutletId::I19 => "I19",
+            OutletId::I20 => "I20",
+            OutletId::I21 => "I21",
         }
     }
 }
@@ -435,6 +457,17 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         // SSE 是文本流（`text/event-stream`）。
         OutletId::I16 => OutletSpec::of("I16", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I17 => OutletSpec::of("I17", Track::Internal, Format::Text, Granularity::Whole),
+        // ⭐ REQ-124 · 控制面：**内部**轨。
+        //
+        // 为什么不是客户轨：能调控制面的只有 admin token（不是客户浏览器），
+        // 产物是管理回执 / 映射 / 声明落盘 —— 客户视图一条都不读。
+        // ⚠️ TTL 与 R2RML 这两条虽然写的是与 C6/C7、D9/D10、I11/I12 **同一份字节**，
+        // 但它们的**送达通道**是管理 API（admin token），所以按通道登记为内部轨；
+        // 内容侧的闸已经在生成那一侧（`prepare_ttl_export` / `r2rml_core`）过过了。
+        OutletId::I18 => OutletSpec::of("I18", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::I19 => OutletSpec::of("I19", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I20 => OutletSpec::of("I20", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I21 => OutletSpec::of("I21", Track::Internal, Format::Text, Granularity::Whole),
     }
 }
 
@@ -1050,12 +1083,12 @@ impl Outlet {
 
 const CUSTOMER: &str = "";
 
-/// ⭐ **52 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
+/// ⭐ **56 条出口的机读登记表**（口径 D + REQ-110 的 6 条 TTL 出口 + REQ-111 的 5 条审核界面出口
 /// + REQ-116 的 1 条文档摄取产物写出点 + REQ-123 的 4 条查询服务出口）。
 ///
 /// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 18 +
 /// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **48**；REQ-116 再加内部 1 条（I10）⇒ 45；REQ-121 再加内部 2 条（I11/I12）⇒ **47**；
-/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ **52（17/10/22/2/1）**。
+/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ 52（17/10/22/2/1）；REQ-124 再加 4 条（I18–I21）⇒ **56（17/10/26/2/1）**。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
 /// 只是被渲染函数读取的静态素材 ⇒ 单列在 [`STATIC_TEMPLATES`]。
@@ -1531,6 +1564,53 @@ pub const OUTLETS: &[Outlet] = &[
          ⛔ 不含 token 明文、⛔ 不含查询原文（两条否定判据在 `query::audit` 的单测里）。\
          内部轨 ⇒ 不过客户发布闸。",
     },
+    // ── REQ-124 · 控制面 API（管理流水线的 HTTP 化）· 内部轨 ──────────
+    //
+    // 四条出口都是**管理面**的通道，不是客户视图：能调到它们的只有 admin token。
+    // 隔离由「token 两套（admin/query）+ 默认只绑回环 + 声明保存前校验」保证，
+    // 不是词汇闸 —— 与 I13/I14 同一条口径。
+    Outlet {
+        id: "I18",
+        path: "src/console/http.rs",
+        // `respond` 是**唯一**的 JSON 写点（其它 handler 都调它）。
+        call_site: "Json(body)",
+        spec: spec_of(OutletId::I18),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-124）：控制面的 JSON 响应（projects / import / apply / \
+         freeze / audit / review / decide / config 回执与错误体）共用 `console::http::respond` \
+         这一个写点。产物是管理回执与审核只读正文，不是客户视图；内部轨 ⇒ 不过客户发布闸。",
+    },
+    Outlet {
+        id: "I19",
+        path: "src/console/http.rs",
+        call_site: "respond_ttl(text)",
+        spec: spec_of(OutletId::I19),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-124）：`GET /api/export/ttl` 的 `text/turtle` 响应。\
+         字节与 C6/C7 / D9/D10 出自**同一组** `prepare_ttl_export` + 同一个 `pipeline::render`（AC-005 的 sha256 相对 CLI）；\
+         内容侧的发布闸在生成那一侧已经过，本出口只负责送达（admin token 通道）。",
+    },
+    Outlet {
+        id: "I20",
+        path: "src/console/http.rs",
+        call_site: "respond_r2rml(text)",
+        spec: spec_of(OutletId::I20),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-124）：`POST /api/r2rml` 的 `text/turtle` 响应。\
+         字节与 I11/I12 出自**同一个** `r2rml_core`（AC-006 的 sha256 相对 CLI）；\
+         映射层产物（表名 / 列名 / join 证据）不是客户视图。",
+    },
+    Outlet {
+        id: "I21",
+        path: "src/console/decl.rs",
+        call_site: "std::fs::write(path, bytes)",
+        spec: spec_of(OutletId::I21),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-124）：三份声明（exclusions / policy / tenancy）的**落盘**\
+         共用这一个写点。写之前必须过 `console::decl::validate`（R4：表/列存在、main_only 与 \
+         publicDimensions 必须带 reason、exclusions 的 category 合法）—— \
+         校验失败时本写点**不会被执行**（原文件一个字节都不变）。",
+    },
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
@@ -1592,7 +1672,7 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 52，分组 17/10/22/2/1。
+    /// 登记表的口径必须**恰好**是 56，分组 17/10/26/2/1。
     ///
     /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
     /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）；
@@ -1600,24 +1680,27 @@ mod tests {
     /// REQ-116 新增 1 条文档摄取的产物写出点（I10，**内部轨**）⇒ 45（17/10/15/2/1）；
     /// REQ-121 新增 2 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）
     /// ⇒ 47（17/10/17/2/1）；REQ-122 再加 I13 ⇒ 48（内部 18）；
-    /// REQ-123 再加 I14–I17（REST / MCP / SSE / 审计，**全部内部轨**）⇒ 52（内部 22）。
+    /// REQ-123 再加 I14–I17（REST / MCP / SSE / 审计，**全部内部轨**）⇒ 52（内部 22）；
+    /// ⭐ REQ-124 再加 I18–I21（控制面 JSON / TTL / R2RML / 声明落盘，**全部内部轨**）
+    /// ⇒ **56（内部 26）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            52,
+            56,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
-             + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）"
+             + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
+             + 4（REQ-124 的控制面出口）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            22,
+            26,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
-             + REQ-123 的 I14–I17"
+             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

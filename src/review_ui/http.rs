@@ -111,6 +111,308 @@ fn fail(status: StatusCode, msg: impl Into<String>) -> ApiErr {
     (status, Json(error_body(&msg.into())))
 }
 
+/// ⭐ REQ-124 · **可共享的作用域**（`GET /api/review` / `POST /api/decide` 的输入）。
+///
+/// 与 [`ReviewState`] 的关系：`ReviewState` 是「启动时冻结一条提案」的审核界面状态，
+/// 本类型是「按请求解析」的控制面作用域。字段是同一批事实 —— 控制面不能另算一份
+/// （AC-008：两个服务读到的条目/建议/双轨状态逐字段相同）。
+#[derive(Debug, Clone)]
+pub struct ReviewScope {
+    pub project: Arc<str>,
+    pub proposal_id: Uuid,
+    pub proposal_alias: Arc<str>,
+    pub base_version_id: Uuid,
+    pub base_seq: i32,
+    /// base 版本里已存在的实体 key —— `summarize` 判「关系两端可用」要用。
+    pub baseline: Arc<BTreeSet<String>>,
+}
+
+/// **可共享的失败**（`status` + 一句话）。
+///
+/// ⛔ 不是 `ApiErr`（那是 `(StatusCode, Json<Value>)`）：控制面返回的是
+/// [`crate::query::error::ApiError`] 的 `{code, message, hint}`，不该被审核界面的
+/// `{"error": …}` 绑定。两个前端各自翻译**同一个**失败事实。
+#[derive(Debug, Clone)]
+pub struct ReviewFailure {
+    pub status: StatusCode,
+    pub message: String,
+}
+
+impl ReviewFailure {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, message)
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, message)
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+}
+
+impl ReviewState {
+    /// 当前状态 → 可共享的作用域（字段逐个复制；都是启动时算好的事实）。
+    pub fn scope(&self) -> ReviewScope {
+        ReviewScope {
+            project: Arc::clone(&self.project),
+            proposal_id: self.proposal_id,
+            proposal_alias: Arc::clone(&self.proposal_alias),
+            base_version_id: self.base_version_id,
+            base_seq: self.base_seq,
+            baseline: Arc::clone(&self.baseline),
+        }
+    }
+}
+
+/// ⭐ REQ-124 · **按请求解析**作用域（不启动闸门）。
+///
+/// 与 [`prepare`] 的差别：`prepare` 是审核界面的**启动**闸门（提案必须 pending、
+/// 基版本必须未冻结）；控制面是长驻服务，同一个进程会服务多份提案，
+/// 所以「能不能改判」必须在**每次写之前**判（[`decide_json`] 里的 `ensure_unfrozen`），
+/// 而不是启动时判一次。
+pub async fn scope_for(
+    pool: &PgPool,
+    project: &str,
+    proposal_spec: &str,
+) -> Result<ReviewScope, ReviewFailure> {
+    let projects = PgProjectStore::new(pool.clone());
+    let proposals = PgProposalStore::new(pool.clone());
+
+    let proj = projects
+        .get_by_name(project)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读项目失败：{e}")))?
+        .ok_or_else(|| ReviewFailure::not_found(format!("项目不存在：{project}")))?;
+    let proposal_id = crate::cli::resolve_proposal(pool, proj.id, proposal_spec)
+        .await
+        .map_err(|e| ReviewFailure::not_found(format!("找不到提案：{e}")))?;
+    let row = proposals
+        .get(proposal_id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读提案失败：{e}")))?
+        .ok_or_else(|| ReviewFailure::not_found(format!("提案不存在：{proposal_spec}")))?;
+    if row.project_id != proj.id {
+        return Err(ReviewFailure::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "提案 {proposal_spec} 不属于项目「{project}」—— 别名只在本项目内解析。"
+            ),
+        ));
+    }
+    let versions = projects
+        .list_versions(proj.id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读版本失败：{e}")))?;
+    let base = versions
+        .iter()
+        .find(|v| v.id == row.base_version_id)
+        .ok_or_else(|| {
+            ReviewFailure::internal(format!(
+                "提案的基版本不在项目「{project}」的版本表里。"
+            ))
+        })?;
+    let snap = PgStore::new(pool.clone())
+        .get_snapshot(base.id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读基版本快照失败：{e}")))?
+        .ok_or_else(|| {
+            ReviewFailure::internal(format!(
+                "基版本 v{} 没有可读的快照 —— 审核需要它判「关系两端是否已存在」。",
+                base.seq
+            ))
+        })?;
+    let baseline: BTreeSet<String> = snap.entity_types.iter().map(|e| e.key.clone()).collect();
+    let alias = crate::cli::proposal_alias(pool, proj.id, proposal_id).await;
+    Ok(ReviewScope {
+        project: Arc::from(proj.name.as_str()),
+        proposal_id,
+        proposal_alias: Arc::from(alias.as_str()),
+        base_version_id: base.id,
+        base_seq: base.seq,
+        baseline: Arc::new(baseline),
+    })
+}
+
+/// ⭐ REQ-124 · `GET /api/review` 正文的**唯一**实现（审核界面与控制面共用）。
+///
+/// 返回的 `Value` 就是 `review serve` 的 `/api/review` 正文 —— 两个服务
+/// 调的是同一个函数、同一份序列化（AC-008 的「同形」）。
+pub async fn review_json(pool: &PgPool, scope: &ReviewScope) -> Result<Value, ReviewFailure> {
+    let rows = PgProposalStore::new(pool.clone())
+        .items(scope.proposal_id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读提案条目失败：{e}")))?;
+    let views = PgProposalStore::to_item_views(&rows);
+    let status = summarize(&views, &scope.baseline);
+
+    // 「被否 / 被依赖拦下」的具体理由，按条目 id 索引 —— 页面直接显示，
+    // 不让人对着 `vetoed` 三个字猜原因（AC-007 的同一条精神）。
+    let mut reasons: BTreeMap<String, String> = BTreeMap::new();
+    for v in status.verdicts.iter().filter(|v| v.reason.is_some()) {
+        if let Some(r) = &v.reason {
+            reasons.insert(v.id.clone(), r.clone());
+        }
+    }
+    for b in status.blocked.iter().filter(|b| b.reason.is_some()) {
+        if let Some(r) = &b.reason {
+            reasons.insert(b.id.clone(), r.clone());
+        }
+    }
+
+    // REQ-112 · 建议**只算一遍**：条目上的 `suggestion` 与下面那份分组计数
+    // 取的是同一个 `Vec` —— 两处各算一次的话，判据会漂（哪怕它是纯函数，
+    // 「有第二处调用点」本身就是可被改坏的地方）。
+    let suggestions: Vec<Suggestion> = rows.iter().map(suggestion_of).collect();
+
+    let items: Vec<Value> = rows
+        .iter()
+        .zip(views.iter())
+        .zip(suggestions.iter())
+        .map(|((r, v), s)| item_json(r, v, &reasons, &s.brief()))
+        .collect();
+
+    // REQ-112 · 分组的**计数**（AC-008「分组计数与后端一致」）。
+    //
+    // 刻意在后端算好再发：页面自己数一遍就是第二份判据，早晚和后端数出两个数。
+    // 顺序取 [`SuggestKind::ALL`]（冲突在最前），页面照这个顺序渲染分组。
+    let mut counts: Vec<usize> = vec![0; SuggestKind::ALL.len()];
+    for s in &suggestions {
+        if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == s.kind) {
+            counts[i] += 1;
+        }
+    }
+    let suggestion_counts: serde_json::Map<String, Value> = SuggestKind::ALL
+        .iter()
+        .zip(counts.iter())
+        .map(|(k, n)| (k.as_str().to_string(), json!(n)))
+        .collect();
+
+    // REQ-111 · QA N2：`frozen` 取**版本行的真实状态**（`ontology_versions.frozen_at IS NOT NULL`），
+    // 不缓存启动时的结论 —— 服务运行中版本可能被冻上，读接口不能跟着说假话。
+    let frozen = PgProjectStore::new(pool.clone())
+        .is_frozen(scope.base_version_id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读版本状态失败：{e}")))?;
+
+    // REQ-113 · AC-006：被排除的表（**只读**区块）。
+    //
+    // 数据来自提案自己的 `inputs.exclusions` —— 也就是**抽取那一轮实际用的**
+    // 那一份记录（含 sha256 与逐条理由），不是在这里重新解析 `exclusions.json`。
+    // 纪律 H 的含义就是这个：排除判定只有一处实现（`extract::exclusions`），
+    // 本文件连 schema 都拿不到，只负责把那份记录原样交给页面。
+    let inputs = PgProposalStore::new(pool.clone())
+        .inputs(scope.proposal_id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读提案输入记录失败：{e}")))?;
+    let exclusions = exclusions_block(inputs.as_ref());
+
+    Ok(json!({
+        "project": scope.project.as_ref(),
+        "proposal": scope.proposal_alias.as_ref(),
+        "base_version": scope.base_seq,
+        // 每次读都查一次版本行：服务运行中版本可能被冻上，这个字段不能说假话。
+        // （QA N2：这里曾硬编码 `false`，冻结后读接口还在说「未冻结」。）
+        "frozen": frozen,
+        "items": items,
+        "progress": progress_json(&rows, &views),
+        // REQ-112 · 建议分组计数（`conflict` 永远排第一 —— 冲突要最先被人看到）。
+        "suggestion_counts": suggestion_counts,
+        // REQ-113 · 被排除的表：`{present, count, tables[], stale[], sha256, …}`。
+        // `count == tables.len()`，而 `tables` 就是 `stats.excluded_tables` 那一份。
+        "exclusions": exclusions,
+    }))
+}
+
+/// ⭐ REQ-124 · `POST /api/decide` 正文的**唯一**实现（审核界面与控制面共用）。
+///
+/// 顺序与 `review serve` 完全一致：解析 track/decision → **写前再校验**
+/// （提案仍 pending + 基版本仍未冻结）→ `decide_item`（**唯一**写路径）→
+/// 写入后的整行状态 + 最新进度。
+///
+/// `via` 只差一个字符串（`ui` / `console`），写的是**同一个** `decide_item`。
+pub async fn decide_json(
+    pool: &PgPool,
+    scope: &ReviewScope,
+    item: i32,
+    track_raw: &str,
+    decision_raw: &str,
+    via: &str,
+) -> Result<Value, ReviewFailure> {
+    let track = parse_track(track_raw).ok_or_else(|| {
+        ReviewFailure::new(
+            StatusCode::BAD_REQUEST,
+            format!("track 只有两种写法：biz（业务轨）或 model（建模轨），收到 {track_raw:?}。"),
+        )
+    })?;
+    let decision = parse_decision_arg(decision_raw).ok_or_else(|| {
+        ReviewFailure::new(
+            StatusCode::BAD_REQUEST,
+            format!("decision 只有两种写法：accept 或 reject，收到 {decision_raw:?}。"),
+        )
+    })?;
+
+    // ⭐ 需求风险 4 / AC-007 / QA N9：**每次写前再校验**。启动校验挡不住
+    // 「服务开着的时候版本被冻上 / 提案被 apply 掉」—— 那正是最容易被误签的时间窗。
+    ensure_unfrozen(pool, scope).await?;
+
+    // ⭐ 唯一写路径：与 `ontok review decide` **同一个函数**（纪律 H）。
+    // 这里没有 SQL、没有第二份「序号 → 条目」的解析。
+    let proposals = PgProposalStore::new(pool.clone());
+    proposals
+        .decide_item(scope.proposal_id, item, track, decision, via)
+        .await
+        .map_err(store_failure)?;
+
+    // 回执带上写入后的**整行状态**与最新进度：页面据此就地更新，不必再 GET 一次。
+    let rows = PgProposalStore::new(pool.clone())
+        .items(scope.proposal_id)
+        .await
+        .map_err(|e| ReviewFailure::internal(format!("读提案条目失败：{e}")))?;
+    let views = PgProposalStore::to_item_views(&rows);
+    let row = rows
+        .iter()
+        .find(|r| r.seq == item)
+        .ok_or_else(|| ReviewFailure::internal("刚写入的条目读不回来了。"))?;
+    // `rows` 与 `views` 同序（`to_item_views` 按同一份 rows 逐条转换），
+    // 所以用**行位置**取视图，不拿 `item - 1` 当索引（序号不保证从 1 连续）。
+    let pos = rows
+        .iter()
+        .position(|r| r.seq == item)
+        .ok_or_else(|| ReviewFailure::internal("刚写入的条目读不回来了。"))?;
+    let view = &views[pos];
+    let state_str = match entry_state(view) {
+        EntryState::Passed => "passed",
+        EntryState::Vetoed => "vetoed",
+        EntryState::Pending => "pending",
+    };
+    Ok(json!({
+        "ok": true,
+        "item": row.seq,
+        "track": track_raw,
+        "decision": decision.as_str(),
+        "biz": row.biz_status,
+        "model": row.model_status,
+        "state": state_str,
+        "decided_at": {
+            "biz": row.biz_decided_at.map(|t| t.to_rfc3339()),
+            "model": row.model_decided_at.map(|t| t.to_rfc3339()),
+        },
+        // AC-009：页面签的记 `ui`，CLI 签的记 `cli`，控制面记 `console`
+        // （同一个函数，只差这个参数）。
+        "via": { "biz": row.biz_via, "model": row.model_via },
+        "progress": progress_json(&rows, &views),
+    }))
+}
+
 // ══════════════════════════════════════════════════════════════
 // 启动闸门（AC-001 / AC-002）
 // ══════════════════════════════════════════════════════════════
@@ -334,87 +636,13 @@ async fn load_rows(state: &ReviewState) -> Result<Vec<ProposalItemRow>, ApiErr> 
         .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读提案条目失败：{e}")))
 }
 
+/// `review serve` 的 `/api/review` 正文：**只**把启动时冻结的作用域翻成
+/// [`ReviewScope`]，正文由 [`review_json`] 产出（控制面调**同一个**函数）。
 async fn review_payload(state: &ReviewState) -> Result<Value, ApiErr> {
-    let rows = load_rows(state).await?;
-    let views = PgProposalStore::to_item_views(&rows);
-    let status = summarize(&views, &state.baseline);
-
-    // 「被否 / 被依赖拦下」的具体理由，按条目 id 索引 —— 页面直接显示，
-    // 不让人对着 `vetoed` 三个字猜原因（AC-007 的同一条精神）。
-    let mut reasons: BTreeMap<String, String> = BTreeMap::new();
-    for v in status.verdicts.iter().filter(|v| v.reason.is_some()) {
-        if let Some(r) = &v.reason {
-            reasons.insert(v.id.clone(), r.clone());
-        }
-    }
-    for b in status.blocked.iter().filter(|b| b.reason.is_some()) {
-        if let Some(r) = &b.reason {
-            reasons.insert(b.id.clone(), r.clone());
-        }
-    }
-
-    // REQ-112 · 建议**只算一遍**：条目上的 `suggestion` 与下面那份分组计数
-    // 取的是同一个 `Vec` —— 两处各算一次的话，判据会漂（哪怕它是纯函数，
-    // 「有第二处调用点」本身就是可被改坏的地方）。
-    let suggestions: Vec<Suggestion> = rows.iter().map(suggestion_of).collect();
-
-    let items: Vec<Value> = rows
-        .iter()
-        .zip(views.iter())
-        .zip(suggestions.iter())
-        .map(|((r, v), s)| item_json(r, v, &reasons, &s.brief()))
-        .collect();
-
-    // REQ-112 · 分组的**计数**（AC-008「分组计数与后端一致」）。
-    //
-    // 刻意在后端算好再发：页面自己数一遍就是第二份判据，早晚和后端数出两个数。
-    // 顺序取 [`SuggestKind::ALL`]（冲突在最前），页面照这个顺序渲染分组。
-    let mut counts: Vec<usize> = vec![0; SuggestKind::ALL.len()];
-    for s in &suggestions {
-        if let Some(i) = SuggestKind::ALL.iter().position(|k| *k == s.kind) {
-            counts[i] += 1;
-        }
-    }
-    let suggestion_counts: serde_json::Map<String, Value> = SuggestKind::ALL
-        .iter()
-        .zip(counts.iter())
-        .map(|(k, n)| (k.as_str().to_string(), json!(n)))
-        .collect();
-
-    // REQ-111 · QA N2：`frozen` 取**版本行的真实状态**（`ontology_versions.frozen_at IS NOT NULL`），
-    // 不缓存启动时的结论 —— 服务运行中版本可能被冻上，读接口不能跟着说假话。
-    let frozen = PgProjectStore::new(state.pool.clone())
-        .is_frozen(state.base_version_id)
+    let scope = state.scope();
+    review_json(&state.pool, &scope)
         .await
-        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读版本状态失败：{e}")))?;
-
-    // REQ-113 · AC-006：被排除的表（**只读**区块）。
-    //
-    // 数据来自提案自己的 `inputs.exclusions` —— 也就是**抽取那一轮实际用的**
-    // 那一份记录（含 sha256 与逐条理由），不是在这里重新解析 `exclusions.json`。
-    // 纪律 H 的含义就是这个：排除判定只有一处实现（`extract::exclusions`），
-    // 本文件连 schema 都拿不到，只负责把那份记录原样交给页面。
-    let inputs = PgProposalStore::new(state.pool.clone())
-        .inputs(state.proposal_id)
-        .await
-        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读提案输入记录失败：{e}")))?;
-    let exclusions = exclusions_block(inputs.as_ref());
-
-    Ok(json!({
-        "project": state.project.as_ref(),
-        "proposal": state.proposal_alias.as_ref(),
-        "base_version": state.base_seq,
-        // 每次读都查一次版本行：服务运行中版本可能被冻上，这个字段不能说假话。
-        // （QA N2：这里曾硬编码 `false`，冻结后读接口还在说「未冻结」。）
-        "frozen": frozen,
-        "items": items,
-        "progress": progress_json(&rows, &views),
-        // REQ-112 · 建议分组计数（`conflict` 永远排第一 —— 冲突要最先被人看到）。
-        "suggestion_counts": suggestion_counts,
-        // REQ-113 · 被排除的表：`{present, count, tables[], stale[], sha256, …}`。
-        // `count == tables.len()`，而 `tables` 就是 `stats.excluded_tables` 那一份。
-        "exclusions": exclusions,
-    }))
+        .map_err(|f| fail(f.status, f.message))
 }
 
 /// **被排除的表** → 页面区块（AC-006）。**只读**，没有任何写入口。
@@ -758,69 +986,20 @@ async fn post_decide(
     let req = body.0;
     check_token(&state, &headers)?;
 
-    let track = parse_track(&req.track).ok_or_else(|| {
-        fail(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "track 只有两种写法：biz（业务轨）或 model（建模轨），收到 {:?}。",
-                req.track
-            ),
-        )
-    })?;
-    let decision = parse_decision_arg(&req.decision).ok_or_else(|| {
-        fail(
-            StatusCode::BAD_REQUEST,
-            format!("decision 只有两种写法：accept 或 reject，收到 {:?}。", req.decision),
-        )
-    })?;
-
-    // ⭐ 需求风险 4 / AC-007 / QA N9：**每次写前再校验**。启动校验挡不住
-    // 「服务开着的时候版本被冻上 / 提案被 apply 掉」—— 那正是最容易被误签的时间窗。
-    ensure_unfrozen(&state).await?;
-
-    // ⭐ 唯一写路径：与 `ontok review decide` **同一个函数**（纪律 H）。
-    // 这里没有 SQL、没有第二份「序号 → 条目」的解析。
-    let proposals = PgProposalStore::new(state.pool.clone());
-    proposals
-        .decide_item(state.proposal_id, req.item, track, decision, VIA_UI)
-        .await
-        .map_err(map_store_error)?;
-
-    // 回执带上写入后的**整行状态**与最新进度：页面据此就地更新，不必再 GET 一次。
-    let rows = load_rows(&state).await?;
-    let views = PgProposalStore::to_item_views(&rows);
-    let row = rows
-        .iter()
-        .find(|r| r.seq == req.item)
-        .ok_or_else(|| fail(StatusCode::INTERNAL_SERVER_ERROR, "刚写入的条目读不回来了。"))?;
-    // `rows` 与 `views` 同序（`to_item_views` 按同一份 rows 逐条转换），
-    // 所以用**行位置**取视图，不拿 `item - 1` 当索引（序号不保证从 1 连续）。
-    let pos = rows
-        .iter()
-        .position(|r| r.seq == req.item)
-        .ok_or_else(|| fail(StatusCode::INTERNAL_SERVER_ERROR, "刚写入的条目读不回来了。"))?;
-    let view = &views[pos];
-    let state_str = match entry_state(view) {
-        EntryState::Passed => "passed",
-        EntryState::Vetoed => "vetoed",
-        EntryState::Pending => "pending",
-    };
-    let decide_body = json!({
-        "ok": true,
-        "item": row.seq,
-        "track": req.track,
-        "decision": decision.as_str(),
-        "biz": row.biz_status,
-        "model": row.model_status,
-        "state": state_str,
-        "decided_at": {
-            "biz": row.biz_decided_at.map(|t| t.to_rfc3339()),
-            "model": row.model_decided_at.map(|t| t.to_rfc3339()),
-        },
-        // AC-009：页面签的记 `ui`，CLI 签的记 `cli`（同一个函数，只差这个参数）。
-        "via": { "biz": row.biz_via, "model": row.model_via },
-        "progress": progress_json(&rows, &views),
-    });
+    // ⭐ REQ-124 · 正文由 [`decide_json`] 产出（控制面的 `POST /api/decide` 调
+    // **同一个**函数）：解析 track/decision → 写前再校验 → `decide_item` → 回执。
+    // 本 handler 只剩「口令 → 作用域 → 响应」。
+    let scope = state.scope();
+    let decide_body = decide_json(
+        &state.pool,
+        &scope,
+        req.item,
+        &req.track,
+        &req.decision,
+        VIA_UI,
+    )
+    .await
+    .map_err(|f| fail(f.status, f.message))?;
     Ok(Json(decide_body))
 }
 
@@ -831,34 +1010,31 @@ async fn post_decide(
 ///    它变成 `applied`，而此时**基版本仍未冻结**；只查冻结会放过这次写入，
 ///    回执就会对用户说「改判成功」，而这份提案已经不再接受审核；
 /// 2. 基版本必须**仍未冻结** —— `ontok version freeze` 同样能在运行中发生。
-async fn ensure_unfrozen(state: &ReviewState) -> Result<(), ApiErr> {
-    let proposal = PgProposalStore::new(state.pool.clone())
-        .get(state.proposal_id)
+async fn ensure_unfrozen(
+    pool: &PgPool,
+    scope: &ReviewScope,
+) -> Result<(), ReviewFailure> {
+    let proposal = PgProposalStore::new(pool.clone())
+        .get(scope.proposal_id)
         .await
-        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读提案状态失败：{e}")))?
-        .ok_or_else(|| fail(StatusCode::INTERNAL_SERVER_ERROR, "提案不见了。"))?;
+        .map_err(|e| ReviewFailure::internal(format!("读提案状态失败：{e}")))?
+        .ok_or_else(|| ReviewFailure::internal("提案不见了。"))?;
     if proposal.status != "pending" {
-        return Err(fail(
-            StatusCode::CONFLICT,
-            format!(
-                "提案 {} 已 {}（不是 pending），不能再改判 —— 已经应用的提案不再接受审核。",
-                state.proposal_alias, proposal.status
-            ),
-        ));
+        return Err(ReviewFailure::conflict(format!(
+            "提案 {} 已 {}（不是 pending），不能再改判 —— 已经应用的提案不再接受审核。",
+            scope.proposal_alias, proposal.status
+        )));
     }
 
-    let frozen = PgProjectStore::new(state.pool.clone())
-        .is_frozen(state.base_version_id)
+    let frozen = PgProjectStore::new(pool.clone())
+        .is_frozen(scope.base_version_id)
         .await
-        .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("读版本状态失败：{e}")))?;
+        .map_err(|e| ReviewFailure::internal(format!("读版本状态失败：{e}")))?;
     if frozen {
-        return Err(fail(
-            StatusCode::CONFLICT,
-            format!(
-                "项目「{}」的 v{} 已冻结，不能再改判 —— 审核界面只服务未冻结的提案。",
-                state.project, state.base_seq
-            ),
-        ));
+        return Err(ReviewFailure::conflict(format!(
+            "项目「{}」的 v{} 已冻结，不能再改判 —— 审核界面只服务未冻结的提案。",
+            scope.project, scope.base_seq
+        )));
     }
     Ok(())
 }
@@ -880,15 +1056,12 @@ fn parse_decision_arg(s: &str) -> Option<Decision> {
     }
 }
 
-/// 存储错误 → HTTP。**具体原因原样送到页面**（AC-007 的核心）：
+/// 存储错误 → **可共享的失败**。**具体原因原样送到页面**（AC-007 的核心）：
 /// 「失败」两个字等于没说话，排障的人只能翻服务端日志。
-fn map_store_error(e: StoreError) -> ApiErr {
+fn store_failure(e: StoreError) -> ReviewFailure {
     match &e {
-        StoreError::ItemNotFound { .. } => fail(StatusCode::NOT_FOUND, e.to_string()),
-        StoreError::VersionFrozen { .. } => fail(StatusCode::CONFLICT, e.to_string()),
-        _ => fail(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("写决策失败：{e}"),
-        ),
+        StoreError::ItemNotFound { .. } => ReviewFailure::new(StatusCode::NOT_FOUND, e.to_string()),
+        StoreError::VersionFrozen { .. } => ReviewFailure::new(StatusCode::CONFLICT, e.to_string()),
+        _ => ReviewFailure::internal(format!("写决策失败：{e}")),
     }
 }

@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "tokens": [
+    {
+      "label": "ops-laptop",
+      "token": "REPLACE-WITH-YOUR-OWN-ADMIN-TOKEN-0001",
+      "kind": "admin"
+    },
+    {
+      "label": "agent-a",
+      "token": "REPLACE-WITH-YOUR-OWN-QUERY-TOKEN-0002",
+      "kind": "query",
+      "tenant": "C0001"
+    }
+  ]
+}
