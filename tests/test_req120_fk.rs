@@ -359,7 +359,7 @@ fn injection_writes_the_payload_layer_that_apply_reads() {
     let signed = load_signed(&render_report(&r).unwrap(), None).unwrap();
     let mut items: Vec<serde_json::Value> = vec![];
     let known: BTreeSet<String> = ["cab", "customers"].iter().map(|s| s.to_string()).collect();
-    let st = inject_signed(&mut items, &signed, &known, None).expect("注入");
+    let st = inject_signed(&mut items, &signed, &known, None, None).expect("注入");
     assert_eq!(st.added, 1);
 
     let it = &items[0];

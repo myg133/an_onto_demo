@@ -2017,6 +2017,13 @@ pub struct InjectionStats {
     pub marked_existing: usize,
     /// 文件里有几条没签（被忽略）。
     pub skipped_unsigned: usize,
+    /// 因为端点表被 `exclusions.json` 排除而**跳过**的签字边条数。
+    ///
+    /// ⛔ 这不是失败：排除是 REQ-113 的**明确决定**（这些表不进本体），
+    /// 一条指向它们的已签关系本来就没有落点。跳过并点名，不阻断整份文件。
+    pub skipped_excluded: usize,
+    /// 被跳过的边（`from → to（端点 X 被 exclusions 排除）`），已排序。
+    pub skipped_excluded_edges: Vec<String>,
 }
 
 /// **把签过字的边注入提案条目**（`items` 里多出 `add_link_type`）。
@@ -2035,9 +2042,29 @@ pub fn inject_signed(
     signed: &SignedFk,
     known_tables: &BTreeSet<String>,
     tenant_columns: Option<&BTreeSet<String>>,
+    excluded_tables: Option<&BTreeSet<String>>,
 ) -> Result<InjectionStats> {
     let mut stats = InjectionStats { skipped_unsigned: signed.skipped_unsigned, ..Default::default() };
     for e in &signed.edges {
+        // REQ-121 · A-2：端点被 `exclusions.json` 排除的签字边 **跳过并点名**，
+        // ⛔ 不阻断整份文件 —— 排除是 REQ-113 的明确决定，不是数据不一致。
+        //
+        // 为什么必须在这里挡：`domain::apply` 对「两端不存在」是 `DanglingLink`
+        // **硬失败**（整份提案进不了快照）。排除表不进实体集合，所以不在这里
+        // 过滤，`--exclude` 与 `--fk-sign` 就永远不能同时用。
+        if let Some(ex) = excluded_tables {
+            let hit = [e.from_table.as_str(), e.to_table.as_str()]
+                .into_iter()
+                .find(|t| ex.contains(*t));
+            if let Some(t) = hit {
+                stats.skipped_excluded += 1;
+                stats.skipped_excluded_edges.push(format!(
+                    "{} → {}（端点 {} 被 exclusions.json 排除）",
+                    e.from_table, e.to_table, t
+                ));
+                continue;
+            }
+        }
         // G-1 的**第二道闸**（纵深防御）：即便有人绕过 `load_signed` 手搓一个
         // `SignedFk`（字段是 pub），注入这一层也不放行租户键的 inherit。
         if e.state == JoinState::Inherited {
@@ -2131,6 +2158,9 @@ pub fn inject_signed(
         }));
         stats.added += 1;
     }
+    // 确定性：跳过的边按文本排序（与 items 的追加顺序无关）。
+    stats.skipped_excluded_edges.sort();
+    stats.skipped_excluded_edges.dedup();
     Ok(stats)
 }
 
@@ -3036,7 +3066,7 @@ mod tests {
         let mut items: Vec<serde_json::Value> = vec![];
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
-        inject_signed(&mut items, &signed, &known, Some(&BTreeSet::new())).unwrap();
+        inject_signed(&mut items, &signed, &known, Some(&BTreeSet::new()), None).unwrap();
         assert_eq!(
             items[0]["payload"]["join_verified"],
             serde_json::Value::String("inherit".into())
@@ -3294,7 +3324,7 @@ mod tests {
             ["api_call_logs", "customers"].iter().map(|s| s.to_string()).collect();
         let mut tenants = BTreeSet::new();
         tenants.insert("customer_id".to_string());
-        let err = inject_signed(&mut items, &signed, &known, Some(&tenants))
+        let err = inject_signed(&mut items, &signed, &known, Some(&tenants), None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("拒绝注入"), "{err}");
@@ -3385,7 +3415,7 @@ mod tests {
         let signed = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
-        let st = inject_signed(&mut items, &signed, &known, None).unwrap();
+        let st = inject_signed(&mut items, &signed, &known, None, None).unwrap();
         assert_eq!(st.added, 0);
         assert_eq!(st.marked_existing, 1, "同一条边只补标记，不新增");
         // ⚠️ 标记只落在 payload（`apply` 唯一读得到的那层），顶层**没有**副本
@@ -3408,7 +3438,7 @@ mod tests {
         let known: BTreeSet<String> =
             ["api_call_logs", "licenses"].iter().map(|s| s.to_string()).collect();
         let before = items[0].clone();
-        let st = inject_signed(&mut items, &signed, &known, None).unwrap();
+        let st = inject_signed(&mut items, &signed, &known, None, None).unwrap();
         assert_eq!(st.added, 1);
         assert_eq!(items[0], before, "既有条目一个字节都不动");
         assert_eq!(items[1]["payload"]["to_type"], "licenses");
@@ -3419,7 +3449,7 @@ mod tests {
         let mut items = vec![];
         let signed = load_signed(&report_json(Some("ba-alice")), None).unwrap();
         let known: BTreeSet<String> = ["api_call_logs"].iter().map(|s| s.to_string()).collect();
-        let err = inject_signed(&mut items, &signed, &known, None).unwrap_err().to_string();
+        let err = inject_signed(&mut items, &signed, &known, None, None).unwrap_err().to_string();
         assert!(err.contains("不存在的表"), "{err}");
     }
 

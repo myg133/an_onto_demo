@@ -1659,6 +1659,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/cli.rs", "review_cmd", "子命令 handler"),
     ("src/cli.rs", "proposal_cmd", "子命令 handler"),
     ("src/cli.rs", "ontology_cmd", "子命令 handler"),
+    // ⭐ REQ-121 · R2RML 映射：唯一入口 + 两个写点（I11 stdout / I12 --out）。
+    // 它把 domain 产物逐字节写出，但它自己**不做序列化**（`domain::r2rml::generate` 是纯函数）。
+    (
+        "src/cli.rs",
+        "r2rml_cmd",
+        "子命令 handler（`r2rml generate`：读快照/schema，fail-closed 写出 I11/I12）",
+    ),
     ("src/cli.rs", "resolve_proposal", "运维辅助"),
     ("src/cli.rs", "newest_proposal_project", "运维辅助"),
     ("src/cli.rs", "resolve_proposal_arg", "运维辅助"),
@@ -1921,6 +1928,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/domain/mod.rs", "snapshot"),
     // ⭐ REQ-110 · Turtle（OWL）序列化：纯函数、零依赖、确定性
     ("src/domain/mod.rs", "ttl"),
+    // ⭐ REQ-121 · R2RML 映射生成：纯函数、零依赖、确定性（TTL 的下游消费者）
+    ("src/domain/mod.rs", "r2rml"),
     ("src/domain/mod.rs", "view"),
     ("src/extract/mod.rs", "cardinality"),
     // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）

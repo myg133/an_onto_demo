@@ -297,6 +297,11 @@ async fn main() -> Result<()> {
     // 判定本身**只有一处**：`Exclusions::apply`（纪律 H）。本文件只负责
     // 「给它的输入对不对」（文件已在参数解析后校验过）与「把结果记下来」。
     let tables_seen = report.tables.len();
+    // REQ-121 · A-2：签字注入要看到**全量** schema 表 —— 排除发生在抽取侧，
+    // 而 `report` 下面会被换成过滤后的版本。排除表的已签关系由
+    // `inject_signed` 的 `excluded_tables` 参数**跳过并点名**（不是整份失败）。
+    let all_tables: std::collections::BTreeSet<String> =
+        report.tables.iter().map(|t| t.name.clone()).collect();
     let mut exclusion_applied: Vec<Entry> = Vec::new();
     let mut exclusion_stale: Vec<String> = Vec::new();
     let mut exclusion_flagged: Vec<ontok::extract::exclusions::Flagged> = Vec::new();
@@ -672,19 +677,28 @@ async fn main() -> Result<()> {
         }
     }
     let mut signed_ref: Option<ontok::extract::fk::SignedFk> = None;
+    // REQ-121 · A-2.3：被排除端点跳过的已签关系（写进 stats.json 供审计）。
+    let mut skipped_excluded_edges: Vec<String> = Vec::new();
     if let Some(sign_path) = fk_sign.as_deref() {
         let raw = std::fs::read_to_string(sign_path)
             .with_context(|| format!("读不出签字产物 {sign_path}"))?;
         // G-1：把租户声明交给签字闸**复核**（fail-closed，不是「生成时不产」就算）。
         let tenants_opt = if tenant_columns.is_empty() { None } else { Some(&tenant_columns) };
         let signed = ontok::extract::fk::load_signed(&raw, tenants_opt)?;
-        let known: std::collections::BTreeSet<String> =
-            report.tables.iter().map(|t| t.name.clone()).collect();
+        // ⚠️ **全量**表集合（不是过滤后的 `report`）：排除表的边不该在这里被
+        // 当成「schema 里没有」硬失败 —— 它们是 REQ-113 的明确排除，交给下一参
+        // 跳过并点名。真正的「schema 里没有」仍然 fail-closed。
+        let excluded_set: std::collections::BTreeSet<String> = exclusions
+            .as_ref()
+            .map(|ex| ex.entries().iter().map(|e| e.table.trim().to_string()).collect())
+            .unwrap_or_default();
+        let excluded_opt = if excluded_set.is_empty() { None } else { Some(&excluded_set) };
         let st = ontok::extract::fk::inject_signed(
             &mut outcome.proposal.items,
             &signed,
-            &known,
+            &all_tables,
             tenants_opt,
+            excluded_opt,
         )?;
         signed_ref = Some(signed);
         println!();
@@ -693,6 +707,17 @@ async fn main() -> Result<()> {
             "  注入关系    : {} 条新增 + {} 条既有边补验证标记（未签 {} 条已忽略）",
             st.added, st.marked_existing, st.skipped_unsigned
         );
+        // REQ-121 · A-2.3：端点被排除的已签关系**跳过并点名**（⛔ 不阻断整份文件）。
+        if st.skipped_excluded > 0 {
+            println!(
+                "  ⚠ 跳过关系  : {} 条（端点被 exclusions.json 排除 —— 这些表不进本体，关系没有落点）",
+                st.skipped_excluded
+            );
+            for e in &st.skipped_excluded_edges {
+                println!("    · {e}");
+            }
+        }
+        skipped_excluded_edges = st.skipped_excluded_edges.clone();
     }
     // R4 / REQ-119 N-1：**单列唯一列上的 N:1 改成 1:1**。
     // 不带开关：这不是可选项，是「`unique_columns` 明明有约束却只标一半」的修正。
@@ -1368,6 +1393,18 @@ async fn main() -> Result<()> {
                     None => "—".to_string(),
                 }
             );
+        }
+    }
+    // REQ-121 · A-2.3：被排除端点跳过的**已签关系**（与上面的「表」分开报）。
+    // ⚠️ 不写进 `ExtractionStats`：那份结构的字段集被 REQ-118 的契约测试钉死；
+    // 关系侧的名单由 stderr + R2RML 的 `--fk-signed` 审计（文件尾点名）承载。
+    if !skipped_excluded_edges.is_empty() {
+        println!(
+            "  跳过关系    : {} 条（已签，但端点被排除 —— 无落点，不进快照）",
+            skipped_excluded_edges.len()
+        );
+        for e in &skipped_excluded_edges {
+            println!("  × {e}");
         }
     }
     // 「保留但存疑」**单独一段**（⛔ 不与上面的排除合并）：

@@ -110,6 +110,24 @@ pub enum Cmd {
     /// ⚠️ 「保留」也是判断，也会进 `proposals[]`；拿不准的保留标 `low_confidence`。
     #[command(verbatim_doc_comment)]
     Exclude { #[command(subcommand)] cmd: ExcludeCmd },
+    /// ⭐ REQ-121 · **R2RML 映射生成**（本体 ↔ 关系库的桥）
+    ///
+    /// 数字员工链路是「TTL → Agent 写 SPARQL → 服务端按 R2RML 查库 → Agent 解释」。
+    /// 本命令产出中间那份**按 R2RML 查库**的映射：每个类一张表、每个数据类型属性一列、
+    /// 每条**验过的**关系一个 join。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok r2rml generate --project anspire_grouped --version 3 --out mapping.ttl --schema code/out/schema.json
+    ///
+    /// ⚠️ 三态决定生成什么：`true` ⇒ 生成 join；`inherit` ⇒ **默认不生成**，
+    /// `--include-inherit` 才生成且带 `ontok:joinState "inherit"`；
+    /// `false` ⇒ ⛔ **永不生成**，只写进文件尾的注释（含原因）。
+    /// ⚠️ `--schema` **必填**：主键 / 复合主键 / 列存在性只能来自真实 schema（不猜）。
+    /// 对账失败会**点名到 表.列**并以非零码退出，⛔ 不写出半份映射。
+    /// ⚠️ 同一 project+version 两次生成**逐字节相同**（不写时间）。
+    #[command(verbatim_doc_comment)]
+    R2rml { #[command(subcommand)] cmd: R2rmlCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -379,6 +397,61 @@ pub enum ProposeCmd {
     Import {
         #[arg(long)]
         file: PathBuf,
+    },
+}
+
+/// ⭐ REQ-121 · R2RML 映射生成。
+#[derive(Subcommand)]
+pub enum R2rmlCmd {
+    /// 从**建模视图**生成 R2RML（Turtle）：类 → 表、属性 → 列、验过的关系 → join
+    ///
+    /// 输入全是**已有的产物**：快照（`--project/--version`）+ `--schema`
+    /// （`ontok-introspect` 的 schema.json）+ 可选的 `--tenancy`（租户列）。
+    /// ⛔ 不跑 SQL、不推断新的列、不发明关系 —— 只把已签的证据翻译成 R2RML。
+    Generate {
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 第几版（该版必须已有快照）
+        #[arg(long)]
+        version: i32,
+        /// **必填**：真实 schema（`ontok-introspect` 产物）。
+        ///
+        /// 主键 / 复合主键 / 列存在性 / 唯一列**只能**来自它 —— 没有它就没法
+        /// 与库对账（⛔ 不猜主键，也不拿启发式顶替）。
+        #[arg(long)]
+        schema: PathBuf,
+        /// 输出路径。省略则打到标准输出
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// 生成 `joinVerified "inherit"` 的边（默认**不生成**）
+        ///
+        /// 生成时该 `rr:predicateObjectMap` 会带 `ontok:joinState "inherit"` +
+        /// `ontok:joinEvidence` —— 让下游看得见「这条 join 本表没实测」。
+        #[arg(long)]
+        include_inherit: bool,
+        /// IRI 基（本体 IRI = `<base><project>`，前缀 = `<base><project>#`）
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
+        /// 租户声明（与 `ontology export --model-view` 同一份口径）。
+        ///
+        /// 已签（`reviewed_by` 非空）且命中时，类的租户列写进 TriplesMap 的
+        /// `ontok:tenantColumn`，供 REQ-122 注入过滤。省略 ⇒ 文件头 + stderr 明说「未标注」。
+        #[arg(long)]
+        tenancy: Option<PathBuf>,
+        /// **审计**（A-2.4）：`exclusions.json`。给了才核对「已排除的表是否混进映射」。
+        ///
+        /// ⛔ 不会因此删掉任何 TriplesMap —— 它只做**可见性**：
+        /// 映射里出现已排除表 ⇒ stderr 警告 + 文件头点名「本映射包含 N 张已排除的表」。
+        /// 生产口径应当是**快照**里就不含这些表（`ontok-propose --exclude`）。
+        #[arg(long)]
+        exclude: Option<PathBuf>,
+        /// **审计**（A-2.3）：已签字的 FK 提案（`fk-proposals.json`）。
+        ///
+        /// 给了才点名「端点被排除、因而没有生成」的已签关系 —— 这些边在快照里
+        /// 已经不存在（`apply` 拒绝悬空关系），只有这份文件还留着它们。
+        #[arg(long)]
+        fk_signed: Option<PathBuf>,
     },
 }
 
@@ -1059,6 +1132,32 @@ pub const DOMAIN_PRINT_SITES: &[DomainPrintSite] = &[
          `DiffItem.target`（快照 key）与 `before`/`after`（原始 JSON，字符串直接 clone）\
          均未经 escape_payload_text；且无判据接线。载荷面=有",
     },
+    // ⭐ REQ-121 · `r2rml generate` 的 stdout（内部轨：表名 / 列名 / join 证据）。
+    //
+    // 为什么登记：它把 domain 产物（R2RML Turtle）逐字节写进 stdout —— 不登记就是
+    // 「新增写点没人管」（REQ-107 收口的那个洞）。为什么**不是** WIRING_PIPELINE：
+    // 内部轨不过客户发布闸（`spec_of(OutletId::I11)` 是 `Track::Internal`），
+    // 走 `publish_customer` 反而会让 T8 把它算成一条「没人认领的闸调用」。
+    DomainPrintSite {
+        enclosing_fn: "r2rml_cmd",
+        command: "r2rml generate",
+        wiring: WIRING_NONE,
+        binding: "r2rml_doc",
+        prefix_template: "",
+        trailing_newline: false,
+        judged_by: &[],
+        projection_judged_by: &[],
+        // ⛔ 未覆盖：本命令要连库 + 要 `--schema`，真进程字节比对需要一套
+        // 专属 schema 夹具；本轮把「两次生成逐字节相同」交给 `tests/test_req121_r2rml.rs`
+        // 的纯函数判据 + 手工 sha256（见交付物）。
+        //
+        // ⚠️ 载荷面=有：表名 / 列名 / `ontok:joinEvidence` 原文都来自快照，
+        // 其中证据串原样进注释行（`one_line` 只压换行，不改内容）。
+        e2e_covered: false,
+        note: "未覆盖（无真进程字节比对断言）：R2RML Turtle 里含表名 / 列名 / \
+         join 证据原文（快照载荷经 one_line 后原样进注释行与 ontok:joinEvidence）—— \
+         载荷面=有；内部轨，只登记在 OUTLETS 的 I11/I12。",
+    },
 ];
 
 // ───────────────────── 唯一的出口（AC-001）─────────────────────
@@ -1239,6 +1338,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Review { cmd } => review_cmd(&pool, cmd).await,
         Cmd::Proposal { cmd } => proposal_cmd(&pool, cmd).await,
         Cmd::Ontology { cmd } => ontology_cmd(&pool, cmd).await,
+        // ⭐ REQ-121 · R2RML 映射（内部轨：表名/列名/join 证据 —— 不是客户视图）
+        Cmd::R2rml { cmd } => r2rml_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -3365,6 +3466,184 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+// ── R2RML 映射（REQ-121）────────────────────────────────
+
+/// ⭐ REQ-121 · `r2rml generate` 的**唯一入口**。
+///
+/// 生成逻辑全在 [`crate::domain::r2rml`]（纯函数、零 I/O）；这里只做三件事：
+/// 读快照 / schema / 租户声明，把**对账失败**变成非零退出，写出产物。
+///
+/// ⛔ 对账失败时**一个字节都不写**（fail-closed）：半份映射比没有映射更危险 ——
+/// 它会被 R2RML 引擎当成完整映射用，查出来的结果是错的，而且不报错。
+///
+/// ⛔ stdout 与 `--out` 写的是**同一份**字节（`r2rml_doc`）：出口只有一处序列化，
+/// 与 C6/C7、D9/D10 同一条口径。
+async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
+    let R2rmlCmd::Generate {
+        project,
+        version,
+        schema,
+        out,
+        include_inherit,
+        base,
+        tenancy,
+        exclude,
+        fk_signed,
+    } = cmd;
+
+    let projects = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool.clone());
+    let p = projects.get_by_name(&project).await?.ok_or_else(|| anyhow::anyhow!("项目不存在"))?;
+    let v = projects.version_by_seq(p.id, &p.name, version).await?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照"))?;
+
+    // 租户声明与 `ontology export --model-view` **同一份解析**（fail-closed：
+    // 解析失败不当成「没有声明」，否则会得到一份看着有标注的映射）。
+    let tenancy_decl = match &tenancy {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("读不出租户声明文件 {path:?}"))?;
+            Some(
+                crate::domain::ttl::TenancyDecl::parse(&raw)
+                    .map_err(|e| anyhow::anyhow!("租户声明文件 {path:?} 不合法：{e}"))?,
+            )
+        }
+        None => None,
+    };
+
+    // `--schema` 必填：主键 / 唯一列 / 列存在性只能来自真实。
+    let raw = std::fs::read_to_string(&schema)
+        .with_context(|| format!("读不出 schema 文件 {schema:?}"))?;
+    let schema_types = crate::domain::ttl::SchemaTypes::parse(&raw)
+        .map_err(|e| anyhow::anyhow!("schema 文件 {schema:?} 不合法：{e}"))?;
+    if schema_types.is_empty() {
+        anyhow::bail!("--schema 里一列都没读到（检查 tables/columns）—— 这份 schema 无法对账");
+    }
+
+    let opts = crate::domain::ttl::TtlOptions {
+        project: project.as_str(),
+        version,
+        base: base.as_str(),
+        action_type_count: snap.action_types.len(),
+        tenancy: tenancy_decl.as_ref(),
+        schema: Some(&schema_types),
+    };
+    let model = crate::domain::model_view::project_model_track(&snap);
+
+    // ── A-2.4 · 审计输入（只影响文件头/文件尾，不改变映射）──────────
+    //
+    // `--exclude` 是**核对**，不是过滤：生产口径应当让快照本身不带这些表
+    // （`ontok-propose --exclude`）。这里能做的只是「有人拿未排除的快照来生成」
+    // 时把它**喊出来**（不阻断，但必须让人看见）。
+    let excluded_names: Option<Vec<String>> = match &exclude {
+        Some(path) => {
+            let ex = crate::extract::exclusions::Exclusions::load(&path.to_string_lossy())
+                .with_context(|| format!("读不出排除文件 {path:?}"))?;
+            Some(ex.entries().iter().map(|e| e.table.clone()).collect())
+        }
+        None => None,
+    };
+    // `--fk-signed` 是**审计**：端点被排除的已签关系在快照里已经不存在
+    // （`apply` 拒绝悬空关系），只有这份签字产物还留着它们。
+    let signed_edges: Option<Vec<(String, String)>> = match &fk_signed {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("读不出签字产物 {path:?}"))?;
+            let v: serde_json::Value = serde_json::from_str(&raw)
+                .with_context(|| format!("签字产物 {path:?} 不是合法 JSON"))?;
+            let mut edges: Vec<(String, String)> = Vec::new();
+            if let Some(arr) = v.get("proposals").and_then(|x| x.as_array()) {
+                for p in arr {
+                    // 只认**签过字**的（`reviewed_by` 非空）—— 未签的本来就不进快照。
+                    let signed = p.get("reviewed_by").is_some_and(|x| !x.is_null());
+                    if !signed {
+                        continue;
+                    }
+                    let subject = p.get("subject").and_then(|x| x.as_str()).unwrap_or("");
+                    let to = p
+                        .pointer("/facts/to_table")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    if let Some((from, _)) = subject.split_once('.') {
+                        if !from.is_empty() && !to.is_empty() {
+                            edges.push((from.to_string(), to.to_string()));
+                        }
+                    }
+                }
+            }
+            edges.sort();
+            edges.dedup();
+            Some(edges)
+        }
+        None => None,
+    };
+
+    // 对账失败 ⇒ Display 里逐条点名（表.列），退出码非零，**不写文件**。
+    let doc = crate::domain::r2rml::generate_audited(
+        &model,
+        &opts,
+        include_inherit,
+        crate::domain::r2rml::R2rmlAudit {
+            excluded_tables: excluded_names.as_deref(),
+            signed_edges: signed_edges.as_deref(),
+        },
+    )?;
+
+    let st = doc.stats();
+    // ⛔ `false` 与 `未标` 分开报：前者是**有据**的「仅名字推断」，后者是
+    // 「没有验证信息」（含旧版布尔 false 无证据的遗留）。合并报会让数字员工
+    // 把 52 条「没验」读成「52 条验过但失败」。
+    // ⚠️ joinCondition 数在 `summary()` 里已经有了 —— 不再重复一遍。
+    eprintln!(
+        "· R2RML（{project} v{version}）：{} · \
+         三态 true {} / inherit {}（生成 {}）/ false（仅名字推断，有据）{} · \
+         未标（无验证信息）{} · 复合主键跳过 {} · 跳过已签关系 {} · schema 对账 0 失败",
+        st.summary(),
+        st.verified_edges,
+        st.inherited_edges,
+        st.inherited_emitted,
+        st.naming_only_edges,
+        st.unverified_edges,
+        st.skipped_classes.len(),
+        st.skipped_signed_edges.len()
+    );
+    // ── A-2.4 · fail-visible：映射里混进了已排除表 ──────────────
+    if !st.excluded_tables_in_mapping.is_empty() {
+        eprintln!(
+            "⚠ 排除表：本映射包含 {} 张已排除的表（{}）—— 这份快照没带 --exclude；\
+             生产口径应重建快照（本文件仅供对照，不阻断）",
+            st.excluded_tables_in_mapping.len(),
+            st.excluded_tables_in_mapping.join("、")
+        );
+    }
+    if !crate::domain::ttl::tenancy_report(&model, tenancy_decl.as_ref()).annotated() {
+        eprintln!(
+            "⚠ 租户列未标注：TriplesMap 上一条 ontok:tenantColumn 都没有 —— \
+             这份映射不能直接给数字员工用（--tenancy <file>）"
+        );
+    }
+
+    let r2rml_doc = doc.doc();
+    match &out {
+        Some(path) => {
+            std::fs::write(path, r2rml_doc.as_bytes())
+                .with_context(|| format!("写不出 {path:?}"))?;
+            // 回执走 stderr：`--out` 的 stdout 必须留空，脚本才好接。
+            eprintln!(
+                "· 已写出 R2RML 映射：{}（{} 字节 / {} 个 TriplesMap · 有损项见文件头）",
+                path.display(),
+                doc.len(),
+                st.triples_maps
+            );
+        }
+        None => print!("{}", r2rml_doc),
     }
     Ok(())
 }
