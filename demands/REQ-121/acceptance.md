@@ -6,7 +6,8 @@
 
 ### AC-001 · 每个类一个 TriplesMap，且三件套齐全
 
-- `rr:TriplesMap` 数 = 建模视图里的类数（当前 96）
+- `rr:TriplesMap` 数 **== 该快照建模视图的类数**（复合主键类除外，逐个列名列出）
+- ⚠️ **不许写死常数**（原写「当前 96」，错：带排除时是 84）
 - 每个 TriplesMap 必须有：`rr:logicalTable`（含 `rr:tableName`）、`rr:subjectMap`（含 template + `rr:class`）、≥1 个 `rr:predicateObjectMap`
 - 判据：结构断言逐个数；⛔ 不许有「只有 subjectMap 没有 predicateObjectMap」的空壳
 
@@ -26,7 +27,7 @@
 
 - 每条 `joinVerified "true"` 的对象属性生成 `rr:objectMap` + `rr:joinCondition`
 - `rr:child` = 子表外键列，`rr:parent` = 父表目标列（**可能是唯一列，不一定主键**）
-- 判据：joinCondition 数 = `true` 边数（72）
+- 判据：joinCondition 数 **== 该快照 `joinVerified "true"` 的对象属性数**（⛔ 不写死 72）
 - 判据：**与 schema 对账**：child 列必须在子表、parent 列必须在父表（列名逐字相等）
 - 判据：每条 join 附带一行注释，写明 `joinEvidence`
 
@@ -82,3 +83,39 @@
 - **H** R2RML 生成只许一处实现
 - **G** 变异三元组：把 `false` 边也生成 join / 把 `inherit` 当 `true` / 删 schema 对账，每条必须被抓
 - **S** AC 也会错，发现直接说
+
+---
+
+## 三 · Dev 首轮交付与裁定
+
+### Dev 结果
+
+| 项 | 值 |
+| --- | --- |
+| 提交 | `3c229fe`（接手基线）+ `bf252b7`（false/未标拆分 + 口径） |
+| 重建快照 | `anspire_r2rml` v2 冻结（96 对象 / 79 关系 / true 72 · inherit 1 · false 6） |
+| R2RML | 95 TriplesMap / 1107 datatype POM / **72 join** / schema 对账 0 失败 |
+| rdflib | 6736 triples（默认）/ 6745（含 inherit） |
+| 确定性 | sha256 `D3D9F7DD…` 三次相同 |
+
+### A-1 · **BA 的 AC 写死了常数**（订正）
+
+原 AC-001 写「TriplesMap = 96」、AC-004 写「joinCondition = 72」——这两个数**都依赖快照是否带排除**。
+**订正为自洽口径**：TriplesMap == 该快照类数；joinCondition == 该快照 `true` 边数。⛔ 验收里不许出现与快照无关的常数。
+
+### A-2 · R2RML **必须只覆盖业务本体**（要改）
+
+Dev 实测：无排除的快照 ⇒ 95 TriplesMap，含 `_volc_dts_pg_ddl_*` / `alembic_version` / `rpt_*` / `*_back` **这 12 张 REQ-113 判定不进本体的表**。
+
+> 数字员工能通过 SPARQL 查到**同步残留表、迁移记账表、备份表**——这不是「多几个类」，是**把不该暴露的东西接到嘴上**。
+
+要求：带 `--exclude` 重建快照再生成；被排除表作为 join 目标的 2 条边**跳过并点名**；**fail-visible**：未排除快照必须 stderr 警告 + 文件头标注「本映射包含 N 张已排除的表」。
+
+### A-3 · `false` / `未标` 的拆分（认可）
+
+| 情形 | 判定 |
+| --- | --- |
+| `false` **且有** `joinEvidence` | **false**（有据：名字推断 / 未签 / 样本不足） |
+| `false` **且无** evidence（REQ-120 前的 BOOLEAN 遗留） | **未标** |
+
+旧快照 `false 0 / 未标 52`、新快照 `false 6 / 未标 0` —— 对照要进报告。
