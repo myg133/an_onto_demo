@@ -174,6 +174,29 @@ pub enum Cmd {
     /// ⚠️ 审计：每个写操作一行（含失败），token 只记摘要。
     #[command(verbatim_doc_comment)]
     Console { #[command(subcommand)] cmd: ConsoleCmd },
+    /// ⭐ REQ-126 · **客户门户**（租户锁死、只能问预置问题）
+    ///
+    /// 给**客户本人**用的服务：他不需要会写 SPARQL，也不该能写。
+    /// 门户只提供**预置问题卡片** —— 每个问题的 SPARQL 由声明文件给出，
+    /// 参数（租户）由服务端从**访问口令**里取，⛔ 请求体 / URL 带上 tenant 会被拒。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok portal serve --bind 127.0.0.1:8900 --tokens portal-tokens.json --project anspire_r2rml_excl --version 2 --schema code/out/schema.json --policy query-policy.json --questions portal-questions.json
+    ///
+    /// ⚠️ 端点**只有四个**：`GET /`（页面壳，零数据）、`GET /api/questions`（问题列表，
+    /// 不含 SPARQL）、`POST /q/<id>`（执行一个问题）、`GET /api/health`（免 token）。
+    /// ⛔ **没有** `/api/sparql`、没有写操作、不能切项目/版本（进程级固定）。
+    /// ⚠️ 凭据是**另一套**：`--tokens` 里的 `kind` 必须是 `"portal"`，每张口令绑定一个租户
+    /// （admin / query 凭据不能当门户口令用，加载时就整份拒绝）。
+    /// ⚠️ `portal-questions.json` **启动时逐题校验**（fail-closed）：`reviewed_by` 为空、
+    /// 表没在 `--policy` 里登记、属性在目录里不存在、结果列是实例 IRI 或与真实列名同名
+    /// ⇒ **拒绝启动并点名**那一条，⛔ 不会「跳过它继续跑」。
+    /// ⚠️ 结果只给客户看**业务名 / 覆盖警告 / 截断说明**：⛔ 不返回 `sql_echo`、
+    /// 表名、列名、属性 IRI。`coverage: main_only` 的表会在页面上**显著告警**。
+    /// ⚠️ 每次问题执行一行审计（口令只记摘要；⛔ 无 SQL、无查询原文）。
+    #[command(verbatim_doc_comment)]
+    Portal { #[command(subcommand)] cmd: PortalCmd },
     /// ⭐ REQ-123 · **查询服务对外**（REST + 远程 MCP；一个进程、两种协议、一份鉴权）
     ///
     /// 数字员工链路的最后一块：把 REQ-122 的 `sparql query` 做成**服务**，
@@ -724,6 +747,79 @@ pub enum ConsoleCmd {
         /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
         #[arg(long, default_value = "https://ontok.local/")]
         base: String,
+    },
+}
+
+/// ⭐ REQ-126 · 客户门户（`ontok portal serve`）。
+///
+/// ⛔ 与 `console` / `query` 是三个独立服务：**各自一套凭据、各自一个端口**
+/// （`kind` 互斥，见 `portal::tokens`）。
+#[derive(Subcommand)]
+pub enum PortalCmd {
+    /// 起客户门户：预置问题卡片 + 结果解释（⛔ 没有自由查询、没有写操作）
+    ///
+    /// 端点（**只有四个**）：
+    ///
+    /// GET  /                                 页面壳（免 token；壳内**零数据**）
+    /// GET  /api/questions                    问题列表（标题 + 说明；⛔ 不含 SPARQL）
+    /// POST /q/<id>                           执行一个问题（租户只来自口令）
+    /// GET  /api/health                       免 token，只给版本
+    ///
+    /// ⛔ 没有 `/api/sparql`（自由查询）、没有 `/api/catalog`、没有任何写操作、
+    ///    不能切项目 / 版本（一个进程只服务一个已冻结版本）。
+    /// ⚠️ `--tokens` 是**第三套凭据**：`kind` 必须是 `"portal"`，每张口令绑定一个租户；
+    ///    admin / query 凭据不能当门户口令用（加载时整份拒绝）。
+    /// ⚠️ 请求体 / URL 带 `tenant` ⇒ **400 / 403**（拒绝，不是忽略）；没有口令 ⇒ 401。
+    /// ⚠️ `--questions` 在启动时**逐题校验**（fail-closed）：`reviewed_by` 为空 /
+    ///    表没在 `--policy` 里登记 / 属性不存在 / 结果列是实例 IRI 或与真实列名同名
+    ///    ⇒ 拒绝启动并点名那一条。
+    /// ⚠️ 结果只给：业务对象名（不是表名）+ 覆盖警告（`main_only` 显著提示）+ 截断说明；
+    ///    ⛔ 不返回 `sql_echo` / 表名 / 列名 / 属性 IRI。
+    /// ⚠️ 默认只绑内网 / 本机；通配或公网地址必须 `--allow-public`（启动警告）。
+    /// ⚠️ 审计：每次问题执行一行（口令只记摘要；⛔ 无 SQL、无查询原文）。
+    #[command(verbatim_doc_comment)]
+    Serve {
+        /// 监听地址。默认 `127.0.0.1:8900`；非内网地址必须加 `--allow-public`
+        #[arg(long, default_value = "127.0.0.1:8900")]
+        bind: String,
+        /// 门户口令表（`portal-tokens.json`；示例见 `portal-tokens.example.json`）
+        ///
+        /// 每条口令绑定一个租户，并可带两个限额：`max_rows`（默认 **200**，
+        /// 上限 10000）= 单次问题最多几行；`max_concurrency`（默认 **2**，上限 64）
+        /// = 同一口令同时最多几个问题在跑 —— 超限立刻 **429** `TOO_MANY_CONCURRENT`，
+        /// ⛔ 不排队；不同口令之间互不影响。`kind` 必须是 `"portal"`。
+        #[arg(long)]
+        tokens: PathBuf,
+        /// 本门户只服务这一个项目
+        #[arg(long)]
+        project: String,
+        /// 第几版（该版必须**已冻结**）
+        #[arg(long)]
+        version: i32,
+        /// 真实 schema（`ontok-introspect` 产物）—— 「变量名不与列名同名」只能来自它
+        #[arg(long, default_value = crate::portal::DEFAULT_SCHEMA)]
+        schema: PathBuf,
+        /// 租户声明（`query-policy.json`）—— 问题涉及的表必须在这里登记
+        #[arg(long, default_value = crate::portal::DEFAULT_POLICY)]
+        policy: PathBuf,
+        /// 预置问题声明（`portal-questions.json`）；启动时逐题校验
+        #[arg(long, default_value = crate::portal::DEFAULT_QUESTIONS)]
+        questions: PathBuf,
+        /// 允许绑非内网地址（`0.0.0.0` / 公网）。⛔ 不加就只能绑内网 / 本机
+        #[arg(long)]
+        allow_public: bool,
+        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+        /// 单个问题的超时（毫秒）
+        #[arg(long, default_value_t = crate::portal::DEFAULT_TIMEOUT_MS)]
+        timeout_ms: u64,
+        /// IRI 基（必须与 `r2rml generate` / `query serve` 用的是同一个）
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
+        /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 CLI 一致）
+        #[arg(long)]
+        include_inherit: bool,
     },
 }
 
@@ -1618,6 +1714,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Query { cmd } => query_cmd(&pool, cmd).await,
         // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化；⛔ 只暴露既有流程）
         Cmd::Console { cmd } => console_cmd(&pool, cmd).await,
+        // ⭐ REQ-126 · 客户门户（租户锁死、只能问预置问题；⛔ 没有自由查询）
+        Cmd::Portal { cmd } => portal_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -4630,6 +4728,43 @@ async fn console_cmd(pool: &PgPool, cmd: ConsoleCmd) -> anyhow::Result<()> {
         base,
     };
     crate::console::serve::serve(pool, args).await
+}
+
+/// ⭐ REQ-126 · `ontok portal serve` —— 参数只在这里翻译，逻辑全在 `portal::serve`。
+///
+/// ⚠️ 这里**不做**任何鉴权 / 绑定 / 问题校验：那些在 `portal::http` 与
+/// `portal::serve`（一处实现）。本函数只做「clap 参数 → ServeArgs」的搬运 ——
+/// 与 `query_cmd` / `console_cmd` 同一条分工。
+async fn portal_cmd(pool: &PgPool, cmd: PortalCmd) -> anyhow::Result<()> {
+    let PortalCmd::Serve {
+        bind,
+        tokens,
+        project,
+        version,
+        schema,
+        policy,
+        questions,
+        allow_public,
+        audit_out,
+        timeout_ms,
+        base,
+        include_inherit,
+    } = cmd;
+    let args = crate::portal::serve::ServeArgs {
+        bind,
+        tokens,
+        project,
+        version,
+        schema,
+        policy,
+        questions,
+        allow_public,
+        audit_out,
+        timeout_ms,
+        base,
+        include_inherit,
+    };
+    crate::portal::serve::serve(pool, args).await
 }
 
 // ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。

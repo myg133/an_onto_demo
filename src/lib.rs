@@ -53,3 +53,11 @@ pub mod query;
 // 本模块只有 import → review → apply → freeze 这条**既有流程**，
 // 没有「直接改对象」的端点（需求风险 1）。见 `src/console/mod.rs` 模块头。
 pub mod console;
+
+// ⭐ REQ-126 · **客户门户**（租户锁死、只能问预置问题）。
+// **不放 domain/**：它要起 socket、连源库、读三份声明与元数据库。
+// ⛔ 也不放进 `console/`：控制面是「admin token + 能写」，门户是
+// 「门户口令 + 只读 + 一个问题一个端点」；两者的**凭据、路由、权限面**都不同，
+// 共一个模块会让「顺手加一个管理端点」变成一次编辑。见 `src/portal/mod.rs` 模块头。
+pub mod portal;
+

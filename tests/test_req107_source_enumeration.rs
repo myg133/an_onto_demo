@@ -1684,6 +1684,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "console_cmd",
         "子命令 handler（`console serve`：只翻译参数，逻辑全在 `console::serve`；本函数零写出）",
     ),
+    // ⭐ REQ-126 · 客户门户：clap 参数 → `portal::serve::ServeArgs` 的**纯搬运**。
+    // 它不做鉴权 / 绑定 / 问题校验，也**不写任何字节**（服务由 `portal::serve` 起）。
+    (
+        "src/cli.rs",
+        "portal_cmd",
+        "子命令 handler（`portal serve`：只翻译参数，逻辑全在 `portal::serve`；本函数零写出）",
+    ),
     (
         "src/cli.rs",
         "import_proposal_core",
@@ -2026,6 +2033,17 @@ const MODULES: &[(&str, &str)] = &[
     ("src/console/mod.rs", "page"),
     ("src/console/mod.rs", "serve"),
     ("src/console/mod.rs", "tokens"),
+    // ⭐ REQ-126 · 客户门户（租户锁死、只能问预置问题）：页面壳 + API + 问题声明校验。
+    // 两条写出口 I23/I24 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "portal"),
+    ("src/portal/mod.rs", "audit"),
+    ("src/portal/mod.rs", "http"),
+    // ⭐ 每口令并发闸（N+1 ⇒ 429，不排队；名额按 token 隔离）。
+    ("src/portal/mod.rs", "limit"),
+    ("src/portal/mod.rs", "page"),
+    ("src/portal/mod.rs", "questions"),
+    ("src/portal/mod.rs", "serve"),
+    ("src/portal/mod.rs", "tokens"),
 ];
 
 #[test]

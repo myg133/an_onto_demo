@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "reviewed_by": "本地实测-业务负责人@2026-10-23（假签名：生产环境必须由业务负责人真签后才允许启动）",
+  "note": "REQ-126 的实例：5 条预置问题。每条都是业务口径，SPARQL 由服务端在启动时逐条校验（表必须已登记、属性必须存在）；租户由门户口令注入，问题本身不含「查谁」。",
+  "questions": [
+    {
+      "id": "charges_by_currency",
+      "title": "我的扣费明细（按币种汇总）",
+      "sparql": "SELECT ?cur (SUM(?amt) AS ?total) WHERE { ?d <https://ontok.local/anspire_r2rml_excl#deductions__currency> ?cur . ?d <https://ontok.local/anspire_r2rml_excl#deductions__deduction_amount> ?amt . } GROUP BY ?cur",
+      "note": "按扣费明细的币种汇总。这张表只覆盖主账号：子账号产生的扣费不在结果里，金额可能偏低。"
+    },
+    {
+      "id": "my_balance",
+      "title": "我的充值余额",
+      "sparql": "SELECT ?bal WHERE { ?b <https://ontok.local/anspire_r2rml_excl#balances__recharge_balance> ?bal . }",
+      "note": "充值余额；不含赠送额度、转移额度与冻结金额。"
+    },
+    {
+      "id": "usage_by_model",
+      "title": "我用量最多的模型",
+      "sparql": "SELECT ?model (SUM(?amt) AS ?used) WHERE { ?u <https://ontok.local/anspire_r2rml_excl#usage_details__model_name> ?model . ?u <https://ontok.local/anspire_r2rml_excl#usage_details__usage_amount> ?amt . } GROUP BY ?model",
+      "note": "按用量明细的模型名称汇总；模型名来自调用记录，可能与产品目录的命名不一致。"
+    },
+    {
+      "id": "my_subscriptions",
+      "title": "我的订阅与套餐",
+      "sparql": "SELECT ?state ?period ?ends WHERE { ?s <https://ontok.local/anspire_r2rml_excl#customer_subscriptions__status> ?state . ?s <https://ontok.local/anspire_r2rml_excl#customer_subscriptions__billing_cycle> ?period . ?s <https://ontok.local/anspire_r2rml_excl#customer_subscriptions__expire_at> ?ends . }",
+      "note": "订阅的状态、计费周期与到期时间。"
+    },
+    {
+      "id": "my_api_keys",
+      "title": "我的授权（API Key）",
+      "sparql": "SELECT ?label WHERE { ?l <https://ontok.local/anspire_r2rml_excl#licenses__name> ?label . }",
+      "note": "只返回授权名称，不返回密钥本身。"
+    }
+  ]
+}
