@@ -2,35 +2,34 @@
 
 ## 当前状态
 
-**进行中**（2026-10-23 开单；等 REQ-124 合并后开工）
+**已完成**（2026-10-23 · 已合并 `develop` `d54c130`）
 
-## 七个视图
+## 结果
 
-| 视图 | 消费的 API |
+| 项 | 值 |
 | --- | --- |
-| 项目与版本 | `GET /api/projects` |
-| 评审 | `GET /api/review`、`POST /api/decide` |
-| 导出 | `GET /api/export/ttl`、`POST /api/r2rml` |
-| 声明编辑 | `GET/PUT /api/config/{...}` |
-| 审计 | `GET /api/audit` |
-| 查询台 | `POST /api/sparql` |
-| 目录浏览 | `GET /api/catalog`、`GET /api/describe` |
+| 合并 | `develop` **`d54c130`**（3 个提交）；禁改面零 diff |
+| 页面 | 单文件 **59,988 B**（内联 CSS/JS），零外部依赖 |
+| **壳零数据** | QA 自建 `secretproj` v1–v7 + 声明投毒「绝密对象」⇒ `GET /` 里全部 **0 命中**；响应体 sha256 **逐字节等于** `CONSOLE_HTML`（服务端无注入） |
+| token | 仅 `sessionStorage`（12 处）；`localStorage`/cookie/`token=`/`location.*` 全 0 |
+| **查询台元信息** | 真实回执（`deductions` main_only / 三表 `used=false` / `max_rows=1` truncated）四段逐行显示；**删掉 warnings 分支 ⇒ 探针 exit 1（3 条红）** |
+| 危险操作 | apply/freeze/声明保存三处确认含「目标+后果」；取消 **0 fetch**；变异抓住 |
+| 声明保存失败 | 编辑器内容**逐字保留** + `code/message/hint` |
+| XSS | 只走 `textContent`；`innerHTML` 赋值 0 次 |
+| 头部 | CSP / nosniff / no-referrer 齐；CSP 三点评注（为什么/代价/何时去掉） |
+| 测试 | lib **590** / doc 4 / `test_req125_page` 8；OUTLETS 57（I22） |
 
-## 认证取舍
+## 两轮 QA
 
-浏览器导航不能带 `Authorization` 头 ⇒ **页面壳公开、零数据**，口令由用户输入后存 `sessionStorage`，所有 fetch 带 token。
+| 轮 | 结论 | 阻断 |
+| --- | --- | --- |
+| 首轮 | **FAIL** | L-1 ①：查询台在 404/403 时给**误导性**提示（列管理端点 / 清掉 query token 导致死循环）+ `--help` 未写「不含查询端点」 |
+| 复审 | 修复 | 404/403 ⇒ 统一 `QUERY_NOT_WIRED` 文案、**不清任何口令**；普通 401/403 仍 `logout()`；`--help` 补三行 |
 
-| 规则 | 理由 |
+## 关键裁定
+
+| # | 裁定 |
 | --- | --- |
-| ⛔ localStorage | 关浏览器不失效，共享机器上等于长期留钥匙 |
-| ⛔ URL 参数 | 进历史/日志/Referer |
-| 壳内零数据 | 与 REQ-110 同一纪律：壳不含任何项目/对象信息 |
-
-⚠️ 这套只用于**内网 + 回环 + 管理员**；客户门户（REQ-126）不能用同一套。
-
-## 硬判据
-
-- 查询台**必须显示** `warnings` / `coverage` / `join_states` 的 `used=false` / `truncated`
-- 危险操作（apply/freeze/声明保存）二次确认，写明目标与后果
-- 声明保存失败**保留用户输入**
-- XSS：用户数据一律 `textContent`；CSP 头
+| L-1 | **接受「查询台需两服务同源」**（console 只管管理端点；查询台要 `query serve` + 反代）；⛔ **拒绝**让 console 自己挂查询端点（会把 query token 面带到 admin 端口）。要求失败**可见** |
+| L-2 | CSP `'unsafe-inline'` 接受（单文件内联的必然代价），但必须写明「代价」与「拆外部文件时必须去掉」 |
+| L-3 | 无真浏览器手测接受，但交互证据必须来自仓库内 Node 探针且可复跑；⛔ 报告不得写「已验证交互」 |

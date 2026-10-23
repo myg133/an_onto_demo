@@ -269,3 +269,13 @@
 - 回收：feature worktree + 分支
 - 结果：11 端点；token 双向隔离；四组 sha256 与 CLI 全等；9 类声明非法全 400 且不落盘；无后门端点
 - 合并后立即开 REQ-125（内部工作台前端），worktree 已建
+
+
+## 2026-10-23 — REQ-125 合并与回收
+
+- 合并：`feature/REQ-125` → `develop` **`d54c130`**（3 个提交：`302bba5` → `37b6526`（L-2 CSP 注释）→ `cbfed33`（B-1/B-2））
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支；合并后立即开 REQ-126 worktree
+- 结果：页面 59,988 B / 壳零数据（沙箱验证：投毒项目名 0 命中）/ token 仅 sessionStorage / 查询台显示 warnings、coverage、used=false、truncated
+- 两轮 QA：首轮 FAIL（查询台 404/403 误导 + `--help` 缺失），修复后通过
+- **新记录**：`dev_proxy.ps1` 成为「两服务同源」的最小示例，已写入 `BA/runbook/ontology-e2e.md §7.3`
