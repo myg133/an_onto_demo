@@ -1666,6 +1666,11 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "r2rml_cmd",
         "子命令 handler（`r2rml generate`：读快照/schema，fail-closed 写出 I11/I12）",
     ),
+    (
+        "src/cli.rs",
+        "sparql_cmd",
+        "子命令 handler（`sparql query`：按声明注入租户 + 只读执行，写出 I13）",
+    ),
     ("src/cli.rs", "resolve_proposal", "运维辅助"),
     ("src/cli.rs", "newest_proposal_project", "运维辅助"),
     ("src/cli.rs", "resolve_proposal_arg", "运维辅助"),
@@ -1964,6 +1969,15 @@ const MODULES: &[(&str, &str)] = &[
     ("src/review_ui/mod.rs", "page"),
     ("src/server/mod.rs", "http"),
     ("src/server/mod.rs", "page"),
+    // ⭐ REQ-122 · SPARQL → SQL（解析 / 规划 / 声明 / SQL 文本 / 只读执行）。
+    // 写出口 I13 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "sparql"),
+    ("src/sparql/mod.rs", "error"),
+    ("src/sparql/mod.rs", "exec"),
+    ("src/sparql/mod.rs", "plan"),
+    ("src/sparql/mod.rs", "policy"),
+    ("src/sparql/mod.rs", "query"),
+    ("src/sparql/mod.rs", "sql"),
 ];
 
 #[test]
