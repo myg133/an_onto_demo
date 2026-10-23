@@ -4,6 +4,11 @@
 # REQ-003 抽取产物（可重跑生成，不入库）
 out/
 
+# Dev 临时工作区（REQ-121 · H-2）
+# 该目录沉淀真名 TTL / proposal（model-v3.ttl / r2rml-proposal.json 等，>900KB），
+# 与 REQ-084 N1 同类：一句 `git add -A` 就会把客户表名带进库。
+/.scratch/
+
 # QA 产物工作区（REQ-084 QA 发现 N1·高危）
 # 该目录会沉淀 classify/rows/inventory/备份等中间件，
 # 其中含**全部 91 个真实客户表名**。develop 分支的 .gitignore
