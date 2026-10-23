@@ -279,3 +279,13 @@
 - 结果：页面 59,988 B / 壳零数据（沙箱验证：投毒项目名 0 命中）/ token 仅 sessionStorage / 查询台显示 warnings、coverage、used=false、truncated
 - 两轮 QA：首轮 FAIL（查询台 404/403 误导 + `--help` 缺失），修复后通过
 - **新记录**：`dev_proxy.ps1` 成为「两服务同源」的最小示例，已写入 `BA/runbook/ontology-e2e.md §7.3`
+
+
+## 2026-10-23 — REQ-126 合并与回收
+
+- 合并：`feature/REQ-126` → `develop` **`5e73813`**（3 个提交）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支；另清理遗留的 `qa-REQ-125`（detached，QA 变异用）
+- 结果：4 端点 / 租户只来自口令 / 启动 8 条 fail-closed 校验 / 响应类型层无技术标识 / 并发闸立刻 429
+- 三轮：主体 → 并发闸 → QA 三条必修（N-1 假红 / N-2 壳豁免 / N-3 单测无计时）
+- **本日三条需求全部合并**：REQ-124 `eaa7c96` · REQ-125 `d54c130` · REQ-126 `5e73813`
