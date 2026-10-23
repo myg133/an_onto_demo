@@ -679,15 +679,16 @@ fn ctx(view: ontok::domain::view::CustomerView) -> ontok::mcp::tools::OntologyCo
 #[test]
 fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // ① 条数：口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口 C6/C7/H4/H5/D9/D10）
-    //        + 5（REQ-111 的审核界面出口 R1–R5）+ 1（REQ-116 的文档摄取产物 I10）= 45。
+    //        + 5（REQ-111 的审核界面出口 R1–R5）+ 1（REQ-116 的文档摄取产物 I10）
+    //        + 2（REQ-121 的 R2RML 映射出口 I11/I12）= 47。
     assert_eq!(
         OUTLETS.len(),
-        45,
+        47,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
-         + 1（REQ-116 文档摄取产物）"
+         + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）"
     );
 
-    // ② 分组：客户 17 / 建模 10 / 内部 15 / 静态 2 / 错误路径 1。
+    // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
     //
     // ⚠️ 与 TC-007 用例原文的差异（**AC/用例自身缺陷**，纪律 S）：
     // 原文写 `Static == 3`（Z2,Z3,Z4）+ ErrorPath 1 ⇒ 13+8+9+3+1 = **34**，
@@ -698,9 +699,11 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // 既不是客户出口、也不是「建模视图」那 10 条 —— 改建模轨会放宽
     // `test_req107_track_manifest.rs` 的「恰好 D1–D10」不变量。
     // REQ-116 内部 14→15（I10）：文档摄取的产物写出点，**内部轨**（不写库、不改本体、不出图）。
+    // REQ-121 内部 15→17（I11/I12）：R2RML 映射的 stdout / `--out` 两个写点
+    // （同一份 Turtle 字节，两个落点 —— 与 C6/C7 同一条口径）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 15);
+    assert_eq!(outlet_count(Track::Internal), 17);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -716,7 +719,8 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     want.extend((1..=5).map(|i| format!("H{i}")));
     want.extend((1..=5).map(|i| format!("M{i}")));
     want.extend((1..=10).map(|i| format!("D{i}")));
-    want.extend((1..=10).map(|i| format!("I{i}")));
+    // REQ-121 · I11/I12（R2RML 映射：stdout / `--out`）
+    want.extend((1..=12).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());
@@ -731,12 +735,15 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
         assert!(!o.call_site.is_empty(), "{} 没有登记 call_site", o.id);
     }
 
-    // ④ 既有 `DOMAIN_PRINT_SITES`（8 条）**不是**本表的替代品。
+    // ④ 既有 `DOMAIN_PRINT_SITES`（9 条）**不是**本表的替代品。
+    //
+    // REQ-121 把 8→9：`r2rml generate` 的 stdout 是**新的 domain 打印点**
+    // （不登记就是「新增写点没人管」）。
     assert_eq!(
         ontok::cli::DOMAIN_PRINT_SITES.len(),
-        8,
-        "`DOMAIN_PRINT_SITES` 是 REQ-078 的**打印点**登记表（8 条），\
-         与 REQ-107 的 33 条出口不是同一张表；条数变了说明有人拿它冒名顶替"
+        9,
+        "`DOMAIN_PRINT_SITES` 是 REQ-078 的**打印点**登记表（9 条），\
+         与 REQ-107 的出口表不是同一张表；条数变了说明有人拿它冒名顶替"
     );
     assert_ne!(
         ontok::cli::DOMAIN_PRINT_SITES.len(),

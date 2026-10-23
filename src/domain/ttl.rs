@@ -213,13 +213,29 @@ impl<'a> TtlOptions<'a> {
     }
 
     /// base 归一化：去掉结尾 `#`，补齐结尾 `/`。
-    fn normalized_base(&self) -> String {
+    pub(crate) fn normalized_base(&self) -> String {
         let b = self.base.trim_end_matches('#');
         if b.ends_with('/') {
             b.to_string()
         } else {
             format!("{b}/")
         }
+    }
+
+    /// **本体 IRI**：`<归一化 base><项目本地名>`（无尾 `#`）。
+    ///
+    /// ⛔ REQ-121：R2RML 生成器也读它 —— 两边算出的本体 IRI 必须逐字相同，
+    /// 否则 R2RML 产出的实例 IRI 与本体里的实例 IRI 是两套（而且不会报错）。
+    pub(crate) fn ontology_iri(&self) -> String {
+        format!("{}{}", self.normalized_base(), local_model(self.project))
+    }
+
+    /// **实例 IRI 模板**（`ontok:instanceIri` 的值，AC-003）。
+    ///
+    /// `{class}` = 类的 key，`{id}` = 主键列的**值**。
+    /// 建模视图、客户视图、R2RML 三处**共用**这一个函数（⛔ 不各写一遍）。
+    pub(crate) fn instance_iri_template(&self) -> String {
+        format!("{}#{{class}}/{{id}}", self.ontology_iri())
     }
 }
 
@@ -239,6 +255,17 @@ pub struct SchemaTypes {
     columns: BTreeMap<(String, String), String>,
     /// 表名 → **单列主键列名**（trim + 小写）。复合主键 / 没主键的表不登记。
     primary_keys: BTreeMap<String, String>,
+    /// schema 里出现过的**全部表名**（trim + 小写）。REQ-121 用它判 `rr:tableName`。
+    tables: BTreeSet<String>,
+    /// 表名 → 该表的全部列名（trim + 小写）。REQ-121 用它判 `rr:columnName` / `rr:child` / `rr:parent`。
+    table_columns: BTreeMap<String, BTreeSet<String>>,
+    /// 表名 → **复合主键**的列（trim + 小写，空 = 不是复合主键）。REQ-121 据此跳过并列入清单。
+    composite_primary_keys: BTreeMap<String, Vec<String>>,
+    /// 表名 → **唯一列**（含主键；trim + 小写，已排序去重）。
+    ///
+    /// REQ-121 用它判 `rr:parent` 是不是一个**可以 join 的列**：
+    /// 连到一个不唯一的列，一条 SPARQL 会悄悄返回多份结果。
+    unique_columns: BTreeMap<String, Vec<String>>,
 }
 
 impl SchemaTypes {
@@ -259,6 +286,8 @@ impl SchemaTypes {
             primary_key: Option<String>,
             #[serde(default)]
             composite_primary_key: Vec<String>,
+            #[serde(default)]
+            unique_columns: Vec<String>,
         }
         #[derive(Deserialize)]
         struct Col {
@@ -272,17 +301,23 @@ impl SchemaTypes {
         let doc: Doc = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let mut columns = BTreeMap::new();
         let mut primary_keys = BTreeMap::new();
+        let mut tables = BTreeSet::new();
+        let mut table_columns: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut composite_primary_keys: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut unique_columns: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for t in doc.tables {
             let table = t.name.trim().to_ascii_lowercase();
             if table.is_empty() {
                 continue;
             }
+            tables.insert(table.clone());
             let mut flagged_pk: Vec<String> = Vec::new();
             for c in t.columns {
                 let column = c.name.trim().to_ascii_lowercase();
                 if column.is_empty() {
                     continue;
                 }
+                table_columns.entry(table.clone()).or_default().insert(column.clone());
                 let ty = c.data_type.trim().to_ascii_lowercase();
                 if !ty.is_empty() {
                     columns.insert((table.clone(), column.clone()), ty);
@@ -291,6 +326,25 @@ impl SchemaTypes {
                     flagged_pk.push(column);
                 }
             }
+            // 复合主键：记下来（REQ-121 要**跳过并点名**，不能悄悄当成「没有主键」）。
+            let composite: Vec<String> = t
+                .composite_primary_key
+                .iter()
+                .map(|c| c.trim().to_ascii_lowercase())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if !composite.is_empty() {
+                composite_primary_keys.insert(table.clone(), composite);
+            }
+            // 唯一列：主键 + 目录里的 `unique_columns`（去重排序）。
+            let mut uniq: Vec<String> = t
+                .unique_columns
+                .iter()
+                .map(|c| c.trim().to_ascii_lowercase())
+                .filter(|c| !c.is_empty())
+                .collect();
+            uniq.sort();
+            uniq.dedup();
             // 复合主键不导出（AC-119 B-2 只要求单列主键；⛔ 不把多个列拼成一个假列）。
             if t.composite_primary_key.is_empty() {
                 let from_field = t
@@ -302,12 +356,24 @@ impl SchemaTypes {
                     .or_else(|| if flagged_pk.len() == 1 { flagged_pk.pop() } else { None });
                 if let Some(pk) = pk {
                     if columns.contains_key(&(table.clone(), pk.clone())) {
-                        primary_keys.insert(table, pk);
+                        primary_keys.insert(table.clone(), pk.clone());
+                        if !uniq.contains(&pk) {
+                            uniq.push(pk);
+                            uniq.sort();
+                        }
                     }
                 }
             }
+            unique_columns.insert(table, uniq);
         }
-        Ok(Self { columns, primary_keys })
+        Ok(Self {
+            columns,
+            primary_keys,
+            tables,
+            table_columns,
+            composite_primary_keys,
+            unique_columns,
+        })
     }
 
     /// 查真实 `data_type`（SQL 原始串）。表名 / 列名按 trim + 小写比对。
@@ -320,6 +386,39 @@ impl SchemaTypes {
     /// 查**单列主键**列名（B-2）。复合主键 / 无主键 ⇒ `None`。
     pub fn primary_key(&self, table: &str) -> Option<&str> {
         self.primary_keys.get(&table.trim().to_ascii_lowercase()).map(|s| s.as_str())
+    }
+
+    /// ⭐ REQ-121 · schema 里有没有这张表（`rr:tableName` 的判据）。
+    pub fn has_table(&self, table: &str) -> bool {
+        self.tables.contains(&table.trim().to_ascii_lowercase())
+    }
+
+    /// ⭐ REQ-121 · 这张表有没有这一列（`rr:columnName` / `rr:child` / `rr:parent` 的判据）。
+    pub fn has_column(&self, table: &str, column: &str) -> bool {
+        self.table_columns
+            .get(&table.trim().to_ascii_lowercase())
+            .is_some_and(|cols| cols.contains(&column.trim().to_ascii_lowercase()))
+    }
+
+    /// ⭐ REQ-121 · 这张表的**复合主键**列（空 = 不是复合主键）。返回已排序的去重列名。
+    pub fn composite_primary_key(&self, table: &str) -> &[String] {
+        self.composite_primary_keys
+            .get(&table.trim().to_ascii_lowercase())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// ⭐ REQ-121 · 这一列是不是**主键或唯一列**（`rr:parent` 必须落在这样的列上）。
+    ///
+    /// 主键天然唯一；`unique_columns` 来自目录（`ontok-introspect` 的 `unique_columns`），
+    /// 已含主键列。⛔ 不把「看起来像 id」当唯一 —— 那是猜。
+    pub fn is_unique_column(&self, table: &str, column: &str) -> bool {
+        let table = table.trim().to_ascii_lowercase();
+        let column = column.trim().to_ascii_lowercase();
+        if self.primary_keys.get(&table) == Some(&column) {
+            return true;
+        }
+        self.unique_columns.get(&table).is_some_and(|cols| cols.contains(&column))
     }
 
     /// 已收录的列数（回执用）。
@@ -766,7 +865,9 @@ pub fn tenancy_report(view: &ModelTrackView, decl: Option<&TenancyDecl>) -> Tena
 }
 
 /// 建模视图里「这个属性对应哪一列」的**唯一**口径（空列名回落到属性名）。
-fn effective_column(p: &ModelPropertyView) -> &str {
+///
+/// ⛔ REQ-121：R2RML 生成器也读它 —— 两边对「哪一列」的判断必须逐字相同。
+pub(crate) fn effective_column(p: &ModelPropertyView) -> &str {
     if p.column.trim().is_empty() {
         p.name.trim()
     } else {
@@ -815,7 +916,7 @@ impl XsdType {
 
 /// range 是靠**哪条规则**定出来的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RangeBasis {
+pub(crate) enum RangeBasis {
     /// 命中了规则（列/中文名启发式，或真实列类型）。
     Matched,
     /// 一条规则都没命中 ⇒ `xsd:string` 兜底，并且必须计数 + 列出（R3）。
@@ -844,7 +945,10 @@ impl RangeSource {
 }
 
 /// 定 range 的**唯一入口**：schema 优先 → 列名 → 中文名 → string 兜底。
-fn xsd_range(
+///
+/// ⛔ REQ-121：R2RML 的 `rr:datatype` 也调它 —— 与 TTL 的 `rdfs:range` 必须一致
+/// （AC-003 的判据就是「逐条与 TTL 对账」）。
+pub(crate) fn xsd_range(
     entity_key: Option<&str>,
     column: Option<&str>,
     schema: Option<&SchemaTypes>,
@@ -1209,12 +1313,12 @@ impl TtlDocument {
 /// REQ-119：反向属性 / xsd range / IRI 模板在这一轨都有；
 /// **租户标注一个字节都没有**（本函数不读 [`TtlOptions::tenancy`]，AC-007）。
 pub fn serialize_customer(view: &CustomerView, opts: &TtlOptions<'_>) -> TtlDocument {
-    let mut ns = NameSpace::new(opts, local_model(opts.project));
+    let mut ns = NameSpace::new(opts);
 
     // ① 先给类分配 IRI 本地名（按名字字典序 ⇒ 分配结果与输入顺序无关）。
     let classes = distinct_customer_classes(view);
     let class_locals: Vec<String> = classes.iter().map(|(name, _)| ns.local_for(name)).collect();
-    let iri_template = format!("{}#{{class}}/{{id}}", ns.ontology());
+    let iri_template = opts.instance_iri_template();
 
     // ② 再给属性分配（同一个 NameSpace，跨类别也不撞车）。
     let mut prop_blocks: Vec<String> = Vec::new();
@@ -1324,8 +1428,8 @@ pub fn serialize_customer(view: &CustomerView, opts: &TtlOptions<'_>) -> TtlDocu
 ///
 /// REQ-119：反向属性 / xsd range / IRI 模板 / **租户标注**（唯一会落标注的一轨）。
 pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocument {
-    let ns = NameSpace::new(opts, local_model(opts.project));
-    let iri_template = format!("{}#{{class}}/{{id}}", ns.ontology());
+    let ns = NameSpace::new(opts);
+    let iri_template = opts.instance_iri_template();
     let tenancy = tenancy_report(view, opts.tenancy);
 
     let mut entities: Vec<&ModelEntityView> = view.entity_types.iter().collect();
@@ -1390,77 +1494,19 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
             .then_with(|| a.to_type.cmp(&b.to_type))
     });
 
-    // ⭐ REQ-120 · **同一对 (from, to) 有多条边时，本地名必须带列名**。
-    //
-    // 病根（本轮实测抓到的真 bug，不是假想）：
-    // `customer_account_binding` 有 `main_customer_id` 与 `sub_customer_id`
-    // **两列都指向 `customers`**，而本地名一直是 `{from}__{to}` ⇒ 两条属性
-    // 写成了**同一个 IRI** `:customer_account_binding__customers`。
-    // Turtle 会把它们**合并成一个属性**：两条 `owl:inverseOf`、两个
-    // `ontok:cardinality`、两条 `ontok:joinVerified` —— 数字员工读到的
-    // 是「一个叫『客户账号绑定 → 客户』的属性，既是主账号又是子账号」。
-    // 这比少一条关系更糟：它看起来完全正常。
-    //
-    // 修法：**只在这一对真有歧义时**给本地名追加列名（`__<column>`），
-    // 唯一的那 71 对名字一个字节不变（REQ-119 的 `<主语>__<宾语>` 契约不动）。
-    // 判据是「这一对出现几次」，不是「第几条」—— 与遍历顺序无关 ⇒ 确定性。
-    let mut pair_count: std::collections::BTreeMap<(String, String), usize> =
-        std::collections::BTreeMap::new();
-    for l in &links {
-        *pair_count
-            .entry((l.from_type.clone(), l.to_type.clone()))
-            .or_insert(0) += 1;
-    }
-
-    let mut forward: Vec<(String, String, Option<String>)> = Vec::new();
-    let mut taken: BTreeSet<String> = BTreeSet::new();
-    for l in &links {
-        let from_local = local_model(&l.from_type);
-        let to_local = local_model(&l.to_type);
-        let ambiguous = pair_count
-            .get(&(l.from_type.clone(), l.to_type.clone()))
-            .copied()
-            .unwrap_or(0)
-            > 1;
-        let col = ambiguous.then(|| {
-            local_model(
-                l.column
-                    .as_deref()
-                    .unwrap_or(l.key.rsplit("__").next().unwrap_or("column")),
-            )
-        });
-        let raw = match &col {
-            Some(c) => format!("{from_local}__{to_local}__{c}"),
-            None => format!("{from_local}__{to_local}"),
-        };
-        // 极端情形（同一列名出现两次）也要唯一：`taken` 在这里兜底。
-        let raw = unique_local(raw, &mut taken);
-        taken.insert(raw);
-        forward.push((from_local, to_local, col));
-    }
-    let mut inverse_locals: Vec<String> = Vec::new();
-    for (from_local, to_local, col) in &forward {
-        // 有歧义的那一对：反向名也带列名（`{to}__{from}__{col}`），
-        // 否则会退化成 `...__inverse` / `...__inverse2` —— 名字里看不出是哪一列。
-        let raw = match col {
-            Some(c) => unique_local(format!("{to_local}__{from_local}__{c}"), &mut taken),
-            None => inverse_candidate(from_local, to_local, &taken),
-        };
-        taken.insert(raw.clone());
-        inverse_locals.push(raw);
-    }
+    // ⭐ REQ-120 · 关系属性的本地名（含「同一对多边时带列名」的裁定）。
+    // ⛔ 唯一实现抽在 [`model_link_locals`]：REQ-121 的 R2RML 生成器也调它，
+    // 于是 `rr:predicate` 与 TTL 的属性 IRI **逐字相同**（抄一份就会漂移）。
+    let (forward_locals, inverse_locals) = model_link_locals(&links);
 
     let mut rel_blocks: Vec<String> = Vec::new();
     let mut inverse_blocks: Vec<(String, String)> = Vec::new();
     for (i, l) in links.iter().enumerate() {
-        let from_local = &forward[i].0;
-        let to_local = &forward[i].1;
-        let subject = match &forward[i].2 {
-            Some(c) => format!("{from_local}__{to_local}__{c}"),
-            None => format!("{from_local}__{to_local}"),
-        };
+        let from_local = local_model(&l.from_type);
+        let to_local = local_model(&l.to_type);
+        let subject = &forward_locals[i];
         let inv = &inverse_locals[i];
-        rel_blocks.push(model_object_block(l, &subject, Some(inv)));
+        rel_blocks.push(model_object_block(l, subject, Some(inv)));
         let features = model_cardinality(&l.cardinality).inverse();
         let label = format!("{} → {}（反向）", l.to_type, l.from_type);
         let comment =
@@ -1491,9 +1537,9 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
             inv.clone(),
             inverse_object_block(
                 inv,
-                &subject,
-                to_local,
-                from_local,
+                subject,
+                &to_local,
+                &from_local,
                 &label,
                 Some(&comment),
                 features,
@@ -1588,9 +1634,10 @@ struct NameSpace {
 }
 
 impl NameSpace {
-    fn new(opts: &TtlOptions<'_>, project_local: String) -> Self {
+    fn new(opts: &TtlOptions<'_>) -> Self {
         Self {
-            ontology: format!("{}{}", opts.normalized_base(), project_local),
+            // 本体 IRI 的唯一来源（与 R2RML 生成器共用）—— 本文件不再自己拼一遍。
+            ontology: opts.ontology_iri(),
             assigned: BTreeMap::new(),
             used: BTreeSet::new(),
         }
@@ -1725,7 +1772,7 @@ fn finish(
     stats: RangeStats,
 ) -> TtlDocument {
     // 本体 IRI 与 `NameSpace::new` 同源（A-7：头部默认前缀 == 正文本体 IRI）。
-    let ontology = format!("{}{}", opts.normalized_base(), local_model(opts.project));
+    let ontology = opts.ontology_iri();
 
     // 头：固定前缀 + 有损声明（AC-008）。
     let mut doc = String::new();
@@ -1990,6 +2037,80 @@ fn inverse_cardinality(cardinality: &str) -> String {
         "N:1" => "1:N".to_string(),
         other => other.to_string(),
     }
+}
+
+/// ⭐ REQ-121 · **关系属性本地名的唯一实现**（前向 + 反向），供 TTL 与 R2RML 共用。
+///
+/// `links` 必须是**已排序**的（TTL 按 `key` / `from` / `to`；R2RML 用同一口径），
+/// 因为「同一对 (from, to) 有多条边」的歧义判定是**集合性**的，
+/// 而名字分配依赖遍历顺序 —— 排序保证两次运行逐字节相同。
+///
+/// # 前向名（REQ-120 的裁定，逐字保留）
+///
+/// 同一对 `(from, to)` 出现**多次**时，本地名追加列名（`{from}__{to}__{col}`）；
+/// 只出现一次的那 71 对仍是 `{from}__{to}`（REQ-119 的契约一个字节不动）。
+///
+/// # 反向名
+///
+/// 有歧义的那一对也带列名（`{to}__{from}__{col}`），否则会退化成
+/// `...__inverse` / `...__inverse2` —— 名字里看不出是哪一列。
+///
+/// # 为什么抽成公共函数
+///
+/// R2RML 的 `rr:predicate` 必须是 TTL 里那条属性的**同一个 IRI**。
+/// 抄一份算法 = 两份命名规则，漂移一次就是「SPARQL 查不到本体里的实例」，
+/// 而且**不会报错**。所以这里的一份实现是唯一的（纪律 H）。
+pub fn model_link_locals(links: &[&ModelLinkView]) -> (Vec<String>, Vec<String>) {
+    let mut pair_count: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for l in links {
+        *pair_count.entry((l.from_type.clone(), l.to_type.clone())).or_insert(0) += 1;
+    }
+
+    let mut forward: Vec<(String, String, Option<String>)> = Vec::new();
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    for l in links {
+        let from_local = local_model(&l.from_type);
+        let to_local = local_model(&l.to_type);
+        let ambiguous = pair_count
+            .get(&(l.from_type.clone(), l.to_type.clone()))
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        let col = ambiguous.then(|| {
+            local_model(
+                l.column
+                    .as_deref()
+                    .unwrap_or(l.key.rsplit("__").next().unwrap_or("column")),
+            )
+        });
+        let raw = match &col {
+            Some(c) => format!("{from_local}__{to_local}__{c}"),
+            None => format!("{from_local}__{to_local}"),
+        };
+        // 极端情形（同一列名出现两次）也要唯一：`taken` 在这里兜底。
+        let raw = unique_local(raw, &mut taken);
+        taken.insert(raw);
+        forward.push((from_local, to_local, col));
+    }
+    let mut inverse_locals: Vec<String> = Vec::new();
+    for (from_local, to_local, col) in &forward {
+        // 有歧义的那一对：反向名也带列名（`{to}__{from}__{col}`），
+        // 否则会退化成 `...__inverse` / `...__inverse2` —— 名字里看不出是哪一列。
+        let raw = match col {
+            Some(c) => unique_local(format!("{to_local}__{from_local}__{c}"), &mut taken),
+            None => inverse_candidate(from_local, to_local, &taken),
+        };
+        taken.insert(raw.clone());
+        inverse_locals.push(raw);
+    }
+    let forward_locals: Vec<String> = forward
+        .iter()
+        .map(|(from_local, to_local, col)| match col {
+            Some(c) => format!("{from_local}__{to_local}__{c}"),
+            None => format!("{from_local}__{to_local}"),
+        })
+        .collect();
+    (forward_locals, inverse_locals)
 }
 
 /// 本地名去重：`base` 已被占用就连加 `_2` / `_3`…
@@ -2299,7 +2420,9 @@ fn bool_lit(v: bool) -> &'static str {
 ///
 /// ⛔ 中文**不转义**（R6：按 UTF-8 原样输出）。控制字符用 `\u00XX` ——
 /// 不这么做的话，一个裸 `\r` 会让 Turtle 文件在 Windows 上被读成两行。
-fn escape(s: &str) -> String {
+///
+/// ⛔ REQ-121：R2RML 生成器也用它（同一个转义器，不抄第二份）。
+pub(crate) fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
@@ -2641,7 +2764,7 @@ mod tests {
         assert_eq!(local_customer("订单"), "订单");
         assert_eq!(local_customer("a b"), "a_b");
         assert_eq!(local_customer("3月"), "_3月");
-        let mut ns = NameSpace::new(&opts(), "demo".to_string());
+        let mut ns = NameSpace::new(&opts());
         // 撞车：第二个同形名字拿到后缀，且**同一个名字**永远拿到同一个后缀。
         let a = ns.local_for("a-b");
         let b = ns.local_for("a_b");

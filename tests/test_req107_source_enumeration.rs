@@ -1921,6 +1921,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/domain/mod.rs", "snapshot"),
     // ⭐ REQ-110 · Turtle（OWL）序列化：纯函数、零依赖、确定性
     ("src/domain/mod.rs", "ttl"),
+    // ⭐ REQ-121 · R2RML 映射生成：纯函数、零依赖、确定性（TTL 的下游消费者）
+    ("src/domain/mod.rs", "r2rml"),
     ("src/domain/mod.rs", "view"),
     ("src/extract/mod.rs", "cardinality"),
     // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）

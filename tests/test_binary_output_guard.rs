@@ -1845,7 +1845,7 @@ fn g5_every_domain_product_print_site_is_registered() {
         if !looks_like_domain_print(call, &bindings) {
             continue;
         }
-        let owner = ["review_cmd", "ontology_cmd", "proposal_cmd", "concept_cmd"]
+        let owner = ["review_cmd", "ontology_cmd", "proposal_cmd", "concept_cmd", "r2rml_cmd"]
             .iter()
             .find(|f| {
                 fn_span(&lines, f)
