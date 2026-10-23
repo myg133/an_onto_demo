@@ -50,9 +50,11 @@ use crate::mcp::protocol as p;
 
 use super::error::ApiError;
 use super::tokens::TokenEntry;
+use super::ttl::TtlView;
 use super::{
-    audit_anonymous, run_catalog, run_describe, run_sample, run_sparql, Caller, CatalogRequest,
-    DescribeRequest, Protocol, QueryService, SampleRequest, SparqlRequest, SYNTAX_VERSION,
+    audit_anonymous, audit_ttl, run_catalog, run_describe, run_sample, run_sparql, Caller,
+    CatalogRequest, DescribeRequest, Protocol, QueryService, SampleRequest, SparqlRequest,
+    SYNTAX_VERSION,
 };
 
 /// 请求体上限（一条 SPARQL 远小于这个数；挡住「用超大 body 拖垮进程」）。
@@ -61,12 +63,24 @@ const MAX_BODY_BYTES: usize = 256 * 1024;
 /// SSE keep-alive 的间隔（也是「空闲」的探测粒度）。
 const SSE_KEEPALIVE: Duration = Duration::from_secs(5);
 
+/// ⭐ REQ-127 · 整份 OWL（Turtle）的端点路径。
+pub const TTL_PATH: &str = "/api/ontology.ttl";
+
+/// ⭐ REQ-127 · 两个 MCP resource 的 URI（与 HTTP 同一份字节）。
+pub const RESOURCE_CUSTOMER: &str = "ontok://ontology/customer.ttl";
+pub const RESOURCE_MODEL: &str = "ontok://ontology/model.ttl";
+
+/// TTL 响应的 `Content-Type`（AC-001）。
+pub const TTL_CONTENT_TYPE: &str = "text/turtle; charset=utf-8";
+
 /// 服务端发给客户端的 `initialize.instructions`。
 ///
 /// 只写**怎么用**与**租户从哪来**，不写任何数据。⛔ 不放项目名/租户名。
 pub const INSTRUCTIONS: &str = "\
 ontok 查询服务（远程 MCP）。工具：catalog（翻页看类/属性/关系）、describe（看一个名字的详情）、\
 sparql_query（执行 SPARQL v1 子集）、sample（取样例值）。
+整份本体：resources/list 里的 ontok://ontology/customer.ttl（客户视图）与 \
+ontok://ontology/model.ttl（建模视图，含主键/枚举/租户列/证据等级），用 resources/read 取原文（Turtle）。
 租户由你的凭据决定：请求里不需要也不能改变租户；带 tenant 字段时必须与凭据一致，否则 403。
 SPARQL v1 只支持单条 SELECT + 基本图模式（1–3 跳）+ FILTER + LIMIT/OFFSET + 单列 ORDER BY +
 COUNT/SUM/MIN/MAX/AVG + 单列 GROUP BY；不支持 OPTIONAL/UNION/子查询/BIND/属性路径/函数。
@@ -88,6 +102,8 @@ pub fn build_router(svc: Arc<QueryService>) -> Router {
         .route("/api/sparql", post(post_sparql))
         .route("/api/catalog", get(get_catalog))
         .route("/api/describe", get(get_describe))
+        // ⭐ REQ-127 · 整份 OWL：默认客户视图，`?view=model` 建模视图（同一道身份门）。
+        .route(TTL_PATH, get(get_ontology_ttl))
         .route("/mcp", post(mcp_post).get(mcp_sse))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -128,6 +144,7 @@ async fn not_found() -> Response {
             "code": "NOT_FOUND",
             "message": "没有这个路径。",
             "hint": "可用：GET /api/catalog、GET /api/describe?name=…、POST /api/sparql、\
+                     GET /api/ontology.ttl（?view=model 取建模视图）、\
                      POST /mcp（JSON-RPC）、GET /mcp（SSE）、GET /api/health（免 token）。",
         }),
     )
@@ -188,7 +205,9 @@ async fn require_token(
         None => {
             let e = ApiError::unauthorized();
             // 审计：这一次**没有身份**可用（不写「哪个 token 错了」——那等于泄漏）。
-            audit_anonymous(&svc, "auth", proto, e.code, started);
+            // ⭐ REQ-127：TTL 端点即使 401 也记下「要的是哪个视图」（AC-006 的四个字段之一）。
+            let view = ttl_view_hint(req.uri().path(), req.uri().query());
+            audit_anonymous(&svc, "auth", proto, view, e.code, started);
             respond(e.status, e.body())
         }
     }
@@ -210,7 +229,7 @@ async fn health(State(svc): State<Arc<QueryService>>) -> Response {
     let started = Instant::now();
     // ⛔ 这里刻意**不读** svc 的任何数据字段（项目名、租户、类清单都不出去）。
     // 只把「这个服务是什么版本、说哪种语法」告诉探针。
-    audit_anonymous(&svc, "health", Protocol::Rest, "OK", started);
+    audit_anonymous(&svc, "health", Protocol::Rest, None, "OK", started);
     respond(
         StatusCode::OK,
         json!({
@@ -304,6 +323,129 @@ async fn get_describe(
     }
 }
 
+/// ⭐ REQ-127 · `GET /api/ontology.ttl` —— **整份 OWL（Turtle）**。
+///
+/// - 默认**客户视图**；`?view=model` 才是建模视图（R1：客户 token 不该一眼拿到内部列名）；
+/// - 两种视图都**不注入租户**（本体是共享结构，不含客户数据）；
+/// - 字节是启动时用 `prepare_ttl_export` + `pipeline::render` 算好并缓存的
+///   —— 与 `ontok ontology export` 同参数时**逐字节相同**（AC-004）；
+/// - `ETag` = 正文 sha256 前 16 位；`If-None-Match` 命中 ⇒ 304 且无体（AC-005）；
+/// - 每次请求一行审计（含 401 / 400 / 304）（AC-006）。
+async fn get_ontology_ttl(
+    State(svc): State<Arc<QueryService>>,
+    Extension(auth): Extension<Auth>,
+    headers: HeaderMap,
+    Query(q): Query<BTreeMap<String, String>>,
+) -> Response {
+    let started = Instant::now();
+    let caller = Caller {
+        token: auth.0,
+        protocol: Protocol::Rest,
+    };
+    let view = match ttl_view_from_query(&q) {
+        Ok(v) => v,
+        Err(e) => {
+            // 参数不合法也记一行（AC-006：每次请求一行）。这一刻还没有可发的字节。
+            audit_ttl(&svc, &caller, TtlView::Customer, None, started, e.code);
+            return respond(e.status, e.body());
+        }
+    };
+
+    let body = svc.ttl.get(view);
+    if if_none_match(&headers, body.etag()) {
+        audit_ttl(&svc, &caller, view, Some(0), started, "NOT_MODIFIED");
+        // 304 **无体**：只回 ETag（AC-005 的判据是 Content-Length 为 0 或不存在）。
+        return ttl_response(StatusCode::NOT_MODIFIED, "", body.etag());
+    }
+
+    audit_ttl(&svc, &caller, view, Some(body.bytes()), started, "OK");
+    ttl_response(StatusCode::OK, body.text(), body.etag())
+}
+
+/// `?view=` 的解析：默认客户视图；`model` 显式要建模视图。
+///
+/// ⛔ 不认识的参数 / 取值 **400**，不静默忽略 —— 拼错 `view=modle` 却拿到客户视图，
+/// 调用方会以为「建模视图里没有主键」，那是错误的事实。
+fn ttl_view_from_query(q: &BTreeMap<String, String>) -> Result<TtlView, ApiError> {
+    let mut view = TtlView::Customer;
+    for (k, v) in q {
+        match k.as_str() {
+            "view" => {
+                view = TtlView::parse(v).ok_or_else(|| {
+                    ApiError::bad_request(
+                        format!("view 只认 customer / model，收到 {v:?}。"),
+                        "默认是**客户视图**（GET /api/ontology.ttl）；要含主键 / 枚举 / 租户列 / \
+                         证据等级的**建模视图**写 `?view=model`。⛔ 拼错不会静默回退。",
+                    )
+                })?
+            }
+            other @ ("token" | "access_token" | "api_key") => {
+                return Err(ApiError::bad_request(
+                    format!("query string 里不要放 {other}。"),
+                    "令牌只认 `Authorization: Bearer <token>` 头；\
+                     放在 query string 里**不生效**，服务端也不会读取它（R5）。",
+                ))
+            }
+            other => {
+                return Err(ApiError::bad_request(
+                    format!("不认识的查询参数 {other:?}。"),
+                    "`/api/ontology.ttl` 只接受 `view=customer|model`（省略 = 客户视图）。",
+                ))
+            }
+        }
+    }
+    Ok(view)
+}
+
+/// `If-None-Match` 是否命中（支持 `*`、弱校验 `W/`、逗号分隔的多值）。
+fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(raw) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let want = etag.trim_matches('"');
+    raw.split(',').any(|part| {
+        let t = part.trim();
+        let t = t.strip_prefix("W/").unwrap_or(t).trim();
+        t == "*" || t.trim_matches('"') == want
+    })
+}
+
+/// TTL 响应（唯一的 Turtle 响应构造点；正文来自 `OntologyTtl` 的缓存字节）。
+fn ttl_response(status: StatusCode, text: &str, etag: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(TTL_CONTENT_TYPE),
+    );
+    // ETag 由内容摘要拼出来（`"<16 hex>"`），只含 ASCII；失败也只是少一个头，不该 panic。
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, value);
+        // 本体随版本冻结：客户端每次都要拿 ETag 复核，⛔ 不让中间层自己猜。
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    (status, headers, text.to_string()).into_response()
+}
+
+/// 401 路径上「要的是哪个视图」的**不解析**提示（只给审计用；不参与任何判定）。
+fn ttl_view_hint(path: &str, query: Option<&str>) -> Option<&'static str> {
+    if path != TTL_PATH {
+        return None;
+    }
+    let requested = query
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("view="))
+        .unwrap_or("");
+    Some(if requested == "model" {
+        TtlView::Model.as_str()
+    } else {
+        TtlView::Customer.as_str()
+    })
+}
+
 // ══════════════════════════════════════════════════════════════
 // MCP over HTTP
 // ══════════════════════════════════════════════════════════════
@@ -335,9 +477,9 @@ async fn mcp_post(
     };
     match p::decode_line(text) {
         p::Incoming::Request(req) => {
-            // `tools/call` 的审计在**适配器**里（一次工具调用一条，含 rows/耗时/错误码）；
-            // 其余方法（initialize / tools/list / ping）在这里补一条信封级审计。
-            if req.method != "tools/call" {
+            // `tools/call` / `resources/read` 的审计在**适配器**里（一次调用一条，含 bytes/错误码）；
+            // 其余方法（initialize / tools/list / resources/list / ping）在这里补一条信封级审计。
+            if req.method != "tools/call" && req.method != "resources/read" {
                 super::audit_call(&svc, "mcp", &caller, None, None, started, "OK", None);
             }
             let line = dispatch(&svc, &caller, &req).await;
@@ -373,12 +515,28 @@ async fn dispatch(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
         "initialize" => {
             let requested = req.params.get("protocolVersion").and_then(Value::as_str);
             let agreed = p::negotiate_protocol_version(requested);
-            p::encode_result(id, p::initialize_result(agreed, INSTRUCTIONS))
+            let mut result = p::initialize_result(agreed, INSTRUCTIONS);
+            // ⭐ REQ-127：本服务**真的**实现了 resources（list/read），所以在这里声明能力。
+            // 共享的 `p::initialize_result` 不声明它 —— stdio 的 `mcp-server` 没有资源，
+            // 在那里声明会让客户端撞一次 -32601。
+            if let Some(caps) = result.get_mut("capabilities").and_then(Value::as_object_mut) {
+                caps.insert(
+                    "resources".to_string(),
+                    json!({ "subscribe": false, "listChanged": false }),
+                );
+            }
+            p::encode_result(id, result)
         }
         "notifications/initialized" => p::encode_result(id, p::empty_result()),
         "ping" => p::encode_result(id, p::empty_result()),
         "tools/list" => p::encode_result(id, p::tools_list_result(Value::Array(tool_defs()))),
         "tools/call" => tools_call(svc, caller, req).await,
+        // ⭐ REQ-127 · 整份 OWL 作为 **resource**（不是 tool）：见 `RESOURCE_*` 与交付说明。
+        "resources/list" => p::encode_result(
+            id,
+            json!({ "resources": resource_defs() }),
+        ),
+        "resources/read" => resources_read(svc, caller, req),
         other => p::encode_error_line(
             id,
             p::METHOD_NOT_FOUND,
@@ -550,6 +708,71 @@ fn tool_defs() -> Vec<Value> {
     ]
 }
 
+/// `resources/list` 的清单（两个视图各一条；URI 与 `resources/read` 的入参一一对应）。
+fn resource_defs() -> Vec<Value> {
+    vec![
+        json!({
+            "uri": RESOURCE_CUSTOMER,
+            "name": "ontology-customer.ttl",
+            "title": "本体（客户视图 · Turtle）",
+            "mimeType": TTL_CONTENT_TYPE,
+            "description": "整份 OWL/Turtle 的**客户视图**：业务名 + 关系，不含主键 / 列名 / 枚举 / \
+                            租户标注 / join 证据。默认就是这一份。",
+        }),
+        json!({
+            "uri": RESOURCE_MODEL,
+            "name": "ontology-model.ttl",
+            "title": "本体（建模视图 · Turtle）",
+            "mimeType": TTL_CONTENT_TYPE,
+            "description": "整份 OWL/Turtle 的**建模视图**：含 ontok:key / 列名 / 主键 / 枚举 / \
+                            租户列 / join 证据等级。内部列名在此轨是**要被裁决的内容**，\
+                            ⛔ 不要把它当成客户可见材料。",
+        }),
+    ]
+}
+
+/// URI → 视图（只认两条；⛔ 不做前缀匹配 —— `ontok://ontology/../` 之类不该被猜出来）。
+fn resource_view(uri: &str) -> Option<TtlView> {
+    match uri {
+        RESOURCE_CUSTOMER => Some(TtlView::Customer),
+        RESOURCE_MODEL => Some(TtlView::Model),
+        _ => None,
+    }
+}
+
+/// `resources/read` —— 返回**与 HTTP 同视图完全相同的字节**（同一个 `OntologyTtl` 缓存）。
+///
+/// 协议形状：`{"contents":[{"uri","mimeType","text"}]}`。`text` 是 Turtle 原文，
+/// 客户端解析出来之后 sha256 与 `GET /api/ontology.ttl?view=…` 的正文相等（AC-007）。
+fn resources_read(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) -> String {
+    let started = Instant::now();
+    let uri = req.params.get("uri").and_then(Value::as_str).unwrap_or("");
+    let Some(view) = resource_view(uri) else {
+        audit_ttl(svc, caller, TtlView::Customer, None, started, "RESOURCE_NOT_FOUND");
+        return p::encode_error_line(
+            &req.id,
+            p::INVALID_PARAMS,
+            &format!("没有这个资源：{uri}"),
+            Some(json!({
+                "code": "RESOURCE_NOT_FOUND",
+                "hint": format!("可用：{RESOURCE_CUSTOMER} / {RESOURCE_MODEL}。"),
+            })),
+        );
+    };
+    let body = svc.ttl.get(view);
+    audit_ttl(svc, caller, view, Some(body.bytes()), started, "OK");
+    p::encode_result(
+        &req.id,
+        json!({
+            "contents": [ {
+                "uri": uri,
+                "mimeType": TTL_CONTENT_TYPE,
+                "text": body.text(),
+            } ]
+        }),
+    )
+}
+
 /// `GET /mcp` —— SSE 流（服务端消息）。
 ///
 /// 三条资源约束都在建流**之前**判：每 token 连接数、全局连接数（超限 ⇒ 429）；
@@ -663,6 +886,11 @@ mod tests {
     /// 401 / 403 / 429 / health / catalog / describe 都在**执行 SQL 之前**结束，
     /// 所以这些判据不需要数据库；真正执行查询的判据在 `tests/test_req123_live.rs`。
     pub(crate) fn test_service() -> Arc<QueryService> {
+        test_service_with_audit(AuditSink::stderr_only())
+    }
+
+    /// 同 [`test_service`]，但审计落到指定 sink（REQ-127 的审计判据读文件对账）。
+    fn test_service_with_audit(audit: AuditSink) -> Arc<QueryService> {
         let (schema, mapping, model) = crate::query::test_fixture();
         let policy = crate::sparql::policy::QueryPolicy::parse(
             r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
@@ -705,7 +933,9 @@ mod tests {
             sse_max_connections: 2,
             max_concurrent_queries: 2,
             tokens,
-            audit: AuditSink::stderr_only(),
+            audit,
+            // ⭐ REQ-127 · 夹具两视图：走同一个 `pipeline::render`（不连库）。
+            ttl: crate::query::ttl::fixture(),
         }));
         svc
     }
@@ -839,7 +1069,19 @@ mod tests {
         assert_eq!(v["jsonrpc"], "2.0");
         assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
         assert!(v["result"]["capabilities"]["tools"].is_object());
+        // ⭐ REQ-127：resources 能力**真的实现了**才声明（list/read 在下面的判据里真调）。
+        assert!(
+            v["result"]["capabilities"]["resources"].is_object(),
+            "initialize 必须声明 resources（否则客户端不会发 resources/list）：{v}"
+        );
         assert!(v["result"]["instructions"].as_str().unwrap().contains("sparql_query"));
+        assert!(
+            v["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("ontok://ontology/model.ttl"),
+            "instructions 要告诉 Agent 整份本体在哪：{v}"
+        );
 
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
         let (_, _, body) = call(build_router(test_service()), post("/mcp", Some(TOKEN_A), line)).await;
@@ -1046,5 +1288,275 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["code"], "NOT_FOUND");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // REQ-127 · 整份 OWL（TTL）：两视图 / ETag / 审计 / MCP resource
+    // ══════════════════════════════════════════════════════════
+
+    /// AC-003：默认**客户视图**（8 个建模关键词 0 命中）；`?view=model` 才有。
+    #[tokio::test]
+    async fn ttl_defaults_to_customer_and_model_is_explicit() {
+        let (status, headers, body) =
+            call(build_router(test_service()), get(TTL_PATH, Some(TOKEN_A))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], TTL_CONTENT_TYPE);
+        assert!(headers.contains_key(header::ETAG), "200 必须带 ETag");
+        for needle in [
+            "ontok:tenantKey",
+            "ontok:tenantColumn",
+            "ontok:tenantUnannotated",
+            "ontok:joinEvidence",
+            "ontok:joinVerified",
+            "ontok:primaryKeyColumn",
+            "ontok:isPrimaryKey",
+            "ontok:allowedValue",
+        ] {
+            assert_eq!(
+                body.matches(needle).count(),
+                0,
+                "客户视图不该出现 {needle}：{body}"
+            );
+        }
+
+        let (status, _, model) = call(
+            build_router(test_service()),
+            get("/api/ontology.ttl?view=model", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        for needle in [
+            "ontok:joinVerified",
+            "ontok:primaryKeyColumn",
+            "ontok:allowedValue",
+        ] {
+            assert!(
+                model.matches(needle).count() > 0,
+                "建模视图必须有 {needle}：{model}"
+            );
+        }
+        assert_ne!(body, model, "两视图必须是两份不同的字节");
+        assert!(model.len() > body.len(), "建模视图应比客户视图大");
+
+        // 显式 `view=customer` 与默认逐字节相同（默认不是「另一个隐藏视图」）。
+        let (_, _, explicit) = call(
+            build_router(test_service()),
+            get("/api/ontology.ttl?view=customer", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(body, explicit);
+    }
+
+    /// AC-002：只认 query token —— 无 token / 错 token / **admin token** 全 401。
+    ///
+    /// `TokenTable` 只有 query token 一种登记；admin token（另一份表里的字符串）
+    /// 在这里就是「不认识的 token」⇒ 401。两套凭证不通用是这个结构的必然结果。
+    #[tokio::test]
+    async fn ttl_accepts_only_the_query_token() {
+        const ADMIN_TOKEN: &str = "ADMIN-TOKEN-cccccccccccccccccccc";
+        for uri in [TTL_PATH, "/api/ontology.ttl?view=model"] {
+            let (status, _, body) = call(build_router(test_service()), get(uri, None)).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} 无 token");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["code"], "UNAUTHORIZED");
+            assert!(!body.contains(TOKEN_A));
+
+            let (status, _, _) =
+                call(build_router(test_service()), get(uri, Some(ADMIN_TOKEN))).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} admin token");
+
+            let (status, _, _) = call(build_router(test_service()), get(uri, Some(TOKEN_A))).await;
+            assert_eq!(status, StatusCode::OK, "{uri} query token");
+        }
+    }
+
+    /// 不认识的 `view` / 参数 ⇒ 400（⛔ 不静默回退成客户视图）。
+    #[tokio::test]
+    async fn ttl_rejects_unknown_views_and_parameters() {
+        for uri in [
+            "/api/ontology.ttl?view=modle",
+            "/api/ontology.ttl?view=",
+            "/api/ontology.ttl?view=model&schema=code/out/schema.json",
+            "/api/ontology.ttl?token=x",
+        ] {
+            let (status, _, body) =
+                call(build_router(test_service()), get(uri, Some(TOKEN_A))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["code"], "BAD_REQUEST");
+            assert!(!v["hint"].as_str().unwrap_or("").is_empty());
+        }
+    }
+
+    /// AC-005：ETag = 正文 sha256 前 16 位；`If-None-Match` 命中 ⇒ 304 且**无体**。
+    #[tokio::test]
+    async fn ttl_etag_and_if_none_match() {
+        use crate::query::audit::sha256_hex;
+
+        let (_, headers, body) =
+            call(build_router(test_service()), get(TTL_PATH, Some(TOKEN_A))).await;
+        let etag = headers[header::ETAG].to_str().expect("ETag 是 ASCII").to_string();
+        assert_eq!(
+            etag,
+            format!("\"{}\"", &sha256_hex(body.as_bytes())[..16]),
+            "ETag 必须是内容 sha256 前 16 位（带引号）"
+        );
+
+        // 命中的 If-None-Match（带引号 / 不带引号都要认）。
+        for presented in [etag.clone(), etag.trim_matches('"').to_string()] {
+            let req = axum::http::Request::builder()
+                .method("GET")
+                .uri(TTL_PATH)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN_A}"))
+                .header(header::IF_NONE_MATCH, presented)
+                .body(Body::empty())
+                .unwrap();
+            let res = build_router(test_service())
+                .oneshot(req)
+                .await
+                .expect("oneshot");
+            assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+            assert_eq!(
+                res.headers()[header::ETAG].to_str().unwrap(),
+                etag.as_str()
+            );
+            let len = res
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("0");
+            assert_eq!(len, "0", "304 的 Content-Length 必须是 0（或无）");
+            let bytes = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+            assert!(bytes.is_empty(), "304 不许带体");
+        }
+
+        // 不命中 ⇒ 200（不是 304）。
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(TTL_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN_A}"))
+            .header(header::IF_NONE_MATCH, "\"0000000000000000\"")
+            .body(Body::empty())
+            .unwrap();
+        let res = build_router(test_service()).oneshot(req).await.expect("oneshot");
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// AC-006：每次请求一行审计 —— 成功（token 摘要 / view / bytes / code）与 401 都有。
+    #[tokio::test]
+    async fn ttl_audit_has_view_and_bytes_for_success_and_401() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontok-req127-audit-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("audit.log");
+        let svc = test_service_with_audit(AuditSink::open(&path).expect("审计文件"));
+        let app = || build_router(Arc::clone(&svc));
+
+        let (status, headers, body) = call(app(), get(TTL_PATH, Some(TOKEN_A))).await;
+        assert_eq!(status, StatusCode::OK);
+        // 304 也记（bytes=0）；再用真实摘要去命中它。
+        let etag = headers[header::ETAG].to_str().unwrap().to_string();
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(TTL_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN_A}"))
+            .header(header::IF_NONE_MATCH, etag)
+            .body(Body::empty())
+            .unwrap();
+        let res = app().oneshot(req).await.expect("oneshot");
+        assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+        // 无 token ⇒ 401 也记一行。
+        let (status, _, _) = call(app(), get("/api/ontology.ttl?view=model", None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let text = std::fs::read_to_string(&path).expect("读审计");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "三次请求三行：\n{text}");
+        assert!(
+            lines[0].contains("event=ttl")
+                && lines[0].contains("token=sha256:")
+                && lines[0].contains("view=customer")
+                && lines[0].contains(&format!("bytes={}", body.len()))
+                && lines[0].contains("code=OK"),
+            "成功行字段不全：{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("code=NOT_MODIFIED") && lines[1].contains("bytes=0"),
+            "304 行：{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("event=auth")
+                && lines[2].contains("token=-")
+                && lines[2].contains("view=model")
+                && lines[2].contains("code=UNAUTHORIZED"),
+            "401 行：{}",
+            lines[2]
+        );
+        assert!(!text.contains(TOKEN_A), "⛔ 审计里出现了 token 明文：{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC-007：MCP 选 **resource** —— `resources/list` 列出两条 URI，
+    /// `resources/read` 的正文与 HTTP 同视图**逐字节相同**（sha256 相等）。
+    #[tokio::test]
+    async fn mcp_resource_reads_the_same_ttl_bytes_as_http() {
+        use crate::query::audit::sha256_hex;
+
+        let (status, _, body) = call(
+            build_router(test_service()),
+            post("/mcp", Some(TOKEN_A), r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let uris: Vec<&str> = v["result"]["resources"]
+            .as_array()
+            .expect("resources[]")
+            .iter()
+            .map(|r| r["uri"].as_str().unwrap())
+            .collect();
+        assert_eq!(uris, vec![RESOURCE_CUSTOMER, RESOURCE_MODEL]);
+
+        for (uri, http_uri) in [
+            (RESOURCE_CUSTOMER, TTL_PATH),
+            (RESOURCE_MODEL, "/api/ontology.ttl?view=model"),
+        ] {
+            let line = format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{{"uri":"{uri}"}}}}"#
+            );
+            let (_, _, rpc) = call(build_router(test_service()), post("/mcp", Some(TOKEN_A), &line)).await;
+            let v: Value = serde_json::from_str(&rpc).unwrap();
+            let text = v["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{uri} 没有 text：{v}"));
+            assert_eq!(v["result"]["contents"][0]["mimeType"], TTL_CONTENT_TYPE);
+
+            let (_, _, http_body) = call(build_router(test_service()), get(http_uri, Some(TOKEN_A))).await;
+            assert_eq!(text, http_body, "{uri} 与 {http_uri} 必须逐字节相同");
+            assert_eq!(
+                sha256_hex(text.as_bytes()),
+                sha256_hex(http_body.as_bytes()),
+                "{uri} 的 sha256 必须与 HTTP 相同"
+            );
+        }
+    }
+
+    /// `resources/read` 的不认识 URI ⇒ 协议错误（带可行动的 hint），⛔ 不返回空内容。
+    #[tokio::test]
+    async fn mcp_resources_read_unknown_uri_is_an_error() {
+        let line = r#"{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"ontok://ontology/evil.ttl"}}"#;
+        let (_, _, body) = call(build_router(test_service()), post("/mcp", Some(TOKEN_A), line)).await;
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].is_object(), "{v}");
+        assert_eq!(v["error"]["data"]["code"], "RESOURCE_NOT_FOUND");
+        assert!(v["error"]["data"]["hint"].as_str().unwrap().contains(RESOURCE_MODEL));
     }
 }

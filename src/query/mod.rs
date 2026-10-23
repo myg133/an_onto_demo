@@ -74,6 +74,8 @@ pub mod error;
 pub mod http;
 pub mod serve;
 pub mod tokens;
+// ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（客户 / 建模）。
+pub mod ttl;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -478,6 +480,8 @@ pub struct QueryService {
     pub max_concurrent_queries: usize,
     pub tokens: TokenTable,
     pub audit: AuditSink,
+    /// ⭐ REQ-127 · 两视图的 TTL（启动时算好；版本冻结 ⇒ 内容不变）。
+    pub ttl: crate::query::ttl::OntologyTtl,
     /// 目录条目（启动时拍平一次，翻页只做切片）。
     pub catalog_items: Vec<catalog::CatalogItem>,
     limiter: Arc<Limiter>,
@@ -500,6 +504,8 @@ pub struct ServiceParts {
     pub max_concurrent_queries: usize,
     pub tokens: TokenTable,
     pub audit: AuditSink,
+    /// ⭐ REQ-127 · 两视图的 TTL（`query::ttl::OntologyTtl::prepare` 的产物）。
+    pub ttl: crate::query::ttl::OntologyTtl,
 }
 
 impl QueryService {
@@ -521,6 +527,7 @@ impl QueryService {
             max_concurrent_queries: p.max_concurrent_queries,
             tokens: p.tokens,
             audit: p.audit,
+            ttl: p.ttl,
             catalog_items,
             limiter: Arc::new(Limiter::default()),
         }
@@ -1084,7 +1091,38 @@ pub fn audit_call(
         rows,
         elapsed_ms: started.elapsed().as_millis(),
         code,
+        view: None,
+        bytes: None,
         note,
+    };
+    svc.audit.record(&rec);
+}
+
+/// ⭐ REQ-127 · TTL 出口的审计（成功 / 304 / 400 都走这一条）。
+///
+/// 比 [`audit_call`] 多两个字段：`view`（customer / model）与 `bytes`（响应正文字节数）。
+/// 401 走 [`audit_anonymous`]（没有身份可用，但有 `view`）。
+pub fn audit_ttl(
+    svc: &QueryService,
+    caller: &Caller,
+    view: crate::query::ttl::TtlView,
+    bytes: Option<usize>,
+    started: Instant,
+    code: &'static str,
+) {
+    let rec = AuditRecord {
+        ts: AuditRecord::now_ts(),
+        event: "ttl",
+        proto: caller.protocol.as_str(),
+        token_digest: Some(caller.token.audit_digest()),
+        tenant: Some(caller.token.tenant.clone()),
+        query_digest: None,
+        rows: None,
+        elapsed_ms: started.elapsed().as_millis(),
+        code,
+        view: Some(view.as_str()),
+        bytes,
+        note: None,
     };
     svc.audit.record(&rec);
 }
@@ -1093,10 +1131,13 @@ pub fn audit_call(
 ///
 /// 字段里没有 token / tenant / query —— 它们**此刻不存在**。事件名仍然记录，
 /// 于是「401 有多少次」是一个能数出来的事实，而不是一段沉默。
+///
+/// `view` 只有 TTL 端点会传（401/400 也记「你要的是哪个视图」）。
 pub fn audit_anonymous(
     svc: &QueryService,
     event: &'static str,
     proto: Protocol,
+    view: Option<&'static str>,
     code: &'static str,
     started: Instant,
 ) {
@@ -1110,6 +1151,8 @@ pub fn audit_anonymous(
         rows: None,
         elapsed_ms: started.elapsed().as_millis(),
         code,
+        view,
+        bytes: None,
         note: None,
     };
     svc.audit.record(&rec);
@@ -1372,6 +1415,7 @@ mod tests {
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
             audit: AuditSink::stderr_only(),
+            ttl: crate::query::ttl::fixture(),
         });
 
         // 直接构造一个 QueryResult（等价于 run_query 的成功返回）来验证回执扩展。
@@ -1479,6 +1523,7 @@ mod tests {
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
             audit: AuditSink::stderr_only(),
+            ttl: crate::query::ttl::fixture(),
         });
 
         let q = sample_query(&svc, ":customers", 5).expect("已知类");

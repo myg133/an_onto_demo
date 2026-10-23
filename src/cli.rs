@@ -614,11 +614,20 @@ pub enum QueryCmd {
     /// POST /api/sparql         body {query, max_rows?}（tenant 只能来自 token）
     /// GET  /api/catalog?page=1&page_size=50
     /// GET  /api/describe?name=:customers
+    /// GET  /api/ontology.ttl   ⭐整份 OWL（Turtle）：默认**客户视图**；`?view=model` 建模视图
     /// GET  /api/health         免 token，只给版本与语法版本
-    /// POST /mcp                JSON-RPC 2.0（initialize / tools/list / tools/call）
+    /// POST /mcp                JSON-RPC 2.0（initialize / tools/list / tools/call / resources/list / resources/read）
     /// GET  /mcp                SSE 流（服务端消息；空闲超时会主动断开）
     ///
     /// MCP 工具：catalog / describe / sparql_query / sample。
+    /// MCP 资源：`ontok://ontology/customer.ttl`（客户视图）/ `ontok://ontology/model.ttl`（建模视图），
+    /// 用 `resources/read` 取原文 —— 与 HTTP 同视图的字节**逐字节相同**。
+    ///
+    /// ⚠️ `/api/ontology.ttl` 的字节与 CLI 导出**同参数**时 sha256 相等：
+    /// 客户视图 = `ontok ontology export`（不带 `--schema`；客户视图结构上不含列名，
+    /// `--schema` 只改文件头一句说明）；建模视图 = `ontok ontology export --model-view
+    /// --schema <schema> --tenancy <file>`。⛔ 客户视图不含 `ontok:tenant*` / 列名 / 主键 /
+    /// 枚举 / join 证据；要这些必须显式 `?view=model`（R1）。
     ///
     /// ⚠️ 回执里的 `join_states[]` 是**什么范围**（⛔ 别读成「本次查询走到的边」）：
     ///
@@ -657,6 +666,12 @@ pub enum QueryCmd {
         /// 租户声明（`query-policy.json`，ADR-006）—— **没有默认值**
         #[arg(long)]
         policy: PathBuf,
+        /// ⭐ 租户标注声明（与 `ontology export --tenancy` 同一份）—— **只在 `?view=model` 生效**。
+        ///
+        /// 省略时自动取 `--policy` 同目录的 `tenancy.json`（存在才用；取不到会在启动时警告，
+        /// 建模视图因此不含 `ontok:tenant*`）。客户视图结构上不含租户信息，不受它影响。
+        #[arg(long)]
+        tenancy: Option<PathBuf>,
         /// 允许绑非内网地址（0.0.0.0 / 公网）。⛔ 不加就只能绑回环或内网
         #[arg(long)]
         allow_public: bool,
@@ -4669,6 +4684,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         version,
         schema,
         policy,
+        tenancy,
         allow_public,
         timeout_ms,
         sse_idle_timeout_ms,
@@ -4686,6 +4702,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         version,
         schema,
         policy,
+        tenancy,
         allow_public,
         timeout_ms,
         sse_idle_timeout_ms,
