@@ -1,0 +1,259 @@
+{
+  "version": "1.0.0",
+  "tenantSubject": "customers",
+  "tenantIdColumn": "id",
+  "perTable": {
+    "agent_white_list": {
+      "tenantColumn": "customer_id"
+    },
+    "api_call_logs": {
+      "tenantColumn": "customer_id",
+      "reason": "本库 0 行；列存在（0/0 非空），归属口径与 licenses 一致"
+    },
+    "app_billing_transactions": {
+      "tenantColumn": "customer_id"
+    },
+    "balance_operation_log": {
+      "tenantColumn": "customer_id",
+      "reason": "related_customer_id 是划拨对手方（122/159 非空），不是归属；本表按 customer_id 过滤（159/159 非空）"
+    },
+    "balance_transfer": {
+      "tenantColumn": "from_customer_id",
+      "reason": "一笔划转有两个客户列（from/to 各 57/57 非空）。v1 一条声明只能登记一列 ⇒ 先登记付款方；收款方的可见性待业务确认（ADR-006 的已知限制：不做子账号/对手方解析）"
+    },
+    "balances": {
+      "tenantColumn": "customer_id",
+      "reason": "customer_id 17935/17935 非空；source_customer_id 只有 20/17935（划拨来源），拿它过滤会隐藏 99.9% 的余额行"
+    },
+    "customer_account_binding": {
+      "tenantColumn": "main_customer_id",
+      "reason": "子账号数据归主账号（ADR-006）：main_customer_id 65/65 非空，sub_customer_id 只有 54/65"
+    },
+    "customer_feature_permissions": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_interests": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_provider_permissions": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_rate_limit": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_rebate": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_subscriptions": {
+      "tenantColumn": "customer_id"
+    },
+    "customer_tpm_rate_limit": {
+      "tenantColumn": "customer_id"
+    },
+    "deductions": {
+      "tenantColumn": "customer_id",
+      "reason": "ADR-006 的示例写的是 main_customer_id（子账号归主账号），但本库 4 行 deductions 的 main_customer_id 全为 NULL（0/4）—— 按它过滤会让这 4 行对任何租户都不可见。本版按实际扣费账号 customer_id（4/4 非空）登记；若业务坚持主子账号口径，改这一行即可（代码不动），并需先补齐 main_customer_id"
+    },
+    "dim_customer_binding": {
+      "tenantColumn": "customer_id",
+      "reason": "main_customer_id 只有 29/17851 非空（绝大多数行没有主账号标注），按它过滤会隐藏 99.8% 的行；本表按 customer_id（17851/17851）"
+    },
+    "enterprise_recharge_order": {
+      "tenantColumn": "customer_id"
+    },
+    "family_high_risk_records": {
+      "tenantColumn": "main_customer_id",
+      "reason": "本表只有 main_customer_id 这一个租户列（本库 0 行）"
+    },
+    "file_parser_task": {
+      "tenantColumn": "customer_id"
+    },
+    "free_amounts": {
+      "tenantColumn": "customer_id"
+    },
+    "frozen_assets": {
+      "tenantColumn": "main_customer_id",
+      "reason": "冻结发生在主账号绑定时，子账号数据归主账号（ADR-006）；两列各 1804/1804 非空，选 main_customer_id"
+    },
+    "instance_manager": {
+      "tenantColumn": "customer_id"
+    },
+    "instance_task_manager": {
+      "tenantColumn": "customer_id"
+    },
+    "internal_messages": {
+      "tenantColumn": "customer_id",
+      "reason": "related_customer_id 是消息的关联方，不是归属；customer_id 13/15 非空（2 行无归属 ⇒ 对任何租户不可见，这是如实结果）"
+    },
+    "internal_operation_records": {
+      "tenantColumn": "customer_id"
+    },
+    "internal_staff": {
+      "tenantColumn": "customer_id",
+      "reason": "本库 0 行；列存在"
+    },
+    "ip_whitelist": {
+      "tenantColumn": "customer_id"
+    },
+    "licenses": {
+      "tenantColumn": "customer_id"
+    },
+    "licenses_archive": {
+      "tenantColumn": "customer_id"
+    },
+    "marketing_channel_customer": {
+      "tenantColumn": "customer_id"
+    },
+    "marketing_channel_log": {
+      "tenantColumn": "customer_id"
+    },
+    "operate_log": {
+      "tenantColumn": "customer_id"
+    },
+    "order": {
+      "tenantColumn": "customer_id"
+    },
+    "proxy_operation_auths": {
+      "tenantColumn": "customer_id"
+    },
+    "refund_operations": {
+      "tenantColumn": "customer_id"
+    },
+    "simulate_login_sessions": {
+      "tenantColumn": "target_customer_id",
+      "reason": "被模拟登录的目标客户就是这条会话的租户；admin_user_id 是操作人（内部账号），不能用它过滤"
+    },
+    "sub_account_bind_permission": {
+      "tenantColumn": "main_customer_id",
+      "reason": "子账号数据归主账号（ADR-006）；本表 4/4 非空"
+    },
+    "sub_account_quota": {
+      "tenantColumn": "main_customer_id",
+      "reason": "子账号配额归主账号（ADR-006）；本库 0 行"
+    },
+    "subscription_priority": {
+      "tenantColumn": "customer_id"
+    },
+    "usage_details": {
+      "tenantColumn": "customer_id"
+    },
+    "usage_quotas": {
+      "tenantColumn": "customer_id"
+    },
+    "usage_reconciliation_log": {
+      "tenantColumn": "customer_id"
+    }
+  },
+  "publicDimensions": [
+    {
+      "table": "package_templates",
+      "reason": "套餐模板是产品目录：所有客户看到的是同一份在售套餐与价格"
+    },
+    {
+      "table": "package_products",
+      "reason": "套餐包含的产品是产品目录的一部分，与客户无关"
+    },
+    {
+      "table": "package_benefits",
+      "reason": "套餐权益定义属于产品目录"
+    },
+    {
+      "table": "recharge_products",
+      "reason": "充值产品（面额/赠品）是产品目录"
+    },
+    {
+      "table": "llm_model",
+      "reason": "模型目录：同一批模型对所有客户开放（谁能用由 customer_provider_permissions 决定，不在本表）"
+    },
+    {
+      "table": "llm_provider",
+      "reason": "供应商目录，与具体客户无关"
+    },
+    {
+      "table": "llm_provider_groups",
+      "reason": "供应商分组是路由/定价的产品配置"
+    },
+    {
+      "table": "llm_provider_group_items",
+      "reason": "分组成员是 llm_provider_groups 的明细，同样是产品配置"
+    },
+    {
+      "table": "llm_routing_rules",
+      "reason": "路由规则是平台级配置，对所有客户相同"
+    },
+    {
+      "table": "llm_model_peak_config",
+      "reason": "峰谷价格配置是产品定价，不属于某个客户"
+    },
+    {
+      "table": "llm_model_sort",
+      "reason": "模型展示排序是全局配置"
+    },
+    {
+      "table": "service_config",
+      "reason": "服务计费口径（单价/计量单位）是平台配置"
+    },
+    {
+      "table": "service_config_peak",
+      "reason": "峰谷计费配置是平台配置"
+    },
+    {
+      "table": "service_free_amount_config",
+      "reason": "免费额度配置是平台策略，对所有客户相同"
+    },
+    {
+      "table": "marketing_channel",
+      "reason": "渠道定义是全局字典（哪个客户的渠道实例在 marketing_channel_customer 里）"
+    },
+    {
+      "table": "interest_configs",
+      "reason": "兴趣目录是全局字典，客户的兴趣在 customer_interests 里"
+    },
+    {
+      "table": "customer_provider_permission_policies",
+      "reason": "策略模板目录：具体授权在 customer_provider_permissions（按 customer_id 过滤）"
+    },
+    {
+      "table": "activity",
+      "reason": "运营活动目录是全局内容"
+    },
+    {
+      "table": "activity_keys",
+      "reason": "活动的键值配置，属于活动目录"
+    },
+    {
+      "table": "activity_recommendations",
+      "reason": "活动推荐位是全局运营内容（没有客户列）"
+    },
+    {
+      "table": "gift_code_batch",
+      "reason": "礼品码批次是运营批次定义；具体兑换归属在 gift_codes.redeemed_by（本表无客户列）"
+    },
+    {
+      "table": "ai_search_pipelines",
+      "reason": "AI 搜索管道配置是平台配置"
+    },
+    {
+      "table": "keyword_filter_config",
+      "reason": "关键词过滤是全局风控配置"
+    },
+    {
+      "table": "website_notice_config",
+      "reason": "站点公告是全局内容"
+    },
+    {
+      "table": "seetings",
+      "reason": "全局设置（表名原文如此）"
+    },
+    {
+      "table": "agent_device_version",
+      "reason": "客户端版本配置是平台级配置"
+    },
+    {
+      "table": "ip_blacklist",
+      "reason": "全局 IP 黑名单是风控配置（按客户的白名单在 ip_whitelist，已按 customer_id 过滤）"
+    }
+  ],
+  "reviewed_by": "业务方 2026-10-23（ADR-006 三项裁定）+ Dev 2026-10-23（逐表列名按真实覆盖率填，见各 reason）",
+  "notes": "机制是产品的（读本文件 → 逐表决定「过滤列 / 公共维度 / 不可查」→ 注入），口径是项目的：换一个客户库只改这里，不改代码。⛔ 没登记、又不在 publicDimensions 的表 = 不可查（查询整条拒绝并点名）。本版尚未登记的 14 张表（口径未定，故意留空而不是猜一列）：admin_roles、admin_users、admin_user_roles、gift_codes、instance_task_record、intance_task_plans、license_quota、proxy_operation_records、service_apps、share_records、share_usage、simulate_login_operations、sub_account_permission、trial_records。它们要么没有客户列（admin_* / gift_codes / license_quota / service_apps / share_* / trial_records / instance_task_* / intance_task_plans / proxy_operation_records / simulate_login_operations），要么只有子账号 id、无法反解主账号（sub_account_permission）。业务方登记其中任一列或把它们标为公共维度后即可查询。已知限制：一条声明只能登记一个过滤列 ⇒ balance_transfer 先按付款方（from_customer_id）；子账号 id → 主账号的解析层不在本版（ADR-006 Limitation）。"
+}

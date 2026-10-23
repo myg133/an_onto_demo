@@ -245,39 +245,140 @@ impl std::error::Error for R2rmlError {}
 // 计划（先算清，再渲染）
 // ══════════════════════════════════════════════════════════════
 
-/// 一个类的映射计划。
-struct MapPlan {
+/// ⭐ REQ-122 · **内存映射**（结构化）—— `r2rml generate` 与 `sparql query` 的**同一份**结果。
+///
+/// # 为什么要有它（而不是让查询去解析 TTL）
+///
+/// REQ-122 的查询引擎需要知道「哪个类是哪张表、哪个属性是哪一列、哪条关系怎么 join」。
+/// 两种做法：
+///
+/// | 做法 | 后果 |
+/// | --- | --- |
+/// | 查询引擎解析生成好的 TTL | 同一份映射有**两份**读法：改了一边、另一边不知道 ⇒ 漂移，而且**不报错** |
+/// | 两边都调 [`build_mapping`] | 「映射文件里是什么，查询就是什么」由**构造**保证，不是靠对齐 |
+///
+/// 所以本模块把「先算清」那一段抽成 [`build_mapping`]，[`generate`] 只负责把它的结果
+/// 渲染成 Turtle。查询引擎拿的是**同一个函数**的输出 —— 判据：内存映射的类数 / join 数
+/// 与 TTL 里的 `rr:TriplesMap` / `rr:joinCondition` 数一致。
+///
+/// ⛔ 这里**不**新增任何命名规则：字段全部来自 [`build_mapping`] 的既有计算
+/// （类本地名来自 [`local_model`]，属性 / 谓词的本地名与 TTL 逐字相同）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct R2rmlMapping {
+    /// 全部 TriplesMap（按类 key 排序）。
+    classes: Vec<MappedClass>,
+    /// 未生成 TriplesMap 的类：`(类 key, 原因)`，已排序。
+    skipped_classes: Vec<(String, String)>,
+    /// 被排除的边：`(关系标签, 原因)`，已排序。
+    excluded_edges: Vec<(String, String)>,
+    /// 结构统计（与 TTL 文件头同一份）。
+    stats: R2rmlStats,
+}
+
+impl R2rmlMapping {
+    /// 全部类（顺序 = `.len()` 与 TTL 里 TriplesMap 的顺序一致：按类 key 排序）。
+    pub fn classes(&self) -> &[MappedClass] {
+        &self.classes
+    }
+
+    /// 按类 key（= 表名）找。
+    pub fn class(&self, key: &str) -> Option<&MappedClass> {
+        self.classes.iter().find(|c| c.key == key)
+    }
+
+    /// 按类 IRI 本地名找（TTL 里的 `:<local>`）—— 同一份本地名映射。
+    pub fn class_by_local(&self, local: &str) -> Option<&MappedClass> {
+        self.classes.iter().find(|c| c.class_local == local)
+    }
+
+    /// 结构统计（`triples_maps` = [`Self::classes`] 的长度；`join_maps` = 全部 join 数）。
+    pub fn stats(&self) -> &R2rmlStats {
+        &self.stats
+    }
+
+    /// join 总数（= `stats().join_maps`；单独一个方法给验收判据按名字对账）。
+    pub fn join_count(&self) -> usize {
+        self.classes.iter().map(|c| c.joins.len()).sum()
+    }
+
+    /// 未生成 TriplesMap 的类（复合主键 / 无主键），已排序。
+    pub fn skipped_classes(&self) -> &[(String, String)] {
+        &self.skipped_classes
+    }
+
+    /// 被排除的边（`inherit` / `false` / 未标），已排序。
+    pub fn excluded_edges(&self) -> &[(String, String)] {
+        &self.excluded_edges
+    }
+}
+
+/// 一个类 = 一个 TriplesMap。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedClass {
     /// 类 key（= 表名 = `ontok:key`）。
-    key: String,
+    pub key: String,
     /// 类 IRI 本地名（与 TTL 的 `:<local>` 同一个）。
-    class_local: String,
-    /// 单列主键列名。
-    pk: String,
+    pub class_local: String,
+    /// 单列主键列名（实例 IRI 模板的 `{id}`）。
+    pub pk: String,
     /// 租户列（已排序；空 = 该类没有租户标注）。
-    tenant_columns: Vec<String>,
+    pub tenant_columns: Vec<String>,
     /// 数据类型属性：按列名排序。
-    datatypes: Vec<DatatypePlan>,
+    pub properties: Vec<MappedProperty>,
     /// join：按谓词本地名排序。
-    joins: Vec<JoinPlan>,
+    pub joins: Vec<MappedJoin>,
 }
 
-struct DatatypePlan {
-    column: String,
-    xsd: XsdType,
+impl MappedClass {
+    /// 按谓词本地名找数据类型属性（查询引擎用：`:类__列`）。
+    pub fn property(&self, local: &str) -> Option<&MappedProperty> {
+        self.properties.iter().find(|p| p.local == local)
+    }
+
+    /// 按谓词本地名找 join（前向：`:子类__父类`）。
+    pub fn join(&self, local: &str) -> Option<&MappedJoin> {
+        self.joins.iter().find(|j| j.predicate_local == local)
+    }
 }
 
-struct JoinPlan {
-    /// 谓词 IRI 的本地名（与 TTL 的 `:<local>` 同一个）。
-    predicate_local: String,
-    /// 子列（快照 `evidence[0].column`）。
-    child: String,
-    /// 父 TriplesMap 的 key。
-    parent_key: String,
+/// 一个数据类型属性 = 一个 `rr:predicate` + `rr:column`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedProperty {
+    /// 谓词 IRI 的本地名（`{类本地名}__{列的本地名}`，与 TTL 逐字相同）。
+    pub local: String,
+    /// 列名（真实 schema 里的那一列）。
+    pub column: String,
+    /// `rr:datatype`。
+    pub xsd: XsdType,
+}
+
+/// 一条 join = 一个 `rr:joinCondition`。
+///
+/// ⚠️ **只有前向**（`child` → `parent`），这是 R2RML 的形状。反向查询（`parent` 当主语）
+/// 由查询引擎在**这一条**上反解 —— 所以这里额外记下它的反向谓词本地名
+/// [`Self::inverse_local`]（与 TTL 的 `model_link_locals` 同一份算法，⛔ 不另算一遍）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappedJoin {
+    /// 前向谓词 IRI 的本地名（`:子类__父类`）。
+    pub predicate_local: String,
+    /// 反向谓词 IRI 的本地名（`:父类__子类`）—— R2RML 里**没有**这一条，供引擎反解。
+    pub inverse_local: String,
+    /// 子表列（快照 `evidence[0].column`）。
+    pub child: String,
+    /// 子表的类 key（= 拥有这一条 join 的 TriplesMap）。
+    ///
+    /// 为什么它必须在这里：反向查询时要知道「我反解到的是哪张子表」，
+    /// 而 [`Self::parent_table`] 只说了父表 —— 从 `predicate_local` 里再拆一遍名字
+    /// 就是第二份命名规则。
+    pub child_table: String,
+    /// 父 TriplesMap 的 key（= 父表名）。
+    pub parent_table: String,
     /// 父列（从 `joinEvidence` 解析，可能是唯一列）。
-    parent: String,
-    state: JoinState,
+    pub parent_column: String,
+    /// 证据等级（`true` / `inherit`）—— 决定这条 join 在 TTL 里的标注。
+    pub state: JoinState,
     /// 证据原文（`ontok:joinEvidence`）。
-    evidence: String,
+    pub evidence: String,
 }
 
 /// ⭐ A-2.4 · **审计输入**（只影响文件头 / 文件尾 / 回执，不改变「查库」逻辑）。
@@ -307,12 +408,32 @@ pub fn generate(
 }
 
 /// 生成 + **审计**（A-2.4 的 fail-visible 判据）。
+///
+/// ⭐ REQ-122 起本函数只是「[`build_mapping`] + [`render`]」两段直连 ——
+/// 查询引擎走的是**前半段同一个函数**，所以映射文件与查询永远同源（见 [`R2rmlMapping`]）。
 pub fn generate_audited(
     view: &ModelTrackView,
     opts: &TtlOptions<'_>,
     include_inherit: bool,
     audit: R2rmlAudit<'_>,
 ) -> Result<R2rmlDocument, R2rmlError> {
+    let mapping = build_mapping(view, opts, include_inherit, audit)?;
+    Ok(document_of(mapping, view, opts, include_inherit, audit))
+}
+
+/// ⭐ REQ-122 · **算清映射（内存）** —— `generate` 与 `sparql query` 的共同前半段。
+///
+/// 全部对账（schema / 证据 / 唯一列）都在这里，失败 ⇒ [`R2rmlError`]，**一个字节都不产出**。
+/// 返回的是**结构化**的 [`R2rmlMapping`]：类 → 表、属性 → 列、关系 → joinCondition。
+///
+/// ⚠️ 判据（AC-010 的同一条纪律）：本函数是映射的**唯一**产物来源。
+/// 谁要读映射（渲染 TTL、生成 SQL），都从这里拿 —— ⛔ 不许再去解析 TTL 文件。
+pub fn build_mapping(
+    view: &ModelTrackView,
+    opts: &TtlOptions<'_>,
+    include_inherit: bool,
+    audit: R2rmlAudit<'_>,
+) -> Result<R2rmlMapping, R2rmlError> {
     let Some(schema) = opts.schema else {
         return Err(R2rmlError::one(
             "缺少 --schema：主键 / 复合主键 / 列存在性都只能来自真实 schema（⛔ 不猜）".to_string(),
@@ -327,7 +448,7 @@ pub fn generate_audited(
     let mut entities: Vec<&ModelEntityView> = view.entity_types.iter().collect();
     entities.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.display_name.cmp(&b.display_name)));
 
-    let mut maps: Vec<MapPlan> = Vec::new();
+    let mut maps: Vec<MappedClass> = Vec::new();
     for e in &entities {
         if !schema.has_table(&e.key) {
             failures.insert(format!(
@@ -352,7 +473,7 @@ pub fn generate_audited(
         let mut props: Vec<&crate::domain::model_view::ModelPropertyView> =
             e.properties.iter().collect();
         props.sort_by(|a, b| a.column.cmp(&b.column).then_with(|| a.name.cmp(&b.name)));
-        let mut datatypes: Vec<DatatypePlan> = Vec::new();
+        let mut datatypes: Vec<MappedProperty> = Vec::new();
         let mut covered: BTreeSet<String> = BTreeSet::new();
         for p in props {
             let column = effective_column(p);
@@ -381,14 +502,22 @@ pub fn generate_audited(
                 label,
                 p.note.as_deref(),
             );
-            datatypes.push(DatatypePlan { column: column.to_string(), xsd });
+            datatypes.push(MappedProperty {
+                local: format!("{}__{}", local_model(&e.key), local_model(column)),
+                column: column.to_string(),
+                xsd,
+            });
         }
         // B-2 的同一条口径：主教列通常被抽取侧从 properties 里剥掉了
         // （`licenses` 没有 `id`）。没有它，`{id}` 模板就指不到任何列。
         if !covered.contains(&pk) {
             let (xsd, _basis, _source) =
                 xsd_range(Some(&e.key), Some(&pk), opts.schema, &pk, None);
-            datatypes.push(DatatypePlan { column: pk.clone(), xsd });
+            datatypes.push(MappedProperty {
+                local: format!("{}__{}", local_model(&e.key), local_model(&pk)),
+                column: pk.clone(),
+                xsd,
+            });
         }
         datatypes.sort_by(|a, b| a.column.cmp(&b.column));
 
@@ -400,12 +529,12 @@ pub fn generate_audited(
         tenant_columns.sort();
         tenant_columns.dedup();
 
-        maps.push(MapPlan {
+        maps.push(MappedClass {
             key: e.key.clone(),
             class_local: local_model(&e.key),
             pk,
             tenant_columns,
-            datatypes,
+            properties: datatypes,
             joins: Vec::new(),
         });
     }
@@ -421,7 +550,7 @@ pub fn generate_audited(
             .then_with(|| a.from_type.cmp(&b.from_type))
             .then_with(|| a.to_type.cmp(&b.to_type))
     });
-    let (predicate_locals, _inverse_locals) = model_link_locals(&links);
+    let (predicate_locals, inverse_locals) = model_link_locals(&links);
 
     let map_index: BTreeMap<String, usize> =
         maps.iter().enumerate().map(|(i, m)| (m.key.clone(), i)).collect();
@@ -561,11 +690,16 @@ pub fn generate_audited(
             continue;
         }
 
-        maps[child_idx].joins.push(JoinPlan {
+        let child_table = maps[child_idx].key.clone();
+        maps[child_idx].joins.push(MappedJoin {
             predicate_local: predicate_locals[i].clone(),
+            // 反向谓词名同样来自 `model_link_locals`（与 TTL 同一份算法）。
+            // R2RML 里没有它 —— 查询引擎用它反解「父类当主语」的那一半。
+            inverse_local: inverse_locals[i].clone(),
             child: child.to_string(),
-            parent_key: l.to_type.clone(),
-            parent: parent_column,
+            child_table,
+            parent_table: l.to_type.clone(),
+            parent_column,
             state: state.expect("emit 只发生在 Some(..) 上"),
             evidence,
         });
@@ -574,7 +708,9 @@ pub fn generate_audited(
     // join 按谓词本地名排序（确定性；同一张 TriplesMap 内不依赖输入顺序）。
     for m in &mut maps {
         m.joins.sort_by(|a, b| {
-            a.predicate_local.cmp(&b.predicate_local).then_with(|| a.parent.cmp(&b.parent))
+            a.predicate_local
+                .cmp(&b.predicate_local)
+                .then_with(|| a.parent_column.cmp(&b.parent_column))
         });
     }
 
@@ -644,7 +780,7 @@ pub fn generate_audited(
     excluded.sort();
     let stats = R2rmlStats {
         triples_maps: maps.len(),
-        datatype_maps: maps.iter().map(|m| m.datatypes.len()).sum(),
+        datatype_maps: maps.iter().map(|m| m.properties.len()).sum(),
         join_maps: maps.iter().map(|m| m.joins.len()).sum(),
         verified_edges,
         inherited_edges,
@@ -658,17 +794,34 @@ pub fn generate_audited(
         skipped_signed_edges: skipped_signed_edges.clone(),
     };
 
+    Ok(R2rmlMapping {
+        classes: maps,
+        skipped_classes,
+        excluded_edges: excluded,
+        stats,
+    })
+}
+
+/// 把已算清的映射渲染成 Turtle（[`build_mapping`] 的后半段）。
+fn document_of(
+    mapping: R2rmlMapping,
+    view: &ModelTrackView,
+    opts: &TtlOptions<'_>,
+    include_inherit: bool,
+    audit: R2rmlAudit<'_>,
+) -> R2rmlDocument {
+    let R2rmlMapping { classes, skipped_classes, excluded_edges, stats } = mapping;
     let doc = render(
         view,
         opts,
-        &maps,
+        &classes,
         &skipped_classes,
-        &excluded,
+        &excluded_edges,
         &stats,
         include_inherit,
         audit,
     );
-    Ok(R2rmlDocument { doc, stats })
+    R2rmlDocument { doc, stats }
 }
 
 /// 关系的人工标签：`from → to（child from.col）`。
@@ -742,7 +895,7 @@ const PREFIX_TABLE: &[(&str, &str)] = &[
 fn render(
     view: &ModelTrackView,
     opts: &TtlOptions<'_>,
-    maps: &[MapPlan],
+    maps: &[MappedClass],
     skipped_classes: &[(String, String)],
     excluded: &[(String, String)],
     stats: &R2rmlStats,
@@ -887,7 +1040,7 @@ fn exclusion_headline(stats: &R2rmlStats, audit: R2rmlAudit<'_>) -> String {
 }
 
 /// 一个 `rr:TriplesMap` 块（主语行 + 三件套 + 全部谓词-宾语映射）。
-fn triples_map(opts: &TtlOptions<'_>, m: &MapPlan, maps: &[MapPlan]) -> String {
+fn triples_map(opts: &TtlOptions<'_>, m: &MappedClass, maps: &[MappedClass]) -> String {
     let template = opts
         .instance_iri_template()
         .replace("{class}", &m.key)
@@ -903,11 +1056,10 @@ fn triples_map(opts: &TtlOptions<'_>, m: &MapPlan, maps: &[MapPlan]) -> String {
         plain(&template),
         m.class_local
     ));
-    for d in &m.datatypes {
+    for d in &m.properties {
         lines.push(format!(
-            "rr:predicateObjectMap [\n        rr:predicate :{}__{} ;\n        rr:objectMap [ rr:column {} ; rr:datatype {} ]\n    ]",
-            m.class_local,
-            local_model(&d.column),
+            "rr:predicateObjectMap [\n        rr:predicate :{} ;\n        rr:objectMap [ rr:column {} ; rr:datatype {} ]\n    ]",
+            d.local,
             plain(&d.column),
             d.xsd.iri()
         ));
@@ -915,9 +1067,9 @@ fn triples_map(opts: &TtlOptions<'_>, m: &MapPlan, maps: &[MapPlan]) -> String {
     for j in &m.joins {
         let parent = maps
             .iter()
-            .find(|x| x.key == j.parent_key)
+            .find(|x| x.key == j.parent_table)
             .map(|x| x.class_local.as_str())
-            .unwrap_or(j.parent_key.as_str());
+            .unwrap_or(j.parent_table.as_str());
         let mut pom: Vec<String> = Vec::new();
         pom.push(format!("rr:predicate :{} ;", j.predicate_local));
         pom.push(format!("# joinEvidence: {}", one_line(&j.evidence)));
@@ -931,7 +1083,7 @@ fn triples_map(opts: &TtlOptions<'_>, m: &MapPlan, maps: &[MapPlan]) -> String {
             "rr:objectMap [\n            rr:parentTriplesMap map:TM_{} ;\n            rr:joinCondition [ rr:child {} ; rr:parent {} ]\n        ]",
             parent,
             plain(&j.child),
-            plain(&j.parent)
+            plain(&j.parent_column)
         ));
         lines.push(format!("rr:predicateObjectMap [\n        {}\n    ]", pom.join("\n        ")));
     }

@@ -34,3 +34,8 @@ pub mod review_ui;
 // **不放 domain/**：它要跑真实 agent（含将来的协议客户端与 DB 查询），
 // 而 `domain` 的 AC-002 判据是「零 I/O」。理由见 `src/agent/mod.rs`。
 pub mod agent;
+
+// ⭐ REQ-122 · **SPARQL → SQL 规划与租户注入**（数字员工链路的第三块地基）。
+// **不放 domain/**：它要连源库执行 SQL（domain 的 AC-002 判据是「零 I/O」）。
+// 纯的那部分（解析 / 规划 / 声明 / SQL 文本）都在 `sparql::*` 里各自单测，不依赖库。
+pub mod sparql;

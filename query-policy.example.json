@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "tenantSubject": "customers",
+  "tenantIdColumn": "id",
+  "perTable": {
+    "some_customer_table": {
+      "tenantColumn": "customer_id",
+      "reason": "这张表的一行属于一个客户：customer_id 就是租户列"
+    },
+    "some_sub_account_table": {
+      "tenantColumn": "main_customer_id",
+      "reason": "子账号的数据归主账号：按 main_customer_id 过滤（没有子账号概念的项目就填 customer_id）"
+    }
+  },
+  "publicDimensions": [
+    {
+      "table": "some_public_catalog",
+      "reason": "产品目录 / 全局配置：对所有客户都一样，过滤它只会把正常数据挡掉"
+    }
+  ],
+  "reviewed_by": "（填上审这份口径的人）",
+  "notes": "这是模板：机制是产品的（读这份声明 → 逐表决定过滤列 / 公共维度 / 不可查 → 注入），口径是项目的（本文件）。换一个客户库只改这里，不改代码。⛔ 没登记、又不在 publicDimensions 的表 = 不可查（整条查询拒绝）。"
+}
