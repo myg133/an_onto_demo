@@ -1,0 +1,13 @@
+target/
+.git/
+.gitignore
+e2e/
+e2e-test/
+BA/
+Deploy/
+out/
+*.log
+.scratch/
+.review-workspace/
+**/*.ps1
+!**/tests/fixtures/**
