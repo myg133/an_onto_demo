@@ -47,6 +47,11 @@ RUN printf '[source.crates-io]\nreplace-with = "aliyun"\n\n[source.aliyun]\nregi
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# ⚠️ 编译期 include_str! 引用的**仓库根**文件（不在 src/ 下）必须显式 COPY，
+#    否则报 `couldn't read src/.../../../xxx.json`。
+#    当前仅一处：src/sparql/policy.rs → include_str!("../../query-policy.example.json")
+#    将来若再加根目录的 include_str!，这里要同步补一行。
+COPY query-policy.example.json ./
 RUN cargo build --release --bins
 
 # ── 运行阶段 ─────────────────────────────────────────────
