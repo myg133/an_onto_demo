@@ -67,6 +67,12 @@ pub struct ProposalItemRow {
 /// 「via 也参与判定」，而它不参与。
 pub const VIA_CLI: &str = "cli";
 pub const VIA_UI: &str = "ui";
+/// ⭐ REQ-124 · 控制面 API（`console serve`）签的。
+///
+/// 与 `ui` / `cli` 并排而不是复用其中一个：`via` 是**审计面**（人查库时读它），
+/// 把 API 签的记成 `ui` 会让「这条是谁签的」在排障时指向一个没开着的页面。
+/// 三个入口调的都是**同一个** `decide_item`，差别只有这一栏。
+pub const VIA_CONSOLE: &str = "console";
 
 /// 一次决策后该条目的**双轨状态**（来自 `UPDATE … RETURNING`，不另查一次）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

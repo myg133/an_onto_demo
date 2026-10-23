@@ -110,6 +110,23 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "BAD_REQUEST", message, hint)
     }
 
+    /// ⭐ REQ-124 · **通用构造点**（同一个错误契约，code/status 由端点语义决定）。
+    ///
+    /// 控制面（`console`）的 code 集合与查询面不同（`TOKEN_KIND_FORBIDDEN` /
+    /// `PROJECT_MISMATCH` / `ALREADY_FROZEN` / `VALIDATION_FAILED` …），
+    /// 但**正文形状必须一模一样**：`{code, message, hint}`。让控制面自己拼一份
+    /// JSON 等于第二个错误契约 —— 那正是 AC-007「错误可行动」要避免的分叉。
+    ///
+    /// `code` 是 `&'static str`：错误码是**端点语义的常量**，不是运行时字符串。
+    pub fn with_code(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self::new(status, code, message, hint)
+    }
+
     /// 请求体里的 `tenant` 与 token 绑定的租户不一致（R1，HTTP 403）。
     pub fn tenant_mismatch(bound: &str) -> Self {
         Self::new(

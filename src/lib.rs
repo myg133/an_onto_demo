@@ -46,3 +46,10 @@ pub mod sparql;
 // POST /api/sparql 与 POST /mcp，且鉴权模型完全不同（同一张 token 表 → 租户）。
 // 见 `src/query/mod.rs` 模块头。
 pub mod query;
+
+// ⭐ REQ-124 · **控制面 API**（管理流水线的 HTTP 化）：把每一步 CLI 变成一个端点。
+// **不放 domain/**：它要起 socket、连元数据库、读写声明文件。
+// ⛔ 也不放进 `server/`（只读）或 `query/`（取数鉴权模型完全不同）：
+// 本模块只有 import → review → apply → freeze 这条**既有流程**，
+// 没有「直接改对象」的端点（需求风险 1）。见 `src/console/mod.rs` 模块头。
+pub mod console;

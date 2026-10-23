@@ -1678,6 +1678,27 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "query_cmd",
         "子命令 handler（`query serve`：只翻译参数，逻辑全在 `query::serve`；本函数零写出）",
     ),
+    // ⭐ REQ-124 · 控制面：CLI 与控制面**共用**的领域调用层 + 纯搬运的参数翻译。
+    (
+        "src/cli.rs",
+        "console_cmd",
+        "子命令 handler（`console serve`：只翻译参数，逻辑全在 `console::serve`；本函数零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "import_proposal_core",
+        "共用实现（`propose import` 与 `POST /api/import` 调**同一个**函数；本函数零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "prepare_ttl_export",
+        "共用实现（`ontology export` 与 `GET /api/export/ttl` 的读取/投影段；本函数零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "r2rml_core",
+        "共用实现（`r2rml generate` 与 `POST /api/r2rml` 的生成段；本函数零写出，AC-006 的逐字节相同靠它）",
+    ),
     ("src/cli.rs", "resolve_proposal", "运维辅助"),
     ("src/cli.rs", "newest_proposal_project", "运维辅助"),
     ("src/cli.rs", "resolve_proposal_arg", "运维辅助"),
@@ -1994,6 +2015,15 @@ const MODULES: &[(&str, &str)] = &[
     ("src/query/mod.rs", "http"),
     ("src/query/mod.rs", "serve"),
     ("src/query/mod.rs", "tokens"),
+    // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
+    // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "console"),
+    ("src/console/mod.rs", "audit"),
+    ("src/console/mod.rs", "decl"),
+    ("src/console/mod.rs", "http"),
+    ("src/console/mod.rs", "ops"),
+    ("src/console/mod.rs", "serve"),
+    ("src/console/mod.rs", "tokens"),
 ];
 
 #[test]
