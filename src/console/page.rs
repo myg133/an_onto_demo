@@ -1243,10 +1243,35 @@ if (typeof window !== "undefined") {
 
 /// `GET /` 的 CSP。
 ///
-/// `default-src 'self'` 是 AC-011 的下限；`script-src` / `style-src` 必须放
-/// `'unsafe-inline'`（本页是单文件内联页，没有外链资源可引），这与
-/// 「零外部依赖」是同一条取舍。`connect-src 'self'` 顺带把「页面被改成打第三方」
-/// 变成一条会当场失败的请求（也解释了为什么查询服务要与控制面同源）。
+/// # `'unsafe-inline'` 为什么在这里、代价是什么、什么时候必须去掉（REQ-125 · L-2）
+///
+/// **为什么需要**：本页是**单文件内联页** —— HTML / CSS / JS 全部写死在
+/// [`CONSOLE_HTML`] 里，一个外部资源都不引（AC-002 的「零外部依赖」）。
+/// 内联 `<style>` / `<script>` 在 CSP 里属于 *inline* 资源，不放 `'unsafe-inline'`
+/// 浏览器会**整段拒执行** ⇒ 页面只剩一张静态骨架，登录、七个视图、危险操作确认
+/// 全部失效。也就是说：这两处 `'unsafe-inline'` 不是「图省事」，而是
+/// 「单文件 + 零外链」这条纪律在 CSP 上的**必然代价**；拿掉它就必须先把脚本/样式
+/// 拆成外部文件，而那等于改需求边界。
+///
+/// **代价（必须承认，不许写成「已防护」）**：`'unsafe-inline'` 让浏览器不再拦截
+/// 内联脚本执行 ⇒ CSP 对「注入一段 `<script>` 或 `onerror=`」这条路的防护被削弱，
+/// 页面自己必须兜住。本页的兜法是**只走 `textContent`**：所有服务端字符串
+/// （对象名 / 说明 / 错误信息 / 回执）都经 `el()` / `txt()` 写入，页面里
+/// `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` / `eval(`
+/// **各 0 处**（判据：`tests/test_req125_page.rs::ac010_no_innerhtml_anywhere`；
+/// 交互层另由 `tests/fixtures/req125/page_probe.js` 用「赋值即抛」的假 DOM 钉住）。
+/// ⛔ 谁把某处渲染改成 `innerHTML`，等于同时打掉两层的防护。
+///
+/// **将来什么时候必须去掉**：一旦脚本或样式被拆成外部 `.js` / `.css`
+/// （例如为了复用或按需加载）——**那要另开需求**，因为它动的是「零外部依赖」这条
+/// 交付纪律 —— 就**必须同时删掉** `script-src` / `style-src` 里的 `'unsafe-inline'`，
+/// 改为 `'self'` 加载外部文件（若确需内联片段，用 nonce / hash，而不是重新放开
+/// `'unsafe-inline'`）。⛔ 不许「拆了外部文件还把 `'unsafe-inline'` 留着」：
+/// 那样既不内联、又放弃了 CSP 对内联注入的拦截，是两头都输。
+///
+/// `default-src 'self'` 是 AC-011 的下限；`connect-src 'self'` 把「页面被改成打
+/// 第三方」变成一条会当场失败的请求（也解释了查询台 / 目录浏览为什么必须与
+/// 控制面同源）。
 pub const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; \
 style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
 base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
