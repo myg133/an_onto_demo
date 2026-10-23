@@ -3,10 +3,19 @@
 //! ```bash
 //! cargo run --bin ontok-propose -- \
 //!     --schema out/schema.json \
-//!     --names   src/extract/table_names.json \
+//!     --names   out/table_names.json \
 //!     --out     out/proposal.json \
 //!     --stats   out/extract-stats.json
 //! ```
+//!
+//! ⚠️ **REQ-128：`--names` 必填，没有默认值。**
+//!
+//! 仓库里的 `src/extract/table_names.json` 是**脱敏占位样例**
+//! （91 条 `t001 → 对象 001`）：它能跑通流程，但抽出来的实体名全是
+//! 「对象 001」这类占位符 —— **本地测试可以用，真实抽取不行**。
+//! 真实抽取请先用 `ontok-translate-names`（或 `ontok name suggest --as-names`）
+//! 按自己的 schema 生成翻译表，再显式传进来。不传 `--names` ⇒ 启动即失败
+//! （退出码非 0），不猜任何默认路径。
 //!
 //! 默认路径**只读本地文件，不连任何数据库** —— 网络访问发生在上一步 `ontok-introspect`。
 //!
@@ -55,7 +64,15 @@ use ontok::extract::names::TableNames;
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut schema_path = String::from("out/schema.json");
-    let mut names_path = String::from("src/extract/table_names.json");
+    // ── REQ-128 · `--names` **没有默认值** ────────────────────────────
+    //
+    // 这里原来是 `String::from("src/extract/table_names.json")`，而那份文件是
+    // **脱敏占位样例**（91 条 `t001 → 对象 001`）。拿它当默认值有两种静默失败：
+    //   · 容器里不传 ⇒ 去 `/data/src/extract/table_names.json` 找，文件不存在；
+    //   · 仓库根不传 ⇒ 读到占位表，实体名全成「对象 001」，而且**不报错**。
+    // 两者都是「白跑一轮」，与「宁可不产出，不产出错的」冲突。
+    // 用 `Option` 把「调用方给了」与「没给」分开；下面参数解析一结束就判。
+    let mut names_path: Option<String> = None;
     let mut out = String::from("out/proposal.json");
     let mut stats_out = String::from("out/extract-stats.json");
     let mut project = String::from("extracted");
@@ -132,7 +149,7 @@ async fn main() -> Result<()> {
         let mut val = || args.next().with_context(|| format!("{a} 需要一个参数"));
         match a.as_str() {
             "--schema" => schema_path = val()?,
-            "--names" => names_path = val()?,
+            "--names" => names_path = Some(val()?),
             "--out" => out = val()?,
             "--stats" => stats_out = val()?,
             "--project" => project = val()?,
@@ -199,6 +216,7 @@ async fn main() -> Result<()> {
             }
             "-h" | "--help" => {
                 println!("schema JSON → 本体提案（本地计算，不连库）\n  --schema / --names / --out / --stats / --project");
+                println!("REQ-128 · --names 是**必填**（没有默认值）：\n  --names <file>  翻译表。必填 —— 不传 ⇒ 退出码非 0，并给出生成方式。\n                  仓库自带的 src/extract/table_names.json 是**脱敏占位样例**（91 条 t001→对象 001），\n                  只能用来看流程，不能用于真实抽取（会让实体名全是占位符，且**不报错**）。\n                  真实表用 ontok-translate-names 或 ontok name suggest --as-names 生成后显式传入。\n                  显式传占位表 ⇒ 告警，但**继续运行**（本地测试需要它）。");
                 println!("REQ-118 · 名字溯源（P4）：\n  --names <file>  翻译表。提案元信息**恒记** inputs.names =\n                  {{file, sha256, agent, version, reviewed_by}}（+ 有 _proposal 时带上原始提案的 file/sha256）；\n                  reviewed_by 取翻译表 `_proposal.reviewed_by`，没有这一块就是 null（字段仍存在）");
                 println!("REQ-059 抽取归属（extracted_by 记的是**真实执行者**，不是调用方填的占位）:\n  --agent <name> / --agent-version <ver>\n                现在是**断言**而不是标签：不带就由真正跑起来的实现自报（{INPROC_EXECUTOR_ID} v{INPROC_EXECUTOR_VERSION}）；\n                带上就必须与事实相符，对不上**拒绝出产物**。\n                要登记一个自己的名字，请用下面的 --agent-registry（查得到才放行）。");
                 println!("REQ-013 agent-registry（带上才连 ONTOK_DATABASE_URL）:\n  --agent-registry <name> / --agent-registry-version <ver> / --round <n>");
@@ -232,6 +250,37 @@ async fn main() -> Result<()> {
             other => anyhow::bail!("未知参数 {other}"),
         }
     }
+
+    // ── REQ-128 · `--names` 必填：**读任何输入之前**就说清 ────────────
+    //
+    // 为什么不给默认值（R1）：仓库里的 `src/extract/table_names.json` 是
+    // **脱敏占位样例**（91 条 `t001 → 对象 001`）。把它当默认值，容器里会
+    // 报「文件不存在」，仓库根目录则会**静默**抽出一整轮「对象 001」——
+    // 后者最坏：产物看起来和真实抽取一模一样，没人会发现白跑。
+    //
+    // 位置：排在排除表 / LLM / schema 之前。这不是「跑起来才知道」的错，
+    // 晚失败只会让一次运行（开了 `--llm` 时还有钱）白付。
+    let Some(names_path) = names_path else {
+        anyhow::bail!(
+            "必须显式提供翻译表（--names），它没有默认值。\n\
+             \n\
+             仓库自带的 src/extract/table_names.json 是脱敏占位样例（t001→对象 001），\
+             不能用于真实抽取：它会抽出「对象 001」这种占位实体名，而且**不报错** —— \
+             白跑一轮，产物看起来和真实抽取一模一样。\n\
+             \n\
+             真实翻译表怎么生成（二选一）：\n\
+             \x20 ① ontok-translate-names --schema <schema.json> --out <table_names.json>\n\
+             \x20 ② ontok name suggest --as-names —— 一条命令同时产出可评审提案与翻译表：\n\
+             \x20    ontok name suggest --schema <schema.json> --out <names.proposal.json> \
+             --as-names <table_names.json>\n\
+             \n\
+             然后显式传进来：\n\
+             \x20 ontok-propose --schema <schema.json> --names <table_names.json> --out <proposal.json>\n\
+             \n\
+             本地测试若确实要用那份脱敏样例，也请显式传：--names src/extract/table_names.json\
+             （会告警，但会继续跑）。"
+        );
+    };
 
     // ── REQ-113 · 排除文件：**先校验输入，再干活** ─────────────────────
     //
@@ -353,6 +402,12 @@ async fn main() -> Result<()> {
     let names_raw = std::fs::read_to_string(&names_path)
         .with_context(|| format!("读不到翻译表 {names_path}"))?;
     let names = TableNames::load(&names_raw)?;
+    // ── REQ-128 · 占位表检测：**警告但不拒绝**（R2 / AC-002）──────────
+    //
+    // `TableNames::load` 只判「空表 / 空名 / 名等于表名」，判不出「整份表都是
+    // 脱敏占位符」。显式传了占位表时**必须说出来**——否则「白跑一轮 + 实体名
+    // 全是对象 001」依然无人察觉。但**不拒绝**：本地测试（含测试夹具）需要它。
+    warn_if_placeholder_names(&names_path, &names);
     // ⭐ REQ-118 · A-1（P4）：**产物侧**必须能查到「这份提案用的是哪份翻译表、谁签的」。
     //
     // 只把 `<file, sha256, agent, version, reviewed_by>` 记进 `inputs.names`——
@@ -1673,4 +1728,58 @@ async fn load_existing_types(round: i32, project: &str) -> Result<(u32, Vec<Exis
         .collect();
     // 清单与提案声明共用这一个 `base_seq` —— 同源，不给第二次解析留口子。
     Ok((base_seq, types))
+}
+
+// ─────────────────────────────────────────────────────────────
+// REQ-128 · 占位翻译表检测（只告警，不拒绝）
+// ─────────────────────────────────────────────────────────────
+
+/// 显式传进来的翻译表若**看起来是脱敏占位样例**，在 stderr 告警，然后继续跑。
+///
+/// 判据（demand R2 / AC-002）：`names` 里 key 形如 `t\d{3}` 且 value 形如
+/// `对象 \d{3}` 的条目**占比 > 80%**。整数比较 `hits * 100 > total * 80`，
+/// 不引入浮点误差，也**不新增依赖**（不用 regex）。
+///
+/// 为什么只告警不拒绝：本地测试（`test_req109_cli_gate` 等）拿这份 91 条的
+/// 脱敏样例当夹具，拒绝会让它们全红；而「真实抽取用错表」这件事，一句能看懂
+/// 的告警 + 产物里一眼可见的「对象 001」已经足够可发现。
+fn warn_if_placeholder_names(path: &str, names: &TableNames) {
+    let total = names.names.len();
+    if total == 0 {
+        // `TableNames::load` 已经拒绝空表；这里只防御，避免除零。
+        return;
+    }
+    let hits = names
+        .names
+        .iter()
+        .filter(|(k, v)| is_placeholder_entry(k.as_str(), v.as_str()))
+        .count();
+    if hits * 100 <= total * 80 {
+        return;
+    }
+    let pct = hits * 100 / total;
+    eprintln!(
+        "⚠ REQ-128：翻译表 {path} 看起来是脱敏占位样例：\
+         {hits}/{total} 条（{pct}%）是「t001 → 对象 001」这种占位条目。\n\
+         \x20 这会让实体名全是占位符（「对象 001」这类），真实抽取请用 \
+         `ontok-translate-names` 或 `ontok name suggest --as-names` \
+         按自己的 schema 生成翻译表。\n\
+         \x20 ⚠ 只警告、不拒绝：本轮继续运行（本地测试需要这份脱敏样例）。"
+    );
+}
+
+/// 单条是否是脱敏占位：key 恰好 `t` + 3 位 ASCII 数字，value 恰好 `对象 ` + 3 位数字。
+///
+/// 刻意**严格**（不做 trim / 模糊匹配）：判据只需要认出「t001 → 对象 001」
+/// 这一种脱敏样例的形状，放宽只会把真实表的正常条目误报成占位。
+fn is_placeholder_entry(key: &str, value: &str) -> bool {
+    let k = key.as_bytes();
+    if k.len() != 4 || k[0] != b't' || !k[1..].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("对象 ") else {
+        return false;
+    };
+    let v = rest.as_bytes();
+    v.len() == 3 && v.iter().all(u8::is_ascii_digit)
 }
