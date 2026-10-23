@@ -61,8 +61,13 @@ ARG HTTP_PROXY=""
 ARG HTTPS_PROXY=""
 
 RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories \
- && apk add --no-cache ca-certificates tzdata bash curl unzip \
+ && apk add --no-cache ca-certificates tzdata bash curl unzip libstdc++ libgcc \
  && adduser -D -u 10001 -h /data ontok
+
+# ⚠️ `libstdc++` / `libgcc` 是 **bun 的硬依赖**（alpine 默认不带 C++ 运行库）：
+#    缺了会报 `Error loading shared library libstdc++.so.6` +
+#    `_ZSt20__throw_length_errorPKc: symbol not found` 一串。
+#    这是 alpine 上跑 bun 的经典坑，别删这两行。
 
 # bun（装包用；在 build 期用代理，运行期不需要代理）
 ENV BUN_INSTALL=/usr/local
