@@ -142,9 +142,18 @@ pub struct R2rmlStats {
     pub inherited_edges: usize,
     /// 其中**真的生成**了 join 的 inherit 边数（`--include-inherit` 下 = inherited_edges）。
     pub inherited_emitted: usize,
-    /// `false` 边数（永不生成）。
+    /// `false` 边数 —— **只算「有据的 false」**：`joinVerified = "false"` 且
+    /// `joinEvidence` 非空（REQ-120 盖章的「仅列名推断」，是一条**有据**的断言）。永不生成。
     pub naming_only_edges: usize,
-    /// 没有 `joinVerified` 的边数（同样不生成）。
+    /// 没有可用验证信息的边数（同样不生成）。**两个来源**：
+    ///
+    /// 1. `joinVerified` 缺失（`None`）—— REQ-120 之前的快照 / 人工修订；
+    /// 2. `joinVerified = "false"` 但**没有 `joinEvidence`** —— REQ-120 之前
+    ///    `link_types.join_verified` 是 BOOLEAN，库只存得下 `true` / `false`，
+    ///    那些 `false` 的含义是「没验过」，**不是**「验过但不成立」。
+    ///
+    /// ⛔ 第 2 种**不许**算进 [`Self::naming_only_edges`]：把「没验」说成 `false`，
+    /// 数字员工会读成「52 条验过但失败」—— 这是本需求最贵的一种误读。
     pub unverified_edges: usize,
     /// 未生成 TriplesMap 的类：`(类 key, 原因)`，已排序。
     pub skipped_classes: Vec<(String, String)>,
@@ -405,16 +414,26 @@ pub fn generate(
                 }
             }
             Some(JoinState::NamingOnly) => {
-                naming_only_edges += 1;
-                excluded.push((edge_label(l), naming_reason(l)));
+                // ⛔ **`false` 分两种，不能合并计数**（本需求的头号误读点）：
+                //
+                // · 有 `joinEvidence`：REQ-120 盖章的「仅列名推断」—— 有据的断言，
+                //   算 `false`，理由写进文件尾；
+                // · 没有 `joinEvidence`：REQ-120 之前 `join_verified` 是 BOOLEAN，
+                //   库只存得下 `true` / `false`。那时的 `false` 只说明「**没验过**」，
+                //   不是「验过但不成立」。按 `未标` 计 —— 把它叫 `false` 就是
+                //   「把没说法说成有结论」。
+                if has_join_evidence(l) {
+                    naming_only_edges += 1;
+                    excluded.push((edge_label(l), naming_reason(l)));
+                } else {
+                    unverified_edges += 1;
+                    excluded.push((edge_label(l), legacy_false_reason(l)));
+                }
                 false
             }
             None => {
                 unverified_edges += 1;
-                excluded.push((
-                    edge_label(l),
-                    "这一版没有 ontok:joinVerified（REQ-120 之前的快照 / 人工修订）—— 没说过，不替它说".to_string(),
-                ));
+                excluded.push((edge_label(l), unlabeled_reason(l)));
                 false
             }
         };
@@ -551,12 +570,29 @@ fn edge_label(l: &ModelLinkView) -> String {
     format!("{} → {}（child {}.{}）", l.from_type, l.to_type, l.from_type, child)
 }
 
-/// `false` 边的「为什么没验」。
+/// 这条边有没有**可读的证据原文**（`joinEvidence` 非空）。
+///
+/// ⛔ 它是 `false` 与 `未标` 的分界线：REQ-120 的 `false` 必须写「为什么没验」（F-2），
+/// 写不出原因的 `false` 只可能是旧版布尔的遗留 —— 那是「没有信息」，不是「有结论」。
+fn has_join_evidence(l: &ModelLinkView) -> bool {
+    l.join_evidence.as_deref().is_some_and(|e| !e.trim().is_empty())
+}
+
+/// `false` 边的「为什么没验」（**有据**的仅名字推断）。
 fn naming_reason(l: &ModelLinkView) -> String {
-    match l.join_evidence.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
-        Some(e) => e.to_string(),
-        None => "仅列名推断（没有数据证据）".to_string(),
-    }
+    let why = l.join_evidence.as_deref().unwrap_or("").trim();
+    format!("false（仅名字推断，未验）：{why}")
+}
+
+/// 旧版布尔 `false` 且没有证据 ⇒ **未标**（不是 `false`）。
+fn legacy_false_reason(_l: &ModelLinkView) -> String {
+    "未标（旧版布尔 false 没有 joinEvidence —— 只说明「没验过」，不当作 false）".to_string()
+}
+
+/// `joinVerified` 根本没有 ⇒ **未标**。
+fn unlabeled_reason(_l: &ModelLinkView) -> String {
+    "未标（这一版没有 ontok:joinVerified —— REQ-120 之前的快照 / 人工修订；没说过，不替它说）"
+        .to_string()
 }
 
 /// 默认不生成的 `inherit` 边：说明它**不是**被当成 `true` 藏掉了。
@@ -627,7 +663,7 @@ fn render(
     ));
     out.push_str(&format!(
         "# 三态策略：joinVerified \"true\" ⇒ 生成 joinCondition（{} 条）；\
-         \"inherit\" ⇒ {}（{} 条，{}）；\"false\" ⇒ ⛔ 永不生成（{} 条，文件尾列原因）\n",
+         \"inherit\" ⇒ {}（{} 条，{}）；\"false\" ⇒ ⛔ 永不生成（{} 条，文件尾写原因）\n",
         stats.verified_edges,
         if include_inherit { "生成并标 ontok:joinState \"inherit\"" } else { "默认不生成" },
         stats.inherited_edges,
@@ -639,9 +675,13 @@ fn render(
         stats.naming_only_edges
     ));
     out.push_str(&format!(
-        "# 未标 joinVerified 的边（REQ-120 之前）：{} 条，同样不生成\n",
+        "# 未标（没有 joinVerified，或旧版布尔 false 没有 joinEvidence）：{} 条，同样不生成\n",
         stats.unverified_edges
     ));
+    out.push_str(
+        "# ⚠ 口径：false ≠「验过但失败」。false 只表示「仅有名字推断、没有数据证据」（REQ-120 的 NamingOnly）；\n\
+         #   「未标」表示根本没有验证信息。两者都不生成 join，但读法不同 —— 别把未标读成 false。\n",
+    );
     let tenant_note = if !tenancy_report(view, opts.tenancy).annotated() {
         "未标注（没给 --tenancy / 未签）—— 这份映射不能直接给数字员工用（REQ-122 无从注入租户过滤）"
             .to_string()
@@ -681,8 +721,11 @@ fn render(
         }
     }
     if !excluded.is_empty() {
-        out.push_str("\n# ── 被排除的边（joinVerified \"false\" / 没有证据）：⛔ 永不生成 join ──\n");
-        out.push_str("# （false = 仅列名推断；行尾是「为什么没验」，供人排查）\n");
+        out.push_str("\n# ── 被排除的边（行首是状态：inherit / false / 未标）：⛔ 永不生成 join ──\n");
+        out.push_str(
+            "# （inherit = 本表未实测；false = 仅名字推断且已写明原因；\
+             未标 = 没有验证信息 —— 三者都不是「验过但失败」）\n",
+        );
         for (edge, reason) in excluded {
             out.push_str(&format!("# · {edge}：{}\n", one_line(reason)));
         }
@@ -1049,9 +1092,49 @@ mod tests {
                 doc.doc()
             );
             assert!(doc.doc().contains(
-                "# · orders → customers（child orders.amount）：insufficient_sample: 有效样本 1 行 < 3 条下限"
+                "# · orders → customers（child orders.amount）：false（仅名字推断，未验）：insufficient_sample: 有效样本 1 行 < 3 条下限"
             ));
         }
+        // `false` 必须算进 false（它**有**证据），不能落到「未标」。
+        let doc = generate(&f.view, &o, false).expect("generate");
+        assert_eq!(doc.stats().naming_only_edges, 1, "{:?}", doc.stats());
+        assert_eq!(doc.stats().unverified_edges, 0, "{:?}", doc.stats());
+    }
+
+    #[test]
+    fn a_false_edge_without_evidence_is_unlabeled_not_false() {
+        // 病根：REQ-120 之前 `link_types.join_verified` 是 BOOLEAN，只有 true/false。
+        // 那些 `false` 的含义是「没验过」—— 旧快照的 52 条边全是这种。
+        // ⛔ 把它算进 `false`，读起来就是「52 条验过但失败」。
+        let mut f = fixture();
+        f.view.link_types[2].join_evidence = None;
+        let doc = generate(&f.view, &opts(&f.schema, None), false).expect("generate");
+        assert_eq!(doc.stats().naming_only_edges, 0, "无证据的 false 不许算成 false");
+        assert_eq!(doc.stats().unverified_edges, 1);
+        assert!(
+            doc.doc().contains(
+                "# · orders → customers（child orders.amount）：未标（旧版布尔 false 没有 joinEvidence"
+            ),
+            "{}",
+            doc.doc()
+        );
+        // 仍然永不生成 join。
+        assert!(!doc.doc().contains("rr:child \"amount\""));
+    }
+
+    #[test]
+    fn a_missing_join_verified_is_unlabeled_too() {
+        let mut f = fixture();
+        f.view.link_types[2].join_verified = None;
+        f.view.link_types[2].join_evidence = None;
+        let doc = generate(&f.view, &opts(&f.schema, None), false).expect("generate");
+        assert_eq!(doc.stats().naming_only_edges, 0);
+        assert_eq!(doc.stats().unverified_edges, 1);
+        assert!(
+            doc.doc().contains("未标（这一版没有 ontok:joinVerified"),
+            "{}",
+            doc.doc()
+        );
     }
 
     #[test]

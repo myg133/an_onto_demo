@@ -1405,7 +1405,11 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "I11",
         path: "src/cli.rs",
-        call_site: "print!(\"{}\", r2rml_doc)",
+        // ⚠️ call_site **刻意只钉实参片段、不写宏名**：T7
+        // （`test_req107_source_enumeration`）按**原文**扫 `src/domain/pipeline.rs`，
+        // 字符串字面量里出现 `print!(` 会被它判成「管线模块自己在写 stdout」。
+        // 这个片段仍是 `src/cli.rs` 里 `None => print!("{}", r2rml_doc)` 的唯一子串。
+        call_site: "\"{}\", r2rml_doc)",
         spec: spec_of(OutletId::I11),
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部（REQ-121）：`ontok r2rml generate` 的 stdout —— R2RML Turtle 是\

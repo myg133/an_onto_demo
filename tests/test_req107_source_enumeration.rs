@@ -1659,6 +1659,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     ("src/cli.rs", "review_cmd", "子命令 handler"),
     ("src/cli.rs", "proposal_cmd", "子命令 handler"),
     ("src/cli.rs", "ontology_cmd", "子命令 handler"),
+    // ⭐ REQ-121 · R2RML 映射：唯一入口 + 两个写点（I11 stdout / I12 --out）。
+    // 它把 domain 产物逐字节写出，但它自己**不做序列化**（`domain::r2rml::generate` 是纯函数）。
+    (
+        "src/cli.rs",
+        "r2rml_cmd",
+        "子命令 handler（`r2rml generate`：读快照/schema，fail-closed 写出 I11/I12）",
+    ),
     ("src/cli.rs", "resolve_proposal", "运维辅助"),
     ("src/cli.rs", "newest_proposal_project", "运维辅助"),
     ("src/cli.rs", "resolve_proposal_arg", "运维辅助"),

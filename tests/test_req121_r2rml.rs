@@ -315,13 +315,37 @@ fn ac006_false_edges_never_produce_a_join_in_either_mode() {
         );
         assert!(
             doc.doc().contains(
-                "# · orders → customers（child orders.amount）：insufficient_sample: 有效样本 1 行 < 3 条下限"
+                "# · orders → customers（child orders.amount）：false（仅名字推断，未验）：insufficient_sample: 有效样本 1 行 < 3 条下限"
             ),
             "false 边必须连同原因写进文件尾：{}",
             doc.doc()
         );
         assert_eq!(doc.stats().naming_only_edges, 1);
+        assert_eq!(doc.stats().unverified_edges, 0, "有证据的 false 不是「未标」");
     }
+}
+
+/// AC-006 的**另一半**：旧版布尔 `false`（没有 `joinEvidence`）是「未标」，
+/// ⛔ 不算 `false` —— 否则读成「验过但失败」。
+///
+/// 现实里这就是 `anspire_grouped v3`（REQ-119 快照）的 52 条边。
+#[test]
+fn ac006_legacy_boolean_false_without_evidence_is_reported_as_unlabeled() {
+    let s = schema();
+    let mut v = view();
+    // 只改第三条（`orders_amount__customers`）的状态：布尔 false、无证据。
+    v.link_types[2].join_verified = Some(JoinState::NamingOnly);
+    v.link_types[2].join_evidence = None;
+
+    let doc = generate(&v, &opts(&s, None), false).expect("generate");
+    assert_eq!(doc.stats().naming_only_edges, 0, "{:?}", doc.stats());
+    assert_eq!(doc.stats().unverified_edges, 1, "{:?}", doc.stats());
+    assert!(
+        doc.doc().contains("未标（旧版布尔 false 没有 joinEvidence"),
+        "{}",
+        doc.doc()
+    );
+    assert!(!doc.doc().contains("rr:child \"amount\""));
 }
 
 // ══════════════════════════════════════════════════════════════

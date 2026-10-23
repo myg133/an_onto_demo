@@ -3517,11 +3517,15 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
     let doc = crate::domain::r2rml::generate(&model, &opts, include_inherit)?;
 
     let st = doc.stats();
+    // ⛔ `false` 与 `未标` 分开报：前者是**有据**的「仅名字推断」，后者是
+    // 「没有验证信息」（含旧版布尔 false 无证据的遗留）。合并报会让数字员工
+    // 把 52 条「没验」读成「52 条验过但失败」。
+    // ⚠️ joinCondition 数在 `summary()` 里已经有了 —— 不再重复一遍。
     eprintln!(
-        "· R2RML（{project} v{version}）：{} · joinCondition {} · \
-         三态 true {} / inherit {}（生成 {}）/ false {} · 未标 {} · 复合主键跳过 {} · schema 对账 0 失败",
+        "· R2RML（{project} v{version}）：{} · \
+         三态 true {} / inherit {}（生成 {}）/ false（仅名字推断，有据）{} · \
+         未标（无验证信息）{} · 复合主键跳过 {} · schema 对账 0 失败",
         st.summary(),
-        st.join_conditions(),
         st.verified_edges,
         st.inherited_edges,
         st.inherited_emitted,
