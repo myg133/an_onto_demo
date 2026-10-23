@@ -52,11 +52,15 @@
     },
     "deductions": {
       "tenantColumn": "customer_id",
-      "reason": "ADR-006 的示例写的是 main_customer_id（子账号归主账号），但本库 4 行 deductions 的 main_customer_id 全为 NULL（0/4）—— 按它过滤会让这 4 行对任何租户都不可见。本版按实际扣费账号 customer_id（4/4 非空）登记；若业务坚持主子账号口径，改这一行即可（代码不动），并需先补齐 main_customer_id"
+      "coverage": "main_only",
+      "coverageNote": "main_customer_id 全空（0/4）；子账号产生的扣费不在结果内，金额可能偏低",
+      "reason": "ADR-006 的示例写的是 main_customer_id（子账号归主账号），但本库 4 行 deductions 的 main_customer_id 全为 NULL（0/4）—— 按它过滤会让这 4 行对任何租户都不可见。本版按实际扣费账号 customer_id（4/4 非空）登记；**代价**：若某行的 customer_id 是子账号 id，主账号就看不到这笔扣费（payer_account_type 区分 1-主账号 / 2-子账号，本表确实会出现子账号行）。所以本条的 coverage = main_only，查询回执会点名警告。若业务坚持主子账号口径，改这一行即可（代码不动），并需先补齐 main_customer_id"
     },
     "dim_customer_binding": {
       "tenantColumn": "customer_id",
-      "reason": "main_customer_id 只有 29/17851 非空（绝大多数行没有主账号标注），按它过滤会隐藏 99.8% 的行；本表按 customer_id（17851/17851）"
+      "coverage": "main_only",
+      "coverageNote": "main_customer_id 仅 29/17851 非空；customer_id 填子账号 id 的行，主账号看不到",
+      "reason": "main_customer_id 只有 29/17851 非空（绝大多数行没有主账号标注），按它过滤会隐藏 99.8% 的行；本表按 customer_id（17851/17851）。**代价**：customer_id 填子账号 id 的行，主账号看不到 ⇒ coverage = main_only，查询回执会点名警告"
     },
     "enterprise_recharge_order": {
       "tenantColumn": "customer_id"
@@ -255,5 +259,5 @@
     }
   ],
   "reviewed_by": "业务方 2026-10-23（ADR-006 三项裁定）+ Dev 2026-10-23（逐表列名按真实覆盖率填，见各 reason）",
-  "notes": "机制是产品的（读本文件 → 逐表决定「过滤列 / 公共维度 / 不可查」→ 注入），口径是项目的：换一个客户库只改这里，不改代码。⛔ 没登记、又不在 publicDimensions 的表 = 不可查（查询整条拒绝并点名）。本版尚未登记的 14 张表（口径未定，故意留空而不是猜一列）：admin_roles、admin_users、admin_user_roles、gift_codes、instance_task_record、intance_task_plans、license_quota、proxy_operation_records、service_apps、share_records、share_usage、simulate_login_operations、sub_account_permission、trial_records。它们要么没有客户列（admin_* / gift_codes / license_quota / service_apps / share_* / trial_records / instance_task_* / intance_task_plans / proxy_operation_records / simulate_login_operations），要么只有子账号 id、无法反解主账号（sub_account_permission）。业务方登记其中任一列或把它们标为公共维度后即可查询。已知限制：一条声明只能登记一个过滤列 ⇒ balance_transfer 先按付款方（from_customer_id）；子账号 id → 主账号的解析层不在本版（ADR-006 Limitation）。"
+  "notes": "机制是产品的（读本文件 → 逐表决定「过滤列 / 公共维度 / 不可查」→ 注入），口径是项目的：换一个客户库只改这里，不改代码。⛔ 没登记、又不在 publicDimensions 的表 = 不可查（查询整条拒绝并点名）。本版尚未登记的 14 张表（口径未定，故意留空而不是猜一列）：admin_roles、admin_users、admin_user_roles、gift_codes、instance_task_record、intance_task_plans、license_quota、proxy_operation_records、service_apps、share_records、share_usage、simulate_login_operations、sub_account_permission、trial_records。它们要么没有客户列（admin_* / gift_codes / license_quota / service_apps / share_* / trial_records / instance_task_* / intance_task_plans / proxy_operation_records / simulate_login_operations），要么只有子账号 id、无法反解主账号（sub_account_permission）。业务方登记其中任一列或把它们标为公共维度后即可查询。已知限制：一条声明只能登记一个过滤列 ⇒ balance_transfer 先按付款方（from_customer_id）；子账号 id → 主账号的解析层不在本版（ADR-006 Limitation）。 覆盖范围（I-1）：perTable[].coverage 默认 complete（声明者保证「过滤列填的就是租户主体，不漏行」）；标了 main_only 的表 = **子账号产生的数据不在结果内**，任何命中它的查询都会在回执 warnings 里点名（⛔ 不许把偏小的金额读成「没有业务」）。发现别的表也可能是子账号维度 ⇒ 把该条改成 \"coverage\": \"main_only\" 并补 reason。"
 }

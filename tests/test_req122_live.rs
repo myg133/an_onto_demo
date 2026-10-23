@@ -238,6 +238,38 @@ async fn ac005_a_tenant_never_sees_another_tenants_rows() {
     ctx.src.close().await;
 }
 
+/// I-1 · 真实声明里的 `coverage: main_only` 必须在真实回执里出现（且只在命中时）。
+#[tokio::test]
+async fn i1_partial_coverage_is_announced_on_real_data() {
+    let Some((a, _b)) = tenants() else {
+        skip("缺 REQ122_TENANT_A / REQ122_TENANT_B");
+        return;
+    };
+    let Some(ctx) = setup().await else {
+        skip("缺 ONTOK_DATABASE_URL / ONTOK_SOURCE_DATABASE_URL / schema / 声明");
+        return;
+    };
+
+    // 命中 main_only 表 ⇒ 点名警告（含 coverage 值与声明写的短句）
+    let res = run(&ctx, &a, "SELECT ?b WHERE { ?b a :dim_customer_binding }").await;
+    let hit: Vec<&String> = res
+        .warnings
+        .iter()
+        .filter(|w| w.contains("dim_customer_binding") && w.contains("main_only"))
+        .collect();
+    assert_eq!(hit.len(), 1, "main_only 表命中时必须警告：{:?}", res.warnings);
+    assert!(hit[0].contains("主账号看不到"), "警告正文来自声明：{}", hit[0]);
+
+    // 同一次查询里 complete 的表不该被报
+    let res = run(&ctx, &a, "SELECT ?u WHERE { ?u a :usage_details }").await;
+    assert!(
+        !res.warnings.iter().any(|w| w.contains("覆盖范围")),
+        "complete 的表不该出现覆盖范围警告：{:?}",
+        res.warnings
+    );
+    ctx.src.close().await;
+}
+
 #[tokio::test]
 async fn ac008_the_session_is_read_only() {
     let Some(src_url) = env_nonempty("ONTOK_SOURCE_DATABASE_URL") else {

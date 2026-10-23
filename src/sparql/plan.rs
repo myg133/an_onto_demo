@@ -688,7 +688,7 @@ impl<'a> Planner<'a> {
         for i in 0..self.nodes.len() {
             let table = self.nodes[i].class_key.clone();
             match self.policy.decide(&table) {
-                TableDecision::Filter { column, .. } => {
+                TableDecision::Filter { column, reason, coverage, coverage_note } => {
                     let column = column.trim().to_string();
                     // 声明里写了列、schema 里没有 —— check_declaration 已经拦过；
                     // 这里再拦一次是因为 **注入的列必须真的存在**（宁可多一次）。
@@ -697,6 +697,24 @@ impl<'a> Planner<'a> {
                             "租户过滤列 {table}.{column}（来自声明）在 schema 里不存在 —— \
                              ⛔ 不会「跳过这一条继续跑」"
                         )));
+                    }
+                    // ⭐ I-1 · 覆盖范围不完整 ⇒ **必须喊出来**（⛔ 不许让调用方把
+                    // 「主账号少看到钱」读成「本来就没有」）。这一段是机制，口径来自声明。
+                    if coverage.is_incomplete() {
+                        // 警告正文优先用声明里的短句 `coverageNote`；没写就退回 `reason`
+                        // （reason 是评审长文，塞进 warning 会读不动 —— 但**聊胜于无**，
+                        // 绝不因为「太长」而闭嘴）。
+                        let why = coverage_note
+                            .as_deref()
+                            .or(reason.as_deref())
+                            .map(str::trim)
+                            .filter(|r| !r.is_empty())
+                            .unwrap_or("声明未写明代价");
+                        self.warnings.push(format!(
+                            "表 {table}：租户过滤用 {column}，覆盖范围 = {} —— {why}\
+                             （依据见声明里的 reason）—— ⛔ 不要把 0 行或偏小的数字读成「没有业务」",
+                            coverage.as_str()
+                        ));
                     }
                     self.injected.push((i, column.clone()));
                     self.tenant_applied.push(TenantApplied {
@@ -712,11 +730,7 @@ impl<'a> Planner<'a> {
             }
         }
         if !unregistered.is_empty() {
-            let list = unregistered
-                .iter()
-                .map(|t| format!("{t}"))
-                .collect::<Vec<_>>()
-                .join("、");
+            let list = unregistered.join("、");
             let example = format!("\"{}\"", unregistered[0]);
             return Err(QueryError::new(format!(
                 "租户过滤无法确定：表 {list} 既没有在声明里登记过滤列，也不在 publicDimensions —— \
@@ -1735,6 +1749,91 @@ mod tests {
         let f = fixture();
         let m = f.err(r#"SELECT ?o { ?o :orders__amount ?a } ORDER BY ?a"#);
         assert!(m.contains("必须出现在 SELECT"), "{m}");
+    }
+
+    // ── I-1 · 覆盖范围不完整 ⇒ 回执里必须出现（且只在命中时）──────────
+
+    #[test]
+    fn i1_an_incomplete_coverage_table_is_announced_in_warnings() {
+        let f = fixture();
+        let incomplete = QueryPolicy::parse(
+            r#"{
+              "version": "1.0.0",
+              "tenantSubject": "customers",
+              "tenantIdColumn": "id",
+              "perTable": {
+                "orders": {
+                  "tenantColumn": "owner_id",
+                  "coverage": "main_only",
+                  "coverageNote": "子账号产生的订单不在结果内，金额可能偏低",
+                  "reason": "子账号产生的订单按 owner_id 过滤时主账号看不到（长文，供评审）"
+                }
+              },
+              "publicDimensions": [{ "table": "products", "reason": "产品目录" }]
+            }"#,
+        )
+        .unwrap();
+        let p = f
+            .plan_with(r#"SELECT ?o ?a { ?o :orders__amount ?a }"#, &incomplete, "C0001", 1000)
+            .unwrap();
+        let hit: Vec<&String> = p
+            .warnings
+            .iter()
+            .filter(|w| w.contains("orders") && w.contains("main_only"))
+            .collect();
+        assert_eq!(hit.len(), 1, "命中 main_only 表必须给一条警告：{:?}", p.warnings);
+        assert!(
+            hit[0].contains("子账号") && hit[0].contains("可能偏低"),
+            "警告正文要来自声明（coverageNote）：{}",
+            hit[0]
+        );
+        // 短句优先：评审长文（reason）不该整段塞进给数字员工读的警告
+        assert!(
+            !hit[0].contains("长文，供评审"),
+            "有 coverageNote 时警告不该退回 reason：{}",
+            hit[0]
+        );
+        // 注入本身不受影响（口径归口径，机制照旧）
+        assert!(p.sql.contains(r#""owner_id" = 'C0001'"#), "{}", p.sql);
+    }
+
+    #[test]
+    fn i1_a_complete_table_produces_no_coverage_warning() {
+        let f = fixture();
+        let p = f
+            .plan(r#"SELECT ?o ?a { ?o :orders__amount ?a }"#)
+            .unwrap();
+        assert!(
+            !p.warnings.iter().any(|w| w.contains("覆盖范围")),
+            "complete 的表不该出现覆盖范围警告：{:?}",
+            p.warnings
+        );
+    }
+
+    #[test]
+    fn i1_an_unqueried_incomplete_table_does_not_warn() {
+        let f = fixture();
+        let incomplete = QueryPolicy::parse(
+            r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
+                "perTable":{"orders":{"tenantColumn":"owner_id","coverage":"main_only",
+                "reason":"子账号订单主账号看不到"}},
+                "publicDimensions":[{"table":"products","reason":"产品目录"}]}"#,
+        )
+        .unwrap();
+        // 只查 customers（complete）——orders 没被碰，就不该报警
+        let p = f
+            .plan_with(
+                r#"SELECT ?c ?n { ?c a :customers . ?c :customers__customer_name ?n }"#,
+                &incomplete,
+                "C0001",
+                1000,
+            )
+            .unwrap();
+        assert!(
+            !p.warnings.iter().any(|w| w.contains("orders")),
+            "没被查询的表不该出现在 warnings：{:?}",
+            p.warnings
+        );
     }
 
     #[test]

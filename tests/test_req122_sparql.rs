@@ -368,6 +368,89 @@ fn ac004_a_missing_declaration_entry_rejects_the_whole_query() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// I-1 · 覆盖范围（coverage）：不完整**必须**在回执里喊出来
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn i1_an_incomplete_coverage_table_is_announced_and_a_complete_one_is_silent() {
+    let f = Fixture::new();
+    let partial = QueryPolicy::parse(
+        r#"{
+          "version": "1.0.0",
+          "tenantSubject": "customers",
+          "tenantIdColumn": "id",
+          "perTable": {
+            "orders": {
+              "tenantColumn": "customer_id",
+              "coverage": "main_only",
+              "coverageNote": "子账号产生的订单不在结果内",
+              "reason": "子账号产生的订单主账号看不到（评审长文）"
+            }
+          },
+          "publicDimensions": [ { "table": "products", "reason": "产品目录" } ]
+        }"#,
+    )
+    .unwrap();
+
+    // 命中 main_only 表 ⇒ 一条警告（正文来自 coverageNote，不是评审长文）
+    let p = f
+        .plan_with(r#"SELECT ?o ?a { ?o :orders__amount ?a }"#, &partial, "C0001", 1000)
+        .unwrap();
+    let hit: Vec<&String> = p.warnings.iter().filter(|w| w.contains("orders")).collect();
+    assert_eq!(hit.len(), 1, "{:?}", p.warnings);
+    assert!(hit[0].contains("main_only"), "{}", hit[0]);
+    assert!(hit[0].contains("子账号产生的订单不在结果内"), "{}", hit[0]);
+    assert!(!hit[0].contains("评审长文"), "短句优先，别把长文塞进警告：{}", hit[0]);
+
+    // 只查公共维度 ⇒ 无警告
+    let p = f
+        .plan_with(r#"SELECT ?n { ?p :products__product_name ?n }"#, &partial, "C0001", 1000)
+        .unwrap();
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // 同一张表改成 complete ⇒ 警告消失（声明驱动，不是写死）
+    let complete = QueryPolicy::parse(
+        &serde_json::to_string(&serde_json::json!({
+            "version": "1.0.0",
+            "tenantSubject": "customers",
+            "tenantIdColumn": "id",
+            "perTable": { "orders": { "tenantColumn": "customer_id", "coverage": "complete" } },
+            "publicDimensions": [{ "table": "products", "reason": "产品目录" }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let p = f
+        .plan_with(r#"SELECT ?o ?a { ?o :orders__amount ?a }"#, &complete, "C0001", 1000)
+        .unwrap();
+    assert!(!p.warnings.iter().any(|w| w.contains("覆盖范围")), "{:?}", p.warnings);
+}
+
+#[test]
+fn i1_the_shipped_declaration_marks_the_two_known_partial_tables() {
+    use ontok::sparql::policy::{Coverage, TableDecision};
+    let p = QueryPolicy::parse(include_str!("../query-policy.json")).expect("声明必须合法");
+    for table in ["deductions", "dim_customer_binding"] {
+        match p.decide(table) {
+            TableDecision::Filter { coverage, coverage_note, .. } => {
+                assert_eq!(
+                    coverage,
+                    Coverage::MainOnly,
+                    "{table} 按 customer_id 过滤会漏掉子账号行，必须声明 main_only"
+                );
+                assert!(coverage_note.is_some(), "{table} 必须写 coverageNote（警告正文）");
+            }
+            other => panic!("{table} 应当是 Filter：{other:?}"),
+        }
+    }
+    // 一张 complete 的表作为对照（它不该被标 main_only）
+    match p.decide("balances") {
+        TableDecision::Filter { coverage, .. } => assert_eq!(coverage, Coverage::Complete),
+        other => panic!("balances 应当是 Filter：{other:?}"),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
 // AC-005 · 泄漏：注入是 AND，反向筛也挡得住
 // ══════════════════════════════════════════════════════════════
 

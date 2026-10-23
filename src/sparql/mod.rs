@@ -33,9 +33,22 @@
 //!
 //! - 一个变量只能属于一个类（没有 UNION/OPTIONAL）；不连通的两段模式直接拒绝（不隐式笛卡尔积）；
 //! - 只支持单列 GROUP BY / ORDER BY，且 ORDER BY 的变量必须出现在 SELECT 里；
-//! - 反向关系靠 R2RML 前向 join 反解；**每条 join 只有一个方向**（R2RML 如此）；
-//! - 没有子账号 id → 主账号的解析层（ADR-006 的 Limitation，属将来）；
-//! - `SELECT DISTINCT` 是 v1 清单之外的**唯一**额外项（它不改变过滤语义，只是去重）。
+//! - `ORDER BY` 是**单列**且不带附加 tie-break ⇒ 排序键相同的行，其相对顺序由 PG 决定
+//!   （同一份数据两次查询可能不同）。要稳定顺序请把主键/时间也投影出来。
+//! - 反向关系靠 R2RML 前向 join 反解；**每条 join 只有一个方向**（R2RML 如此）；自连接不支持；
+//! - 没有子账号 id → 主账号的解析层（ADR-006 的 Limitation，属将来）。**但它不再沉默**：
+//!   声明里 `coverage: "main_only"` 的表，命中时会在 `warnings[]` 里点名
+//!   （见 [`policy::Coverage`]）——「主账号少看到钱」必须让调用方知道。
+//! - `SELECT DISTINCT` 是 v1 清单之外的**唯一**额外项（它不改变过滤语义，只是去重；
+//!   已获 BA 批准，见 [`query`] 模块头）。⛔ 再想扩清单必须先改文档与验收。
+//!
+//! # `truncated` 是怎么判的（I-2 裁定）
+//!
+//! SQL 里的 `LIMIT` 是 **`effective_limit + 1`**（多取一行探针）：
+//! 只有这样才分得清「结果正好 N 行」与「还有第 N+1 行」。探针行**不进结果**，
+//! 判据是 `truncated = capped && 探针行存在`，`capped` = 查询没写 LIMIT 或写的 LIMIT
+//! 超过 `--max-rows`。`sql_echo` **逐字包含** `LIMIT N+1` 与尾部的探针注释
+//! （回执与执行不差一个字节）—— 验收口径：`LIMIT <= max_rows + 1`。
 
 pub mod error;
 pub mod exec;
@@ -61,13 +74,16 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub row_count: usize,
+    /// 结果被 `--max-rows` 截断。判定见模块头「`truncated` 是怎么判的」。
     pub truncated: bool,
-    /// 真正执行的 SQL（租户条件**在 WHERE 最前面**，人第一眼就能看见）。
+    /// 真正执行的 SQL（租户条件**在 WHERE 最前面**，人第一眼就能看见；
+    /// `LIMIT` = 上限 + 1 行探针，末尾带注释）。
     pub sql_echo: String,
     pub tenant_applied: Vec<TenantApplied>,
     pub tables: Vec<String>,
     /// 声明为公共维度、因而**没有**注入的表（含理由）。
     pub public_dimensions: Vec<PublicDimensionUsed>,
+    /// 可行动提示：截断 / LIMIT 被压 / 覆盖范围不完整（`coverage != complete`）等。
     pub warnings: Vec<String>,
 }
 

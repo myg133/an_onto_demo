@@ -65,9 +65,54 @@ pub struct TableRule {
     /// 过滤列名（真实 schema 里的列名，原样）。
     #[serde(rename = "tenantColumn")]
     pub tenant_column: String,
+    /// ⭐ REQ-122 · I-1 · **覆盖范围**（可选，默认 `complete`）。
+    ///
+    /// 一个过滤列能把租户分干净，不代表**这张表里每一行都能被它的主人看见**：
+    /// 若某行的过滤列填的是**子账号** id，主账号按自己的 id 过滤就看不到它 ——
+    /// 而查询**不会报错**，只是「金额偏低」。数字员工会据此回答「您本月扣费 0 元」。
+    /// 所以口径必须能被声明出来，并且**在回执里喊出来**（见 [`super::plan`] 的 warnings）。
+    ///
+    /// | 值 | 含义 |
+    /// | --- | --- |
+    /// | `complete`（默认） | 声明者保证：过滤列填的就是租户主体本身，不漏行 |
+    /// | `main_only` | 只覆盖主账号；**子账号产生的数据不在结果内** |
+    #[serde(default)]
+    pub coverage: Coverage,
+    /// ⭐ I-1 · **回执里那句警告的正文**（可选，短句；省略则回退到 [`Self::reason`]）。
+    ///
+    /// 为什么和 `reason` 分开：`reason` 是给人**评审**的长文（数据事实、取舍、待办），
+    /// 而 `warnings[]` 是给数字员工**读**的一句话 —— 把 200 字的评审理由塞进警告，
+    /// 等于没有警告。这里写「代价」，`reason` 写「为什么这么定」。
+    #[serde(rename = "coverageNote", default)]
+    pub coverage_note: Option<String>,
     /// 为什么是这一列（可选，但多租户列的表**应当**写）。
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+/// 一张表的租户过滤**覆盖面**（声明事实，不是代码推断）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Coverage {
+    /// 声明者保证不漏行（默认）。
+    #[default]
+    Complete,
+    /// 只覆盖主账号：子账号产生的数据不在结果内。
+    MainOnly,
+}
+
+impl Coverage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Coverage::Complete => "complete",
+            Coverage::MainOnly => "main_only",
+        }
+    }
+
+    /// 是否**不完整**（需要在回执里报警）。
+    pub const fn is_incomplete(self) -> bool {
+        !matches!(self, Coverage::Complete)
+    }
 }
 
 /// 一个公共维度。
@@ -82,8 +127,14 @@ pub struct PublicDimension {
 /// 一张表的租户决定 —— 机制的全部输出只有这三种（+ 拒绝）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableDecision {
-    /// 按这一列过滤。
-    Filter { column: String, reason: Option<String> },
+    /// 按这一列过滤（`coverage` = 声明者声明的覆盖面，见 [`Coverage`]）。
+    Filter {
+        column: String,
+        reason: Option<String>,
+        coverage: Coverage,
+        /// `coverage` 不完整时，回执警告里要用的短句（省略则回退到 `reason`）。
+        coverage_note: Option<String>,
+    },
     /// 公共维度，不过滤。
     Public { reason: String },
     /// 没登记 ⇒ 不可查（调用方负责拒绝并点名）。
@@ -122,6 +173,17 @@ impl QueryPolicy {
             }
             if rule.tenant_column.trim().is_empty() {
                 problems.push(format!("perTable.{table}.tenantColumn 不能为空"));
+            }
+            // 不完整的口径**必须**说明原因与代价：警告里要读得出「为什么」，
+            // 否则调用方只看到一句「可能偏低」，无法判断该不该信这个数。
+            if rule.coverage.is_incomplete()
+                && rule.reason.as_deref().unwrap_or("").trim().is_empty()
+            {
+                problems.push(format!(
+                    "perTable.{table} 声明了 coverage = {:?} 却没写 reason —— \
+                     不完整的口径必须写明「为什么选这一列」和「代价是什么」",
+                    rule.coverage.as_str()
+                ));
             }
             if let Some(public) = self
                 .public_dimensions
@@ -171,6 +233,9 @@ impl QueryPolicy {
             return TableDecision::Filter {
                 column: self.tenant_id_column.clone(),
                 reason: Some("tenantSubject —— 租户主体表按 tenantIdColumn 过滤".into()),
+                // 主体表按自己的 id 过滤，天然覆盖全体（声明事实）。
+                coverage: Coverage::Complete,
+                coverage_note: None,
             };
         }
         if let Some((_, rule)) = self
@@ -181,6 +246,8 @@ impl QueryPolicy {
             return TableDecision::Filter {
                 column: rule.tenant_column.clone(),
                 reason: rule.reason.clone(),
+                coverage: rule.coverage,
+                coverage_note: rule.coverage_note.clone(),
             };
         }
         if let Some(p) = self
@@ -227,7 +294,7 @@ mod tests {
           "tenantSubject": "customers",
           "tenantIdColumn": "id",
           "perTable": {
-            "deductions": { "tenantColumn": "main_owner_id", "reason": "子账号归主账号" },
+            "ledger": { "tenantColumn": "main_owner_id", "reason": "子账号归主账号" },
             "balances": { "tenantColumn": "owner_id" }
           },
           "publicDimensions": [
@@ -245,14 +312,18 @@ mod tests {
             p.decide("customers"),
             TableDecision::Filter {
                 column: "id".into(),
-                reason: Some("tenantSubject —— 租户主体表按 tenantIdColumn 过滤".into())
+                reason: Some("tenantSubject —— 租户主体表按 tenantIdColumn 过滤".into()),
+                coverage: Coverage::Complete,
+                coverage_note: None,
             }
         );
         assert_eq!(
-            p.decide("deductions"),
+            p.decide("ledger"),
             TableDecision::Filter {
                 column: "main_owner_id".into(),
-                reason: Some("子账号归主账号".into())
+                reason: Some("子账号归主账号".into()),
+                coverage: Coverage::Complete,
+                coverage_note: None,
             }
         );
         assert_eq!(
@@ -262,10 +333,63 @@ mod tests {
         assert_eq!(p.decide("balances_archive"), TableDecision::Unregistered);
     }
 
+    // ── I-1 · coverage（覆盖范围）────────────────────────────────
+
+    #[test]
+    fn coverage_defaults_to_complete() {
+        let p = QueryPolicy::parse(&base()).unwrap();
+        match p.decide("balances") {
+            TableDecision::Filter { coverage, .. } => assert_eq!(coverage, Coverage::Complete),
+            other => panic!("应当是 Filter：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn main_only_is_parsed_and_kept_on_the_decision() {
+        let raw = base().replace(
+            "\"balances\": { \"tenantColumn\": \"owner_id\" }",
+            "\"balances\": { \"tenantColumn\": \"owner_id\", \"coverage\": \"main_only\", \
+             \"coverageNote\": \"子账号产生的余额行不在结果里\", \
+             \"reason\": \"子账号产生的余额行不在主账号结果里\" }",
+        );
+        let p = QueryPolicy::parse(&raw).expect("合法声明");
+        match p.decide("balances") {
+            TableDecision::Filter { coverage, reason, coverage_note, .. } => {
+                assert_eq!(coverage, Coverage::MainOnly);
+                assert!(reason.unwrap().contains("子账号"));
+                assert_eq!(coverage_note.as_deref(), Some("子账号产生的余额行不在结果里"));
+            }
+            other => panic!("应当是 Filter：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_coverage_value_is_an_error_not_a_default() {
+        let raw = base().replace(
+            "\"balances\": { \"tenantColumn\": \"owner_id\" }",
+            "\"balances\": { \"tenantColumn\": \"owner_id\", \"coverage\": \"main-only\" }",
+        );
+        let e = QueryPolicy::parse(&raw).unwrap_err();
+        assert!(
+            e.message().contains("unknown variant") && e.message().contains("main_only"),
+            "拼错/未知的 coverage 不许静默当默认：{e}"
+        );
+    }
+
+    #[test]
+    fn main_only_without_a_reason_is_rejected() {
+        let raw = base().replace(
+            "\"balances\": { \"tenantColumn\": \"owner_id\" }",
+            "\"balances\": { \"tenantColumn\": \"owner_id\", \"coverage\": \"main_only\" }",
+        );
+        let e = QueryPolicy::parse(&raw).unwrap_err();
+        assert!(e.message().contains("没写 reason"), "{e}");
+    }
+
     #[test]
     fn table_names_are_compared_case_insensitively_and_trimmed() {
         let p = QueryPolicy::parse(&base()).unwrap();
-        assert!(matches!(p.decide(" Deductions "), TableDecision::Filter { .. }));
+        assert!(matches!(p.decide(" Ledger "), TableDecision::Filter { .. }));
         assert!(matches!(p.decide("PACKAGE_TEMPLATES"), TableDecision::Public { .. }));
     }
 
@@ -312,5 +436,13 @@ mod tests {
         // 从而不会悄悄放过一张没登记的表。
         assert!(matches!(p.decide("some_customer_table"), TableDecision::Filter { .. }));
         assert!(matches!(p.decide("some_public_catalog"), TableDecision::Public { .. }));
+        // 模板必须示范 `coverage`（只写 complete 的项目永远不知道有这个口子）
+        assert!(
+            matches!(
+                p.decide("some_sub_account_table"),
+                TableDecision::Filter { coverage: Coverage::MainOnly, .. }
+            ),
+            "模板里的子账号表应当示范 coverage = main_only"
+        );
     }
 }

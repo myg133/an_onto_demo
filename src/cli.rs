@@ -144,6 +144,8 @@ pub enum Cmd {
     /// 换库只改声明。没登记、又不在公共维度的表 ⇒ **整条查询拒绝**（点名表）。
     /// ⚠️ 不支持的语法（OPTIONAL / UNION / 子查询 / BIND / 属性路径 / CONSTRUCT / ASK /
     /// REGEX / 函数）**一律报错**，不会静默忽略。
+    /// ⚠️ **覆盖范围也会报警**：声明里标了 `coverage: "main_only"` 的表（例如子账号产生的
+    /// 扣费主账号看不到），命中时 `warnings[]` 会点名 —— 别把偏小的金额读成「没有业务」。
     /// ⚠️ 源库连接串走环境变量 `ONTOK_SOURCE_DATABASE_URL`（口令不入库），
     /// 连上后**读回** `transaction_read_only = on` 才执行。
     #[command(verbatim_doc_comment)]
@@ -512,7 +514,8 @@ pub enum SparqlCmd {
         #[arg(long)]
         tenant: String,
         /// SPARQL 查询（v1 子集：BGP / 基本 FILTER / LIMIT / OFFSET / ORDER BY 单列 /
-        /// COUNT·SUM·MIN·MAX·AVG + GROUP BY 单列）。
+        /// COUNT·SUM·MIN·MAX·AVG + GROUP BY 单列；唯一的清单外额外项是 `SELECT DISTINCT`，
+        /// 它只去重、不改变「取哪些行」）。
         #[arg(long)]
         query: String,
         /// 最多返回多少行（超出 ⇒ `truncated: true` 并明确告知）。
