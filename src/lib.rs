@@ -39,3 +39,10 @@ pub mod agent;
 // **不放 domain/**：它要连源库执行 SQL（domain 的 AC-002 判据是「零 I/O」）。
 // 纯的那部分（解析 / 规划 / 声明 / SQL 文本）都在 `sparql::*` 里各自单测，不依赖库。
 pub mod sparql;
+
+// ⭐ REQ-123 · **查询服务对外**（REST + 远程 MCP）：一个进程、两种协议、**一份鉴权**。
+// **不放 domain/**：它要起 socket、连源库、读 token 表。
+// ⛔ 也不放进 `server/`：那一层的结构判据是「只读 + 只注册 GET」，而本模块要
+// POST /api/sparql 与 POST /mcp，且鉴权模型完全不同（同一张 token 表 → 租户）。
+// 见 `src/query/mod.rs` 模块头。
+pub mod query;

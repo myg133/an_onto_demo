@@ -150,6 +150,24 @@ pub enum Cmd {
     /// 连上后**读回** `transaction_read_only = on` 才执行。
     #[command(verbatim_doc_comment)]
     Sparql { #[command(subcommand)] cmd: SparqlCmd },
+    /// ⭐ REQ-123 · **查询服务对外**（REST + 远程 MCP；一个进程、两种协议、一份鉴权）
+    ///
+    /// 数字员工链路的最后一块：把 REQ-122 的 `sparql query` 做成**服务**，
+    /// 让 Agent 通过 HTTP 或 MCP 调用。⛔ 租户只能来自 token —— 请求里带 tenant
+    /// 只用于核对，不一致直接 403。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok query serve --bind 10.0.0.5:8800 --tokens tokens.json --project anspire_r2rml_excl --version 2 --schema code/out/schema.json --policy query-policy.json
+    ///
+    /// ⚠️ **默认只绑内网/本机**：`127.0.0.1` / `10.x` / `172.16–31.x` / `192.168.x` / `fc00::/7`。
+    /// 绑 `0.0.0.0`（或任何公网地址）**必须**显式加 `--allow-public`，启动时打警告。
+    /// ⚠️ token 表是**静态文件**（`--tokens`）：`token → {tenant, max_rows, max_concurrency}`；
+    /// 启动时读一次（改 token 要重启）。示例见 `tokens.example.json`，⛔ 里面的 token 是假值。
+    /// ⚠️ 租户声明 `--policy` **必填**（ADR-006：机制在代码、口径在声明）。
+    /// ⚠️ 版本必须**已冻结**（与 `serve` / `mcp-server` 同一条闸门）。
+    #[command(verbatim_doc_comment)]
+    Query { #[command(subcommand)] cmd: QueryCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -534,6 +552,74 @@ pub enum SparqlCmd {
         /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成）。
         ///
         /// 生成时会带 `ontok:joinState "inherit"` 标（这些 join 本表没实测）。
+        #[arg(long)]
+        include_inherit: bool,
+    },
+}
+
+/// ⭐ REQ-123 · 查询服务（REST + 远程 MCP）。
+#[derive(Subcommand)]
+pub enum QueryCmd {
+    /// 起查询服务：REST（/api/sparql /catalog /describe /health）+ MCP over HTTP（/mcp）
+    ///
+    /// 端点：
+    ///
+    /// POST /api/sparql         body {query, max_rows?}（tenant 只能来自 token）
+    /// GET  /api/catalog?page=1&page_size=50
+    /// GET  /api/describe?name=:customers
+    /// GET  /api/health         免 token，只给版本与语法版本
+    /// POST /mcp                JSON-RPC 2.0（initialize / tools/list / tools/call）
+    /// GET  /mcp                SSE 流（服务端消息；空闲超时会主动断开）
+    ///
+    /// MCP 工具：catalog / describe / sparql_query / sample。
+    ///
+    /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。⛔ 放 query string / cookie **不生效**。
+    /// ⚠️ 限额：`max_rows`（token 级上限，调用方只能往下压）、超时、每 token 并发、
+    /// SSE 连接数 + 空闲超时；超限 **429**。
+    /// ⚠️ 审计：每次调用一行（时间 / token 摘要 / tenant / 查询哈希 / 行数 / 耗时 / code），
+    /// ⛔ 不记 token 明文、不记查询原文。
+    #[command(verbatim_doc_comment)]
+    Serve {
+        /// 监听地址。默认只允许内网/回环；绑 0.0.0.0 或公网地址要显式 `--allow-public`
+        #[arg(long)]
+        bind: String,
+        /// 静态 token 表（JSON，见 `tokens.example.json`；示例里的 token 是假值）
+        #[arg(long)]
+        tokens: PathBuf,
+        /// 项目名
+        #[arg(long)]
+        project: String,
+        /// 第几版（该版必须已冻结）
+        #[arg(long)]
+        version: i32,
+        /// 真实 schema（`ontok-introspect` 产物）—— 列存在性 / 列类型只能来自它
+        #[arg(long)]
+        schema: PathBuf,
+        /// 租户声明（`query-policy.json`，ADR-006）—— **没有默认值**
+        #[arg(long)]
+        policy: PathBuf,
+        /// 允许绑非内网地址（0.0.0.0 / 公网）。⛔ 不加就只能绑回环或内网
+        #[arg(long)]
+        allow_public: bool,
+        /// 单次查询超时（毫秒）：服务端 statement_timeout + 客户端兜底都按它
+        #[arg(long, default_value_t = 10_000)]
+        timeout_ms: u64,
+        /// SSE 空闲超时（毫秒）：到点主动断开并记审计（≥ 1000）
+        #[arg(long, default_value_t = 60_000)]
+        sse_idle_timeout_ms: u64,
+        /// 全局 SSE 连接上限（超限 429）
+        #[arg(long, default_value_t = 32)]
+        sse_max_connections: usize,
+        /// 全局并发查询上限（按源库只读池的连接数取，默认 2）
+        #[arg(long, default_value_t = 2)]
+        max_concurrent_queries: usize,
+        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+        /// IRI 基（必须与 `ontok r2rml generate` 用的是同一个）
+        #[arg(long, default_value = "https://ontok.local/")]
+        base: String,
+        /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 `r2rml generate` 一致）
         #[arg(long)]
         include_inherit: bool,
     },
@@ -1426,6 +1512,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::R2rml { cmd } => r2rml_cmd(&pool, cmd).await,
         // ⭐ REQ-122 · SPARQL → SQL（按声明注入租户；只读源库由本命令自己连）
         Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
+        // ⭐ REQ-123 · 查询服务对外（REST + MCP over HTTP；一个进程、一份鉴权）
+        Cmd::Query { cmd } => query_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -3933,8 +4021,48 @@ async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ── 提案指法 ────────────────────────────────────────────
-/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；
+/// ⭐ REQ-123 · `ontok query serve` —— 参数只在这里翻译，逻辑全在 `query::serve`。
+///
+/// ⚠️ 这里**不做**任何鉴权 / 限额 / 绑定判断：那些在 `query::serve::serve` 与
+/// `query::http` 里（一处实现）。本函数只做「clap 参数 → ServeArgs」的搬运。
+async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
+    let QueryCmd::Serve {
+        bind,
+        tokens,
+        project,
+        version,
+        schema,
+        policy,
+        allow_public,
+        timeout_ms,
+        sse_idle_timeout_ms,
+        sse_max_connections,
+        max_concurrent_queries,
+        audit_out,
+        base,
+        include_inherit,
+    } = cmd;
+
+    let args = crate::query::serve::ServeArgs {
+        bind,
+        tokens,
+        project,
+        version,
+        schema,
+        policy,
+        allow_public,
+        timeout_ms,
+        sse_idle_timeout_ms,
+        sse_max_connections,
+        max_concurrent_queries,
+        audit_out,
+        base,
+        include_inherit,
+    };
+    crate::query::serve::serve(pool, args).await
+}
+
+// ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；
 /// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
 ///
 /// # 别名是「项目内序号」—— 必须带 `WHERE project_id = $1`

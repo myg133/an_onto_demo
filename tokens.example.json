@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "tokens": [
+    {
+      "label": "样例-A（假值，勿用于任何环境）",
+      "token": "EXAMPLE-NOT-A-REAL-TOKEN-0001",
+      "tenant": "REPLACE-WITH-TENANT-A",
+      "max_rows": 200,
+      "max_concurrency": 2
+    },
+    {
+      "label": "样例-B（假值，勿用于任何环境）",
+      "token": "EXAMPLE-NOT-A-REAL-TOKEN-0002",
+      "tenant": "REPLACE-WITH-TENANT-B",
+      "max_rows": 50,
+      "max_concurrency": 1
+    }
+  ]
+}

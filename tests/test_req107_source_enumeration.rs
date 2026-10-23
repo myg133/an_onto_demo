@@ -1671,6 +1671,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "sparql_cmd",
         "子命令 handler（`sparql query`：按声明注入租户 + 只读执行，写出 I13）",
     ),
+    // ⭐ REQ-123 · 查询服务：clap 参数 → `query::serve::ServeArgs` 的**纯搬运**。
+    // 它不做鉴权 / 限额 / 绑定判断，也**不写任何字节**（服务由 `query::serve` 起）。
+    (
+        "src/cli.rs",
+        "query_cmd",
+        "子命令 handler（`query serve`：只翻译参数，逻辑全在 `query::serve`；本函数零写出）",
+    ),
     ("src/cli.rs", "resolve_proposal", "运维辅助"),
     ("src/cli.rs", "newest_proposal_project", "运维辅助"),
     ("src/cli.rs", "resolve_proposal_arg", "运维辅助"),
@@ -1978,6 +1985,15 @@ const MODULES: &[(&str, &str)] = &[
     ("src/sparql/mod.rs", "policy"),
     ("src/sparql/mod.rs", "query"),
     ("src/sparql/mod.rs", "sql"),
+    // ⭐ REQ-123 · 查询服务对外（REST + 远程 MCP）。
+    // 四条写出口 I14–I17 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "query"),
+    ("src/query/mod.rs", "audit"),
+    ("src/query/mod.rs", "catalog"),
+    ("src/query/mod.rs", "error"),
+    ("src/query/mod.rs", "http"),
+    ("src/query/mod.rs", "serve"),
+    ("src/query/mod.rs", "tokens"),
 ];
 
 #[test]
