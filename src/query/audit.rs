@@ -159,6 +159,12 @@ pub struct AuditRecord {
     pub elapsed_ms: u128,
     /// `OK` 或错误码。
     pub code: &'static str,
+    /// ⭐ REQ-127 · TTL 视图（`customer` / `model`）；其它出口 `None`。
+    ///
+    /// 只放**代码里写死的两个短语**（`TtlView::as_str`），不是调用方给的字符串。
+    pub view: Option<&'static str>,
+    /// ⭐ REQ-127 · 响应正文字节数（只有 TTL 出口用它；401/304 记 `0`）。
+    pub bytes: Option<usize>,
     /// 附加事实（**只许是代码里写死的短语**：`idle_timeout` / `client_gone`）。
     pub note: Option<&'static str>,
 }
@@ -183,8 +189,16 @@ impl AuditRecord {
             .note
             .map(|n| format!(" note={n}"))
             .unwrap_or_default();
+        let view = self
+            .view
+            .map(|v| format!(" view={v}"))
+            .unwrap_or_default();
+        let bytes = self
+            .bytes
+            .map(|b| format!(" bytes={b}"))
+            .unwrap_or_default();
         format!(
-            "audit ts={} event={} proto={} token={} tenant={} q={} rows={} elapsed_ms={} code={}{}",
+            "audit ts={} event={} proto={} token={} tenant={} q={} rows={} elapsed_ms={} code={}{}{}{}",
             self.ts,
             self.event,
             self.proto,
@@ -194,6 +208,8 @@ impl AuditRecord {
             rows,
             self.elapsed_ms,
             self.code,
+            view,
+            bytes,
             note
         )
     }
@@ -305,6 +321,8 @@ mod tests {
             rows: Some(12),
             elapsed_ms: 37,
             code: "OK",
+            view: None,
+            bytes: None,
             note: None,
         };
         assert_eq!(
@@ -333,6 +351,50 @@ mod tests {
         assert!(sse.line().ends_with("code=OK note=idle_timeout"), "{}", sse.line());
     }
 
+    /// ⭐ REQ-127 · TTL 出口的审计行：`view=` / `bytes=` 只在有值时出现，
+    /// 且位置固定（`code=` 之后、`note=` 之前）—— 运维 grep 的口径不变。
+    #[test]
+    fn the_ttl_line_carries_view_and_bytes() {
+        let rec = AuditRecord {
+            ts: "2026-10-23T05:31:12.480Z".into(),
+            event: "ttl",
+            proto: "rest",
+            token_digest: Some("sha256:3f2a1b0c9d8e".into()),
+            tenant: Some("C0001".into()),
+            query_digest: None,
+            rows: None,
+            elapsed_ms: 3,
+            code: "OK",
+            view: Some("model"),
+            bytes: Some(432_101),
+            note: None,
+        };
+        let line = rec.line();
+        assert!(
+            line.ends_with("code=OK view=model bytes=432101"),
+            "TTL 审计行的形状不对：{line}"
+        );
+        // 304：bytes=0；code 仍是可数的事实。
+        let not_modified = AuditRecord {
+            code: "NOT_MODIFIED",
+            bytes: Some(0),
+            ..rec.clone()
+        };
+        assert!(
+            not_modified.line().ends_with("code=NOT_MODIFIED view=model bytes=0"),
+            "{}",
+            not_modified.line()
+        );
+        // 其它出口不带这两个字段时，行形状与 REQ-123 完全一致（⛔ 不破坏既有 grep）。
+        let plain = AuditRecord {
+            view: None,
+            bytes: None,
+            ..rec
+        };
+        assert!(!plain.line().contains("view="), "{}", plain.line());
+        assert!(!plain.line().contains("bytes="), "{}", plain.line());
+    }
+
     /// ⭐ AC-007 的两条否定判据：行里**不许**出现 token 原文与查询原文。
     ///
     /// 变异：把 `token_digest` 换成 `Some(token.clone())` / 把 `query_digest`
@@ -351,6 +413,8 @@ mod tests {
             rows: Some(3),
             elapsed_ms: 5,
             code: "OK",
+            view: None,
+            bytes: None,
             note: None,
         };
         let line = rec.line();
@@ -384,6 +448,8 @@ mod tests {
             rows: Some(0),
             elapsed_ms: 1,
             code: "OK",
+            view: None,
+            bytes: None,
             note: None,
         };
         {

@@ -358,6 +358,12 @@ pub enum OutletId {
     /// 没有 `sql_echo` / 表名 / 列名 / 属性 IRI：这条是**类型层**的
     /// （`portal::PortalAnswer` 没有那些字段），不是这一行的措辞。
     I24,
+    /// ⭐ REQ-127 · 查询服务 · **整份 OWL TTL 响应**（`GET /api/ontology.ttl` 的两视图）。
+    ///
+    /// 内部轨（按**通道**登记，与 I19 同一条口径）：能调到它的是 query token（Agent 面），
+    /// 不是客户浏览器；正文的客户视图字节由 C6 的管线产出（同一份，发布闸已在生成侧过），
+    /// 建模视图由 D9 产出。本出口只负责**送达**（并把缓存字节原样写出）。
+    I25,
 }
 
 impl OutletId {
@@ -402,6 +408,7 @@ impl OutletId {
             OutletId::I22 => "I22",
             OutletId::I23 => "I23",
             OutletId::I24 => "I24",
+            OutletId::I25 => "I25",
         }
     }
 }
@@ -507,6 +514,12 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         // 是类型层的（`portal::PortalAnswer` 的字段清单）。
         OutletId::I23 => OutletSpec::of("I23", Track::Internal, Format::Html, Granularity::Whole),
         OutletId::I24 => OutletSpec::of("I24", Track::Internal, Format::Json, Granularity::Whole),
+        // ⭐ REQ-127 · 查询服务的整份 OWL（Turtle）响应：**内部**轨（Agent 面通道）。
+        //
+        // 内容侧：客户视图字节来自 C6 的管线（同一份 `pipeline::render`，过客户发布闸），
+        // 建模视图来自 D9（显式豁免）。本出口只送达；按通道登记为内部轨 ——
+        // 与 I19（控制面 `GET /api/export/ttl`）完全同一条口径。
+        OutletId::I25 => OutletSpec::of("I25", Track::Internal, Format::Text, Granularity::Whole),
     }
 }
 
@@ -1689,6 +1702,19 @@ pub const OUTLETS: &[Outlet] = &[
          那是 `portal::PortalAnswer` 的字段清单决定的（类型层，不是这一行的措辞）。",
     },
     Outlet {
+        id: "I25",
+        path: "src/query/http.rs",
+        // 唯一的 Turtle 响应构造点（handler 只把缓存字节交给它）。
+        call_site: "fn ttl_response(",
+        spec: spec_of(OutletId::I25),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-127）：查询服务的 `GET /api/ontology.ttl`（客户 / 建模两视图）\
+         与 MCP `resources/read` 的 Turtle 正文。字节与 C6 / D9 **同一份**\
+         （启动时 `prepare_ttl_export` + `pipeline::render` 渲染一次并缓存，AC-004 的 sha256 对拍靠它）；\
+         送达通道是 query token（Agent 面），所以按通道登记为内部轨 —— 与 I19 同一条口径。\
+         ⛔ 不在这里做任何序列化或二次加工。",
+    },
+    Outlet {
         id: "Z1",
         path: "src/server/http.rs",
         call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
@@ -1761,26 +1787,29 @@ mod tests {
     /// ⭐ REQ-124 再加 I18–I21（控制面 JSON / TTL / R2RML / 声明落盘，**全部内部轨**）
     /// ⇒ **56（内部 26）**；REQ-125 再加 I22（工作台页面壳 HTML，**内部轨、零数据**）
     /// ⇒ 57（内部 27）；REQ-126 再加 I23/I24（客户门户的页面壳与 API，**内部轨**）
-    /// ⇒ **59（内部 29）**。
+    /// ⇒ **59（内部 29）**；REQ-127 再加 I25（查询服务的整份 OWL TTL 响应，**内部轨**）
+    /// ⇒ **60（内部 30）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            59,
+            60,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
              + 4（REQ-124 的控制面出口）+ 1（REQ-125 的工作台页面壳）\
-             + 2（REQ-126 的客户门户：页面壳 + API）"
+             + 2（REQ-126 的客户门户：页面壳 + API）\
+             + 1（REQ-127 的查询服务 OWL TTL 响应）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            29,
+            30,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
-             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24"
+             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24 \
+             + REQ-127 的 I25"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

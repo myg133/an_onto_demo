@@ -45,6 +45,11 @@ pub struct ServeArgs {
     pub version: i32,
     pub schema: PathBuf,
     pub policy: PathBuf,
+    /// ⭐ REQ-127 · 租户标注声明（**只在建模视图生效**；与 `ontology export --tenancy` 同一份）。
+    ///
+    /// 省略时按「`--policy` 同目录的 `tenancy.json`」自动取（取不到则建模视图不带租户标注，
+    /// 启动横幅会明说）—— 这样默认启动命令也能与 CLI 的 `--tenancy tenancy.json` 对拍。
+    pub tenancy: Option<PathBuf>,
     /// 绑非内网地址时必须显式给（`0.0.0.0` 也要）。
     pub allow_public: bool,
     pub timeout_ms: u64,
@@ -56,6 +61,26 @@ pub struct ServeArgs {
     pub base: String,
     /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 CLI 一致）。
     pub include_inherit: bool,
+}
+
+/// ⭐ REQ-127 · 建模视图的租户声明从哪来。
+///
+/// 顺序：显式 `--tenancy` → `--policy` 同目录的 `tenancy.json`（存在才用）→ 没有。
+///
+/// 为什么允许自动取同目录那一份：本项目把两份声明放在一起（`query-policy.json` /
+/// `tenancy.json`），而 `query serve` 的默认启动命令里只写了 `--policy`。
+/// 若坚持必须显式给 `--tenancy`，默认命令产出的建模视图会**少**租户标注，
+/// 与 `ontology export --model-view --tenancy tenancy.json` 对不上（AC-004）。
+/// 取不到就**明确警告**，⛔ 不假装已标注。
+fn resolve_tenancy(policy: &std::path::Path, explicit: Option<&std::path::Path>) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(path.to_path_buf());
+    }
+    let sibling = policy
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("tenancy.json");
+    sibling.is_file().then_some(sibling)
 }
 
 /// 绑定地址的判定结果。
@@ -265,6 +290,51 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("项目 {:?} 第 {} 版没有快照", args.project, args.version))?;
 
+    // ── ⑥.5 ⭐ REQ-127 · 两视图 TTL（启动时算一次；版本冻结 ⇒ 内容不变）──
+    //
+    // 读/投影走 `cli::prepare_ttl_export`（与 `ontology export` **同一段**），
+    // 渲染走 `console::ops::render_ttl_export`（同一个 `pipeline::render`）——
+    // 于是 `GET /api/ontology.ttl` 与 CLI 导出同参数时逐字节相同（AC-004）。
+    // 产不出就**拒绝启动**：这个端点的契约就是「与 CLI 一致」，产不出不能宣称能产。
+    let tenancy_path = resolve_tenancy(&args.policy, args.tenancy.as_deref());
+    let ttl = crate::query::ttl::OntologyTtl::prepare(
+        pool,
+        &crate::query::ttl::TtlSource {
+            project: &args.project,
+            version: args.version,
+            base: &args.base,
+            schema: Some(&args.schema),
+            tenancy: tenancy_path.as_deref(),
+        },
+    )
+    .await
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "启动时无法生成 `/api/ontology.ttl` 的两视图（fail-closed）：{e}\n  \
+             这个端点的契约是「与 `ontok ontology export` 同参数逐字节相同」；\
+             产不出来就不该起服务（否则调用方会拿到一份与 CLI 不同的本体）。"
+        )
+    })?;
+    match &tenancy_path {
+        Some(path) => eprintln!(
+            "· TTL 租户标注：{}（只在 `?view=model` 生效；客户视图结构上不含租户信息）",
+            path.display()
+        ),
+        None => eprintln!(
+            "⚠ 没有租户声明（`--tenancy` 未给，且 `--policy` 同目录下没有 tenancy.json）：\
+             建模视图不含 ontok:tenant*；若要与 `ontology export --model-view --tenancy <file>` \
+             逐字节相同，请补 `--tenancy`。"
+        ),
+    }
+    eprintln!(
+        "· OWL/TTL：GET /api/ontology.ttl（客户视图，{} 字节，ETag {}）· \
+         ?view=model（建模视图，{} 字节，ETag {}）· 与 CLI 同参数逐字节相同",
+        ttl.customer().bytes(),
+        ttl.customer().etag(),
+        ttl.model().bytes(),
+        ttl.model().etag(),
+    );
+
     // ── ⑦ 映射（与 r2rml generate 同一个函数）────────────────
     let opts = crate::domain::ttl::TtlOptions {
         project: args.project.as_str(),
@@ -322,6 +392,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         max_concurrent_queries: args.max_concurrent_queries,
         tokens,
         audit,
+        ttl,
     }));
 
     let tenants = svc.tokens.tenants();
@@ -469,5 +540,51 @@ mod tests {
         );
         assert!(off.contains("transaction_read_only = off"), "{off}");
         assert!(!off.contains("= on"), "横幅里出现了写死的 on：\n{off}");
+    }
+
+    /// ⭐ REQ-127 · 建模视图的租户声明从哪来（AC-004 的建模视图那一半靠它）。
+    ///
+    /// 三条判据对应三种现实：显式给 / 约定位置有 / 两处都没有。
+    /// 变异：把「显式优先」写成「同目录优先」⇒ 第一条红；把「没有就 None」写成
+    /// 「造一个默认路径」⇒ 第三条红（会拿一个不存在的文件去开）。
+    #[test]
+    fn the_model_view_tenancy_resolves_explicit_then_sibling_then_none() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontok-req127-tenancy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let policy = dir.join("query-policy.json");
+        std::fs::write(&policy, "{}").expect("写 policy");
+        let explicit = dir.join("elsewhere.json");
+
+        // ① 显式给 ⇒ 就是它（即使同目录也有 tenancy.json）。
+        std::fs::write(dir.join("tenancy.json"), "{}").expect("写同目录 tenancy");
+        assert_eq!(
+            resolve_tenancy(&policy, Some(explicit.as_path())),
+            Some(explicit.clone()),
+            "`--tenancy` 是调用方的明确意图，⛔ 不能被同目录的约定覆盖"
+        );
+
+        // ② 没显式给 + 同目录有 ⇒ 用它（这正是默认启动命令能与 CLI 对拍的原因）。
+        assert_eq!(
+            resolve_tenancy(&policy, None),
+            Some(dir.join("tenancy.json")),
+            "`--policy` 同目录的 tenancy.json 应当被自动采用"
+        );
+
+        // ③ 两处都没有 ⇒ None（⛔ 不编一个路径出来）。
+        std::fs::remove_file(dir.join("tenancy.json")).expect("删同目录 tenancy");
+        assert_eq!(
+            resolve_tenancy(&policy, None),
+            None,
+            "没有声明时必须明说「没有」，不能返回一个不存在的路径"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

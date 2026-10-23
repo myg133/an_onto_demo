@@ -2022,6 +2022,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/query/mod.rs", "http"),
     ("src/query/mod.rs", "serve"),
     ("src/query/mod.rs", "tokens"),
+    // ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（出口 I25 登记在 OUTLETS）。
+    ("src/query/mod.rs", "ttl"),
     // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),

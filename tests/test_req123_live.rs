@@ -145,6 +145,22 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
     ))
     .expect("夹具 token 表");
 
+    // ⭐ REQ-127 · 服务状态里多了两视图 TTL（不连库也能从已投影视图渲染；走同一个管线）。
+    let customer_view = ontok::domain::view::project(&ontok::cli::snapshot_to_view(&snap));
+    let ttl = ontok::query::ttl::OntologyTtl::from_views(
+        &customer_view,
+        &model,
+        ontok::query::ttl::TtlMeta {
+            project: &project,
+            version,
+            base: "https://ontok.local/",
+            action_type_count: snap.action_types.len(),
+            schema: Some(&schema),
+            tenancy: None,
+        },
+    )
+    .expect("两视图 TTL 必须能渲染");
+
     Some(Arc::new(QueryService::new(ServiceParts {
         source: src.pool.clone(),
         facts: src.facts.clone(),
@@ -161,6 +177,7 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
         max_concurrent_queries: 2,
         tokens,
         audit: ontok::query::audit::AuditSink::stderr_only(),
+        ttl,
     })))
 }
 
