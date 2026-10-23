@@ -22,7 +22,7 @@
 //! | R2 | 未知类/属性**报错**并给可用清单，⛔ 不返回空结果 | [`plan`] 的 `unknown_predicate` / `class_of` |
 //! | R3 | 租户无法确定 ⇒ **整条拒绝**，点名表 | [`plan`] 的 `decide_tenants` |
 //! | R4 | 注入在 SQL 生成后、执行前，**每张涉及的表都有** | [`plan`] 的 `where_clause`（唯一实现） |
-//! | R5 | 注入**可见**：`sql_echo` 就是真正执行的那条 SQL | [`QueryResult::sql_echo`] |
+//! | R5 | 注入**可见**：`sql_echo` 就是真正执行的那条 SQL | [`QueryResult::sql_echo`] + [`receipt`] 的单测 |
 //!
 //! # 映射从哪来（⛔ 不解析 TTL）
 //!
@@ -108,6 +108,24 @@ pub async fn run_query(
     .await
     .map_err(|e| QueryError::new(format!("{}\n  SQL: {}", e.message(), planned.sql)))?;
 
+    Ok(receipt(planned, rows))
+}
+
+/// 把「规划结果 + 执行结果」组装成回执 —— **`sql_echo` 只在这里产生**。
+///
+/// # 为什么单独抽成一个纯函数（REQ-122 · N1）
+///
+/// 「`sql_echo` 就是真正执行的那条 SQL」是整条**注入可视化**验收的地基
+/// （R5 / AC-004 / AC-005 / AC-009 都踩在它上面）。原先它只出现在
+/// [`run_query`] 里，而那是个要连库的 async 函数 ⇒ 没有人能**不连库**校验它。
+/// QA 的实测说明代价有多大：把 echo 里的租户条件**全删掉**（执行不变），
+/// lib 516 / sparql 17 / live 3 **全绿**。
+///
+/// 抽出来之后，`sql_echo` 的取值可以被逐字校验（本文件 `#[cfg(test)] mod tests`）：
+/// 它**逐字等于** `planned.sql`（[`exec::run`] 收到的也是这同一个字段），
+/// 且逐字包含注入条件、`LIMIT N+1` 探针与尾部注释。
+/// 任何「让回执好看一点」的后加工都会在那两条判据上变红。
+fn receipt(planned: plan::Planned, rows: exec::Rows) -> QueryResult {
     let truncated = planned.truncated_possible && rows.more;
     let mut warnings = planned.warnings.clone();
     if truncated {
@@ -118,15 +136,218 @@ pub async fn run_query(
         ));
     }
     let row_count = rows.rows.len();
-    Ok(QueryResult {
+    QueryResult {
         columns: planned.columns,
         rows: rows.rows,
         row_count,
         truncated,
+        // ⛔ 逐字取自 `planned.sql`：**执行用的就是这一个字符串**，
+        // 这里不许 replace / 截断 / 美化（N1 的变异正是这一类）。
         sql_echo: planned.sql,
         tenant_applied: planned.tenant_applied,
         tables: planned.tables,
         public_dimensions: planned.public_dimensions,
         warnings,
-    })
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// N1 判据：`sql_echo` 的内容不是「顺带有的」，而是**被钉住的**
+// ══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::model_view::{
+        ModelEntityView, ModelLinkView, ModelPropertyView, ModelTrackView,
+    };
+    use crate::domain::r2rml::{build_mapping, R2rmlMapping};
+    use crate::domain::snapshot::{Evidence, JoinState};
+    use crate::domain::ttl::{SchemaTypes, TtlOptions};
+
+    const ONT: &str = "https://ontok.local/demo";
+
+    fn prop(name: &str, column: &str) -> ModelPropertyView {
+        ModelPropertyView {
+            name: name.into(),
+            column: column.into(),
+            nullable: false,
+            note: None,
+            sample: None,
+        }
+    }
+
+    fn entity(key: &str, props: Vec<ModelPropertyView>) -> ModelEntityView {
+        ModelEntityView {
+            key: key.into(),
+            display_name: key.into(),
+            description: None,
+            aliases: vec![],
+            parent: None,
+            disjoint_with: vec![],
+            properties: props,
+            evidence: vec![],
+        }
+    }
+
+    fn link(from: &str, to: &str, column: &str, parent_col: &str) -> ModelLinkView {
+        ModelLinkView {
+            key: format!("{from}_{column}__{to}"),
+            from_type: from.into(),
+            to_type: to.into(),
+            cardinality: "N:1".into(),
+            semantic: "belongs_to".into(),
+            evidence: vec![Evidence {
+                table: from.into(),
+                column: column.into(),
+                claim: "外键".into(),
+            }],
+            confidence: None,
+            join_verified: Some(JoinState::Verified),
+            join_evidence: Some(format!(
+                "value-overlap 5/5 (100.00%) -> {to}.{parent_col} via primary_key (plural)"
+            )),
+            column: Some(column.into()),
+        }
+    }
+
+    const SCHEMA: &str = r#"{"tables":[
+      {"name":"customers","primary_key":"id","composite_primary_key":[],"unique_columns":["id"],
+       "columns":[{"name":"id","data_type":"text","is_primary_key":true},
+                  {"name":"customer_name","data_type":"text"}]},
+      {"name":"orders","primary_key":"order_id","composite_primary_key":[],"unique_columns":["order_id"],
+       "columns":[{"name":"order_id","data_type":"text","is_primary_key":true},
+                  {"name":"customer_id","data_type":"text"},
+                  {"name":"amount","data_type":"numeric(12,4)"}]}
+    ]}"#;
+
+    const POLICY: &str = r#"{
+      "version": "1.0.0",
+      "tenantSubject": "customers",
+      "tenantIdColumn": "id",
+      "perTable": { "orders": { "tenantColumn": "customer_id" } },
+      "publicDimensions": []
+    }"#;
+
+    fn fixture() -> (SchemaTypes, R2rmlMapping) {
+        let schema = SchemaTypes::parse(SCHEMA).expect("夹具 schema");
+        let view = ModelTrackView {
+            seq: 2,
+            extracted_by: None,
+            entity_types: vec![
+                entity("customers", vec![prop("客户名", "customer_name")]),
+                entity(
+                    "orders",
+                    vec![prop("金额", "amount"), prop("客户", "customer_id")],
+                ),
+            ],
+            link_types: vec![link("orders", "customers", "customer_id", "id")],
+            action_types: vec![],
+            functions: vec![],
+        };
+        let mut opts = TtlOptions::new("demo", 2);
+        opts.schema = Some(&schema);
+        let mapping =
+            build_mapping(&view, &opts, false, Default::default()).expect("夹具映射必须能生成");
+        (schema, mapping)
+    }
+
+    fn planned(sparql: &str) -> plan::Planned {
+        let (schema, mapping) = fixture();
+        let policy = QueryPolicy::parse(POLICY).expect("夹具声明");
+        plan::plan(
+            sparql,
+            &PlanInput {
+                mapping: &mapping,
+                schema: &schema,
+                ontology_iri: ONT,
+                policy: &policy,
+                tenant: "C0001",
+                max_rows: 1000,
+            },
+        )
+        .expect("这条查询应当能规划")
+    }
+
+    /// **N1 的主判据**：`sql_echo` 就是执行的那条 SQL，而且注入 / 探针 / 尾部注释都在里面。
+    ///
+    /// # 变异验证（QA 可复现，命令见下）
+    ///
+    /// ```text
+    /// # 把 receipt() 里的 sql_echo 改成「删掉注入条件」的样子：
+    /// #   sql_echo: strip_tenant_conditions(&planned.sql)  （或任何 replace）
+    /// # 期望：本测试红，且第一条断言就红（sql_echo != 执行的 SQL）。
+    /// ```
+    #[test]
+    fn sql_echo_is_the_executed_sql_and_shows_the_injection_and_the_probe() {
+        let p = planned(r#"SELECT ?o ?a WHERE { ?o :orders__amount ?a }"#);
+        let executed_sql = p.sql.clone();
+        let res = receipt(p, exec::Rows { rows: vec![], more: false });
+
+        // ① **逐字节**相等：echo 与执行用的字符串是同一个（⛔ 不是「长得像」）
+        assert_eq!(
+            res.sql_echo, executed_sql,
+            "sql_echo 必须逐字等于执行的 SQL —— 回执被再加工过"
+        );
+
+        // ② 注入条件在 echo 里，且是 WHERE 的最前面的项（AND 语义）
+        assert!(
+            res.sql_echo
+                .contains(r#"WHERE t0."customer_id" = 'C0001' AND"#),
+            "echo 的 WHERE 最前面必须是注入条件：{}",
+            res.sql_echo
+        );
+
+        // ③ `LIMIT N+1` 探针与尾部注释逐字在 echo 里（验收口径：LIMIT <= max_rows + 1）
+        assert!(
+            res.sql_echo.contains(
+                "LIMIT 1001 /* REQ-122: 上限 1000 行 + 1 行探针（判断 truncated），探针不进结果 */"
+            ),
+            "echo 必须逐字带 LIMIT N+1 与探针注释：{}",
+            res.sql_echo
+        );
+        assert!(
+            res.sql_echo.trim_end().ends_with("探针不进结果 */"),
+            "尾部必须是那句探针注释：{}",
+            res.sql_echo
+        );
+    }
+
+    /// 每一条 `tenant_applied` 都必须在 echo 里**恰好**出现一次。
+    ///
+    /// 这条是上面那条的推广：表多了、join 多了以后，「只删了其中一张表的条件」
+    /// 也必须红 —— 单表用例抓不住这种半删。
+    #[test]
+    fn every_applied_tenant_condition_appears_in_the_echo_exactly_once() {
+        let p = planned(
+            r#"SELECT ?n WHERE { ?o :orders__customers ?c . ?c :customers__customer_name ?n }"#,
+        );
+        let res = receipt(p, exec::Rows { rows: vec![], more: false });
+
+        assert_eq!(res.tenant_applied.len(), 2, "两张表都要注入：{:?}", res.tenant_applied);
+        for t in &res.tenant_applied {
+            let needle = format!("\"{}\" = '{}'", t.column, t.value);
+            assert_eq!(
+                res.sql_echo.matches(&needle).count(),
+                1,
+                "表 {} 的注入条件 `{needle}` 必须**恰好**在 echo 里出现一次：{}",
+                t.table,
+                res.sql_echo
+            );
+        }
+    }
+
+    /// 注入条件的**数量**也必须与 `tenant_applied` 一致（防止 echo 里多出「看起来像注入」的东西）。
+    #[test]
+    fn the_echo_does_not_invent_tenant_conditions_that_were_not_applied() {
+        let p = planned(r#"SELECT ?o ?a WHERE { ?o :orders__amount ?a }"#);
+        let res = receipt(p, exec::Rows { rows: vec![], more: false });
+        assert_eq!(res.tenant_applied.len(), 1);
+        assert_eq!(
+            res.sql_echo.matches(r#""customer_id" = 'C0001'"#).count(),
+            1,
+            "echo 里的注入条件数必须等于 tenant_applied（1）：{}",
+            res.sql_echo
+        );
+    }
 }

@@ -3749,7 +3749,7 @@ async fn r2rml_cmd(pool: &PgPool, cmd: R2rmlCmd) -> anyhow::Result<()> {
 /// | ③ | 项目 / 版本 / 快照 | 元数据库只读 |
 /// | ④ | `--schema` 对账 | 列存在性 / 类型只能来自真实 schema |
 /// | ⑤ | **映射**（与 `r2rml generate` 同一个 `build_mapping`） | ⛔ 不解析 TTL；同源才不会有第二份读法 |
-/// | ⑥ | 连**源库**（只读，读回 `transaction_read_only`） | 客户资产：只读不成立就一条都不查 |
+/// | ⑥ | 连**源库**（只读，读回 `transaction_read_only` / `standard_conforming_strings`） | 客户资产：只读不成立就一条都不查；回执里那两个值就是**这里读回来的**，⛔ 不写死 |
 /// | ⑦ | 规划（含注入）→ 执行 | 注入在 SQL 生成之后、执行之前 |
 ///
 /// # 为什么先连元数据库再连源库
@@ -3868,14 +3868,14 @@ async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
         tenant: tenant.as_str(),
         max_rows,
     };
-    let result = match crate::sparql::run_query(&src, &input, &query, timeout_ms).await {
+    let result = match crate::sparql::run_query(&src.pool, &input, &query, timeout_ms).await {
         Ok(r) => r,
         Err(e) => {
-            src.close().await;
+            src.pool.close().await;
             return Err(anyhow::anyhow!("{e}"));
         }
     };
-    src.close().await;
+    src.pool.close().await;
 
     // ── ⑧ 回执（stderr 给人，stdout 给脚本）──────────────────
     let st = mapping.stats();
@@ -3915,10 +3915,10 @@ async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
                 .join("、")
         );
     }
-    eprintln!(
-        "· 只读会话：transaction_read_only = on · standard_conforming_strings = on · \
-         超时 {timeout_ms} ms · 上限 {max_rows} 行"
-    );
+    // ⛔ 这一行**不许**写死 `on`（REQ-122 · N3）：两个会话值都来自 ⑥ 里
+    // `SHOW` 在**这条**连接上读回的结果（`ReadOnlyConnection::facts`）。
+    // 曾经的「只读会话：transaction_read_only = on」是硬编码字符串 —— 那是假回执。
+    eprintln!("{}", src.facts.receipt(timeout_ms, max_rows));
     eprintln!(
         "· 返回 {} 行（truncated: {}）· 涉及 {} 张表",
         result.row_count,
