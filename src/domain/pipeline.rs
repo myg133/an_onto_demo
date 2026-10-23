@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ **57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -338,6 +338,13 @@ pub enum OutletId {
     /// 三份声明（exclusions / policy / tenancy）共用这一个写点；写之前必须过
     /// `console::decl::validate`（R4），失败时原文件一个字节都不变。
     I21,
+    /// ⭐ REQ-125 · 控制面 · **工作台页面壳**（`GET /`，`console::page::CONSOLE_HTML`）。
+    ///
+    /// 内部轨：它是 FDE / 实施用的界面骨架（七个视图 + 登录态），**壳内零数据** ——
+    /// 项目名 / 版本号 / 对象名一个都不在 HTML 里，全部由拿到口令后的 `/api/*` 提供。
+    /// 之所以仍然登记：页面壳是一条**匿名可达**的外送通道（浏览器导航带不了
+    /// `Authorization`），「不登记 = 没人管」正是 REQ-107 收口的那个洞。
+    I22,
 }
 
 impl OutletId {
@@ -379,6 +386,7 @@ impl OutletId {
             OutletId::I19 => "I19",
             OutletId::I20 => "I20",
             OutletId::I21 => "I21",
+            OutletId::I22 => "I22",
         }
     }
 }
@@ -468,6 +476,13 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I19 => OutletSpec::of("I19", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I20 => OutletSpec::of("I20", Track::Internal, Format::Text, Granularity::Whole),
         OutletId::I21 => OutletSpec::of("I21", Track::Internal, Format::Text, Granularity::Whole),
+        // ⭐ REQ-125 · 工作台页面壳：**内部**轨（HTML）。
+        //
+        // 为什么不是客户轨：它是 FDE 的界面骨架，壳内零数据（⛔ 项目名 / 版本 / 对象名
+        // 都不出现）；客户视图（客户浏览器 + `/api/*` 口令）是另一条通道。
+        // 为什么是 Internal 而不是 Static：它**不是**被管线渲染的素材，而是一条
+        // 匿名可达的 HTTP 外送点 —— 与 R4（审核页壳）同一条口径。
+        OutletId::I22 => OutletSpec::of("I22", Track::Internal, Format::Html, Granularity::Whole),
     }
 }
 
@@ -1088,7 +1103,7 @@ const CUSTOMER: &str = "";
 ///
 /// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 18 +
 /// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **48**；REQ-116 再加内部 1 条（I10）⇒ 45；REQ-121 再加内部 2 条（I11/I12）⇒ **47**；
-/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ 52（17/10/22/2/1）；REQ-124 再加 4 条（I18–I21）⇒ **56（17/10/26/2/1）**。
+/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ 52（17/10/22/2/1）；REQ-124 再加 4 条（I18–I21）⇒ 56（17/10/26/2/1）；REQ-125 再加 1 条（I22 工作台页面壳）⇒ **57（17/10/27/2/1）**。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
 /// 只是被渲染函数读取的静态素材 ⇒ 单列在 [`STATIC_TEMPLATES`]。
@@ -1612,6 +1627,19 @@ pub const OUTLETS: &[Outlet] = &[
          校验失败时本写点**不会被执行**（原文件一个字节都不变）。",
     },
     Outlet {
+        id: "I22",
+        path: "src/console/http.rs",
+        // ⭐ REQ-125 · 工作台页面壳：`GET /` 的唯一写点。
+        // 壳是**静态**的（零数据），所以这里钉的是「页面常量被原样写出去」这一行。
+        call_site: "Html(crate::console::page::CONSOLE_HTML)",
+        spec: spec_of(OutletId::I22),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-125）：控制面的**工作台页面壳**（`GET /`）。\
+         壳内零数据（无项目名 / 版本号 / 对象名 / token），免 token 只是为了让浏览器\
+         导航打得开；数据全走 `/api/*`（admin token）。⛔ 不为前端新开端点；\
+         7 个视图只消费 REQ-124 端点 + REQ-123 的三个查询端点（同源）。",
+    },
+    Outlet {
         id: "Z1",
         path: "src/server/http.rs",
         call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
@@ -1672,7 +1700,7 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 56，分组 17/10/26/2/1。
+    /// 登记表的口径必须**恰好**是 57，分组 17/10/27/2/1。
     ///
     /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
     /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）；
@@ -1682,25 +1710,26 @@ mod tests {
     /// ⇒ 47（17/10/17/2/1）；REQ-122 再加 I13 ⇒ 48（内部 18）；
     /// REQ-123 再加 I14–I17（REST / MCP / SSE / 审计，**全部内部轨**）⇒ 52（内部 22）；
     /// ⭐ REQ-124 再加 I18–I21（控制面 JSON / TTL / R2RML / 声明落盘，**全部内部轨**）
-    /// ⇒ **56（内部 26）**。
+    /// ⇒ **56（内部 26）**；REQ-125 再加 I22（工作台页面壳 HTML，**内部轨、零数据**）
+    /// ⇒ **57（内部 27）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            56,
+            57,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
-             + 4（REQ-124 的控制面出口）"
+             + 4（REQ-124 的控制面出口）+ 1（REQ-125 的工作台页面壳）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            26,
+            27,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
-             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21"
+             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

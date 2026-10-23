@@ -147,6 +147,15 @@ pub fn banner(
         "· 健康检查（免 token）：http://{addr}{HEALTH_PATH}\n",
         HEALTH_PATH = super::http::HEALTH_PATH
     ));
+    s.push_str(&format!(
+        "· 工作台（页面壳零数据、免 token）：http://{addr}/ —— 口令只存 sessionStorage；\
+         7 个视图只调 /api/*，且 ⛔ 不为前端新开端点\n"
+    ));
+    s.push_str(
+        "· 查询台 / 目录浏览调的是 REQ-123 查询服务的 /api/sparql、/api/catalog、/api/describe；\
+         页面只发**同源**请求（CSP connect-src 'self'）⇒ 把两个服务放在同一个源后面\
+         （反向代理按路径分流；本机调试用 tests/fixtures/req125/dev_proxy.ps1）。\n",
+    );
     if verdict.needs_warning() {
         s.push_str(&format!(
             "⚠ 警告：绑定的是 {addr}（{}）—— 控制面可被本机以外访问。\

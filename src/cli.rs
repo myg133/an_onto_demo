@@ -668,7 +668,10 @@ pub enum ConsoleCmd {
     ///
     /// 端点：
     ///
+    /// GET  /                                 ⭐REQ-125 工作台页面壳（免 token；壳内零数据）
     /// GET  /api/health                       免 token，只给版本
+    /// ⚠️ 本服务**不含查询端点**：POST /api/sparql、GET /api/catalog、GET /api/describe 属于 `ontok query serve`（另一进程）；
+    ///    查询台 / 目录浏览需由反向代理把两者挂到**同一个源**下（本机 `tests/fixtures/req125/dev_proxy.ps1`，部署见 BA/runbook/ontology-e2e.md §7.3）。
     /// GET  /api/projects                     项目 / 版本 / 冻结状态 / 对象·关系计数
     /// POST /api/import                       body {project, path} 或 {project, proposal}
     /// POST /api/apply                        body {project, proposal}

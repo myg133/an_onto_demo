@@ -2022,6 +2022,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/console/mod.rs", "decl"),
     ("src/console/mod.rs", "http"),
     ("src/console/mod.rs", "ops"),
+    // ⭐ REQ-125 · 工作台页面壳（GET /）：零数据 HTML 骨架；出口 I22 登记在 OUTLETS。
+    ("src/console/mod.rs", "page"),
     ("src/console/mod.rs", "serve"),
     ("src/console/mod.rs", "tokens"),
 ];
