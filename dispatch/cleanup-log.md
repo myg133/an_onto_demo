@@ -233,3 +233,12 @@
 - 回收：feature worktree + 分支；清理临时项目 **1308 条**（`anspire_fk120*` / `g1demo` 等），库里只剩 4 个真实项目
 - 结果：关系 52 → **79**；三态 true 144 / inherit 2 / false 12；`joinEvidence` 158/158；1:1 共 8 对
 - **新规程**：安全约束必须**全路径 fail-closed**（生成 / 签字 / 注入三层）——「能被文本绕过的不算规则」
+
+
+## 2026-10-23 — REQ-121 合并与回收
+
+- 合并：`feature/REQ-121` → `develop` **`e8f21c8`**（5 个提交：3c229fe → bf252b7 → 28199ca → d19fa13 → 595711e）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：84 TriplesMap / 70 join；true→join、inherit 默认不生成、false 永不成 join；类集双向差集 0；中文 IRI 0 处
+- 新修：AC-008 三条 guard 补夹具 + 逐条变异证明有牙；`.scratch/`（1.4 MB 真名 TTL）进 `.gitignore`
