@@ -77,3 +77,55 @@ GET /api/ontology.ttl?view=model   # 建模视图
 - **H** TTL 生成只许一处实现（复用，不新写）
 - **G** 变异三元组：把客户视图换成建模视图 / 去掉 401 / 让 ETag 恒定 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 交付与裁定（P-1 ~ P-3）
+
+### P-1 · AC-004 的命令口径：**按字面写死**（Dev 的选择正确）
+
+Dev 指出：客户视图与 CLI 对拍有两种写法，**差一行文件头**，不可能同时满足。
+
+| 写法 | 差异 |
+| --- | --- |
+| `ontok ontology export`（不带 `--schema`） | 客户视图**没有列名**，`--schema` 只改文件头一句「xsd 类型来源」 |
+| 带 `--schema` | 多一行 `# · xsd 类型来源` |
+
+**裁定：AC-004 以「不带 `--schema`」为准**，并把命令写死：
+
+```bash
+# 客户视图
+ontok ontology export --project <P> --version <V> --out customer.ttl
+# 建模视图
+ontok ontology export --project <P> --version <V> --model-view --schema <S> --tenancy <T> --out model.ttl
+```
+
+**理由**：客户视图本来就不该带 schema（它不含列名），`--schema` 对它只是**文件头一句话的残留**。
+⇒ **Dev 的现实现（`schema: None`）保持不变。**
+
+⛔ QA 不要用「带 `--schema` 的客户视图」去对拍，那会红一行且毫无意义。
+
+### P-2 · `tenantUnannotated` 在建模视图为 0：**正确，不是缺陷**
+
+该标记是「声明缺失/未签」的**告警**（`domain/ttl.rs:1776`），与已签且命中的 `tenantKey` **互斥**。
+本库 `tenancy.json` 已签且命中 ⇒ `tenantKey 54` / `tenantUnannotated 0` **正是预期**。
+
+**要求**：QA 的 grep 判据分两类：
+
+| 类别 | 期望 |
+| --- | --- |
+| `tenantKey` / `tenantColumn` / `joinEvidence` / `joinVerified` / `primaryKeyColumn` / `isPrimaryKey` / `allowedValue` | 客户视图 **0**；建模视图 **> 0** |
+| `tenantUnannotated` | 两视图都允许为 0（它是告警标记，互斥项） |
+
+### P-3 · 基线数字口径：**以「同机实测」为准**
+
+Dev 实测 `develop@3051baf` 的 lib 基线是 **639**，而我在 AC 里写的 645（来自 REQ-126 的报告）对不上。
+
+**原因**：部分 lib 测试依赖 `ONTOK_TEST_DATABASE_URL`（缺库时跳过/失败），**不同机器的基线数字天然不同**。
+
+**裁定**：AC-008 的「基线 645」作废，改为：
+
+> 基线以「同一台机器、同一环境、`develop` 干净检出」的实测为准；报告必须给出该基线数字与差值。
+
+⇒ Dev 的 `639 → 651（+12）` 成立。
