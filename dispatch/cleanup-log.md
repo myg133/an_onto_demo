@@ -317,3 +317,11 @@
 - 回收：feature worktree + 分支
 - 结果：AC-002 判据改**身份三元组相等**（无 `contains`，绿红成对且绿判据自带牙）；`signed_at_source` 三值（arg/system/legacy）
 - **新规程**：变异实验必须用独立 `CARGO_TARGET_DIR`（共享 target 的缓存假象两个方向都会错）
+
+
+## 2026-10-24 — REQ-131 合并与回收
+
+- 合并：`feature/REQ-131` → `develop` **`5163cfb`**（2 个提交）；`src/` 零改动，只改 `tests/` 9 个文件
+- 结果：缺夹具默认**响亮跳过**（exit 0 / 21 条用例 21 行标记 1:1）；`ONTOK_REQUIRE_FIXTURES=1` ⇒ **失败**（exit 101）
+- **假红清零后暴露 5 条真红/门禁** ⇒ 已建 `BA/dispatch/baseline-reds.md` 台账，每条有归属，并登记 REQ-132（flake）/ REQ-133（抽取回归）/ REQ-134（登记表过期）
+- 顺手修掉 2 条既有红（裸 `env!` ⇒ `common::crate_root()`），`test_anchor_guard` 转绿
