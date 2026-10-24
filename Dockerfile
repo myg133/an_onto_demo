@@ -78,6 +78,16 @@ RUN HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} sh -c 'curl -fsSL https:
 RUN HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} bun add -g @earendil-works/pi-coding-agent@1.4.0 pi-acp@0.0.34 \
  && ls -l /usr/local/bin | grep -E 'pi$|pi-acp' || true
 
+# ⚠️ pi / pi-acp 的 bin 是 `#!/usr/bin/env node`，而本镜像**只装 bun 不装 node**。
+#    直接用会报 `env: can't execute 'node': No such file or directory`。
+#    实测 `bun <cli.js> --version` 能正常跑（pi 1.4.0）⇒ 把 shebang 指向 bun，省掉 node。
+#    若将来某个子命令确实依赖 node（例如 pi 去 spawn `node` 子进程），再 `apk add nodejs`。
+RUN sed -i '1s|^#!/usr/bin/env node\r\?$|#!/usr/local/bin/bun|' \
+        /usr/local/install/global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
+        /usr/local/install/global/node_modules/pi-acp/dist/index.js \
+ && head -1 /usr/local/install/global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
+ && pi --version
+
 COPY --from=build /src/target/release/ontok                 /usr/local/bin/ontok
 COPY --from=build /src/target/release/ontok-introspect      /usr/local/bin/ontok-introspect
 COPY --from=build /src/target/release/ontok-propose         /usr/local/bin/ontok-propose
