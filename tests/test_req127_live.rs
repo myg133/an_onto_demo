@@ -236,12 +236,14 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
     let audit = AuditSink::open(&dir.path().join("audit.log")).expect("审计文件");
 
     let svc = Arc::new(QueryService::new(ServiceParts {
-        source: pool.clone(),
-        facts: ontok::sparql::exec::SessionFacts {
+        // ⭐ REQ-136 · 普通模式（有源库 + schema）：模式字段显式写 Query。
+        mode: ontok::query::ServiceMode::Query,
+        source: Some(pool.clone()),
+        facts: Some(ontok::sparql::exec::SessionFacts {
             transaction_read_only: "on".into(),
             standard_conforming_strings: "on".into(),
-        },
-        mapping,
+        }),
+        mapping: Some(mapping),
         model,
         schema,
         policy,

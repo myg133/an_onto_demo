@@ -34,7 +34,7 @@ use crate::sparql::policy::QueryPolicy;
 
 use super::audit::AuditSink;
 use super::tokens::TokenTable;
-use super::{QueryService, ServiceParts};
+use super::{QueryService, ServiceMode, ServiceParts};
 
 /// `ontok query serve` 的参数（与 clap 的定义分开：本模块不认识 clap）。
 #[derive(Debug, Clone)]
@@ -43,8 +43,16 @@ pub struct ServeArgs {
     pub tokens: PathBuf,
     pub project: String,
     pub version: i32,
-    pub schema: PathBuf,
-    pub policy: PathBuf,
+    /// ⭐ REQ-136 · `None` = 本体服务模式（那里**没有** schema，也不读它）。
+    /// 普通模式下**必填**（闸门在 [`serve`] 里：缺 ⇒ 拒绝启动，消息说明为什么）。
+    pub schema: Option<PathBuf>,
+    /// ⭐ REQ-136 · `None` 允许出现在本体服务模式（没有数据源 ⇒ 租户声明无处生效）；
+    /// 普通模式下**必填**。
+    pub policy: Option<PathBuf>,
+    /// ⭐ REQ-136 · **本体服务模式**：不连源库、不做 schema / R2RML 对账。
+    ///
+    /// 与 `--schema` **互斥**（R1）：同时给 ⇒ 拒绝启动并说明。
+    pub ontology_only: bool,
     /// ⭐ REQ-127 · 租户标注声明（**只在建模视图生效**；与 `ontology export --tenancy` 同一份）。
     ///
     /// 省略时按「`--policy` 同目录的 `tenancy.json`」自动取（取不到则建模视图不带租户标注，
@@ -63,6 +71,26 @@ pub struct ServeArgs {
     pub include_inherit: bool,
 }
 
+impl ServeArgs {
+    /// 本组参数对应哪个模式（**唯一**判据；`serve` 与判据都读它）。
+    pub fn mode(&self) -> ServiceMode {
+        if self.ontology_only {
+            ServiceMode::OntologyOnly
+        } else {
+            ServiceMode::Query
+        }
+    }
+}
+
+/// ⭐ REQ-136 · 本体服务模式没有 `--policy` 时用的**无租户**声明。
+///
+/// 为什么需要它：`QueryService` 里有 `policy` 字段（普通模式的规划器要用），而本体模式
+/// 一次规划都不会发生。给它一份「每张表都没登记」的空声明，比把字段 `Option` 化改动更小，
+/// 且语义诚实：**这个部署没有任何租户口径**（对外说法在 `describe` 的
+/// `tenant.mode = not_applicable`，⛔ 不把这份占位声明泄露给调用方）。
+const NO_TENANT_POLICY: &str = r#"{"version":"1.0.0","tenantSubject":"__no_tenant__",
+    "tenantIdColumn":"__no_tenant__","perTable":{},"publicDimensions":[]}"#;
+
 /// ⭐ REQ-127 · 建模视图的租户声明从哪来。
 ///
 /// 顺序：显式 `--tenancy` → `--policy` 同目录的 `tenancy.json`（存在才用）→ 没有。
@@ -72,11 +100,17 @@ pub struct ServeArgs {
 /// 若坚持必须显式给 `--tenancy`，默认命令产出的建模视图会**少**租户标注，
 /// 与 `ontology export --model-view --tenancy tenancy.json` 对不上（AC-004）。
 /// 取不到就**明确警告**，⛔ 不假装已标注。
-fn resolve_tenancy(policy: &std::path::Path, explicit: Option<&std::path::Path>) -> Option<PathBuf> {
+///
+/// ⭐ REQ-136 · `policy` 变成 `Option`（本体模式可以不给）：没有 `--policy` 就没有
+/// 「同目录」可推，只剩显式 `--tenancy`。
+fn resolve_tenancy(
+    policy: Option<&std::path::Path>,
+    explicit: Option<&std::path::Path>,
+) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
     }
-    let sibling = policy
+    let sibling = policy?
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("tenancy.json");
@@ -162,6 +196,12 @@ pub fn check_bind(addr: SocketAddr, allow_public: bool) -> Result<BindVerdict, S
 ///
 /// ⚠️ 租户 id 会**打印出来**（需求风险 5：「横幅打印绑定地址与租户范围」）。
 /// 它不是秘密：知道「这台服务能查到谁」是运维判断暴露面的前提。
+///
+/// ⭐ REQ-136 · `mode` 决定多印哪一行：
+/// - 普通模式：**一个字节都不变**（AC-006 的「零行为变化」连日志也照做），`facts` 必有；
+/// - 本体模式：第二行起印 `mode=ontology-only（不接业务库）`（AC-001 的判据），
+///   并把「只读会话（读回）」换成「数据源：无」——⛔ 没有会话就**不编**一个 `on`。
+#[allow(clippy::too_many_arguments)]
 pub fn banner(
     addr: SocketAddr,
     verdict: BindVerdict,
@@ -172,7 +212,8 @@ pub fn banner(
     max_rows_cap: u64,
     timeout_ms: u64,
     max_concurrent_queries: usize,
-    facts: &crate::sparql::exec::SessionFacts,
+    facts: Option<&crate::sparql::exec::SessionFacts>,
+    mode: ServiceMode,
 ) -> String {
     let mut s = String::new();
     s.push_str(&format!(
@@ -186,15 +227,25 @@ pub fn banner(
             tenants.join("、")
         }
     ));
+    // ⭐ REQ-136 · 模式行：普通模式不印（既有横幅不变），本体模式必须印（AC-001）。
+    if let Some(line) = mode.banner_line() {
+        s.push_str(line);
+    }
     s.push_str(&format!(
         "· SPARQL 语法 v1 · 超时 {timeout_ms} ms · 单次最多 {max_rows_cap} 行（按 token）· \
          全局并发 {max_concurrent_queries}\n"
     ));
-    // ⛔ 这两个值来自连接上**读回**的事实，不是字面量（REQ-122 · N3）。
-    s.push_str(&format!(
-        "· 只读会话（读回）：transaction_read_only = {} · standard_conforming_strings = {}\n",
-        facts.transaction_read_only, facts.standard_conforming_strings
-    ));
+    match facts {
+        // ⛔ 这两个值来自连接上**读回**的事实，不是字面量（REQ-122 · N3）。
+        Some(f) => s.push_str(&format!(
+            "· 只读会话（读回）：transaction_read_only = {} · standard_conforming_strings = {}\n",
+            f.transaction_read_only, f.standard_conforming_strings
+        )),
+        // ⭐ REQ-136 · 本体模式没有会话可读回 ⇒ 明说「没有数据源」，⛔ 不编一个 on。
+        None => s.push_str(
+            "· 数据源：无（本体服务模式不连业务库；SPARQL / sample 恒 503 NO_DATA_SOURCE）\n",
+        ),
+    }
     s.push_str("· 审计：每次调用一行（token 只记摘要、不记查询原文；stdout 恒写）\n");
     s.push_str(&format!(
         "· 指标（免 token）：http://{addr}{}\n",
@@ -237,6 +288,37 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         );
     }
 
+    // ⭐ REQ-136 · **模式闸**（R1 + 启动约束）。位置在「绑 socket / 读文件 / 连库」之前：
+    // 参数自相矛盾时报的是参数问题，不该先看到「token 表读不出来」这种下游错误。
+    let mode = args.mode();
+    if args.ontology_only && args.schema.is_some() {
+        anyhow::bail!(
+            "--ontology-only 与 --schema 互斥（R1）：本体服务模式**不做 schema 对账**，\
+             给了 --schema 只会让人以为「关系是按列映射出来的」。\n  \
+             只看本体：去掉 --schema（与 --policy，若不需要）。\n  \
+             要按真实列映射（关系 = join）：去掉 --ontology-only，并给 --schema + --policy。"
+        );
+    }
+    if !args.ontology_only && args.schema.is_none() {
+        anyhow::bail!(
+            "普通模式缺 --schema：主键 / 列存在性 / 列类型只能来自真实 schema（⛔ 不猜）。\n  \
+             没有源库、只想对外提供本体（类 / 关系 / 属性 / TTL）时，请加 `--ontology-only`\
+             （那个模式不需要 --schema，也不需要 ONTOK_SOURCE_DATABASE_URL）。"
+        );
+    }
+    if !args.ontology_only && args.policy.is_none() {
+        anyhow::bail!(
+            "普通模式缺 --policy：租户主体 / 逐表过滤列只能来自声明（ADR-006，⛔ 不许猜一个列名）。\n  \
+             本体服务模式（`--ontology-only`）不需要它（那里没有数据可查，也就没有租户口径）。"
+        );
+    }
+    if args.ontology_only && args.include_inherit {
+        eprintln!(
+            "⚠ --include-inherit 在本体服务模式不生效：本模式不做 R2RML 对账（没有 join 可生成），\
+             该开关只影响普通模式的映射生成。"
+        );
+    }
+
     // ── ② 绑定 + 闸门 ───────────────────────────────────────
     let addr = parse_bind(&args.bind).map_err(|e| anyhow::anyhow!("{e}"))?;
     let verdict = check_bind(addr, args.allow_public).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -253,19 +335,39 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))?;
 
     // ── ④ 声明 ──────────────────────────────────────────────
-    let raw = std::fs::read_to_string(&args.policy)
-        .map_err(|e| anyhow::anyhow!("读不出租户声明 {:?}：{e}", args.policy))?;
-    let policy = QueryPolicy::parse(&raw)
-        .map_err(|e| anyhow::anyhow!("租户声明 {:?} 不合法：{e}", args.policy))?;
+    //
+    // ⭐ REQ-136 · 本体模式可以不给 `--policy`：那份声明的作用是「哪张表按哪一列过滤」，
+    // 而本模式没有数据可查。不给时用一份**无租户**声明（每张表都没登记；对外说法见
+    // `describe` 的 `tenant.mode = not_applicable`）。
+    let policy = match &args.policy {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("读不出租户声明 {path:?}：{e}"))?;
+            QueryPolicy::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("租户声明 {path:?} 不合法：{e}"))?
+        }
+        None => QueryPolicy::parse(NO_TENANT_POLICY).map_err(|e| {
+            anyhow::anyhow!("内部错误：本体服务模式的占位租户声明不合法（{e}）—— 这是 bug")
+        })?,
+    };
 
     // ── ⑤ schema ────────────────────────────────────────────
-    let raw = std::fs::read_to_string(&args.schema)
-        .map_err(|e| anyhow::anyhow!("读不出 schema 文件 {:?}：{e}", args.schema))?;
-    let schema = crate::domain::ttl::SchemaTypes::parse(&raw)
-        .map_err(|e| anyhow::anyhow!("schema 文件 {:?} 不合法：{e}", args.schema))?;
-    if schema.is_empty() {
-        anyhow::bail!("--schema 里一列都没读到 —— 这份 schema 无法对账（⛔ 不猜列类型）");
-    }
+    //
+    // ⭐ REQ-136 · 本体模式**不读** schema（`SchemaTypes::default()`：空表 = 没有真实
+    // 列类型可用）。空 schema 在这里是**事实**而不是错误：本模式结构上不对账。
+    let schema = match &args.schema {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("读不出 schema 文件 {path:?}：{e}"))?;
+            let schema = crate::domain::ttl::SchemaTypes::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("schema 文件 {path:?} 不合法：{e}"))?;
+            if schema.is_empty() {
+                anyhow::bail!("--schema 里一列都没读到 —— 这份 schema 无法对账（⛔ 不猜列类型）");
+            }
+            schema
+        }
+        None => crate::domain::ttl::SchemaTypes::default(),
+    };
 
     // ── ⑥ 项目 / 版本 / 快照（必须已冻结）───────────────────
     let projects = crate::db::project::PgProjectStore::new(pool.clone());
@@ -300,14 +402,18 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // 渲染走 `console::ops::render_ttl_export`（同一个 `pipeline::render`）——
     // 于是 `GET /api/ontology.ttl` 与 CLI 导出同参数时逐字节相同（AC-004）。
     // 产不出就**拒绝启动**：这个端点的契约就是「与 CLI 一致」，产不出不能宣称能产。
-    let tenancy_path = resolve_tenancy(&args.policy, args.tenancy.as_deref());
+    //
+    // ⭐ REQ-136 · 本体模式把 `schema` 传 `None`（= CLI 的 `ontology export` 不带 `--schema`）
+    // ⇒ 客户视图与 `ontok ontology export --project <p> --version <v>` 逐字节相同（AC-005）。
+    let tenancy_path = resolve_tenancy(args.policy.as_deref(), args.tenancy.as_deref());
     let ttl = crate::query::ttl::OntologyTtl::prepare(
         pool,
         &crate::query::ttl::TtlSource {
             project: &args.project,
             version: args.version,
             base: &args.base,
-            schema: Some(&args.schema),
+            // 客户视图在 `prepare` 里固定用 None（结构上不含列名）；这里只影响建模视图。
+            schema: args.schema.as_deref(),
             tenancy: tenancy_path.as_deref(),
         },
     )
@@ -323,6 +429,9 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         Some(path) => eprintln!(
             "· TTL 租户标注：{}（只在 `?view=model` 生效；客户视图结构上不含租户信息）",
             path.display()
+        ),
+        None if mode.is_ontology_only() => eprintln!(
+            "· TTL 租户标注：无（本模式没有数据源 ⇒ 也没有租户口径；`?view=model` 不带 ontok:tenant*）"
         ),
         None => eprintln!(
             "⚠ 没有租户声明（`--tenancy` 未给，且 `--policy` 同目录下没有 tenancy.json）：\
@@ -340,34 +449,59 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     );
 
     // ── ⑦ 映射（与 r2rml generate 同一个函数）────────────────
-    let opts = crate::domain::ttl::TtlOptions {
+    //
+    // ⭐ REQ-136 · 本体模式**不建映射**：`build_mapping` 要求 schema（主键 / 列存在性都只能
+    // 来自它），而本模式结构上没有 schema。`None` 也正是「不许自动造 schema」的形状。
+    let model = crate::domain::model_view::project_model_track(&snap);
+    let ontology_iri = crate::domain::ttl::TtlOptions {
         project: args.project.as_str(),
         version: args.version,
         base: args.base.as_str(),
         action_type_count: snap.action_types.len(),
         tenancy: None,
-        schema: Some(&schema),
-    };
-    let model = crate::domain::model_view::project_model_track(&snap);
-    let mapping = crate::domain::r2rml::build_mapping(
-        &model,
-        &opts,
-        args.include_inherit,
-        crate::domain::r2rml::R2rmlAudit::default(),
-    )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "按 R2RML 生成 SQL 的前置对账失败（映射与 schema 不一致，⛔ 一个字节都不产出）：\n{e}"
+        schema: None,
+    }
+    .ontology_iri();
+    let mapping = if mode.is_ontology_only() {
+        None
+    } else {
+        let opts = crate::domain::ttl::TtlOptions {
+            project: args.project.as_str(),
+            version: args.version,
+            base: args.base.as_str(),
+            action_type_count: snap.action_types.len(),
+            tenancy: None,
+            schema: Some(&schema),
+        };
+        Some(
+            crate::domain::r2rml::build_mapping(
+                &model,
+                &opts,
+                args.include_inherit,
+                crate::domain::r2rml::R2rmlAudit::default(),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "按 R2RML 生成 SQL 的前置对账失败（映射与 schema 不一致，⛔ 一个字节都不产出）：\n{e}"
+                )
+            })?,
         )
-    })?;
-    let ontology_iri = opts.ontology_iri();
+    };
 
     // ── ⑧ 源库（只读；读回校验）──────────────────────────────
-    let url = crate::config::require_env(crate::extract::introspect::SOURCE_DATABASE_URL_ENV)
-        .map_err(|e| anyhow::anyhow!("{e}（查询服务查的是源库，不是元数据库）"))?;
-    let src = crate::sparql::exec::connect_read_only(&url)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    //
+    // ⭐ REQ-136 · 本体模式**整段跳过**：不读 `ONTOK_SOURCE_DATABASE_URL`、不建连接池、
+    // 不读回会话值（R2：「该模式 ⛔ 不许任何请求尝试连源库」—— 启动时也不连）。
+    let source = if mode.is_ontology_only() {
+        None
+    } else {
+        let url = crate::config::require_env(crate::extract::introspect::SOURCE_DATABASE_URL_ENV)
+            .map_err(|e| anyhow::anyhow!("{e}（查询服务查的是源库，不是元数据库）"))?;
+        let src = crate::sparql::exec::connect_read_only(&url)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Some(src)
+    };
 
     // ── ⑨ 审计落点 + 服务状态 ───────────────────────────────
     let audit = match &args.audit_out {
@@ -381,8 +515,9 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     };
 
     let svc = std::sync::Arc::new(QueryService::new(ServiceParts {
-        source: src.pool.clone(),
-        facts: src.facts.clone(),
+        mode,
+        source: source.as_ref().map(|s| s.pool.clone()),
+        facts: source.as_ref().map(|s| s.facts.clone()),
         mapping,
         model,
         schema,
@@ -412,7 +547,8 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             svc.tokens.max_rows_cap(),
             svc.timeout_ms,
             svc.max_concurrent_queries,
-            &svc.facts,
+            svc.facts.as_ref(),
+            svc.mode,
         )
     );
 
@@ -492,7 +628,8 @@ mod tests {
             200,
             10_000,
             2,
-            &facts_on(),
+            Some(&facts_on()),
+            ServiceMode::Query,
         );
         for needle in [
             "绑定 10.0.0.5:8800",
@@ -520,7 +657,8 @@ mod tests {
             100,
             1000,
             1,
-            &facts_on(),
+            Some(&facts_on()),
+            ServiceMode::Query,
         );
         assert!(public.contains("⚠ 警告"), "{public}");
         assert!(public.contains("0.0.0.0:8800"), "{public}");
@@ -537,10 +675,11 @@ mod tests {
             1,
             1,
             1,
-            &SessionFacts {
+            Some(&SessionFacts {
                 transaction_read_only: "off".into(),
                 standard_conforming_strings: "off".into(),
-            },
+            }),
+            ServiceMode::Query,
         );
         assert!(off.contains("transaction_read_only = off"), "{off}");
         assert!(!off.contains("= on"), "横幅里出现了写死的 on：\n{off}");
@@ -569,14 +708,14 @@ mod tests {
         // ① 显式给 ⇒ 就是它（即使同目录也有 tenancy.json）。
         std::fs::write(dir.join("tenancy.json"), "{}").expect("写同目录 tenancy");
         assert_eq!(
-            resolve_tenancy(&policy, Some(explicit.as_path())),
+            resolve_tenancy(Some(policy.as_path()), Some(explicit.as_path())),
             Some(explicit.clone()),
             "`--tenancy` 是调用方的明确意图，⛔ 不能被同目录的约定覆盖"
         );
 
         // ② 没显式给 + 同目录有 ⇒ 用它（这正是默认启动命令能与 CLI 对拍的原因）。
         assert_eq!(
-            resolve_tenancy(&policy, None),
+            resolve_tenancy(Some(policy.as_path()), None),
             Some(dir.join("tenancy.json")),
             "`--policy` 同目录的 tenancy.json 应当被自动采用"
         );
@@ -584,7 +723,7 @@ mod tests {
         // ③ 两处都没有 ⇒ None（⛔ 不编一个路径出来）。
         std::fs::remove_file(dir.join("tenancy.json")).expect("删同目录 tenancy");
         assert_eq!(
-            resolve_tenancy(&policy, None),
+            resolve_tenancy(Some(policy.as_path()), None),
             None,
             "没有声明时必须明说「没有」，不能返回一个不存在的路径"
         );

@@ -230,21 +230,27 @@ fn proto_of(path: &str) -> Protocol {
 // ══════════════════════════════════════════════════════════════
 
 /// `GET /api/health` —— **免 token**，只给版本与语法版本（AC-001：不含任何数据）。
+///
+/// ⭐ REQ-136 · 本体服务模式多一个 `"mode":"ontology-only"`（AC-001 的判据）。
+/// 普通模式**不加**这个字段（既有响应逐字节不变，AC-006）—— 探针要区分部署时，
+/// 看「有没有 mode 字段」即可；带上它的部署就是「只有本体、没有数据源」。
 async fn health(State(svc): State<Arc<QueryService>>) -> Response {
     let started = Instant::now();
     // ⛔ 这里刻意**不读** svc 的任何数据字段（项目名、租户、类清单都不出去）。
-    // 只把「这个服务是什么版本、说哪种语法」告诉探针。
+    // 只把「这个服务是什么版本、说哪种语法（以及哪种模式）」告诉探针。
     audit_anonymous(&svc, "health", Protocol::Rest, None, "OK", started);
-    respond(
-        StatusCode::OK,
-        json!({
-            "service": "ontok-query",
-            "version": env!("CARGO_PKG_VERSION"),
-            "syntax": SYNTAX_VERSION,
-            "protocols": ["rest", "mcp-http"],
-            "transports": ["http", "sse"],
-        }),
-    )
+    let mut body = json!({
+        "service": "ontok-query",
+        "version": env!("CARGO_PKG_VERSION"),
+        "syntax": SYNTAX_VERSION,
+        "protocols": ["rest", "mcp-http"],
+        "transports": ["http", "sse"],
+    });
+    if svc.mode.is_ontology_only() {
+        // `mode` 是**部署形状**，不是数据：它告诉探针「这个进程不会去连业务库」。
+        body["mode"] = json!(svc.mode.as_str());
+    }
+    respond(StatusCode::OK, body)
 }
 
 /// ⭐ REQ-135 · `GET /metrics` —— **免 token**（与 `/api/health` 同口径）的聚合数字。
@@ -528,7 +534,18 @@ async fn dispatch(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
         "initialize" => {
             let requested = req.params.get("protocolVersion").and_then(Value::as_str);
             let agreed = p::negotiate_protocol_version(requested);
-            let mut result = p::initialize_result(agreed, INSTRUCTIONS);
+            // ⭐ REQ-136 · 本体服务模式的 instructions **要说清「没有数据源」**：
+            // Agent 只看这一段就决定要不要调 sparql_query；不说 = 它一定会调一次、失败一次。
+            let instructions = if svc.mode.is_ontology_only() {
+                format!(
+                    "{INSTRUCTIONS}\n\
+                     ⚠️ 本部署是**本体服务模式**（无业务库）：catalog / describe / resources 正常，\
+                     sparql_query 与 sample 恒返回 NO_DATA_SOURCE（503 语义，重试无效）。"
+                )
+            } else {
+                INSTRUCTIONS.to_string()
+            };
+            let mut result = p::initialize_result(agreed, &instructions);
             // ⭐ REQ-127：本服务**真的**实现了 resources（list/read），所以在这里声明能力。
             // 共享的 `p::initialize_result` 不声明它 —— stdio 的 `mcp-server` 没有资源，
             // 在那里声明会让客户端撞一次 -32601。
@@ -930,17 +947,20 @@ mod tests {
         ))
         .expect("token 表");
         let svc = Arc::new(QueryService::new(ServiceParts {
-            source: sqlx::postgres::PgPoolOptions::new()
-                // 夹具池**故意连不上**：判据要的是「鉴权/限额在连库之前就答完」，
-                // 短 acquire_timeout 让「确实要连库」的那条分支快速变成 500（而不是等 30 s）。
-                .acquire_timeout(std::time::Duration::from_millis(300))
-                .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
-                .expect("lazy pool"),
-            facts: SessionFacts {
+            mode: crate::query::ServiceMode::Query,
+            source: Some(
+                sqlx::postgres::PgPoolOptions::new()
+                    // 夹具池**故意连不上**：判据要的是「鉴权/限额在连库之前就答完」，
+                    // 短 acquire_timeout 让「确实要连库」的那条分支快速变成 500（而不是等 30 s）。
+                    .acquire_timeout(std::time::Duration::from_millis(300))
+                    .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+                    .expect("lazy pool"),
+            ),
+            facts: Some(SessionFacts {
                 transaction_read_only: "on".into(),
                 standard_conforming_strings: "on".into(),
-            },
-            mapping,
+            }),
+            mapping: Some(mapping),
             model,
             schema,
             policy,
@@ -957,6 +977,51 @@ mod tests {
             ttl: crate::query::ttl::fixture(),
         }));
         svc
+    }
+
+    /// ⭐ REQ-136 · **本体服务模式**的夹具：**没有源库、没有映射、没有 schema**。
+    ///
+    /// 与 [`test_service`] 的差别只有 `ServiceParts` 的三个 `None` + `mode` ——
+    /// 所有端点走的是同一套 handler（这正是「两个模式只在过滤处分叉」的证据）。
+    /// 判据里它还带一条硬约束：任何请求都**不许**尝试连库（这里连连接池都不存在）。
+    pub(crate) fn test_service_ontology_only() -> Arc<QueryService> {
+        let (schema, _mapping, model) = crate::query::test_fixture();
+        let policy = crate::sparql::policy::QueryPolicy::parse(
+            r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
+                "perTable":{"orders":{"tenantColumn":"customer_id"}},"publicDimensions":[]}"#,
+        )
+        .expect("声明");
+        let ontology_iri = {
+            let opts = crate::domain::ttl::TtlOptions::new("demo", 2);
+            opts.ontology_iri()
+        };
+        let tokens = TokenTable::parse(&format!(
+            r#"{{"version":"1.0.0","tokens":[
+                {{"label":"a","token":"{TOKEN_A}","tenant":"C0001","max_rows":5,"max_concurrency":1}}
+            ]}}"#
+        ))
+        .expect("token 表");
+        let _ = schema;
+        Arc::new(QueryService::new(ServiceParts {
+            mode: crate::query::ServiceMode::OntologyOnly,
+            source: None,
+            facts: None,
+            mapping: None,
+            model,
+            // 本体模式没有 schema（`SchemaTypes::default()` = 空表；⛔ 不读文件）。
+            schema: crate::domain::ttl::SchemaTypes::default(),
+            policy,
+            ontology_iri,
+            project: "demo".into(),
+            version: 2,
+            timeout_ms: 1000,
+            sse_idle_timeout_ms: 1_000,
+            sse_max_connections: 2,
+            max_concurrent_queries: 2,
+            tokens,
+            audit: AuditSink::stdout_only(),
+            ttl: crate::query::ttl::fixture(),
+        }))
     }
 
     async fn call(app: Router, req: axum::http::Request<Body>) -> (StatusCode, HeaderMap, String) {
@@ -1766,13 +1831,229 @@ mod tests {
         assert!(
             body.contains(&format!(
                 "ontok_mapping_joins {}",
-                svc.mapping.join_count()
+                svc.mapping.as_ref().expect("夹具映射").join_count()
             )),
             "映射 join 数必须与 `R2rmlMapping::join_count()` 一致：\n{body}"
         );
         assert!(
-            svc.mapping.join_count() > 0,
+            svc.mapping.as_ref().expect("夹具映射").join_count() > 0,
             "夹具映射必须真的有 join（否则这条判据是空转）"
+        );
+    }
+
+    // ⭐ REQ-136 · 本体服务模式（`--ontology-only`）
+    // ══════════════════════════════════════════════════════════
+
+    /// ⭐ AC-001：health 200 且带 `mode:"ontology-only"`；**普通模式一个字节都不多**。
+    ///
+    /// 变异：把 `mode` 无条件写进 health ⇒ 第二条断言红（普通模式的行为变了，AC-006）。
+    #[tokio::test]
+    async fn ontology_mode_health_says_so_and_query_mode_stays_byte_identical() {
+        let (status, _, body) = call(
+            build_router(test_service_ontology_only()),
+            get("/api/health", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["mode"], "ontology-only", "{v}");
+        assert_eq!(v["service"], "ontok-query");
+
+        let (_, _, normal) = call(build_router(test_service()), get("/api/health", None)).await;
+        assert!(
+            !normal.contains("\"mode\""),
+            "普通模式的 health 不许出现 mode 字段（AC-006）：{normal}"
+        );
+    }
+
+    /// ⭐ AC-002：本体模式的 catalog **必须列关系**，即使那条边没有 join 列。
+    ///
+    /// 夹具里 `orders -> customers` 是有 join 的边；这里的关键断言是
+    /// **`counts.relations` 不为 0、且 `counts` 里没有 `excluded_relations` 这个键**。
+    /// 变异：让 catalog 走映射对账（回到现状）⇒ 在「无 schema」下连映射都建不出来，
+    /// 这条测试的 `test_service_ontology_only` 就会在构建期 panic。
+    #[tokio::test]
+    async fn ontology_mode_catalog_lists_relations_and_has_no_excluded_count() {
+        let (status, _, body) = call(
+            build_router(test_service_ontology_only()),
+            get("/api/catalog?page=1&page_size=200", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["counts"]["classes"], 2, "{v}");
+        assert_eq!(v["counts"]["relations"], 1, "关系不许被吃掉：{v}");
+        assert_eq!(v["counts"]["properties"], 4, "属性 = 快照属性（⛔ 不补主键）：{v}");
+        assert!(
+            v["counts"].get("excluded_relations").is_none(),
+            "本体模式的 counts 不许有 excluded_relations：{v}"
+        );
+
+        // 类条目带 display_name（普通模式没有这个字段）。
+        let class = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["kind"] == "class")
+            .expect("必须有类");
+        assert!(
+            class["display_name"].as_str().is_some_and(|d| !d.is_empty()),
+            "类必须带非空 display_name：{class}"
+        );
+        assert_eq!(class["primary_key"], "", "没有 schema ⇒ 没有主键，⛔ 不拿 id 顶替");
+
+        // 关系条目：有名字、有 from/to、有证据等级（true/inherit/false/unverified 之一）。
+        let rel = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["kind"] == "relation")
+            .expect("目录里必须有关系（本需求存在的理由）");
+        assert_eq!(rel["from"], "orders");
+        assert_eq!(rel["to"], "customers");
+        assert!(
+            ["true", "inherit", "false", "unverified"].contains(&rel["evidence_level"].as_str().unwrap()),
+            "关系必须带 joinVerified 等级：{rel}"
+        );
+        assert_eq!(rel["evidence_level"], "true", "夹具这条边是实测通过的真边：{rel}");
+    }
+
+    /// ⭐ AC-003：本体模式的 describe 给 `display_name` / `key` / 正确的属性数。
+    ///
+    /// 变异：把 `display_name` 恒 `None` ⇒ 第一条断言红（那正是「名字为空」的现状）。
+    #[tokio::test]
+    async fn ontology_mode_describe_has_a_display_name_and_a_key() {
+        let (status, _, body) = call(
+            build_router(test_service_ontology_only()),
+            get("/api/describe?name=:customers", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["kind"], "class");
+        assert_eq!(v["name"], "customers");
+        assert_eq!(v["display_name"], "customers", "{v}");
+        assert_eq!(v["key"], "customers", "{v}");
+        // 快照里 customers 只有两列（customer_name / status）——没有 schema 就没有 id 列。
+        assert_eq!(
+            v["properties"].as_array().unwrap().len(),
+            2,
+            "属性数必须等于快照里的列数（⛔ 不造主键）：{v}"
+        );
+        assert!(
+            !v["properties"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["column"] == "id"),
+            "⛔ 不许凭空造 id 列：{v}"
+        );
+        assert_eq!(v["tenant"]["mode"], "not_applicable", "{v}");
+        assert_eq!(v["relations"].as_array().unwrap().len(), 1, "{v}");
+
+        // 属性详情也带业务名（`客户名`）。
+        let (status, _, body) = call(
+            build_router(test_service_ontology_only()),
+            get("/api/describe?name=:customers__customer_name", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["kind"], "property");
+        assert_eq!(v["display_name"], "客户名", "{v}");
+        assert_eq!(v["column"], "customer_name", "{v}");
+    }
+
+    /// ⭐ AC-004：REST 503 `NO_DATA_SOURCE`；MCP 同一个 `code`/`hint`（HTTP 200 + isError）。
+    ///
+    /// 这是「本部署没有数据源」与「查了没有」的分界：⛔ 不是 200 空结果、⛔ 不是 500。
+    /// 变异：让 SPARQL 在本体模式直接跑（或返回空回执）⇒ 状态码与 code 双双红。
+    #[tokio::test]
+    async fn ontology_mode_sparql_is_503_no_data_source_in_both_protocols() {
+        let body = r#"{"query":"SELECT ?s WHERE { ?s a :customers }"}"#;
+        let (status, _, text) = call(
+            build_router(test_service_ontology_only()),
+            post("/api/sparql", Some(TOKEN_A), body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+        let rest: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(rest["code"], "NO_DATA_SOURCE", "{rest}");
+        let hint = rest["hint"].as_str().expect("hint 必须非空");
+        for needle in ["本体", "没有接业务库", "重试无效"] {
+            assert!(hint.contains(needle), "hint 缺 {needle:?}：{hint}");
+        }
+        // 连请求里的租户都没被拿去查库（503 在租户比对之前）；查询原文不出现在正文里。
+        assert!(!text.contains("SELECT"), "错误正文不许回显查询原文：{text}");
+
+        // MCP：同一个错误（信封里），HTTP 仍是 200 —— 传输没坏，是工具执行失败。
+        let line = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"sparql_query","arguments":{"query":"SELECT ?s WHERE { ?s a :customers }"}}}"#;
+        let (status, _, rpc) = call(
+            build_router(test_service_ontology_only()),
+            post("/mcp", Some(TOKEN_A), line),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        assert_eq!(v["result"]["isError"], true, "{v}");
+        assert_eq!(v["result"]["structuredContent"]["code"], "NO_DATA_SOURCE", "{v}");
+        // 「同语义」的硬判据：两个协议的 code 与 hint **逐字相同**。
+        assert_eq!(
+            v["result"]["structuredContent"]["hint"], rest["hint"],
+            "REST 与 MCP 的 hint 必须逐字相同"
+        );
+        assert_eq!(
+            v["result"]["structuredContent"]["message"], rest["message"],
+            "REST 与 MCP 的 message 必须逐字相同"
+        );
+
+        // sample 也是取数据 ⇒ 同一个 503 语义（⛔ 不返回空样例）。
+        let line = r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"sample","arguments":{"name":":customers"}}}"#;
+        let (status, _, rpc) = call(
+            build_router(test_service_ontology_only()),
+            post("/mcp", Some(TOKEN_A), line),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        assert_eq!(v["result"]["structuredContent"]["code"], "NO_DATA_SOURCE", "{v}");
+    }
+
+    /// ⭐ AC-008：MCP 的 `catalog` / `describe` / `resources/read` 在本体模式**照常工作**。
+    ///
+    /// 变异：把 MCP 侧也按「没有数据源」一刀切（连 catalog 都 503）⇒ 本测试红。
+    #[tokio::test]
+    async fn ontology_mode_mcp_catalog_describe_and_resources_still_work() {
+        let svc = test_service_ontology_only();
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"catalog","arguments":{"page":1,"page_size":200}}}"#;
+        let (_, _, rpc) = call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), line)).await;
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        assert_eq!(v["result"]["isError"], false, "{v}");
+        assert_eq!(v["result"]["structuredContent"]["counts"]["relations"], 1, "{v}");
+
+        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"describe","arguments":{"name":":orders"}}}"#;
+        let (_, _, rpc) = call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), line)).await;
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        assert_eq!(v["result"]["structuredContent"]["display_name"], "orders", "{v}");
+
+        // 整份本体（resource）照样能读：字节来自启动时的缓存，与数据源无关。
+        let line = format!(r#"{{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{{"uri":"{RESOURCE_CUSTOMER}"}}}}"#);
+        let (_, _, rpc) = call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), &line)).await;
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        assert_eq!(
+            v["result"]["contents"][0]["text"].as_str().unwrap(),
+            svc.ttl.customer().text(),
+            "resource 的正文必须与 HTTP 同视图逐字节相同"
+        );
+
+        // initialize 的 instructions 要说清「本部署没有数据源」（Agent 只看这一段）。
+        let line = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#;
+        let (_, _, rpc) = call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), line)).await;
+        let v: Value = serde_json::from_str(&rpc).unwrap();
+        let instructions = v["result"]["instructions"].as_str().unwrap();
+        assert!(
+            instructions.contains("本体服务模式") && instructions.contains("NO_DATA_SOURCE"),
+            "instructions 必须说清没有数据源：{instructions}"
         );
     }
 }
