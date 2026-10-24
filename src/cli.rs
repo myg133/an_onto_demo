@@ -788,7 +788,7 @@ pub enum QueryCmd {
         /// 全局并发查询上限（按源库只读池的连接数取，默认 2）
         #[arg(long, default_value_t = 2)]
         max_concurrent_queries: usize,
-        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**（容器日志 → 集群采集）；给了它 = stdout **+** 这个文件（同时写）
         #[arg(long)]
         audit_out: Option<PathBuf>,
         /// IRI 基（必须与 `ontok r2rml generate` 用的是同一个）
@@ -857,7 +857,7 @@ pub enum ConsoleCmd {
         /// 允许绑非回环地址（`0.0.0.0` / 公网）。⛔ 不加就只能绑回环
         #[arg(long)]
         allow_public: bool,
-        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**（容器日志 → 集群采集）；给了它 = stdout **+** 这个文件（同时写）
         #[arg(long)]
         audit_out: Option<PathBuf>,
         /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
@@ -924,7 +924,7 @@ pub enum PortalCmd {
         /// 允许绑非内网地址（`0.0.0.0` / 公网）。⛔ 不加就只能绑内网 / 本机
         #[arg(long)]
         allow_public: bool,
-        /// 审计落点（追加写）。省略 = 只写 stderr；stderr **恒写**
+        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**（容器日志 → 集群采集）；给了它 = stdout **+** 这个文件（同时写）
         #[arg(long)]
         audit_out: Option<PathBuf>,
         /// 单个问题的超时（毫秒）

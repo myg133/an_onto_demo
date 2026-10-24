@@ -93,16 +93,21 @@ pub struct Auth(pub PortalTokenEntry);
 
 /// 组装路由。
 pub fn build_router(svc: Arc<PortalService>) -> Router {
+    // ⭐ REQ-135 · 指标层在最外层：401 / 404 也计数。
+    let metrics = svc.metrics.clone();
     Router::new()
         // ⭐ 页面壳与健康检查在身份门之外（浏览器导航带不了头；壳内零数据）。
         .route(PAGE_PATH, get(index))
         .route(HEALTH_PATH, get(health))
+        // ⭐ REQ-135 · 免 token 的聚合数字（零业务数据）。
+        .route(crate::metrics::METRICS_PATH, get(get_metrics))
         .route(QUESTIONS_PATH, get(list_questions))
         .route("/q/:id", post(ask))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(svc.clone(), require_token))
         .with_state(svc)
+        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -189,7 +194,8 @@ async fn require_token(
 
     // ⭐ 豁免的只有**路径**（浏览器导航带不了 `Authorization`），不豁免查询串：
     // `/` 与 `/api/health` 带参数同样 400（与其它端点同一条规则）。
-    if path == HEALTH_PATH || path == PAGE_PATH {
+    // ⭐ REQ-135：`/metrics` 与 `/api/health` 同口径（免 token，只给聚合数字）。
+    if path == HEALTH_PATH || path == PAGE_PATH || path == crate::metrics::METRICS_PATH {
         if bad_query {
             audit::anonymize(&svc.audit, "QUERY_PARAM_FORBIDDEN", Instant::now());
             return fail(query_param_forbidden());
@@ -259,6 +265,13 @@ async fn health(uri: axum::http::Uri) -> Response {
             "api": "v1",
         }),
     )
+}
+
+/// ⭐ REQ-135 · `GET /metrics` —— **免 token** 的聚合数字（与 `/api/health` 同口径）。
+///
+/// ⛔ 不读任何业务字段：指标里没有租户 / 问题 id / 表名 / SQL。
+async fn get_metrics(State(svc): State<Arc<PortalService>>) -> Response {
+    svc.metrics.http_response()
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -345,6 +358,8 @@ async fn ask(
 ) -> Response {
     let started = Instant::now();
     if let Err(e) = guard_body(&body) {
+        // ⭐ REQ-135 · 请求体里带别人的租户 = 越权尝试（计数 +1，reason=TENANT_FROM_CLIENT）。
+        svc.metrics.note_denial_code(e.code);
         // 审计：`qid` 走安全过滤（客户端可控输入不许改写日志形状）。
         svc.audit
             .record(&auth.0, &id, None, started.elapsed(), e.code);

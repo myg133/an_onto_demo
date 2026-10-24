@@ -192,11 +192,11 @@ pub async fn load(pool: &PgPool, args: &ServeArgs) -> anyhow::Result<PortalServi
     let sink = match &args.audit_out {
         Some(path) => AuditSink::open(path).map_err(|e| {
             anyhow::anyhow!(
-                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stderr」，\
+                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，\
                  请换一个可写的路径或去掉 --audit-out"
             )
         })?,
-        None => AuditSink::stderr_only(),
+        None => AuditSink::stdout_only(),
     };
 
     Ok(PortalService::new(PortalParts {
@@ -274,10 +274,11 @@ pub fn banner(addr: SocketAddr, verdict: BindVerdict, svc: &PortalService) -> St
     ));
     s.push_str(&format!(
         "· 端点：GET {PAGE}（页面壳，零数据）· GET {Q}（问题列表）· POST /q/<id>（执行）· \
-         GET {H}（免 token）\n",
+         GET {H} / GET {M}（免 token）\n",
         PAGE = super::http::PAGE_PATH,
         Q = super::http::QUESTIONS_PATH,
-        H = super::http::HEALTH_PATH
+        H = super::http::HEALTH_PATH,
+        M = crate::metrics::METRICS_PATH
     ));
     s.push_str(
         "· 隔离：租户**只**来自口令（请求体/URL 带 tenant ⇒ 400/403）· ⛔ 没有 /api/sparql · \

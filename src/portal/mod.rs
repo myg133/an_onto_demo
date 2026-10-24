@@ -144,6 +144,8 @@ pub struct PortalService {
     /// 表 key → **业务名**（启动校验保证：问题涉及的每一张表都在这里）。
     pub names: BTreeMap<String, String>,
     pub audit: audit::AuditLog,
+    /// ⭐ REQ-135 · `/metrics` 的注册表（进程私有）。
+    pub metrics: crate::metrics::Metrics,
     /// ⭐ **每口令并发闸**（[`limit`]）：`max_concurrency` 在这里真的生效。
     /// 拿不到名额 ⇒ 立刻 429，⛔ 不排队。
     pub limiter: limit::Limiter,
@@ -182,6 +184,7 @@ impl PortalService {
             questions: p.questions,
             names: p.names,
             audit: p.audit,
+            metrics: crate::metrics::Metrics::for_portal(),
             limiter: limit::Limiter::default(),
         }
     }
@@ -384,6 +387,8 @@ pub async fn run_question(
                 elapsed_ms: elapsed.as_millis(),
             };
             let answer = answer_of(q, r, &ctx);
+            // ⭐ REQ-135 · 返回给客户的行数（截断前；回答里的 `row_count` 就是它）。
+            svc.metrics.rows(answer.row_count as u64);
             svc.audit
                 .record(entry, q.id(), Some(answer.row_count), elapsed, "OK");
             Ok(answer)

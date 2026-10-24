@@ -188,6 +188,8 @@ pub struct ConsoleService {
     pub schema: SchemaTypes,
     pub paths: decl::DeclPaths,
     pub audit: audit::AuditLog,
+    /// ⭐ REQ-135 · `/metrics` 的注册表（进程私有；只有 admin 通道会改写它）。
+    pub metrics: crate::metrics::Metrics,
     /// 实际绑定地址（横幅与 `/api/health` 之外的诊断用）。
     pub bind: SocketAddr,
     pub allow_public: bool,
@@ -216,6 +218,7 @@ impl ConsoleService {
             schema: p.schema,
             paths: p.paths,
             audit: p.audit,
+            metrics: crate::metrics::Metrics::for_console(),
             bind: p.bind,
             allow_public: p.allow_public,
         }

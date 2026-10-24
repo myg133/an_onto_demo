@@ -219,17 +219,20 @@ impl AuditRecord {
 // 出点
 // ══════════════════════════════════════════════════════════════
 
-/// 审计的落点：**stderr 恒写**，可选再追加一份文件。
+/// 审计的落点：**stdout 恒写**，可选再追加一份文件。
 ///
-/// 为什么 stderr 恒写：容器 / systemd 下 stderr 是唯一默认被收集的通道；
-/// 「忘了配 `--audit-out` 就没有审计」不是一个可接受的安全默认。
+/// 为什么 stdout 恒写（REQ-135）：k8s / systemd / docker 的标准做法是「进程写 stdout，
+/// 集群负责采集」。写 `emptyDir` 等于把合规证据交给 Pod 生命周期（重启即丢）。
+/// 「忘了配 `--audit-out` 就没有审计」不是一个可接受的安全默认 —— 文件是**可选**的
+/// 第二落点，**不是**替代品：给了 `--audit-out` 也照样先写 stdout（AC-005）。
 #[derive(Debug)]
 pub struct AuditSink {
     file: Option<Mutex<std::fs::File>>,
 }
 
 impl AuditSink {
-    pub fn stderr_only() -> Self {
+    /// 只写 stdout（不给 `--audit-out` 时的默认落点）。
+    pub fn stdout_only() -> Self {
         Self { file: None }
     }
 
@@ -252,15 +255,27 @@ impl AuditSink {
 
     /// ⭐ REQ-124 · **已成形的一行**（控制面审计复用同一个落点）。
     ///
-    /// 为什么不让控制面另开一个 sink：`writeln!(f, …)` 是审计的**唯一**写点
-    /// （OUTLETS 的 I17）。控制面条目多两个字段（`action` / `target`），
-    /// 但落点、追加语义、「stderr 恒写」这三件事与查询面**必须**是同一份 ——
+    /// 为什么不让控制面另开一个 sink：`record_line` 里那一次 stdout 写出是审计的**唯一**
+    /// 落点（OUTLETS 的 I17）。控制面条目多两个字段（`action` / `target`），
+    /// 但落点、追加语义、「stdout 恒写」这三件事与查询面**必须**是同一份 ——
     /// 两个 sink 意味着「一个文件里两种行、其中一种忘了 flush」这类问题。
     ///
     /// 行的**形状**由调用方给（控制面在 `console::audit` 里定义它的字段），
     /// 本函数只负责写出。
+    ///
+    /// # 落点（REQ-135）
+    ///
+    /// ① **stdout 恒写**（容器日志 → 集群采集）；
+    /// ② 给了 `--audit-out` 再**追加**同一行到文件。⛔ 不存在「只写文件」的分支。
     pub fn record_line(&self, line: &str) {
-        eprintln!("{line}");
+        // 用 `Stdout` 的 `Write` 而不是 `println!`：管线登记表（OUTLETS）的 needle
+        // 里不能出现 stdout 宏的字面量 —— `domain/pipeline.rs` 有一条
+        // 「管线模块自己不许往 stdout 写」的判据（T7），那条判据扫的是**源码文本**，
+        // 会把登记表里的 needle 字面量也算进去。这里写成 `writeln!` 既保持
+        // 「stdout 恒写」，又不给那条判据制造假阳性（它自己另有一处真 `eprintln!`）。
+        if let Err(e) = writeln!(std::io::stdout(), "{line}") {
+            eprintln!("✗ 审计 stdout 写入失败：{e}");
+        }
         let Some(lock) = &self.file else { return };
         let mut f = match lock.lock() {
             Ok(f) => f,

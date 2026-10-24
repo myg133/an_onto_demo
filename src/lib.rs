@@ -61,3 +61,9 @@ pub mod console;
 // 共一个模块会让「顺手加一个管理端点」变成一次编辑。见 `src/portal/mod.rs` 模块头。
 pub mod portal;
 
+// ⭐ REQ-135 · **生产可观测性**（`GET /metrics` 的 Prometheus 文本格式）。
+// 为什么是独立模块而不是塞进三个 http.rs：指标登记表 / 渲染 / 校验只有一个写点，
+// 三个服务共用同一份口径；而且它是纯计算（无 I/O、无业务数据），
+// 判据（格式合法性、零泄漏、维度爆炸）可以脱离 socket 与数据库跑。
+pub mod metrics;
+

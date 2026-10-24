@@ -841,3 +841,117 @@ fn the_shipped_questions_file_is_valid_for_the_committed_policy() {
         assert!(!lower.contains("sparql"), "说明文字里出现了 sparql：{shown}");
     }
 }
+
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-135 · `/metrics`（客户门户）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ AC-001：`GET /metrics` **免 token**、`Content-Type` 逐字正确、六个指标都在、
+/// 文本通过格式校验器，且零业务数据（租户 / 项目名 / 对象名 / 口令都不出现）。
+#[tokio::test]
+async fn metrics_is_anonymous_valid_and_carries_no_portal_data() {
+    let (svc, _) = test_service("metrics");
+    let r = call(
+        ontok::portal::http::build_router(Arc::clone(&svc)),
+        get("/metrics", None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "AC-001：/metrics 免 token");
+    assert_eq!(
+        header_of(&r, "content-type").as_deref(),
+        Some("text/plain; version=0.0.4"),
+        "AC-001：Content-Type"
+    );
+    for name in [
+        "ontok_requests_total",
+        "ontok_request_duration_seconds",
+        "ontok_rows_returned_total",
+        "ontok_tenant_denied_total",
+        "ontok_ttl_bytes",
+        "ontok_mapping_joins",
+    ] {
+        assert!(
+            r.body.contains(&format!("# HELP {name} ")),
+            "缺 # HELP {name}：\n{}",
+            r.body
+        );
+        assert!(
+            r.body.contains(&format!("# TYPE {name} ")),
+            "缺 # TYPE {name}：\n{}",
+            r.body
+        );
+    }
+    if let Err(errs) = ontok::metrics::validate_exposition(&r.body) {
+        panic!(
+            "AC-002：门户 /metrics 不合法：\n{}",
+            errs.join("\n") + "\n\n" + &r.body
+        );
+    }
+    // ⛔ AC-003：零业务数据。
+    for forbidden in [
+        TENANT_A,
+        TENANT_B,
+        SECRET_PROJECT,
+        SECRET_OBJECT,
+        SECRET_QUESTION_TITLE,
+        "customer_id",
+        "orders",
+        TOKEN_A,
+    ] {
+        assert!(
+            !r.body.contains(forbidden),
+            "/metrics 里出现了门户数据 {forbidden:?}：\n{}",
+            r.body
+        );
+    }
+}
+
+/// ⭐ AC-004：请求体带别人的租户（403 `TENANT_FROM_CLIENT`）⇒
+/// `ontok_tenant_denied_total{reason="TENANT_FROM_CLIENT"}` 真的 +1。
+///
+/// 变异：把 `ask` 里那次 `note_denial_code` 删掉 ⇒ 本测试红。
+#[tokio::test]
+async fn a_tenant_in_the_body_bumps_the_security_counter() {
+    let (svc, _) = test_service("metrics-denied");
+    let metric = |body: &str| -> String {
+        body.lines()
+            .find(|l| {
+                l.starts_with(
+                    "ontok_tenant_denied_total{service=\"ontok-portal\",reason=\"TENANT_FROM_CLIENT\"}",
+                )
+            })
+            .unwrap_or_else(|| panic!("缺 TENANT_FROM_CLIENT 序列：\n{body}"))
+            .to_string()
+    };
+    let fetch = || async {
+        call(
+            ontok::portal::http::build_router(Arc::clone(&svc)),
+            get("/metrics", None),
+        )
+        .await
+        .body
+    };
+    assert!(metric(&fetch().await).ends_with(" 0"), "起始必须是 0");
+
+    for key in ["tenant", "customer_id"] {
+        let body = format!(r#"{{"{key}":"{TENANT_B}"}}"#);
+        let r = call(
+            ontok::portal::http::build_router(Arc::clone(&svc)),
+            post("/q/my_spend", Some(TOKEN_A), &body),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{key}: {}", r.body);
+    }
+
+    let after = fetch().await;
+    assert!(
+        metric(&after).ends_with(" 2"),
+        "两次越权尝试必须记 2：{}",
+        metric(&after)
+    );
+    // 端点标签是**路由模式**（不是真实问题 id）。
+    assert!(
+        after.contains("endpoint=\"/q/:id\"") && !after.contains("/q/my_spend"),
+        "端点标签不许带真实问题 id：\n{after}"
+    );
+}

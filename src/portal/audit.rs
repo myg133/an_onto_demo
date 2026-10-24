@@ -12,7 +12,7 @@
 //! # 落点复用查询面的那一个
 //!
 //! 行在这里拼，写出去走 [`crate::query::audit::AuditSink::record_line`]：
-//! **stderr 恒写 + 可选文件追加**。⛔ 不另开第二个 sink —— 审计的唯一写点是
+//! **stdout 恒写 + 可选文件追加**。⛔ 不另开第二个 sink —— 审计的唯一写点是
 //! `query/audit.rs` 的 `writeln!`（OUTLETS 的 I17）。
 //!
 //! # 字段清单就是白名单
@@ -93,7 +93,7 @@ pub fn safe_qid(raw: &str) -> String {
     }
 }
 
-/// 审计出口：唯一落点（stderr 恒写；文件可选追加）。
+/// 审计出口：唯一落点（stdout 恒写；文件可选追加）。
 #[derive(Debug)]
 pub struct AuditLog {
     sink: AuditSink,
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn the_line_carries_no_token_plaintext_and_no_sql() {
         let token = "FAKE-PORTAL-TOKEN-0123456789abcdef";
-        let log = AuditLog::new(AuditSink::stderr_only());
+        let log = AuditLog::new(AuditSink::stdout_only());
         let entry = PortalTokenEntry {
             token: token.into(),
             digest: crate::query::audit::sha256_hex(token.as_bytes()),

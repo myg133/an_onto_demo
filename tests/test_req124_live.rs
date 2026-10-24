@@ -113,7 +113,7 @@ fn live_service(
         tokens,
         schema,
         paths,
-        audit: AuditLog::new(AuditSink::stderr_only()),
+        audit: AuditLog::new(AuditSink::stdout_only()),
         bind: "127.0.0.1:8899".parse().unwrap(),
         allow_public: false,
     }))

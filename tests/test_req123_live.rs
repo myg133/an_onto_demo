@@ -170,7 +170,7 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
         sse_max_connections: 4,
         max_concurrent_queries: 2,
         tokens,
-        audit: ontok::query::audit::AuditSink::stderr_only(),
+        audit: ontok::query::audit::AuditSink::stdout_only(),
         ttl,
     })))
 }
