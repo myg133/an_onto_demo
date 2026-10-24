@@ -59,21 +59,30 @@ pub enum Cmd {
     /// 把「分数」与「人工最终决定」对起来，输出**分箱命中率**。
     /// 样本不足时**明确说样本不足**，不输出 0% / 100% 冒充结论。
     Confidence { #[command(subcommand)] cmd: ConfidenceCmd },
-    /// REQ-116 · **文档摄取与断言抽取**（第一步：非结构化文档 → 带证据的断言）
+    /// REQ-116 / REQ-129 · **文档 → 本体**的三步（摄取 / 合并 / 签字）
     ///
     /// 当前本体的关系只有归属（79/82 条 `belongs_to`），因为源库没有外键、
     /// 只能按 `*_id` 推断。**关系语义在文档里，不在 DDL 里。**
-    /// 本命令只做第一步：`.md` / `.txt` → 带证据片段的 concept / relation 断言。
+    ///
+    /// | 子命令 | 做什么 | 调模型？ | 连库？ |
+    /// | --- | --- | --- | --- |
+    /// | `doc ingest` | `.md` / `.txt` → 带证据片段的 concept / relation 断言 | 是 | 否 |
+    /// | `doc merge` | 断言 → 机械并进一份提案（同 `proposal.json` 形状） | 否 | 否 |
+    /// | `doc sign` | 给一条 doc/both 条目签字（只写 `reviewed_by` + `signed_at`） | 否 | 否 |
     ///
     /// 【可以照抄的一整条】
     ///
     /// ontok doc ingest --input docs/ --out out/assertions.jsonl --stats out/stats.json
     ///
+    /// ontok doc merge --assertions out/assertions.jsonl --proposal out/proposal.json --out out/merged.json --schema out/schema.json
+    ///
+    /// ontok doc sign --file out/merged.json --item relation:订单→套餐模板 --by qa-li --out out/signed.json
+    ///
     /// ⚠️ 只吃 `.md` / `.txt`（UTF-8）。`.pdf` / `.docx` / `.doc` **直接报错并点名格式**，
     /// 请先用外部工具转成文本（转换后请记下 hash）。⛔ 不静默跳过。
     /// ⚠️ 每条断言都带 `evidence.quote`，它必须能在对应块的原文里**逐字**找到；
     /// 找不到的断言**丢弃并计数**（⛔ 不修正 quote）。
-    /// ⚠️ 本命令**不连产品库、不写本体、不出图**：输入是本地文件、产物是本地文件，
+    /// ⚠️ 两条命令都**不连产品库、不写本体、不出图**：输入是本地文件、产物是本地文件，
     /// 指纹缓存也是本地文件（默认 `<out>.cache.json`）。
     #[command(verbatim_doc_comment)]
     Doc { #[command(subcommand)] cmd: DocCmd },
@@ -384,6 +393,93 @@ pub enum DocCmd {
         /// 不需要 LLM 三件套、不需要预算。
         #[arg(long)]
         chunks_only: bool,
+    },
+    /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
+    ///
+    /// 这一步是「文档 → 本体」断掉的那一节：`doc ingest` 产出带证据的断言，
+    /// 本命令把其中**已对齐**的部分并进提案，于是链路继续：
+    /// `propose import → review decide → proposal apply → version freeze`。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok doc merge --assertions out/assertions.jsonl --proposal out/proposal.json --out out/merged.json --stats out/merge.stats.json
+    ///
+    /// ⚠️ **只并 `alignable: true`**：`future` / `example` 一律排除并计数（那是文档里的设想/举例）。
+    /// ⚠️ **只做机械对齐**：断言自带 `maps_to`（表的列 / 关系的 child 列 + parent 列）就校验后并入；
+    /// 没有映射的关系 ⇒ `doc_unmapped`，⛔ **不按名字猜表**；概念只按「精确名字/别名命中」对齐。
+    /// ⚠️ doc 条目 `band` 最高 `medium`、`reviewed_by` 恒 `null` ⇒ **未签的不会被 apply 采用**。
+    /// ⚠️ 基数冲突的条目 `applicable: false` 且两侧说法都在 `conflicts[]` 里 ——
+    /// `proposal apply` 遇到它会**拒绝并点名**（不是忽略）。
+    /// ⚠️ 同一份输入两次运行 ⇒ 输出**逐字节相同**（无时间戳、无随机、稳定排序）。
+    /// ⚠️ ⛔ **输出不许指向输入，也不许互相撞**：`--out` / `--stats` 与
+    /// `--assertions` / `--proposal`（以及两者彼此）撞了就 **exit≠0 并点名**。
+    /// 静默覆盖是数据丢失（`--stats` 指向提案会把提案写成一坨统计 JSON）。
+    /// ⚠️ 重跑合并会让**之前的签字失效**（`reviewed_by` / `signed_at` 一并清掉，
+    /// `stats.reviewed_by_reset` 会记数）—— 内容变了签名就该作废，这是刻意的。
+    /// ⚠️ 本命令**不连产品库、不调模型**：输入两份本地文件、产物也是本地文件。
+    #[command(verbatim_doc_comment)]
+    Merge {
+        /// 断言 JSONL（`ontok doc ingest` 的产物）
+        #[arg(long)]
+        assertions: PathBuf,
+        /// 提案 JSON（`ontok-propose` 的产物）
+        #[arg(long)]
+        proposal: PathBuf,
+        /// 合并结果：与 `proposal.json` 同形状（可直接 `propose import`）
+        #[arg(long)]
+        out: PathBuf,
+        /// 统计：`stats.json` 的落点（五项 + 明细）。省略则不写（屏幕上报同一批数字）
+        #[arg(long)]
+        stats: Option<PathBuf>,
+        /// ⭐ 真实 schema（`ontok-introspect` 产出的 `schema.json`）。**可选**。
+        ///
+        /// 给了 ⇒ **严格**校验 `maps_to` 的每个表/列（**含父端主键列**，如 `customers.id`），
+        /// 任何一个不存在 ⇒ `doc_unmapped`（AC-004：给了 schema 就 0 例外）。
+        /// 不给 ⇒ 退回 fallback（列必须在提案的 `properties` 里；父端列额外接受约定名 `id`），
+        /// 并在 stats 里记 `parent_key_id_convention` + stderr 警告 —— **可数、可见**。
+        #[arg(long)]
+        schema: Option<PathBuf>,
+    },
+    /// ⭐ REQ-129 · 给一条 `doc` / `both` 条目**签字**（写 `reviewed_by` + `signed_at`）
+    ///
+    /// # 为什么需要一条命令
+    ///
+    /// 规则 7 说「未签 ⇒ apply 时忽略」；而「签」在 REQ-118 里是**评审流程写进提案**的动作。
+    /// 没有这条命令时，唯一办法是手工改 JSON 里的 `reviewed_by` —— 那不是产品能力，
+    /// 也没人挡得住手滑改错条目。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok doc sign --file out/merged.json --item relation:订单→套餐模板 --by qa-li --out out/signed.json
+    ///
+    /// ⚠️ `--item` 认三种写法：**1 基序号**（`136`，与 `review decide --item N` 同一个 N）、
+    /// **稳定键**（`relation:订单→套餐模板` / `entity:customers` /
+    /// `relation:order_template_id__package_templates`）、以及 `apply` 报错里那个
+    /// `136:add_link_type:订单→套餐模板`。⛔ 不认数组下标（顺序会变，按它签迟早签错人）。
+    /// ⚠️ 只签 `origin: doc | both` 的条目；DB 轨条目请走 `review decide`（两条轨有意分开）。
+    /// ⚠️ 只写 `reviewed_by` + `signed_at` 两栏，**其余字节不变**；重复签同一个人 ⇒ 幂等。
+    /// ⚠️ ⛔ 不就地改输入：必须给 `--out`（或显式 `--in-place`）。
+    /// ⚠️ 签字时间是事实，所以默认取当前 UTC 时间；要逐字节复现就给 `--at <RFC3339>`。
+    #[command(verbatim_doc_comment)]
+    Sign {
+        /// 要签的提案文件（`ontok doc merge` 的产物）
+        #[arg(long)]
+        file: PathBuf,
+        /// 签哪一条：1 基序号 / `relation:订单→套餐模板` / `136:add_link_type:订单→套餐模板`
+        #[arg(long)]
+        item: String,
+        /// 签字人（**必填**，空/空白 ⇒ 拒绝：⛔ 不许匿名签）
+        #[arg(long)]
+        by: String,
+        /// 签完的输出（⛔ 与 `--in-place` 互斥；两个都不给 ⇒ 拒绝）
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// 显式就地覆盖输入（不加这个开关时 `--out` 指向输入文件也会被拒）
+        #[arg(long)]
+        in_place: bool,
+        /// 签字时间（RFC3339，如 `2026-10-24T04:00:00Z`）。省略 = 当前 UTC 时间
+        #[arg(long)]
+        at: Option<String>,
     },
 }
 
@@ -1810,17 +1906,71 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 /// （`--limit-chunks` 是**显式**截断，那种情况允许出产物，并在 `stats.truncated`
 /// 里标 true —— 人知道自己只要前 N 块。）
 async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
-    use crate::extract::doc_ingest as di;
+    match cmd {
+        // ⭐ REQ-129 · 合并是**第二条** `doc` 子命令（拆开而不是给 ingest 加开关：
+        // 摄取要调模型、合并只做机械对齐，两者的失败面与预算面完全不同）。
+        DocCmd::Merge {
+            assertions,
+            proposal,
+            out,
+            stats,
+            schema,
+        } => {
+            return doc_merge_cmd(
+                &assertions,
+                &proposal,
+                &out,
+                stats.as_deref(),
+                schema.as_deref(),
+            )
+            .await
+        }
+        // ⭐ REQ-129 · 签字（规则 7 的另一半）：只写两栏、⛔ 不就地改输入。
+        DocCmd::Sign {
+            file,
+            item,
+            by,
+            out,
+            in_place,
+            at,
+        } => {
+            return doc_sign_cmd(&file, &item, &by, out.as_deref(), in_place, at.as_deref())
+                .await
+        }
+        DocCmd::Ingest {
+            input,
+            out,
+            stats,
+            budget_tokens,
+            limit_chunks,
+            cache,
+            chunks_only,
+        } => {
+            return doc_ingest_cmd(
+                input,
+                out,
+                stats,
+                budget_tokens,
+                limit_chunks,
+                cache,
+                chunks_only,
+            )
+            .await
+        }
+    }
+}
 
-    let DocCmd::Ingest {
-        input,
-        out,
-        stats: stats_path,
-        budget_tokens,
-        limit_chunks,
-        cache,
-        chunks_only,
-    } = cmd;
+/// REQ-116 · `ontok doc ingest` 的装配点（唯一一个调模型的 `doc` 子命令）。
+async fn doc_ingest_cmd(
+    input: PathBuf,
+    out: PathBuf,
+    stats_path: Option<PathBuf>,
+    budget_tokens: Option<u64>,
+    limit_chunks: Option<usize>,
+    cache: Option<PathBuf>,
+    chunks_only: bool,
+) -> anyhow::Result<()> {
+    use crate::extract::doc_ingest as di;
 
     if limit_chunks == Some(0) {
         anyhow::bail!("--limit-chunks 是 0：0 块等于「什么都没跑」，那与「不跑」混淆。要跑就给 ≥1。");
@@ -2048,6 +2198,287 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
         "  提示        : 本命令不写库、不改本体、不出图；产物供下一轮「断言 ↔ 表/字段」对齐使用"
     );
     Ok(())
+}
+
+/// ⭐ REQ-129 · `ontok doc merge` 的装配点（**不连产品库、不调模型**）。
+///
+/// # 顺序是刻意的
+///
+/// | 步骤 | 为什么在这个位置 |
+/// | --- | --- |
+/// | 读两份输入 | 最便宜的失败先报（文件不在 / 不是合法 JSON） |
+/// | 拒绝原地覆盖 | `--out` 指向输入文件 ⇒ 先报，别把提案写坏 |
+/// | 纯合并（`extract::doc_merge`） | 零 I/O 的唯一实现；失败时**一个字节都不写** |
+/// | 写合并结果 → 写统计 | 主产物先落盘；统计是附件 |
+/// | stderr 报告五项 | stdout 留给「要不要接管道」的选择（本命令不写 stdout） |
+///
+/// # 为什么不需要 LLM 三件套、不需要预算
+///
+/// 它是**机械对齐**：输入是两份本地文件，判断依据全是文件里的字段（`maps_to` /
+/// 名字 / 别名）。⛔ 没有一次网络调用，所以没有 token 可花，也就没有预算闸。
+async fn doc_merge_cmd(
+    assertions: &std::path::Path,
+    proposal: &std::path::Path,
+    out: &std::path::Path,
+    stats_path: Option<&std::path::Path>,
+    schema: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    use crate::extract::doc_merge as dm;
+
+    let assertions_text = std::fs::read_to_string(assertions).with_context(|| {
+        format!(
+            "读不到断言 JSONL：{}（先跑 `ontok doc ingest` 产出它）",
+            assertions.display()
+        )
+    })?;
+    let proposal_text = std::fs::read_to_string(proposal).with_context(|| {
+        format!(
+            "读不到提案 JSON：{}（先跑 `ontok-propose` 产出它）",
+            proposal.display()
+        )
+    })?;
+    let proposal_doc: Value = serde_json::from_str(&proposal_text)
+        .with_context(|| format!("提案 {} 不是合法 JSON", proposal.display()))?;
+
+    // ⛔ **不原地覆盖 —— 输出 × {输入 ∪ 另一个输出}，全部查**（QA N1）。
+    //
+    // | 撞法 | 后果 |
+    // | --- | --- |
+    // | `--out` == `--assertions` / `--proposal` | 输入被合并结果盖掉，没法再复核「合并前是什么样」 |
+    // | `--stats` == `--assertions` / `--proposal` | **提案/断言被写成一坨统计 JSON**（静默数据丢失） |
+    // | `--stats` == `--out` | 主产物被统计文件顶掉，而屏幕上会报「产物已写出」 |
+    //
+    // 上一版只守了 `--out` ⇒ `--stats` 指向提案时 exit 0 且提案被覆盖（QA 实测）。
+    // 静默覆盖是**数据丢失**，所以这里一律 exit≠0 并**点名哪两个参数撞了**。
+    let ins: [(&str, &std::path::Path); 2] =
+        [("--assertions", assertions), ("--proposal", proposal)];
+    let mut outs: Vec<(&str, &std::path::Path)> = vec![("--out", out)];
+    if let Some(p) = stats_path {
+        outs.push(("--stats", p));
+    }
+    for (i, (oname, opath)) in outs.iter().enumerate() {
+        for (iname, ipath) in ins.iter() {
+            if same_path(opath, ipath) {
+                anyhow::bail!(
+                    "{oname} 与 {iname} 是同一个文件（{}）。\n\
+                     ⛔ 不原地覆盖：{iname} 是**输入**，覆盖后就没法再拿它复核「合并前是什么样」。\
+                     请给 {oname} 换一个路径。",
+                    opath.display()
+                );
+            }
+        }
+        for (oname2, opath2) in outs.iter().skip(i + 1) {
+            if same_path(opath, opath2) {
+                anyhow::bail!(
+                    "{oname} 与 {oname2} 是同一个文件（{}）。\n\
+                     ⛔ 两个产物不能写同一个文件：一份会**静默盖掉**另一份，\
+                     而屏幕上还会报「两个都写了」。请各给一个路径。",
+                    opath.display()
+                );
+            }
+        }
+        crate::extract::proposal::require_out_is_file(opath)
+            .map_err(|e| anyhow::anyhow!("{oname}：{e}"))?;
+    }
+
+    // ⭐ `--schema`（可选）：给了就走**严格**校验面（AC-004 订正后：给了就 0 例外）。
+    let opts = match schema {
+        Some(p) => {
+            let report = load_schema_report(p)?;
+            dm::MergeOptions {
+                schema: Some(dm::SchemaIndex::from_report(&report)),
+            }
+        }
+        None => dm::MergeOptions::default(),
+    };
+
+    // 纯合并：失败 ⇒ 一个字节都不写（不产半份提案）。
+    let outcome = dm::merge_with(&assertions_text, &proposal_doc, &opts)?;
+    let stats_json = dm::render_stats(&outcome.stats)?;
+    write_local(out, outcome.rendered.as_bytes())?;
+    if let Some(p) = stats_path {
+        write_local(p, stats_json.as_bytes())?;
+    }
+
+    // 屏幕报告（stderr）：AC-008 的五项逐行点名，外加未映射的原因分档。
+    let s = &outcome.stats;
+    eprintln!("✓ 文档断言合并（机械对齐，⛔ 不做语义猜测）");
+    eprintln!(
+        "  输入        : {} 行断言（概念 {} · 关系 {}） × 提案 {} 条",
+        s.assertions_read, s.assertions_concept, s.assertions_relation, s.items_in
+    );
+    eprintln!(
+        "  排除不可对齐: {}（future {} · example {}{}）",
+        s.excluded_not_alignable,
+        s.excluded_future,
+        s.excluded_example,
+        if s.excluded_modality_conflict > 0 {
+            format!(" · 模态与标记矛盾 {}", s.excluded_modality_conflict)
+        } else {
+            String::new()
+        }
+    );
+    eprintln!("  并入        : {}", s.merged);
+    eprintln!(
+        "  未映射      : {}{}",
+        s.doc_unmapped,
+        if s.unmapped_reasons.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "（{}）",
+                s.unmapped_reasons
+                    .iter()
+                    .map(|(k, n)| format!("{k} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            )
+        }
+    );
+    eprintln!("  冲突        : {}（两侧说法都在 conflicts[]，条目 applicable=false）", s.conflicts);
+    eprintln!(
+        "  合并为 both : {} · doc-only 条目 {}（新增 {} 条）",
+        s.merged_both, s.merged_doc_only, s.items_added
+    );
+    if s.duplicate_claims > 0 {
+        eprintln!("  重复断言    : {} 条（同实体/同一条边逐条去重后只留一条证据）", s.duplicate_claims);
+    }
+    if s.band_capped_strong > 0 {
+        eprintln!(
+            "  ⚠ 压档      : {} 条（输入档位强于 {} ⇒ 压到 medium）",
+            s.band_capped_strong, dm::DOC_BAND_CAP
+        );
+    }
+    if s.reviewed_by_reset > 0 {
+        eprintln!(
+            "  ⚠ 签名重置  : {} 条（doc 条目必须未签；重跑合并会让之前的签字作废）",
+            s.reviewed_by_reset
+        );
+    }
+    if s.parent_key_id_convention > 0 {
+        eprintln!(
+            "  ⚠ 父端列    : {} 条只靠约定主键名 `{}` 通过（提案里没有主键列；给 `--schema` 可严格校验）",
+            s.parent_key_id_convention,
+            dm::PK_CONVENTION
+        );
+    }
+    if s.schema_checked {
+        eprintln!(
+            "  严格校验    : 是（schema.json {} 张表）· 父端列靠 schema 通过 {} 条",
+            s.schema_tables, s.parent_column_schema_only
+        );
+    } else {
+        eprintln!(
+            "  严格校验    : 否（没给 --schema ⇒ 父端列只能靠约定名；\
+             要 0 例外请给 --schema <schema.json>）"
+        );
+    }
+    eprintln!("  产物        : {}", out.display());
+    if let Some(p) = stats_path {
+        eprintln!("  统计        : {}", p.display());
+    }
+    eprintln!(
+        "  提示        : 产出与 proposal.json 同形状；未签的 doc 条目 apply 时会被忽略，\
+         冲突条目会让 apply 拒绝并点名"
+    );
+    Ok(())
+}
+
+/// ⭐ REQ-129 · `ontok doc sign` 的装配点（**不连产品库、不调模型**）。
+///
+/// # 三条「不做」落在哪
+///
+/// | ⛔ | 落点 |
+/// | --- | --- |
+/// | 不匿名签 | `sign()` 里对 `--by` 的空串判断（CLI 只负责原样传） |
+/// | 不就地改输入 | 这里：`--out` 与 `--in-place` 二选一；`--out` 指向输入也拒 |
+/// | 不签 DB 轨条目 | `sign()` 里对 `origin` 的判断（CLI 不重复判） |
+///
+/// 时间戳默认取 UTC：签字时间是**事实**，不是渲染选项。
+/// 要逐字节复现（AC 的确定性判据）就显式给 `--at`。
+async fn doc_sign_cmd(
+    file: &std::path::Path,
+    item: &str,
+    by: &str,
+    out: Option<&std::path::Path>,
+    in_place: bool,
+    at: Option<&str>,
+) -> anyhow::Result<()> {
+    use crate::extract::doc_merge as dm;
+
+    // ⑤/⑥ · 出口：`--out` 与 `--in-place` 二选一，且 ⛔ 不许拿 `--out` 悄悄就地覆盖。
+    let target: &std::path::Path = match (out, in_place) {
+        (Some(_), true) => anyhow::bail!(
+            "--out 与 --in-place 只能给一个：给了 --out 就写到新文件，\
+             要覆盖输入请显式用 --in-place"
+        ),
+        (Some(p), false) => {
+            if same_path(p, file) {
+                anyhow::bail!(
+                    "--out 指向的正是输入文件（{}）。\n\
+                     ⛔ 不就地改输入：请写到另一个文件；确实要覆盖请显式加 `--in-place`。\n\
+                     理由：签字前后的两份文件是**审计对象**（谁签的、改了什么）——\
+                     留不下原件就没法复核。",
+                    p.display()
+                );
+            }
+            p
+        }
+        (None, true) => file,
+        (None, false) => anyhow::bail!(
+            "缺 --out：签字**必须落盘**到另一个文件（或显式给 `--in-place`）。\n\
+             ⛔ 不提供「默认就地改」：签字前后的两份文件是审计对象，\
+             留不下原件就没法复核「谁签的、除了这两栏还改了什么」。"
+        ),
+    };
+
+    let text = std::fs::read_to_string(file)
+        .with_context(|| format!("读不到提案文件：{}", file.display()))?;
+    let at = match at {
+        Some(t) => t.to_string(),
+        None => chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+
+    // 纯签字：失败 ⇒ 一个字节都不写。
+    let outcome = dm::sign(&text, item, by, &at)?;
+    write_local(target, outcome.rendered.as_bytes())?;
+
+    eprintln!("✓ 文档条目签字");
+    eprintln!(
+        "  条目        : 第 {} 条 {}（origin {}）",
+        outcome.seq, outcome.label, outcome.origin
+    );
+    eprintln!(
+        "  签字        : {} @ {}{}",
+        by.trim(),
+        outcome.signed_at,
+        if outcome.already_signed {
+            "（幂等：本来就已由同一个人签过，值不变）"
+        } else {
+            ""
+        }
+    );
+    eprintln!("  其余字节    : 未变（只写了 reviewed_by / signed_at 两栏）");
+    if !outcome.input_canonical {
+        eprintln!(
+            "  ⚠ 格式提示  : 输入不是规范格式（键序/缩进），本次输出已规范化 —— 条目内容未变"
+        );
+    }
+    eprintln!("  产物        : {}", target.display());
+    eprintln!(
+        "  下一步      : ontok propose import --file {}（未签的 doc 条目 apply 时会被忽略）",
+        target.display()
+    );
+    Ok(())
+}
+
+/// 两个路径是否是同一个文件（**只做字面比较**：本命令不做符号链接解析）。
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b
+        || match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
 }
 
 /// 本地产物的**唯一写出点**（REQ-116）。
@@ -3718,6 +4149,20 @@ async fn proposal_cmd(pool: &PgPool, cmd: ProposalCmd) -> anyhow::Result<()> {
             for b in &st.blocked {
                 println!("  被拦：{} —— {}", b.target, b.reason.as_deref().unwrap_or(""));
             }
+        }
+    }
+
+    // ⭐ REQ-129 · 规则 7 的可见性：未签的 doc-only 条目在 apply 时被**忽略**。
+    // 走 stderr 是把「没那么做」说清楚 —— 静默跳过会让「签了一条」与「什么都没签」
+    // 在输出上长得一模一样（而 AC-007 判的正是这两者的差别）。
+    let ignored = crate::domain::apply::unsigned_doc_only(&views);
+    if !ignored.is_empty() {
+        eprintln!(
+            "· 未签的 doc 条目 {} 条 ⇒ apply 时**忽略**（规则 7：未签不进快照）",
+            ignored.len()
+        );
+        for (_, target) in ignored.iter().take(8) {
+            eprintln!("    {target}");
         }
     }
 

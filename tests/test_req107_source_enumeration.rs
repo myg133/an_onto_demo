@@ -1755,7 +1755,29 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
     (
         "src/cli.rs",
         "doc_cmd",
+        "子命令分派（REQ-116 `doc ingest` / REQ-129 `doc merge`：两条都**不连产品库**）",
+    ),
+    (
+        "src/cli.rs",
+        "doc_ingest_cmd",
         "子命令 handler（`doc ingest`：文档 → 带证据的断言；**不连产品库**，产物/缓存全在本地）",
+    ),
+    // ⭐ REQ-129 · `doc merge`：断言 → 提案的机械合并。写出口 I26 登记在 OUTLETS。
+    (
+        "src/cli.rs",
+        "doc_merge_cmd",
+        "子命令 handler（`doc merge`：断言 + 提案 → 合并提案；**不连产品库、不调模型**）",
+    ),
+    // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
+    (
+        "src/cli.rs",
+        "doc_sign_cmd",
+        "子命令 handler（`doc sign`：给一条 doc/both 条目签字；**不连产品库、不调模型**）",
+    ),
+    (
+        "src/cli.rs",
+        "same_path",
+        "运维辅助（REQ-129：`--out` 不许原地覆盖输入 —— 字面/规范化两条比较）",
     ),
     (
         "src/cli.rs",
@@ -1980,6 +2002,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "doc_ingest"),
     // ⭐ REQ-118 · AI 提案框架（ADR-005：提案形状 / 校验 / 指纹缓存 / 预算 / 渲染；三命令共用）
     ("src/extract/mod.rs", "proposal"),
+    // ⭐ REQ-129 · 文档断言 → 提案的**机械合并**（七条规则 / 五项统计 / 确定性；零 I/O）。
+    // 写出口 I26 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
+    ("src/extract/mod.rs", "doc_merge"),
     // REQ-118 · 决策点一：中文名提案（`ontok name suggest`）
     ("src/extract/mod.rs", "name_suggest"),
     // REQ-118 · 决策点二：排除提案（`ontok exclude suggest`）

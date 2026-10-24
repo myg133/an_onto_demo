@@ -134,6 +134,11 @@ fn map_apply_error(e: ApplyError) -> StoreError {
         ApplyError::BadConceptGroup(m) => StoreError::BadConceptGroup(m),
         // REQ-108 · 读不懂的分数 ⇒ 拒绝 apply（fail-closed，不静默降级成无分数）
         ApplyError::BadConfidence(m) => StoreError::BadConfidence(m),
+        // ⭐ REQ-129 · AC-006（拒绝并点名）与规则 2 的纵深防御
+        ApplyError::NotApplicable { items } => {
+            StoreError::ItemsNotApplicable(items.join("；"))
+        }
+        ApplyError::DocBandStrong { items } => StoreError::DocBandStrong(items.join("；")),
     }
 }
 

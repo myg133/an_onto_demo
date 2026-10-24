@@ -157,6 +157,27 @@ impl NewItem {
                 }
             }
         }
+        // ⭐ REQ-129 · 文档合并条目的**文档面字段**：条目顶层 → payload。
+        //
+        // 理由与上面的 `confidence` 逐字相同：`apply` 那条路只拿得到 `ItemView.payload`。
+        // 不搬进 payload，下面三条判据在 apply 侧**根本看不见**：
+        //
+        // | 字段 | apply 侧的用法 |
+        // | --- | --- |
+        // | `applicable` | `false` ⇒ **拒绝并点名**（AC-006，不是忽略） |
+        // | `origin` + `reviewed_by` | `doc` + 未签 ⇒ **忽略**（规则 7：未签不进快照） |
+        // | `band` | doc 条目 `strong` ⇒ 拒绝（规则 2 的第二道闸） |
+        //
+        // 缺省不插入：普通提案条目一个字节都不变（`payload` 里不会凭空多出五个键）。
+        for key in ["origin", "band", "reviewed_by", "applicable", "conflicts"] {
+            if let Some(v) = it.get(key) {
+                if !v.is_null() || key == "reviewed_by" {
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.insert(key.to_string(), v.clone());
+                    }
+                }
+            }
+        }
         Ok(NewItem { kind, target_key: target.to_string(), payload })
     }
 

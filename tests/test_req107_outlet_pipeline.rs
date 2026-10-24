@@ -700,13 +700,15 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        + 1（REQ-125 的工作台页面壳出口 I22）
     //        + 2（REQ-126 的客户门户出口 I23/I24）
     //        + 1（REQ-127 的查询服务 OWL TTL 出口 I25）
+    //        + 2（REQ-129 的 `doc merge` 合并提案 I26 / `doc sign` 签字产物 I27）
     assert_eq!(
         OUTLETS.len(),
-        60,
+        62,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
          + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）\
-         + 1（REQ-125 工作台页面壳）+ 2（REQ-126 客户门户）+ 1（REQ-127 OWL TTL 响应）"
+         + 1（REQ-125 工作台页面壳）+ 2（REQ-126 客户门户）+ 1（REQ-127 OWL TTL 响应）\
+         + 2（REQ-129 doc merge 合并提案 / doc sign 签字产物）"
     );
 
     // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
@@ -730,9 +732,12 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // （管理通道，只有 admin token 能到；内容侧的闸在生成那一侧）。
     // REQ-125 内部 26→27（I22）：工作台的**页面壳**（零数据、匿名可达的 HTML 骨架）。
     // REQ-127 内部 29→30（I25）：查询服务的整份 OWL TTL 响应（C6/D9 的同一份字节，送达侧）。
+    // REQ-129 内部 30→32（I26/I27）：`doc merge` 的合并提案 + `doc sign` 的签字产物
+    // （都是候选提案，不是客户视图；物理写点仍复用 I10 的唯一 `fs::write`，
+    // 这两条钉的是**新命令的写出调用**）。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 30);
+    assert_eq!(outlet_count(Track::Internal), 32);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -753,7 +758,8 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-124 · I18–I21（控制面：JSON / TTL / R2RML / 声明落盘）；
     // REQ-125 · I22（工作台页面壳：匿名可达、零数据）；REQ-126 · I23/I24（客户门户）；
     // REQ-127 · I25（查询服务的整份 OWL TTL 响应）
-    want.extend((1..=25).map(|i| format!("I{i}")));
+    // REQ-129 · I26/I27（`doc merge` 的合并提案 / `doc sign` 的签字产物）
+    want.extend((1..=27).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());

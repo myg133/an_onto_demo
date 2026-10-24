@@ -278,6 +278,17 @@ pub enum StoreError {
     /// 领域层先判（纯函数可单测），存储层把它翻成自己的错误类型。
     #[error("关系条目的 confidence 不合法：{0}")]
     BadConfidence(String),
+
+    /// ⭐ REQ-129 · AC-006：条目被标为 `applicable: false` ⇒ **拒绝 apply 并点名**。
+    ///
+    /// 与 `domain::apply::ApplyError::NotApplicable` 是同一条事实的两次呈现
+    /// （领域层判、存储层翻）。CLI 打印的是这一条 —— 报错原文里必须**有名字**。
+    #[error("条目被标为不可应用（applicable: false），拒绝 apply：{0}")]
+    ItemsNotApplicable(String),
+
+    /// ⭐ REQ-129 · 规则 2：doc 条目的 `band` 不许是 `strong`（纵深防御）。
+    #[error("doc 条目的 band 不许是 strong：{0}")]
+    DocBandStrong(String),
 }
 
 const SCHEMA: &str = r#"

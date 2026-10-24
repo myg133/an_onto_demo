@@ -6,6 +6,11 @@ pub mod ai_semantic;
 // **不放 domain/**：它要打 HTTP，理由同上；缓存与传输都是注入的 trait，
 // 本模块零磁盘 I/O —— 读写三份产物由 `cli::doc_cmd` 负责。
 pub mod doc_ingest;
+// ⭐ REQ-129 · **文档断言 → 本体提案**的机械合并（`ontok doc merge`）。
+// 独立成文件：`doc_ingest` 是**产出方**（本 REQ 不改它的语义），合并规则是
+// 消费方的判据；放在一起会让「证据校验的唯一实现」与「合并规则的唯一实现」混成一份。
+// 零 I/O：输入是字符串 + `Value`，落盘由 `cli::doc_merge_cmd` 负责。
+pub mod doc_merge;
 // REQ-113 · 排除表（**一个实现**：解析 / 校验 / 剔除 / 记录都在这一个文件里）。
 // 不放 `domain/`：它判的是「这一轮抽取的作用域」，与 `extract::propose` 同层。
 pub mod exclusions;

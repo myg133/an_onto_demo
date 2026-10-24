@@ -616,7 +616,12 @@ pub fn chunk_all(docs: &[SourceDoc]) -> Vec<Chunk> {
 ///
 /// `span` 是**绝对**字节偏移（归一化文本上的 `[start, end)`），
 /// 等于 `块起点 + 片段在块内的偏移` —— 人可以直接 `dd`/切片复核。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// ⚠️ REQ-129 追加 `Deserialize`：合并器（`extract::doc_merge`）要**读回**
+/// `doc ingest` 写出的 JSONL。形状仍然只有这一处定义 —— 抄一份「读侧结构体」
+/// 会让「产出方改了字段、消费方还在读旧名」变成静默丢字段。
+/// 反序列化不改变任何产出：`Serialize` 侧逐字节不变。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
     pub file: String,
     pub chunk_id: String,
@@ -729,12 +734,13 @@ impl Modality {
 // ──────────────────────────────────────────────────────────
 
 /// 一条概念断言。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConceptAssertion {
     pub name: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// 缺省 = 没有别名（REQ-129 读回时必须容忍省略：产出侧对空数组是跳过序列化的）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub modality: Modality,
     /// `false` = 不可用于对齐（`future` / `example`）。
@@ -743,12 +749,12 @@ pub struct ConceptAssertion {
 }
 
 /// 一条关系断言。`predicate` 是**文档里的动词**（这是本需求存在的理由，AC-004）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationAssertion {
     pub subject: String,
     pub predicate: String,
     pub object: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cardinality: Option<String>,
     pub modality: Modality,
     pub alignable: bool,
@@ -756,7 +762,7 @@ pub struct RelationAssertion {
 }
 
 /// JSONL 的一行。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Assertion {
     Concept(ConceptAssertion),
