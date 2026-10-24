@@ -2,49 +2,60 @@
 
 ## 当前状态
 
-**进行中**（2026-10-24 开单）
+**已完成**（2026-10-24 · 已合并 `develop` `267aaec`）
 
-## 缺的是什么
+## 解决了什么
 
 ```
 文档 → doc ingest → assertions.jsonl
-                          │
-                          ⚠️ 断在这里（没有任何命令）
+                          ┆
+                          ┆ ← REQ-129 之前断在这里
                           ▼
-                   proposal.json → 人签 → 本体
+                   doc merge → 提案 → 人签 → 本体
 ```
 
-`ontok doc --help` 原话：「**第一步**：非结构化文档 → 带证据的断言」「本命令**只做第一步**」。
+## 最终结果
 
-## 要加的命令
-
-```bash
-ontok doc merge --assertions <assertions.jsonl> --proposal <proposal.json> --out <merged.json>
-```
-
-产出与 `proposal.json` **同形状**，所以后续流程不变。
-
-## 七条合并规则
-
-| # | 规则 |
+| 项 | 值 |
 | --- | --- |
-| 1 | 只并 `alignable: true`（`future`/`example` 是设想/举例，排除并计数） |
-| 2 | doc 条目**最高 medium**、`reviewed_by: null`（⛔ 不许 strong） |
-| 3 | 关系必须有显式 `maps_to`，没有 ⇒ `doc_unmapped`，⛔ 不许发明表名 |
-| 4 | 同实体（映射到同一表）⇒ `origin: both`，两侧证据都留 |
-| 5 | 冲突（doc 基数 vs DB 推断）⇒ 双保留 + `applicable: false` |
-| 6 | 确定性：两次运行逐字节相同 |
-| 7 | 未签 ⇒ apply 时忽略（沿用 REQ-118 的 P2） |
+| 合并 | `develop` **`267aaec`**（3 个提交）；禁改面零 diff |
+| 新命令 | `ontok doc merge`（合并）+ `ontok doc sign`（签字） |
+| 并入（真实 56 行 fixture） | **14**（「客户」断言并进 `customers`，`origin: both`，两侧证据都留） |
+| 排除不可对齐 | **28**（future 14 / example 14） |
+| 未映射 | **14**（`no_maps_to`，⛔ 一条都没猜） |
+| 冲突 | 0 |
+| **AC-007 端到端** | 不签 ⇒ 83 类 / **52 关系** / grep **0**；`doc sign` 签一条 ⇒ **53 关系** / grep **1** |
+| AC-006 | `applicable:false` ⇒ apply **exit 1 并点名**（不是忽略），未生成新版本 |
+| `doc sign` | 七条判据全过（匿名拒绝 / 五种写法命中同一条 / 只签 doc·both / 只改两栏 / 幂等且不覆盖他人 / 不就地改 / 确定性） |
+| `--schema` 严格 | 给了就 0 例外（`customers.id` 靠 schema 通过）；不给保留 fallback + 可数警告 |
+| 确定性 | merge（含/不含 schema）与 sign 各两次 sha256 相同 |
+| 测试 | `doc_merge` 30 · `apply` 6 · `test_req129_doc_merge` 14；全量 1721 passed / 6 failed（基线同因） |
+| 出口 | I26 + I27 ⇒ 62 条（内部 32） |
 
-## 一个边界我特意写死
+## 关键裁定
 
-**合并器不做语义猜测**。它只做机械对齐：断言自带 `maps_to` 就校验存在性并并入；
-没带就进 `doc_unmapped`。
+| # | 裁定 |
+| --- | --- |
+| **Q-1** | 必须有 `doc sign` 一等签字入口；**不采用**「apply 改读 DB 双轨」——`reviewed_by` 是 ADR-005 的**溯源字段**，换成 DB 状态会丢掉「谁签的」 |
+| **Q-2** | `--schema` 可选；**给了就严格 0 例外**（含父端主键列），把「列名恰好是 id」这条**约定**换成**验证** |
+| **Q-3** | `--at` **保持可选**：`signed_at` 是**事实**（人什么时候签的），不是计算产物；确定性口径 = 同一输入 + 同一组参数 |
+| **N-1** | 改判**必修**：`--stats` 曾能静默覆盖输入提案（数据丢失）；已扩成「输出×输入 + 输出×输出」全检查 |
 
-> 「文档说『套餐』→ 库里 `package_templates`」这条判断**本身需要证据 + 人签**，
-> 不是合并器该干的事。
+## 合并器**不做**的（故意的）
 
-## 待办
+> ⛔ 不做语义猜测：「文档说『套餐』」→ `package_templates` 这条判断**不猜**。
 
-- [ ] Dev 实现 + 真实 fixtures（56 行断言）
-- [ ] QA（重点：AC-007 端到端「不签没有、签了有」）
+理由：不是字符串相似度问题，是业务判断；猜错会「能跑、不报错、结果错」——正是这套系统一直在防的那类失败。
+
+## 4 条非阻断（登记）
+
+| # | 项 | 处置 |
+| --- | --- | --- |
+| N-2 | `signed_at_source`（时间是人给的还是机器取的）未记录 | 下轮 |
+| N-3 | AC-002 的 grep 判据有假阳性（被排除的名字出现在别条 evidence 里） | **下轮修判据**，实现不动 |
+| N-4 | 重跑 merge 会清签名 | **行为正确**（内容变则签名失效），已写进 `--help` + 模块头 |
+| — | `doc ingest` 输出与 develop 逐字节相同 | ✅ QA 复核 sha 一致 |
+
+## 操作手册
+
+见 [`BA/runbook/doc-to-ontology.md`](../runbook/doc-to-ontology.md)：六步命令、**「先合并完再签字」的顺序坑**、以及「合并器做了什么/没做什么」。
