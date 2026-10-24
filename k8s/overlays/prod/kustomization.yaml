@@ -18,17 +18,13 @@ replicas:
   - { name: ontok-portal,  count: 2 }
 
 patches:
-  # 生产环境的基础设施差异：PodDisruptionBudget（至少保一半可用）
   - target: { kind: Deployment, name: ontok-query }
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 2Gi
 
-  - target: { kind: Deployment, name: ontok-query }
-    patch: |-
-      - op: add
-        path: /spec/template/metadata/annotations
-        value:
-          prometheus.io/scrape: "true"
-          prometheus.io/port: "8800"
+  # ⚠️ 这里**故意没有** prometheus.io/scrape 注解 —— 产品当前**没有 /metrics 端点**。
+  #    曾经加过，是假的（抓不到任何东西，只会让面板显示"0 指标"而让人以为在监控）。
+  #    要开监控，先实现 /metrics（见 Deploy/PRODUCTION-READINESS.md §3），再加注解。
+
