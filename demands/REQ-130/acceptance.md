@@ -4,7 +4,7 @@
 
 ### AC-001 · N-3 判据改成按条目匹配
 
-- 新判据断言：`merged.json` 里**不存在** `name == <被排除概念>` 的 concept 条目、**不存在** `subject/object` 含它的 relation 条目
+- 新判据断言：`merged.json` 里**不存在** `name == <被排除概念>` 的 concept 条目、**不存在** relation 条目的任一端**等于**它、**不存在** `semantic`（谓词）**等于**它的 relation 条目
 - ⛔ 不再用整文件 grep
 - 判据：真实 fixture 上跑，**绿**；同时 `excluded_not_alignable == 28` 仍成立
 
@@ -77,3 +77,20 @@ Dev 说：relation 判据把 `payload.semantic`（谓词）也算进身份，比
 | 判据改回整文件 grep | 反向判据 + 真实 fixture 双红：`引文里提到「积分转赠」≠ 条目被并入` |
 | `signed_at_source` 恒 `arg` | `system` 与「arg≠system 可分」两条红 |
 | 去掉老产物兼容 | `ac004_legacy` 红（panic 在 `doc_merge.rs:1872`） |
+
+
+### R-4 · QA 的 4 条非阻断
+
+| # | 项 | 处置 |
+| --- | --- | --- |
+| **N-1** | `doc sign --help` 只写 `arg`/`system`，没列 `legacy` | **必修**（三值必须一致） |
+| **N-2** | relation 判据用 `contains` ⇒ 合法边 `套餐退款→客户` 会**假红** | **必修**：两端与 `semantic` 改**相等**，并要求**绿红成对**验证 |
+| N-3 | `missing(...).unwrap()` 把「fixture 缺失」变成 panic 而非 SKIP | 登记；下轮统一改「响亮 SKIP」（至少不是假绿） |
+| D-1 | AC-001 字面未同步 `semantic` | ✅ 本文件已改（见上） |
+
+**N-2 为什么必修**：这个需求存在的全部理由就是「判据不许假红」。用 `contains` 只是把假阳性从 `evidence.quote` 搬到「端点/谓词包含关系」，**性质一样**。
+
+### 方法学提醒（QA 提的，记进规程）
+
+> **共享 `target/` 做变异会导致缓存假象**（QA 遇到一次，`cargo clean -p ontok` 重建后才对）。
+> ⇒ 变异 worktree 应给**独立 `CARGO_TARGET_DIR`**。
