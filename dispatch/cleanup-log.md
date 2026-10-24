@@ -298,3 +298,13 @@
 - 回收：feature worktree + 分支
 - 结果：`--names` 必填（不传退出码 1、产物不生成）；占位表只警告不拒绝；阈值严格 `>80%`
 - **QA 推翻了我两个说法**（「有一批测试依赖默认值」→ 实际 0 处；「19 调用点」→ 基线 18），已更正进 demand
+
+
+## 2026-10-24 — REQ-129 合并与回收
+
+- 合并：`feature/REQ-129` → `develop` **`267aaec`**（3 个提交：3b7bbb6 + 10e46d3 + 430b3c2）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：`doc merge`（14 并入 / 28 排除 / 14 未映射 / 0 冲突）+ `doc sign`；AC-007 端到端 52→53 关系
+- **文档链路闭环**：ingest → merge → sign → import → review → apply → freeze → TTL
+- 新手册：`BA/runbook/doc-to-ontology.md`（含「先合并后签字」顺序坑）
