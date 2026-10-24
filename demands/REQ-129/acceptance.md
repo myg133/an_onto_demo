@@ -70,3 +70,54 @@ merge → propose import → review decide --accept-all → proposal apply → v
 - **H** 合并规则只许一处实现
 - **G** 变异三元组：doc 条目设 strong / 猜表名 / 去掉 `applicable` ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 首轮交付与裁定（Q-1 / Q-2）
+
+### 首轮结果
+
+| 项 | 值 |
+| --- | --- |
+| 并入 | 14（14 条「客户」断言并进 `customers`，`origin: both`） |
+| 排除不可对齐 | 28（future 14 / example 14） |
+| 未映射 | 14（「客户-下单->订单」没有 `maps_to`） |
+| 冲突 | 0 |
+| 确定性 | merged.json 两次 sha256 相同 |
+| AC-006 | applier **拒绝** `applicable:false` 并点名（exit 1，不是忽略） |
+| AC-007 | 不签：关系 52、grep 0 命中；签一条：**53**、TTL 里出现该边 |
+
+### Q-1 · **签字没有一等入口**（必修）
+
+Dev 自报：AC-007 的「签」是**手工改提案文件的 `reviewed_by`**，`review decide` 写的是 DB 双轨，两者不是一回事。
+
+**裁定：加文件级签字命令**
+
+```bash
+ontok doc sign --file <merged.json> --item <序号或稳定键> --by <签字人> --out <signed.json>
+```
+
+| # | 约束 |
+| --- | --- |
+| 1 | `--by` 必填，匿名拒绝 |
+| 2 | `--item` 支持序号与**稳定键**（如 `relation:订单->套餐模板`），⛔ 不许只按数组下标 |
+| 3 | 只允许签 `doc` / `both` 条目 |
+| 4 | 签完其余字节不变；重复签幂等 |
+| 5 | ⛔ 不许就地改输入（必须给 `--out` 或显式 `--in-place`） |
+| 6 | 确定性逐字节相同 |
+
+**为什么不改成「apply 读 DB 双轨」**：`reviewed_by` 是 ADR-005 的**溯源字段**（谁认可了这条 AI 提案），换成读 DB 状态会丢掉「谁签的」。
+
+### Q-2 · **父端列校验靠约定**（必修）
+
+提案里没有主键列（抽取侧剥掉了 PK），所以 `customers.id` 这类父端列无法校验；Dev 退化成「列在 properties 里」或「列名恰好是 id」+ stderr 警告。
+
+**裁定：加可选 `--schema`**
+
+| 情形 | 行为 |
+| --- | --- |
+| 给了 `--schema` | **严格校验**（含父端主键列），不存在 ⇒ `doc_unmapped`，**0 例外** |
+| 没给 | 保留 fallback，但 `stats` 必须有显式字段 + stderr 警告 |
+
+⇒ **AC-004 订正**：不是「任何情况下都 0 例外」，而是「**给了 `--schema` 时 0 例外**；没给时 fallback 必须可数可见」。
