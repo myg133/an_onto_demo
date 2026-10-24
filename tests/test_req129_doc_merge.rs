@@ -817,7 +817,11 @@ fn ac002_a_legal_superstring_edge_is_not_a_leak() {
 /// 两种布局都认：worktree 内（`<crate>/out/...`）与 workspace 布局
 /// （`<workspace>/code/out/...`，本 worktree 就是这种）。
 fn real_fixture() -> Option<(PathBuf, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // ⚠️ 走**运行时**锚点：裸 `env!("CARGO_MANIFEST_DIR")` 是 `tests/test_anchor_guard.rs`
+    // G-1 明令禁止的写法（只许出现在 `tests/common/source_root.rs`）。
+    // 🔖 这处**不属于 REQ-131**：它是 REQ-131 修掉假红之后**暴露出来的既有红**
+    // （REQ-130 的 7ca0743 引入，基线 `1772507` 上 `test_anchor_guard` 就是红的）。
+    let root = common::crate_root();
     let mut bases = vec![root.to_path_buf()];
     if let Some(parent) = root.parent() {
         bases.push(parent.join("code"));
