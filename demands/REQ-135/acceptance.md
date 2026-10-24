@@ -64,3 +64,30 @@
 - **H** 指标登记只许一处（一张静态表，标签集合固定）
 - **G** 变异：把 `tenant_denied` 恒 0 / 让 `/metrics` 输出租户 id / 审计只写文件 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 交付与裁定（S-1 / S-2）
+
+### S-1 · `code` 标签语义：**用 HTTP 状态码**
+
+Dev 指出：需求表只写 `code`，没定义是「HTTP 状态」还是「业务错误码」，它实现成了 HTTP 状态码（`200/401/403/…`）。
+
+**裁定：保持 HTTP 状态码。** 理由：
+
+| 理由 | 说明 |
+| --- | --- |
+| 标准实践 | `http_requests_total{code}` 是 Prometheus 生态的通行写法 |
+| 基数可控 | 状态码是固定小集合；业务错误码会随产品演进膨胀 |
+| **业务原因已经单独有了** | `ontok_tenant_denied_total{reason}` 就是按业务原因分的（四类拒绝） |
+
+⇒ 两者分工：`requests_total.code` = **协议层**，`tenant_denied_total.reason` = **安全层**。
+⛔ 不要在两个指标里重复同一维度。
+
+### S-2 · `TENANT_UNRESOLVED` 的 live 现场依赖「策略漏登记」
+
+可接受：in-crate 用例已覆盖同一路径；QA 复现时用 `code/query-policy.json` + 查 `:admin_users` 即可（一条 curl）。
+
+**但它暴露了一个真部署缺口**（Dev 的发现 #1）：本体里 96 张表中有 **27 张**没在 `query-policy.json` 的 `perTable`+`publicDimensions` 里登记 ⇒ 查它们 500。
+**上线前必须补齐**（否则客户一问就 500）。已记入上线检查项。
