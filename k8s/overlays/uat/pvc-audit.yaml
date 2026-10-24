@@ -1,0 +1,12 @@
+# 审计日志落盘（stdout + PVC 双写）
+# 为什么还要 PVC：stdout 靠集群采集，采集链路本身也可能断；
+# 合规证据要有一份"进程自己写的"副本。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ontok-audit
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

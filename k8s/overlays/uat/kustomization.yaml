@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# UAT overlay —— 按本集群实测值填（2026-10-24）
+#   context     : anspire-k8-admin@anspire-dify
+#   ingress     : traefik
+#   metadata DB : postgres17-wal-service.middlewave:5432（用户 postgres，库 ontok）
+#   source DB   : postgres-service.middlewave:5432（anspire_open_uat，只读账号）
+namespace: anspire-ontok-uat
+
+resources:
+  - ../../base
+  - pvc-audit.yaml
+  - ingress.yaml
+
+images:
+  - name: ontok
+    newName: aigccontainer.azurecr.cn/REPLACE-ME/ontok   # ← 确认 ACR 仓库路径后替换
+    newTag: 0.1.0
+
+replicas:
+  - { name: ontok-query,   count: 1 }    # UAT 先单副本
+  - { name: ontok-console, count: 1 }
+  - { name: ontok-portal,  count: 1 }
+
+patches:
+  # 审计从 emptyDir 换成 PVC（stdout + PVC 双写，BA 已拍板）
+  - target: { kind: Deployment, name: ontok-console }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/2
+        value:
+          name: audit
+          persistentVolumeClaim:
+            claimName: ontok-audit
+  - target: { kind: Deployment, name: ontok-portal }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/2
+        value:
+          name: audit
+          persistentVolumeClaim:
+            claimName: ontok-audit
+
+  # UAT 资源调小（集群 8C 共享）
+  - target: { kind: Deployment }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 512Mi

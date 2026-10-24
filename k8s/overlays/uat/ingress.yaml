@@ -1,0 +1,49 @@
+# Ingress（traefik）
+#
+# 三个入口分开：
+#   console : 只内网（FDE 用，admin token）
+#   query   : 内网（数字员工调）
+#   portal  : 可对客户（portal token）
+#
+# ⚠️ 域名先占位（*.example.internal / *.example.com），上线前替换为真实域名。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontok-console
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ontok-console.example.internal
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: ontok-console, port: { number: 8899 } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontok-query
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ontok-api.example.internal
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: ontok-query, port: { number: 8800 } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontok-portal
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ontok.example.com
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: ontok-portal, port: { number: 8900 } } } }
