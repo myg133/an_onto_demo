@@ -459,9 +459,10 @@ pub enum DocCmd {
     /// ⚠️ 只签 `origin: doc | both` 的条目；DB 轨条目请走 `review decide`（两条轨有意分开）。
     /// ⚠️ 只写 `reviewed_by` + `signed_at` + `signed_at_source` 三栏，**其余字节不变**；
     /// 重复签同一个人 ⇒ 幂等。
-    /// ⚠️ `signed_at_source` 标的是时间来源：给了 `--at` ⇒ `arg`（声明，可复现）；
-    /// 省略 ⇒ `system`（本次运行的系统时钟，记录）。REQ-129 的老产物没有这一栏 ⇒
-    /// 读回按缺省处理（不报错、也⛔ 不补写）。
+    /// ⚠️ `signed_at_source` 标的是时间来源，**三值**（与模块头一致）：
+    /// 给了 `--at` ⇒ `arg`（人给的声明，可复现）；省略 ⇒ `system`（本次运行的系统时钟，
+    /// 记录）；`legacy` = REQ-129 的老产物没有这一栏，读回时按缺省处理
+    /// （不报错、⛔ 不补写，也⛔ 不写进产物）。
     /// ⚠️ ⛔ 不就地改输入：必须给 `--out`（或显式 `--in-place`）。
     /// ⚠️ 签字时间是事实，所以默认取当前 UTC 时间；要逐字节复现就给 `--at <RFC3339>`。
     #[command(verbatim_doc_comment)]

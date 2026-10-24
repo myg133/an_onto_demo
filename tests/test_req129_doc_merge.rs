@@ -396,24 +396,50 @@ fn sha256_of(bytes: &[u8]) -> String {
 // 「计数没算错、但条目还是被塞进去了」。⛔ 整文件 grep 两条都不是。
 // ──────────────────────────────────────────────────────────
 
-/// N-3 · **按条目**判「这些被排除的概念/谓词有没有混进来」（⛔ 不是整文件 grep）。
+/// N-3 · **被排除断言的「身份」**（不是「词」）。
+///
+/// ⭐ REQ-130 QA：判据**不许假红**，所以不能按词、更不能按 `contains` 判。
+/// 反例是合法的：`套餐退款→客户`（`semantic = 退款`）是一条**合法边** ——
+/// 端点 `套餐退款` 是「退款」的**超串**，谓词又恰好等于被排除谓词。
+/// 按词判会把它判成「被排除的断言并进来了」，这与在 `evidence.quote` 里 grep 到
+/// 「退款」是**同一类错**：假阳性只是从引文搬到了端点。
+///
+/// 所以判据比的是**身份**，不是词：
+///
+/// | 断言 | 身份 | 判法 |
+/// | --- | --- | --- |
+/// | concept | 名字 | 整值**相等** |
+/// | relation | `(subject, predicate, object)` 三元组 | 三项**整值相等**（方向可反） |
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ExcludedIdentity {
+    Concept(String),
+    Relation {
+        subject: String,
+        predicate: String,
+        object: String,
+    },
+}
+
+/// N-3 · **按条目身份**判「被排除的断言有没有变成条目」（⛔ 不是整文件 grep）。
 ///
 /// 只读条目的**身份**字段，⛔ 不读任何 `evidence` / `doc_evidence` / `claim`：
 /// 引文是原文片段，里面提到被排除的词是正常的。条目身份是：
 ///
-/// - `add_entity_type`（概念）：`target` / `payload.display_name` / `payload.key`（**相等**才算）
-/// - `add_link_type`（关系）：`target` 的两端、`payload.from_type` / `to_type`（两端 + 表 key）、
-///   `payload.semantic` / `payload.key`（谓词）—— 这些字段**含**被排除词就算（含谓词，
-///   因为夹具里被排除的关系正是「订单 -[退款]-> 客户」，只靠两端查不出来）。
+/// - `add_entity_type`（概念）：`target` / `payload.display_name` / `payload.key` —— 与
+///   被排除**概念名**比**相等**；
+/// - `add_link_type`（关系）：
+///   - 两端（`target` 的 `A` / `B`、`payload.from_type` / `to_type`）与**概念名**比**相等**；
+///   - `payload.semantic`（谓词）与被排除关系的 `predicate` 比**相等**，且两端与被排除
+///     关系的 `subject` / `object` **整值相等**（三元组身份，方向可反）。
 ///
 /// 返回**违规描述**（空 = 绿）。红了要能点名第几条、哪个字段 —— 否则人只能看到一坨红。
-fn excluded_entries_in(doc: &Value, excluded: &[&str]) -> Vec<String> {
+fn excluded_entries_in(doc: &Value, excluded: &[ExcludedIdentity]) -> Vec<String> {
     let mut leaks: Vec<String> = Vec::new();
     for (i, it) in items(doc).iter().enumerate() {
         let no = i + 1;
         match it["kind"].as_str().unwrap_or("") {
             "add_entity_type" => {
-                let fields = [
+                let names = [
                     ("target", it["target"].as_str().unwrap_or("")),
                     (
                         "payload.display_name",
@@ -421,43 +447,68 @@ fn excluded_entries_in(doc: &Value, excluded: &[&str]) -> Vec<String> {
                     ),
                     ("payload.key", it["payload"]["key"].as_str().unwrap_or("")),
                 ];
-                for term in excluded {
-                    for (field, v) in fields {
-                        // 概念是「名字」，所以判**相等**；引文里那句「支持积分转赠」不该命中。
-                        if v == *term {
+                for ex in excluded {
+                    let ExcludedIdentity::Concept(name) = ex else {
+                        continue;
+                    };
+                    for (field, v) in names {
+                        // 概念是「名字」：整值相等，`客户` 不会命中 `客户经理`。
+                        if !v.is_empty() && v == name {
                             leaks.push(format!(
-                                "第 {no} 条：concept 的 {field} = {v:?} —— 被排除的概念成了一个条目"
+                                "第 {no} 条：concept 的 {field} = {v:?} —— 被排除的概念「{name}」成了一个条目"
                             ));
                         }
                     }
                 }
             }
             "add_link_type" => {
-                // 两端：target 写成 `A→B`（也接受 `->`），再拆成 A / B
-                let mut identity: Vec<(&str, String)> = Vec::new();
-                if let Some(t) = it["target"].as_str() {
-                    identity.push(("target", t.to_string()));
-                    let normalized = t.replace("->", "→");
-                    for half in normalized.split('→').map(str::trim).filter(|s| !s.is_empty()) {
-                        identity.push(("target 的一端", half.to_string()));
-                    }
-                }
-                for f in ["from_type", "to_type", "key"] {
+                // 两端：target 写成 `A→B`（也接受 `->`）
+                let normalized = it["target"].as_str().unwrap_or("").replace("->", "→");
+                let halves: Vec<&str> = normalized
+                    .split('→')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let semantic = it["payload"]["semantic"].as_str().unwrap_or("");
+                // 概念身份用**相等**判：展示名两端 + 表 key（key 是表名，命中不了中文概念名）
+                let mut endpoints: Vec<(&str, &str)> =
+                    halves.iter().map(|h| ("target 的一端", *h)).collect();
+                for f in ["from_type", "to_type"] {
                     if let Some(v) = it["payload"][f].as_str() {
-                        identity.push((f, v.to_string()));
+                        endpoints.push((f, v));
                     }
                 }
-                // 谓词单独点名（别和 from/to 混成一条难读的报错）
-                if let Some(v) = it["payload"]["semantic"].as_str() {
-                    identity.push(("payload.semantic", v.to_string()));
-                }
-                for term in excluded {
-                    for (field, v) in &identity {
-                        if v.contains(term) {
-                            leaks.push(format!(
-                                "第 {no} 条：relation 的 {field} = {v:?} 含被排除的 {term:?}\
-                                 —— 被排除的关系成了一个条目"
-                            ));
+                for ex in excluded {
+                    match ex {
+                        ExcludedIdentity::Concept(name) => {
+                            for (field, v) in &endpoints {
+                                if v == name {
+                                    leaks.push(format!(
+                                        "第 {no} 条：relation 的 {field} = {v:?} —— 被排除的概念「{name}」出现在关系的一端"
+                                    ));
+                                }
+                            }
+                        }
+                        ExcludedIdentity::Relation {
+                            subject,
+                            predicate,
+                            object,
+                        } => {
+                            // 谓词**整值**相等（`退款` ≠ `退款成功`），不是 contains。
+                            if semantic != predicate || halves.len() != 2 {
+                                continue;
+                            }
+                            let (left, right) = (halves[0], halves[1]);
+                            // 推导方向（child→parent）与断言方向（subject→object）可以相反。
+                            if (left == subject && right == object)
+                                || (left == object && right == subject)
+                            {
+                                leaks.push(format!(
+                                    "第 {no} 条：relation 身份 = ({left:?}, {semantic:?}, {right:?}) \
+                                     与被排除断言 ({subject:?}, {predicate:?}, {object:?}) 相同 \
+                                     —— 被排除的关系成了一个条目"
+                                ));
+                            }
                         }
                     }
                 }
@@ -468,10 +519,12 @@ fn excluded_entries_in(doc: &Value, excluded: &[&str]) -> Vec<String> {
     leaks
 }
 
-/// 从断言 JSONL 里推出「被排除的身份词」：`alignable:false` 的概念取 `name`，
-/// 关系取 `predicate`（⛔ 不拿 subject/object：那两端可能正是已并入的合法实体）。
-fn excluded_terms(jsonl: &str) -> Vec<String> {
-    let mut set: BTreeSet<String> = BTreeSet::new();
+/// 从断言 JSONL 里推出「被排除的**身份**」（只收 `alignable:false` 的断言）。
+///
+/// 概念收 `name`；关系收完整三元组 —— ⛔ 不收单个词：拿 `predicate` 当词用，
+/// 合法的 `套餐退款→客户`（`semantic=退款`）就会被误判（假红）。
+fn excluded_identities(jsonl: &str) -> Vec<ExcludedIdentity> {
+    let mut set: BTreeSet<ExcludedIdentity> = BTreeSet::new();
     for (ln, raw) in jsonl.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
@@ -484,13 +537,21 @@ fn excluded_terms(jsonl: &str) -> Vec<String> {
         }
         match v["kind"].as_str().unwrap_or("") {
             "concept" => {
-                if let Some(n) = v["name"].as_str() {
-                    set.insert(n.to_string());
+                if let Some(n) = v["name"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    set.insert(ExcludedIdentity::Concept(n.to_string()));
                 }
             }
             "relation" => {
-                if let Some(p) = v["predicate"].as_str() {
-                    set.insert(p.to_string());
+                let s = v["subject"].as_str().unwrap_or("").trim();
+                let p = v["predicate"].as_str().unwrap_or("").trim();
+                let o = v["object"].as_str().unwrap_or("").trim();
+                // 三元组缺一项就不是可判的身份（这种夹具本身该修，⛔ 不猜）。
+                if !s.is_empty() && !p.is_empty() && !o.is_empty() {
+                    set.insert(ExcludedIdentity::Relation {
+                        subject: s.to_string(),
+                        predicate: p.to_string(),
+                        object: o.to_string(),
+                    });
                 }
             }
             _ => {}
@@ -519,9 +580,20 @@ fn ac002_only_alignable_true_is_merged() {
 
     // AC-002 的判据①（REQ-130 改法）：**按条目身份**判，⛔ 不是整文件 grep
     let doc = read_json(&m);
-    let terms = excluded_terms(&std::fs::read_to_string(&a).expect("读断言"));
-    assert_eq!(terms, vec!["积分转赠".to_string(), "退款".to_string()], "夹具里的被排除身份词");
-    let leaks = excluded_entries_in(&doc, &terms.iter().map(String::as_str).collect::<Vec<_>>());
+    let excluded = excluded_identities(&std::fs::read_to_string(&a).expect("读断言"));
+    assert_eq!(
+        excluded,
+        vec![
+            ExcludedIdentity::Concept("积分转赠".to_string()),
+            ExcludedIdentity::Relation {
+                subject: "订单".to_string(),
+                predicate: "退款".to_string(),
+                object: "客户".to_string(),
+            },
+        ],
+        "夹具里被排除的身份：1 个概念 + 1 条关系三元组"
+    );
+    let leaks = excluded_entries_in(&doc, &excluded);
     assert!(
         leaks.is_empty(),
         "future 的概念 / example 的关系都不许成为条目：{leaks:#?}"
@@ -549,8 +621,11 @@ fn ac002_only_alignable_true_is_merged() {
 ///    真实 fixture 里就是这样（`客户` 的引文：「平台计划在下一财年支持积分转赠」）。
 ///    把判据改回整文件 grep ⇒ 这一半立刻红 —— 这就是 N-3 说的假阳性。
 /// ② **塞条目**：手工往 `items[]` 塞一条 `alignable:false` 的 concept 条目 / 一条
-///    端点含被排除概念的边 / 一条谓词是被排除谓词的边 ⇒ 判据必须**红**，且点名。
-///    把判据改松（只看某个顶层键 / 只数个数）⇒ 这一半红。
+///    端点**等于**被排除概念的边 / 一条**身份三元组与被排除关系相同**的边 ⇒
+///    判据必须**红**，且点名。把判据改松（只看某个顶层键 / 只数个数）⇒ 这一半红。
+///
+/// 与之**成对**的是 [`ac002_a_legal_superstring_edge_is_not_a_leak`]：只做红会过严
+/// （`套餐退款→客户` 是合法边），只做绿会放水。
 ///
 /// 只有①没有② = 判据被改松了没人知道；只有②没有① = 改回 grep 也能绿。
 #[test]
@@ -569,7 +644,12 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
     );
     assert!(o.status.success(), "{}", stderr(&o));
 
-    let terms = ["积分转赠", "退款"];
+    let excluded = excluded_identities(&std::fs::read_to_string(&a).expect("读断言"));
+    assert_eq!(
+        excluded.len(),
+        2,
+        "夹具里应当有 1 个被排除概念 + 1 条被排除关系：{excluded:?}"
+    );
     let base = items(&read_json(&m));
     assert!(!base.is_empty(), "夹具必须真的产出条目，否则这条判据空转");
 
@@ -592,7 +672,7 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
         }));
     let mut bait_doc = read_json(&m);
     bait_doc["items"] = Value::Array(bait);
-    let leaks = excluded_entries_in(&bait_doc, &terms);
+    let leaks = excluded_entries_in(&bait_doc, &excluded);
     assert!(
         leaks.is_empty(),
         "引文里提到「积分转赠」≠ 条目被并入（这正是 N-3 的假阳性）：{leaks:#?}"
@@ -613,7 +693,7 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
     }));
     let mut red = read_json(&m);
     red["items"] = Value::Array(injected);
-    let leaks = excluded_entries_in(&red, &terms);
+    let leaks = excluded_entries_in(&red, &excluded);
     let expect_seq = format!("第 {} 条", base.len() + 1);
     assert!(
         !leaks.is_empty(),
@@ -624,7 +704,7 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
         "报错必须点名是哪一条、哪个字段，实际：{leaks:#?}"
     );
 
-    // ── ②b 关系的**端点**含被排除概念 ⇒ 必须红 ──
+    // ── ②b 关系的**端点等于**被排除概念 ⇒ 必须红 ──
     let mut link_leak = base.clone();
     link_leak.push(json!({
         "kind": "add_link_type",
@@ -638,14 +718,15 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
     }));
     let mut red = read_json(&m);
     red["items"] = Value::Array(link_leak);
-    let leaks = excluded_entries_in(&red, &terms);
+    let leaks = excluded_entries_in(&red, &excluded);
     assert!(
         !leaks.is_empty(),
-        "端点含被排除概念的 relation 条目必须被抓到（subject/object 一侧）"
+        "端点等于被排除概念的 relation 条目必须被抓到（subject/object 一侧）"
     );
     assert!(leaks.iter().any(|l| l.contains("积分转赠")), "{leaks:#?}");
 
-    // ── ②c 关系的**谓词**是被排除词（夹具里「订单 -[退款]-> 客户」）⇒ 必须红 ──
+    // ── ②c 与被排除关系**身份三元组相同**的条目 ⇒ 必须红 ──
+    // 夹具里被排除的关系是「订单 -[退款]-> 客户」：两端 + 谓词整值相等才算命中。
     let mut pred_leak = base.clone();
     pred_leak.push(json!({
         "kind": "add_link_type",
@@ -659,10 +740,74 @@ fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
     }));
     let mut red = read_json(&m);
     red["items"] = Value::Array(pred_leak);
-    let leaks = excluded_entries_in(&red, &terms);
+    let leaks = excluded_entries_in(&red, &excluded);
+    eprintln!("[红] 身份与被排除关系相同的条目，判据结论：{leaks:#?}（必须非空）");
     assert!(
-        leaks.iter().any(|l| l.contains("退款") && l.contains("payload.semantic")),
-        "谓词是被排除词的 relation 条目必须被抓到：{leaks:#?}"
+        leaks
+            .iter()
+            .any(|l| l.contains("退款") && l.contains("身份") && l.contains("订单")),
+        "与被排除关系身份相同的条目必须被抓到（含谓词）：{leaks:#?}"
+    );
+}
+
+/// ⭐ REQ-130 QA · **绿红成对**的另一半：合法的「超串」端点不许假红。
+///
+/// `套餐退款→客户`（`semantic = 退款`）是一条**合法边**：
+/// - 端点 `套餐退款` **包含**「退款」（超串）；
+/// - 谓词**整值等于**被排除关系的谓词「退款」。
+///
+/// 用 `contains` 判（上一版实现）⇒ 假红；按**身份三元组**判 ⇒ 绿。
+/// 只做反向（红）会过严，只做这条（绿）会放水 —— 两条必须成对。
+#[test]
+fn ac002_a_legal_superstring_edge_is_not_a_leak() {
+    let dir = temp_dir("ac002-superstring");
+    let (a, p) = write_fixtures(&dir, "req129_ac002_super");
+    let m = dir.join("merged.json");
+    let o = cli(
+        &[
+            "doc", "merge",
+            "--assertions", a.to_str().unwrap(),
+            "--proposal", p.to_str().unwrap(),
+            "--out", m.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+
+    let excluded = excluded_identities(&std::fs::read_to_string(&a).expect("读断言"));
+    // 底料自证：这条合法边确实同时踩中「超串」与「谓词整值相等」两个坑，
+    // 所以它能抓住 contains 判据（换成相等判据它就该绿）。
+    assert!(
+        "套餐退款".contains("退款"),
+        "夹具必须是真超串，否则这条绿判据证明不了什么"
+    );
+    assert!(
+        excluded.iter().any(|e| matches!(
+            e,
+            ExcludedIdentity::Relation { predicate, .. } if predicate == "退款"
+        )),
+        "被排除关系的谓词必须是「退款」，这条绿判据才有意义：{excluded:?}"
+    );
+
+    let mut all = items(&read_json(&m));
+    all.push(json!({
+        "kind": "add_link_type",
+        "target": "套餐退款→客户",
+        "payload": {
+            "key": "refund_package_customers",
+            "from_type": "refund_package",
+            "to_type": "customers",
+            "semantic": "退款"
+        }
+    }));
+    let mut doc = read_json(&m);
+    doc["items"] = Value::Array(all);
+    let leaks = excluded_entries_in(&doc, &excluded);
+    eprintln!("[绿] 合法边「套餐退款→客户」(semantic=退款) 的判据结论：{leaks:#?}（应为空）");
+    assert!(
+        leaks.is_empty(),
+        "「套餐退款→客户」(semantic=退款) 是**合法边**：端点超串 + 谓词同值都不该判成\
+         「被排除关系并入了」。用 contains 判就会在这里假红：{leaks:#?}"
     );
 }
 
@@ -718,10 +863,10 @@ fn ac002_real_fixture_excludes_28_and_no_excluded_entry() {
     );
 
     // ② 按条目判据
-    let terms = excluded_terms(&std::fs::read_to_string(&a).expect("读断言"));
-    assert_eq!(terms.len(), 2, "真实 fixture 有两类被排除概念：{terms:?}");
+    let excluded = excluded_identities(&std::fs::read_to_string(&a).expect("读断言"));
+    assert_eq!(excluded.len(), 2, "真实 fixture 有两类被排除概念：{excluded:?}");
     let doc = read_json(&m);
-    let leaks = excluded_entries_in(&doc, &terms.iter().map(String::as_str).collect::<Vec<_>>());
+    let leaks = excluded_entries_in(&doc, &excluded);
     assert!(
         leaks.is_empty(),
         "真实 fixture 上不许有被排除的条目：{leaks:#?}"
