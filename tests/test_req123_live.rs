@@ -46,21 +46,15 @@ fn meta_url() -> Option<String> {
     env("ONTOK_DATABASE_URL").or_else(|| env("ONTOK_TEST_DATABASE_URL"))
 }
 
-/// 缺哪个变量就**响亮地**说，然后 `None`（测试提前返回 = SKIP）。
-fn missing(name: &str, test: &str) -> Option<()> {
-    // ⚠️ 直接写 fd 2：libtest 会捕获测试线程上 `eprintln!` 的输出，
-    // 而默认 `cargo test` 只在失败时打印那部分 —— 跳过必须**看得见**（REQ-122 · N2）。
-    use std::io::Write as _;
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "*** SKIP: {test} -- missing {name} ***");
-    None
-}
-
-/// 少任何一个必需变量 ⇒ `None`（并打印缺哪个）。
+/// 缺哪个变量就**响亮地**说，然后提前返回（SKIP）。
+///
+/// 唯一实现在 [`common::skip::missing`]（REQ-131）：默认打一行 `*** SKIP: … ***`
+/// 后**正常返回**；`ONTOK_REQUIRE_FIXTURES=1` 时**失败**（CI 用）。
 fn require(test: &str, names: &[&str]) -> Option<()> {
     for n in names {
         if env(n).is_none() {
-            return missing(n, test);
+            common::skip::missing(n, test);
+            return None;
         }
     }
     Some(())
@@ -96,7 +90,7 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
     let pool = match ontok::db::pool::connect(&meta).await {
         Ok(p) => p,
         Err(e) => {
-            missing(&format!("可连的 ONTOK_DATABASE_URL（{e}）"), "build_service");
+            common::skip::missing(&format!("可连的 ONTOK_DATABASE_URL（{e}）"), "build_service");
             return None;
         }
     };
@@ -217,16 +211,18 @@ async fn mcp(svc: &Arc<QueryService>, token: &str, line: &str) -> Value {
 async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
     let _live = one_at_a_time();
     let test = "ac004_rest_and_mcp_receipts_are_byte_identical";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -310,16 +306,18 @@ async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
 async fn b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt() {
     let _live = one_at_a_time();
     let test = "b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -412,7 +410,7 @@ async fn b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt() {
 async fn ac003_a_never_sees_another_tenants_rows() {
     let _live = one_at_a_time();
     let test = "ac003_a_never_sees_another_tenants_rows";
-    if require(
+    let missing_required = require(
         test,
         &[
             "ONTOK_REQ123_SCHEMA",
@@ -421,12 +419,13 @@ async fn ac003_a_never_sees_another_tenants_rows() {
             "ONTOK_SOURCE_DATABASE_URL",
         ],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性），同上面那几条。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -469,16 +468,18 @@ async fn ac003_a_never_sees_another_tenants_rows() {
 async fn ac010_five_real_queries_return_receipts() {
     let _live = one_at_a_time();
     let test = "ac010_five_real_queries_return_receipts";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -512,16 +513,18 @@ async fn ac010_five_real_queries_return_receipts() {
 async fn ac004_the_same_error_code_on_both_protocols() {
     let _live = one_at_a_time();
     let test = "ac004_the_same_error_code_on_both_protocols";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -551,16 +554,18 @@ async fn ac004_the_same_error_code_on_both_protocols() {
 async fn ac001_catalog_and_describe_are_identical_across_protocols() {
     let _live = one_at_a_time();
     let test = "ac001_catalog_and_describe_are_identical_across_protocols";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -608,16 +613,18 @@ async fn ac001_catalog_and_describe_are_identical_across_protocols() {
 async fn ac007_audit_has_no_token_and_no_query_text() {
     let _live = one_at_a_time();
     let test = "ac007_audit_has_no_token_and_no_query_text";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -657,16 +664,18 @@ async fn ac007_audit_has_no_token_and_no_query_text() {
 async fn ac005_the_token_row_cap_cannot_be_raised() {
     let _live = one_at_a_time();
     let test = "ac005_the_token_row_cap_cannot_be_raised";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
@@ -694,16 +703,18 @@ async fn ac005_the_token_row_cap_cannot_be_raised() {
 async fn ac005_a_timeout_is_reported_as_timeout() {
     let _live = one_at_a_time();
     let test = "ac005_a_timeout_is_reported_as_timeout";
-    if require(
+    let missing_required = require(
         test,
         &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
     )
-    .is_none()
-        || meta_url().is_none()
-    {
-        if meta_url().is_none() {
-            missing("ONTOK_DATABASE_URL", test);
-        }
+    .is_none();
+    let missing_db = meta_url().is_none();
+    // ⚠️ 一条用例只打**一行**标记（REQ-131 · 可数性）：`require` 已经说过缺什么时，
+    // 不再补一句 `ONTOK_DATABASE_URL` —— 否则 `grep -c` 数出来的不是用例数。
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
         return;
     }
     let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();

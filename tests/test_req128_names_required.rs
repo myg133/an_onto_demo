@@ -23,6 +23,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod common;
+
 const BIN: &str = env!("CARGO_BIN_EXE_ontok-propose");
 
 /// 一份**正常**翻译表：`fixtures/schema-req109.json` 的 3 张表都有中文名。
@@ -39,7 +41,11 @@ const REAL_NAMES: &str = r#"{
 }"#;
 
 fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // ⚠️ 走**运行时**锚点：裸 `env!("CARGO_MANIFEST_DIR")` 是 `tests/test_anchor_guard.rs`
+    // G-1 明令禁止的写法（只许出现在 `tests/common/source_root.rs`）。
+    // 🔖 这处**不属于 REQ-131**：它是 REQ-131 修掉假红之后**暴露出来的既有红**
+    // （基线 `1772507` 上 `test_anchor_guard` 就是红的），按 BA 裁定在本分支顺手修掉。
+    common::crate_root()
 }
 
 fn schema() -> PathBuf {

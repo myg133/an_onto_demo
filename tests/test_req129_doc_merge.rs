@@ -18,12 +18,19 @@
 //! # 为什么端到端缺库时是 SKIP 而不是 `#[ignore]`
 //!
 //! `#[ignore]` 会让 `cargo test` 看起来全绿而实际上一条端到端都没跑。这里按本仓
-//! 既有口径（`tests/test_req127_live.rs`）：缺变量就往 **fd 2** 打一行
-//! `*** SKIP: <测试名> -- missing <ENV> ***` 并提前返回 —— 跑没跑过一眼能看出来。
+//! 统一口径（REQ-131 · `tests/common/skip.rs`）：缺变量就往 **fd 2** 打一行
+//! `*** SKIP: <测试名> -- 缺 <夹具> -- 这条判据没有执行，不是通过 ***` 并**正常返回**
+//! —— 跑没跑过一眼能看出来（`Select-String '\*\*\* SKIP:'` 能数条数）。
+//!
+//! ⚠️ **CI 用 `ONTOK_REQUIRE_FIXTURES=1`**：同样的缺失 ⇒ 用例**失败**
+//! （「CI 要求夹具必须存在」），跳过就混不过去。
 //!
 //! ```text
 //! $env:ONTOK_TEST_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/<库>"
 //! cargo test --test test_req129_doc_merge
+//!
+//! # CI / 想强制「夹具必须存在」时
+//! $env:ONTOK_REQUIRE_FIXTURES="1"; cargo test --test test_req129_doc_merge
 //! ```
 
 use std::collections::BTreeSet;
@@ -32,20 +39,14 @@ use std::process::Output;
 
 use serde_json::{json, Value};
 
+mod common;
+
 // ──────────────────────────────────────────────────────────
 // 夹具与夹具工具
 // ──────────────────────────────────────────────────────────
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// 缺哪个变量就**响亮地**说，然后 `None`（测试提前返回 = SKIP）。
-fn missing(name: &str, test: &str) -> Option<()> {
-    use std::io::Write as _;
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "*** SKIP: {test} -- missing {name} ***");
-    None
 }
 
 fn meta_url() -> Option<String> {
@@ -816,7 +817,11 @@ fn ac002_a_legal_superstring_edge_is_not_a_leak() {
 /// 两种布局都认：worktree 内（`<crate>/out/...`）与 workspace 布局
 /// （`<workspace>/code/out/...`，本 worktree 就是这种）。
 fn real_fixture() -> Option<(PathBuf, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // ⚠️ 走**运行时**锚点：裸 `env!("CARGO_MANIFEST_DIR")` 是 `tests/test_anchor_guard.rs`
+    // G-1 明令禁止的写法（只许出现在 `tests/common/source_root.rs`）。
+    // 🔖 这处**不属于 REQ-131**：它是 REQ-131 修掉假红之后**暴露出来的既有红**
+    // （REQ-130 的 7ca0743 引入，基线 `1772507` 上 `test_anchor_guard` 就是红的）。
+    let root = common::crate_root();
     let mut bases = vec![root.to_path_buf()];
     if let Some(parent) = root.parent() {
         bases.push(parent.join("code"));
@@ -836,7 +841,7 @@ fn real_fixture() -> Option<(PathBuf, PathBuf)> {
 fn ac002_real_fixture_excludes_28_and_no_excluded_entry() {
     const NAME: &str = "ac002_real_fixture_excludes_28_and_no_excluded_entry";
     let Some((a, p)) = real_fixture() else {
-        return missing("out/req116/cache/assertions.jsonl", NAME).unwrap();
+        return common::skip::missing("out/req116/cache/assertions.jsonl（+ out/proposal.json）", NAME);
     };
     let dir = temp_dir("ac002-real");
     let m = dir.join("merged.json");
@@ -1107,7 +1112,7 @@ fn run_to_ttl(url: &str, merged: &Path, tag: &str) -> String {
 fn ac006_applier_refuses_an_inapplicable_item_and_names_it() {
     let _ = match meta_url() {
         Some(u) => u,
-        None => return missing("ONTOK_TEST_DATABASE_URL", "ac006_applier_refuses_an_inapplicable_item_and_names_it").unwrap(),
+        None => return common::skip::missing("ONTOK_TEST_DATABASE_URL", "ac006_applier_refuses_an_inapplicable_item_and_names_it"),
     };
     let url = meta_url().unwrap();
     let dir = temp_dir("ac006");
@@ -1175,7 +1180,7 @@ fn ac006_applier_refuses_an_inapplicable_item_and_names_it() {
 fn ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it() {
     let _ = match meta_url() {
         Some(u) => u,
-        None => return missing("ONTOK_TEST_DATABASE_URL", "ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it").unwrap(),
+        None => return common::skip::missing("ONTOK_TEST_DATABASE_URL", "ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it"),
     };
     let url = meta_url().unwrap();
     let dir = temp_dir("ac007");
