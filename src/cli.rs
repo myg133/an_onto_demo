@@ -716,9 +716,21 @@ pub enum QueryCmd {
     /// GET  /api/catalog?page=1&page_size=50
     /// GET  /api/describe?name=:customers
     /// GET  /api/ontology.ttl   ⭐整份 OWL（Turtle）：默认**客户视图**；`?view=model` 建模视图
-    /// GET  /api/health         免 token，只给版本与语法版本
+    /// GET  /api/health         免 token：产品版本 + 项目名 + **本体**版本 + 语法版本（两种模式都有）
     /// POST /mcp                JSON-RPC 2.0（initialize / tools/list / tools/call / resources/list / resources/read）
     /// GET  /mcp                SSE 流（服务端消息；空闲超时会主动断开）
+    ///
+    /// ⭐ REQ-139 · `/api/health` 里的 `version` 与 `ontology_version` 是**两件事**，⛔ 别混读：
+    ///
+    /// | 字段 | 含义 | 例 |
+    /// | --- | --- | --- |
+    /// | `version` | **产品**版本 = 这个 `ontok` 二进制的 `CARGO_PKG_VERSION`（升级软件才变） | `"0.1.0"` |
+    /// | `ontology_version` | **本体**版本 = `--version` 指向的、已冻结的快照版本号（整数，`ontok version freeze` 才变） | `2` |
+    /// | `project` | 项目名（`--project`）；它本来就出现在 TTL 与 `/api/catalog` 里 | `"ops360"` |
+    ///
+    /// `project` / `ontology_version` 与 `GET /api/catalog` 的 `project` / `version` 是**同一对
+    /// 字段**（同一来源，⛔ 不在两处各算一次）；普通模式与 `--ontology-only` **都有**这两个字段。
+    /// ⛔ health 仍然**不给**租户 id / 连接串 / 表名 / 口令（能判断「是哪套部署」就够了）。
     ///
     /// MCP 工具：catalog / describe / sparql_query / sample。
     /// MCP 资源：`ontok://ontology/customer.ttl`（客户视图）/ `ontok://ontology/model.ttl`（建模视图），
@@ -755,7 +767,7 @@ pub enum QueryCmd {
     ///
     /// | 端点 | 普通模式 | `--ontology-only` |
     /// | --- | --- | --- |
-    /// | `GET /api/health` | 200 | 200 + `"mode":"ontology-only"` |
+    /// | `GET /api/health` | 200 + `project` / `ontology_version` | 200 + `project` / `ontology_version` + `"mode":"ontology-only"` |
     /// | `GET /api/catalog` | 只列**可查**的类/关系（schema + R2RML 对账） | **直接读快照**：类/属性/关系**全列**；关系带 `evidence_level`（= `ontok:joinVerified`：`true`/`inherit`/`false`/**`unverified`**），类带 `display_name`；`counts` 里**没有** `excluded_relations` |
     /// | `GET /api/describe` | 类/属性详情（含租户口径） | 同上，另给 `display_name` / `key`；`tenant.mode = not_applicable`（没有数据源） |
     /// | `GET /api/ontology.ttl` | 同 CLI 导出 | **与 `ontok ontology export --project <p> --version <v>`（不带 `--schema`）逐字节相同**；`?view=model` 是同一份无 schema/tenancy 的建模视图 |
