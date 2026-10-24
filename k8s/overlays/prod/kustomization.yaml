@@ -6,10 +6,11 @@ namespace: ontok
 
 resources:
   - ../../base
+  - pvc-audit.yaml
 
 images:
   - name: ontok
-    newName: registry.example.com/ontok
+    newName: aigccontainer.azurecr.cn/an_onto/ontok
     newTag: 0.1.0
 
 replicas:
@@ -24,7 +25,62 @@ patches:
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 2Gi
 
-  # ⚠️ 这里**故意没有** prometheus.io/scrape 注解 —— 产品当前**没有 /metrics 端点**。
-  #    曾经加过，是假的（抓不到任何东西，只会让面板显示"0 指标"而让人以为在监控）。
-  #    要开监控，先实现 /metrics（见 Deploy/PRODUCTION-READINESS.md §3），再加注解。
+  # 审计落 PVC（BA 拍板：stdout + PVC 双写）
+  # stdout 靠集群采集；PVC 是进程自己写的那份证据。
+  # volumes 顺序在 base 里是 config(0) / secrets(1) / audit(2)。
+  - target: { kind: Deployment, name: ontok-console }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/2
+        value:
+          name: audit
+          persistentVolumeClaim:
+            claimName: ontok-audit
+  - target: { kind: Deployment, name: ontok-portal }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/2
+        value:
+          name: audit
+          persistentVolumeClaim:
+            claimName: ontok-audit
 
+  # ✅ 这次是真的：/metrics 由 REQ-135 实现（此前曾写过假注解，已删）
+  # ⚠️ /metrics 免 token —— 必须用 NetworkPolicy 只放行监控命名空间，
+  #    并确保 ingress 不暴露该路径。
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-query }
+      spec:
+        template:
+          metadata:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: "/metrics"
+              prometheus.io/port: "8800"
+  - target: { kind: Deployment, name: ontok-console }
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-console }
+      spec:
+        template:
+          metadata:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: "/metrics"
+              prometheus.io/port: "8899"
+  - target: { kind: Deployment, name: ontok-portal }
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-portal }
+      spec:
+        template:
+          metadata:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: "/metrics"
+              prometheus.io/port: "8900"
