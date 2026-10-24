@@ -115,3 +115,6 @@ podman build -t ontok:0.1.0 -f Dockerfile . \
 | `cargo` 卡在 `Updating crates.io index` | `index.crates.io` 不可达 | Dockerfile 已配阿里云镜像 |
 | rustup 下载极慢 | 官方源限速 | Dockerfile 已改用 `rsproxy.cn` |
 | 大镜像拉取 `TLS handshake timeout` | 部分镜像源 R2 后端不稳 | 只拉小镜像 / 已本地化的基础镜像 |
+| `bun: libstdc++.so.6 not found` | alpine 不带 C++ 运行库 | 已修：`apk add libstdc++ libgcc` |
+| `pi: env: can't execute 'node'` | pi 的 shebang 指向 node，镜像只有 bun | 已修：shebang 改 `#!/usr/local/bin/bun` |
+| `controller 'pids' is not available` | WSL 把 podman 放进 `non-systemd` 子树且未开 pids | `podman machine stop && start`；持续复现则见 `LOCAL-ENV-ISSUES.md` |

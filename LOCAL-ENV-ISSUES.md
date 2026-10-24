@@ -98,3 +98,53 @@ apk add --no-cache ca-certificates tzdata bash curl unzip libstdc++ libgcc
 
 **原因**：磁盘修复/时钟偏移导致时间戳异常。
 **处理**：`podman machine stop && start` 后恢复正常；**数据不受影响**（在卷里）。
+
+
+---
+
+## 问题 4 · `pi` 报 `env: can't execute 'node'`（镜像里只有 bun）
+
+### 症状
+
+```
+$ podman run --rm --entrypoint sh ontok:0.1.0 -c "pi --version"
+env: can't execute 'node': No such file or directory
+```
+
+### 根因
+
+`pi` / `pi-acp` 的 bin 第一行是 `#!/usr/bin/env node`，而镜像里**只装 bun 不装 node**。
+
+### 修法（已进 Dockerfile）
+
+实测 `bun <cli.js> --version` 能正常跑 pi（输出 `1.4.0`）⇒ 把 shebang 指到 bun：
+
+```dockerfile
+RUN sed -i '1s|^#!/usr/bin/env node$|#!/usr/local/bin/bun|' \
+        .../pi-coding-agent/dist/bundle/cli.js \
+        .../pi-acp/dist/index.js \
+ && pi --version     # 构建期自检
+```
+
+### 为什么不是装 node
+
+| 方案 | 判断 |
+| --- | --- |
+| `apk add nodejs`（3.20 = node 20） | ⚠️ pi 的 `engines` 要 **≥22.19**，装了也可能不对 |
+| 从 edge 装 node 22 | 可行，但 +50MB、双运行时 |
+| **shebang 指向 bun** | ✅ 实测可用，镜像小、单一运行时 |
+
+**退路**：若某子命令内部 `spawn node`，再加 `apk add nodejs`。
+
+---
+
+## 最终验证（2026-10-24 实测通过）
+
+```
+$ podman run --rm --entrypoint sh ontok:0.1.0 -c "bun --version; pi --version; ontok --help | head -1"
+1.4.4
+1.4.0
+FDE 本体论平台 · 本体内核（切片 1，只读闭环）
+```
+
+`pi-acp` 无输出是**正常**：它是 stdio 服务，喂 EOF 即退出，`--help` 不打印。
