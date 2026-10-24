@@ -802,6 +802,10 @@ pub enum QueryCmd {
         /// 只要 `--project` / `--version`（已冻结）+ `--tokens`；catalog/describe 直接读快照、
         /// `/api/ontology.ttl` 与 CLI 导出逐字节相同、SPARQL/取样恒 503 `NO_DATA_SOURCE`。
         /// ⛔ 与 `--schema` 互斥（同时给 ⇒ 拒绝启动并说明原因）。
+        ///
+        /// ⭐ REQ-137 · 本模式的 token 表里**不许写 `tenant`**（必须缺省）：这里没有业务库、
+        /// 没有租户概念，填了 ⇒ 拒绝启动。⛔ 不要用全 0 UUID 之类的假租户让它起来 ——
+        /// 那会让审计日志里出现一个「看起来真实」的租户。
         #[arg(long)]
         ontology_only: bool,
         /// ⭐ 租户标注声明（与 `ontology export --tenancy` 同一份）—— **只在 `?view=model` 生效**。

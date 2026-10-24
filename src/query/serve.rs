@@ -331,7 +331,9 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             args.tokens
         )
     })?;
-    let tokens = TokenTable::parse(&raw)
+    // ⭐ REQ-137 · token 表**按模式**校验：普通模式 `tenant` 必填（原样）；本体模式
+    // `tenant` 必须缺省（填了 ⇒ 这里就拒绝启动，⛔ 不带着假租户起来）。
+    let tokens = TokenTable::parse_for_mode(&raw, mode)
         .map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))?;
 
     // ── ④ 声明 ──────────────────────────────────────────────
