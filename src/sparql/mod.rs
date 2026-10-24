@@ -61,7 +61,7 @@ use serde::Serialize;
 use sqlx::postgres::PgPool;
 
 pub use error::QueryError;
-pub use plan::{PlanInput, Planned, PublicDimensionUsed, TenantApplied};
+pub use plan::{ColumnKind, PlanInput, Planned, ProjectedColumn, PublicDimensionUsed, TenantApplied};
 pub use policy::QueryPolicy;
 
 /// 查询回执（AC-009 的形状）。
@@ -85,6 +85,13 @@ pub struct QueryResult {
     pub public_dimensions: Vec<PublicDimensionUsed>,
     /// 可行动提示：截断 / LIMIT 被压 / 覆盖范围不完整（`coverage != complete`）等。
     pub warnings: Vec<String>,
+    /// ⭐ REQ-140 · 每个投影列的 `var → 类 / 谓词 / xsd`（[`ProjectedColumn`]）。
+    ///
+    /// `#[serde(skip)]` 是**硬约束**：本类型的序列化就是 I13 的 CLI 回执，
+    /// 它必须与 REQ-122 逐字节相同（多一个字段就红）。JSON-LD 渲染直接读字段，
+    /// 不走序列化。
+    #[serde(skip)]
+    pub projection: Vec<ProjectedColumn>,
 }
 
 /// 规划 + 执行。**唯一**入口。
@@ -148,6 +155,8 @@ fn receipt(planned: plan::Planned, rows: exec::Rows) -> QueryResult {
         tables: planned.tables,
         public_dimensions: planned.public_dimensions,
         warnings,
+        // ⭐ REQ-140 · 列的 RDF 身份原样带出（⛔ 不在这里重新推导一遍）。
+        projection: planned.projection,
     }
 }
 

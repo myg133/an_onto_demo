@@ -2052,6 +2052,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/query/mod.rs", "tokens"),
     // ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（出口 I25 登记在 OUTLETS）。
     ("src/query/mod.rs", "ttl"),
+    // ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；**不新增响应写点** ——
+    // 复用 I14 的同一个 `Json(` 写点，只换 Content-Type，见 `query::http::respond_jsonld`）。
+    ("src/query/mod.rs", "jsonld"),
     // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),

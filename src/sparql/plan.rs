@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::domain::r2rml::{MappedClass, MappedJoin, MappedProperty, R2rmlMapping};
-use crate::domain::ttl::SchemaTypes;
+use crate::domain::ttl::{SchemaTypes, XsdType};
 
 use super::error::QueryError;
 use super::policy::{QueryPolicy, TableDecision};
@@ -71,11 +71,51 @@ pub struct PublicDimensionUsed {
     pub reason: String,
 }
 
+/// ⭐ REQ-140 · 一个投影列**在 RDF 里是什么**。
+///
+/// # 为什么必须由规划器说出来（⛔ 不从列名猜）
+///
+/// 「这一列是实例 IRI 还是字面量」「它的谓词本地名是什么」「它的 xsd 类型是什么」——
+/// 三件事在**绑定变量的那一刻**才确定，而列名里一个都没有：
+///
+/// - `?m` 的值是 `https://…#llm_model/<uuid>`，列名只有 `m`；
+/// - 谓词本地名是 `llm_model__model_name`（`rr:predicate`），⛔ 不是列名 `model_name`；
+/// - xsd 类型来自 `rr:datatype`（模型轨的 range 推断），⛔ 不是 `::text`。
+///
+/// 所以 JSON-LD 渲染只吃这里的事实（[`crate::query::jsonld`]），字符串前缀只做兜底。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnKind {
+    /// 类变量：值就是**完整实例 IRI**（`iri_sql` 拼的 `{ontology_iri}#{类}/{主键}`）。
+    ///
+    /// `class` = 类 key（= 表名），`class_local` = RDF 类本地名（`:<local>`，与 TTL 同一个）。
+    Node { class: String, class_local: String },
+    /// 数据类型属性的值：类 key / 列名 / `rr:predicate` 本地名 / `rr:datatype` 的本地名。
+    Literal {
+        class: String,
+        column: String,
+        predicate: String,
+        xsd: &'static str,
+    },
+    /// 聚合（COUNT / SUM / MIN / MAX / AVG）：**没有实体可挂** ⇒ 进 `summary`。
+    Aggregate { func: &'static str },
+    /// 理论上不可达（投影项要么带聚合函数，要么有取值）；渲染侧与 [`Self::Aggregate`] 同路。
+    Unknown,
+}
+
+/// ⭐ REQ-140 · 投影列 = 列名 + [`ColumnKind`]（与 [`Planned::columns`] 同序同长）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectedColumn {
+    pub name: String,
+    pub kind: ColumnKind,
+}
+
 /// 规划结果 —— SQL 已就绪，等执行。
 #[derive(Debug, Clone)]
 pub struct Planned {
     pub sql: String,
     pub columns: Vec<String>,
+    /// ⭐ REQ-140 · 每个投影列的 `var → 类 / 谓词 / xsd` 映射（JSON-LD 子图的**唯一**类型来源）。
+    pub projection: Vec<ProjectedColumn>,
     /// 涉及的表（FROM 顺序，去重）。
     pub tables: Vec<String>,
     pub tenant_applied: Vec<TenantApplied>,
@@ -947,10 +987,21 @@ impl<'a> Planner<'a> {
         let tables: Vec<String> =
             self.nodes.iter().map(|n| n.class_key.clone()).collect();
         let columns: Vec<String> = items.iter().map(|(n, _, _, _)| n.clone()).collect();
+        // ⭐ REQ-140 · 列的 RDF 身份（与 `columns` 同序同长）：JSON-LD 只用这一份事实，
+        // ⛔ 不从列名反猜「谁是实体、谁是什么谓词」。
+        let projection: Vec<ProjectedColumn> = items
+            .iter()
+            .map(|(name, _, func, val)| ProjectedColumn {
+                name: name.clone(),
+                kind: self.column_kind(*func, val.as_ref()),
+            })
+            .collect();
+        debug_assert_eq!(columns.len(), projection.len());
 
         Ok(Planned {
             sql,
             columns,
+            projection,
             tables,
             tenant_applied: self.tenant_applied.clone(),
             public_dimensions: self.public_used.clone(),
@@ -1048,6 +1099,50 @@ impl<'a> Planner<'a> {
 
     fn data_type_of(&self, c: &ColRef) -> Option<&str> {
         self.schema.data_type(&self.nodes[c.node].class_key, &c.column)
+    }
+
+    /// ⭐ REQ-140 · 一个投影列的 RDF 身份（[`ColumnKind`]）。
+    ///
+    /// 谓词本地名与 `rr:datatype` 都**查映射**（同一个 `MappedProperty`）——
+    /// 与 `classify_predicate` 认谓词用的是同一份数据，⛔ 不另算一份命名规则。
+    /// 兜底分支（映射里找不到该列）只在 `SELECT *` 投影出主键列这类情况出现：
+    /// 谓词名退回 `{类}__{列}`（与 R2RML 的命名同形），类型退回 `xsd:string`。
+    fn column_kind(&self, func: Option<AggFunc>, val: Option<&Val>) -> ColumnKind {
+        if let Some(f) = func {
+            return ColumnKind::Aggregate { func: f.as_str() };
+        }
+        match val {
+            Some(Val::Node(n)) => {
+                let class_key = self.nodes[*n].class_key.clone();
+                let class_local = self
+                    .mapping
+                    .class(&class_key)
+                    .map(|c| c.class_local.clone())
+                    .unwrap_or_else(|| class_key.clone());
+                ColumnKind::Node { class: class_key, class_local }
+            }
+            Some(Val::Col(c)) => {
+                let class_key = self.nodes[c.node].class_key.clone();
+                let mapped = self
+                    .mapping
+                    .class(&class_key)
+                    .and_then(|m| m.properties.iter().find(|p| p.column == c.column));
+                let (predicate, xsd) = match mapped {
+                    Some(p) => (p.local.clone(), p.xsd.key()),
+                    None => (
+                        format!("{class_key}__{}", c.column),
+                        XsdType::String.key(),
+                    ),
+                };
+                ColumnKind::Literal {
+                    class: class_key,
+                    column: c.column.clone(),
+                    predicate,
+                    xsd,
+                }
+            }
+            None => ColumnKind::Unknown,
+        }
     }
 
     fn value_expr(&self, v: &Val) -> Result<String, QueryError> {

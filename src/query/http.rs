@@ -28,6 +28,11 @@
 //! 两者都登记在 `domain::pipeline::OUTLETS`（I14 / I15 / I16），
 //! `tests/test_req107_source_enumeration.rs` 的 T1 会逐个对账。
 //!
+//! ⭐ REQ-140 · JSON-LD（`format=jsonld`）**没有**第三个写点：它复用 [`respond`]
+//! （同一个 `Json(`/同一个序列化器），只把 `Content-Type` 改成 `application/ld+json`
+//! —— 见 [`respond_jsonld`]。于是「出口表」不需要登记新出口，也不存在
+//! 「同一个回执有两套序列化」。
+//!
 //! # 已知限制
 //!
 //! - GET `/mcp` 的 SSE 是**服务端单向**流：只发 `notifications/message` 与注释型
@@ -56,9 +61,9 @@ use super::error::ApiError;
 use super::tokens::TokenEntry;
 use super::ttl::TtlView;
 use super::{
-    audit_anonymous, audit_ttl, run_catalog, run_describe, run_sample, run_sparql, Caller,
-    CatalogRequest, DescribeRequest, Protocol, QueryService, SampleRequest, SparqlRequest,
-    SYNTAX_VERSION,
+    audit_anonymous, audit_ttl, run_catalog, run_describe, run_sample, run_sparql, run_sparql_ex,
+    Caller, CatalogRequest, DescribeRequest, Protocol, QueryFormat, QueryService, SampleRequest,
+    SparqlRequest, SYNTAX_VERSION,
 };
 
 /// 请求体上限（一条 SPARQL 远小于这个数；挡住「用超大 body 拖垮进程」）。
@@ -280,10 +285,25 @@ async fn get_metrics(State(svc): State<Arc<QueryService>>) -> Response {
     svc.metrics.http_response()
 }
 
-/// `POST /api/sparql` —— body `{query, max_rows?, tenant?}`。
+/// `POST /api/sparql` —— body `{query, max_rows?, tenant?, format?}`。
+///
+/// ⭐ REQ-140 · **回执格式**（三处入口，⚠️ 默认零变化）：
+///
+/// | 入口 | 怎么要 JSON-LD |
+/// | --- | --- |
+/// | REST | `Accept: application/ld+json` **或** `?format=jsonld`（或 body 里的 `format`） |
+/// | MCP | `sparql_query` 的 `arguments.format = "jsonld"` |
+///
+/// 优先级：**显式 `?format=` > body 的 `format` > `Accept` 头**（后两者冲突时以更具体的
+/// 那个为准；`Accept: */*` **不算**要 JSON-LD —— 否则 curl / 浏览器的默认头会把默认行为
+/// 改掉，AC-009 就守不住了）。
+///
+/// ⛔ 默认（三处都不写）走 [`QueryFormat::Rows`]，响应体与 REQ-123 **逐字节相同**。
 async fn post_sparql(
     State(svc): State<Arc<QueryService>>,
     Extension(auth): Extension<Auth>,
+    headers: HeaderMap,
+    Query(q): Query<BTreeMap<String, String>>,
     body: Bytes,
 ) -> Response {
     let started = Instant::now();
@@ -305,12 +325,115 @@ async fn post_sparql(
             return respond(e.status, e.body());
         }
     };
+    // ⭐ REQ-140 · 格式在**执行之后**才用得上，但参数错要在执行之前报（省一次查询）。
+    let format = match sparql_format(&q, &headers, req.format) {
+        Ok(f) => f,
+        Err(e) => {
+            super::audit_call(&svc, "sparql", &caller, None, None, started, e.code, None);
+            return respond(e.status, e.body());
+        }
+    };
+    // ⭐ REQ-140 · 默认（rows）**就是原来那一行**：`run_sparql` → `Json(receipt)`。
+    // JSON-LD 是另一条渲染分支，但**同一次查询**（`run_sparql_ex` 只是多交出列的 RDF 身份）。
+    if format.is_jsonld() {
+        return match run_sparql_ex(&svc, &caller, req).await {
+            Ok(out) => respond_jsonld(super::jsonld::render(
+                &out.receipt,
+                &out.projection,
+                &svc.ontology_iri,
+            )),
+            Err(e) => respond(e.status, e.body()),
+        };
+    }
     match run_sparql(&svc, &caller, req).await {
         // ⭐ 回执的**唯一**序列化路径：`Json(receipt)` 与 MCP 的
         // `content[0].text = receipt.serialize()` 出自同一个 `Serialize` 实现。
         Ok(receipt) => respond(StatusCode::OK, receipt),
         Err(e) => respond(e.status, e.body()),
     }
+}
+
+/// ⭐ REQ-140 · `?format=` / body / `Accept` 三处的**唯一**解析（优先级见 [`post_sparql`]）。
+///
+/// 拼错 / 不认识的 query 参数一律 **400**（与 `/api/ontology.ttl` 的 `?view=` 同一条口径：
+/// ⛔ 不静默回退到默认 —— 那样调用方会拿着一个「行回执」以为拿到了图）。
+fn sparql_format(
+    q: &BTreeMap<String, String>,
+    headers: &HeaderMap,
+    from_body: Option<QueryFormat>,
+) -> Result<QueryFormat, ApiError> {
+    let mut explicit: Option<QueryFormat> = None;
+    for (k, v) in q {
+        match k.as_str() {
+            "format" => {
+                explicit = Some(QueryFormat::parse(v).ok_or_else(|| {
+                    ApiError::bad_request(
+                        format!("format 只认 rows / jsonld，收到 {v:?}。"),
+                        "行回执（默认）不写 `format`；要 JSON-LD 上下文子图写 `?format=jsonld`\
+                         （或 `Accept: application/ld+json`）。⛔ 拼错不会静默回退。",
+                    )
+                })?)
+            }
+            other @ ("token" | "access_token" | "api_key") => {
+                return Err(ApiError::bad_request(
+                    format!("query string 里不要放 {other}。"),
+                    "令牌只认 `Authorization: Bearer <token>` 头；\
+                     放在 query string 里**不生效**，服务端也不会读取它（R5）。",
+                ))
+            }
+            other => {
+                return Err(ApiError::bad_request(
+                    format!("不认识的查询参数 {other:?}。"),
+                    "`/api/sparql` 只接受 `format=rows|jsonld`（省略 = 行回执）。",
+                ))
+            }
+        }
+    }
+    if let Some(f) = explicit {
+        return Ok(f);
+    }
+    if let Some(f) = from_body {
+        return Ok(f);
+    }
+    if accepts_jsonld(headers) {
+        return Ok(QueryFormat::JsonLd);
+    }
+    Ok(QueryFormat::Rows)
+}
+
+/// `Accept` 里**明确**写了 `application/ld+json` 吗。
+///
+/// ⛔ `*/*` 与 `application/*` **不算**：curl / 浏览器默认就带 `*/*`，把它们读成
+/// 「要 JSON-LD」会改掉默认行为（AC-009）。
+fn accepts_jsonld(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|raw| {
+            raw.split(',').any(|part| {
+                part.split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case(super::jsonld::CONTENT_TYPE_MEDIA)
+            })
+        })
+}
+
+/// ⭐ REQ-140 · JSON-LD 响应：**复用** [`respond`] 这唯一一个 `Json(` 写点，
+/// 只把 `Content-Type` 换成 `application/ld+json`。
+///
+/// 正文由 `Json(JsonLd)` 序列化 —— 与 MCP 的 `content[0].text`（`JsonLd::to_text()`）
+/// 出自**同一个** `Serialize`，所以两个协议逐字节相同。
+/// 这样「出口表」不用加第 4 个写点：`Json(` 在本文件里仍然只有一处（I14）。
+fn respond_jsonld(body: super::jsonld::JsonLd<'_>) -> Response {
+    let mut res = respond(StatusCode::OK, body);
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(super::jsonld::CONTENT_TYPE),
+    );
+    res
 }
 
 /// `GET /api/catalog` —— 分页的类 / 属性 / 关系（含证据等级与枚举值）。
@@ -622,11 +745,30 @@ async fn tools_call(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) 
 
     match name {
         "sparql_query" => match SparqlRequest::from_value(&arguments) {
-            Ok(r) => match run_sparql(svc, caller, r).await {
-                // ⭐ `content[0].text` 与 REST 正文逐字节相同（同一个 `serialize`）。
-                Ok(receipt) => tool_ok(id, &receipt.serialize(), serde_json::to_value(&receipt).unwrap_or(Value::Null)),
-                Err(e) => tool_err(id, &e),
-            },
+            Ok(r) => {
+                // ⭐ REQ-140 · `format` 只决定渲染：`rows`(默认) 走**原来那一行**，
+                // `jsonld` 换成上下文子图（`content[0].text` 与 REST 正文逐字节相同）。
+                let jsonld = r.format.unwrap_or_default().is_jsonld();
+                if !jsonld {
+                    return match run_sparql(svc, caller, r).await {
+                        // ⭐ `content[0].text` 与 REST 正文逐字节相同（同一个 `serialize`）。
+                        Ok(receipt) => tool_ok(
+                            id,
+                            &receipt.serialize(),
+                            serde_json::to_value(&receipt).unwrap_or(Value::Null),
+                        ),
+                        Err(e) => tool_err(id, &e),
+                    };
+                }
+                match run_sparql_ex(svc, caller, r).await {
+                    Ok(out) => {
+                        let graph =
+                            super::jsonld::render(&out.receipt, &out.projection, &svc.ontology_iri);
+                        tool_ok(id, &graph.to_text(), graph.to_value())
+                    }
+                    Err(e) => tool_err(id, &e),
+                }
+            }
             Err(e) => tool_err(id, &e),
         },
         "catalog" => match CatalogRequest::from_value(&arguments) {
@@ -727,13 +869,22 @@ fn tool_defs() -> Vec<Value> {
                             （join_states_scope 恒为 all_edges_between_involved_tables），\
                             ⛔ 不是本次查询实际走过的那几条：只要两张表都出现在 tables 里，\
                             映射里它们之间的每一条边都会列出，所以会有 used=false 的条目\
-                            （= 涉及但本次没用到；人话说明见 join_states_scope_note）。",
+                            （= 涉及但本次没用到；人话说明见 join_states_scope_note）。\
+                            ⭐ format=\"jsonld\" 时回执换成**上下文子图**（@context/@graph/summary/meta，\
+                            同 @id 的多行合并成一个节点、节点按 @id 排序、聚合进 summary），\
+                            且**不回 rows**；默认 format=\"rows\"，字节与以前完全一致。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "一条 SELECT（v1 子集）" },
                     "max_rows": { "type": "integer", "minimum": 1, "description": "行数上限；不会超过凭证上限" },
-                    "tenant": { "type": "string", "description": "**只用于核对**：必须等于凭证绑定的租户，否则 403。正常调用不用写。" }
+                    "tenant": { "type": "string", "description": "**只用于核对**：必须等于凭证绑定的租户，否则 403。正常调用不用写。" },
+                    "format": {
+                        "type": "string",
+                        "enum": ["rows", "jsonld"],
+                        "default": "rows",
+                        "description": "回执格式：rows（默认，表格）/ jsonld（上下文子图，供推理）。只影响渲染。"
+                    }
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -2234,5 +2385,110 @@ mod tests {
         );
         assert!(!text.contains(TOKEN_A), "⛔ 审计里出现了 token 明文：{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-140 · 回执格式的三处入口（REST 的两种写法共用一个解析）
+    // ══════════════════════════════════════════════════════════
+
+    fn q(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn accept(values: &[&str]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for v in values {
+            h.append(header::ACCEPT, HeaderValue::from_str(v).expect("Accept 头"));
+        }
+        h
+    }
+
+    /// AC-001（REST 的两条路）+ AC-009（默认零变化）：`?format` / `Accept` / body 三处。
+    #[test]
+    fn the_response_format_has_one_resolver_for_all_three_entry_points() {
+        // ① 什么都不写 ⇒ rows（**默认**；AC-009 的地基）
+        assert_eq!(
+            sparql_format(&q(&[]), &HeaderMap::new(), None).unwrap(),
+            QueryFormat::Rows
+        );
+        // ② `?format=jsonld` ⇒ jsonld；`rows` 显式写了也是 rows
+        assert_eq!(
+            sparql_format(&q(&[("format", "jsonld")]), &HeaderMap::new(), None).unwrap(),
+            QueryFormat::JsonLd
+        );
+        assert_eq!(
+            sparql_format(&q(&[("format", "rows")]), &accept(&["application/ld+json"]), None)
+                .unwrap(),
+            QueryFormat::Rows,
+            "显式 ?format=rows 压过 Accept（更具体的那一个说了算）"
+        );
+        // ③ `Accept: application/ld+json` ⇒ jsonld（带参数也认）
+        assert_eq!(
+            sparql_format(&q(&[]), &accept(&["application/ld+json;q=0.9"]), None).unwrap(),
+            QueryFormat::JsonLd
+        );
+        // ④ ⛔ `*/*` / `application/json` **不是**要 JSON-LD（curl / 浏览器默认头）
+        for default_ish in ["*/*", "application/json", "text/html, */*"] {
+            assert_eq!(
+                sparql_format(&q(&[]), &accept(&[default_ish]), None).unwrap(),
+                QueryFormat::Rows,
+                "Accept: {default_ish} 不该改默认行为"
+            );
+        }
+        // ⑤ body 的 `format` 也认（MCP 与 REST 的 body 是同一个 DTO）
+        assert_eq!(
+            sparql_format(&q(&[]), &HeaderMap::new(), Some(QueryFormat::JsonLd)).unwrap(),
+            QueryFormat::JsonLd
+        );
+        assert_eq!(
+            sparql_format(&q(&[("format", "rows")]), &HeaderMap::new(), Some(QueryFormat::JsonLd))
+                .unwrap(),
+            QueryFormat::Rows,
+            "?format= 优先于 body.format"
+        );
+    }
+
+    /// ⛔ 拼错 / 不认识的参数**报 400**（⛔ 不静默回退到行回执）。
+    #[test]
+    fn a_bogus_format_or_an_unknown_query_parameter_is_a_400() {
+        let e = sparql_format(&q(&[("format", "json-ld")]), &HeaderMap::new(), None).unwrap_err();
+        assert_eq!(e.code, "BAD_REQUEST");
+        assert!(e.message.contains("jsonld"), "{}", e.message);
+        assert!(e.hint.contains("?format=jsonld"), "{}", e.hint);
+
+        let e = sparql_format(&q(&[("form", "jsonld")]), &HeaderMap::new(), None).unwrap_err();
+        assert_eq!(e.code, "BAD_REQUEST");
+        assert!(e.message.contains("form"), "{}", e.message);
+
+        let e = sparql_format(&q(&[("token", "x")]), &HeaderMap::new(), None).unwrap_err();
+        assert_eq!(e.code, "BAD_REQUEST");
+        assert!(e.hint.contains("Authorization"), "{}", e.hint);
+    }
+
+    /// AC-011：JSON-LD 的响应**没有** `rows`（有也不会是行的形状）。
+    ///
+    /// 这里走的是「不连库」的夹具：执行必然失败（500），所以只验**参数解析**这一层。
+    /// ⛔ 正文层面的判据**不在本文件**（也不需要连库）——它在 `query::jsonld` 的两个单测里：
+    /// `meta_text_is_the_rows_receipt_minus_columns_and_rows`（钉住正文里没有 `"rows":[`
+    /// 与 `"columns":[`）与 `meta_carries_the_same_warnings_and_coverage_as_the_rows_receipt`
+    /// （钉住顶层没有 `rows` 键）。三入口的真库实测只写在交付报告里，⛔ 不在这里引用仓库外的文件。
+    #[tokio::test]
+    async fn a_bogus_format_is_rejected_before_any_query_runs() {
+        let (status, _, body) = call(
+            build_router(test_service()),
+            post(
+                "/api/sparql?format=bogus",
+                Some(TOKEN_A),
+                r#"{"query":"SELECT ?s WHERE { ?s a :customers }"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["code"], "BAD_REQUEST");
+        assert!(v["hint"].as_str().unwrap().contains("jsonld"), "{body}");
     }
 }

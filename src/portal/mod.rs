@@ -513,6 +513,8 @@ mod tests {
             tables: tables.iter().map(|t| t.to_string()).collect(),
             public_dimensions: vec![],
             warnings: vec!["表 orders：租户过滤用 customer_id".into()],
+            // ⭐ REQ-140 · 列 RDF 身份（门户回答不用它；给空集即可）。
+            projection: vec![],
         }
     }
 

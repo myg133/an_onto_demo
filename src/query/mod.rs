@@ -87,6 +87,8 @@ pub mod audit;
 pub mod catalog;
 pub mod error;
 pub mod http;
+// ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；零 I/O、零依赖）。
+pub mod jsonld;
 pub mod serve;
 pub mod tokens;
 // ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（客户 / 建模）。
@@ -199,6 +201,56 @@ pub struct SparqlRequest {
     pub max_rows: Option<u64>,
     #[serde(default)]
     pub tenant: Option<String>,
+    /// ⭐ REQ-140 · 回执格式（`rows`(默认) / `jsonld`）。⚠️ 它**只**决定渲染，
+    /// ⛔ 不参与规划 / 注入 / 限额 / 审计的任何判断。
+    ///
+    /// REST 侧还有两个入口（`?format=` 与 `Accept: application/ld+json`），
+    /// 三者的优先级见 [`crate::query::http`] 的 `sparql_format`：
+    /// **显式 `?format=` > 本字段 > `Accept` 头**。
+    #[serde(default)]
+    pub format: Option<QueryFormat>,
+}
+
+/// ⭐ REQ-140 · 回执格式：`rows`（默认，REQ-122 的行回执）/ `jsonld`（上下文子图）。
+///
+/// 默认 [`QueryFormat::Rows`]，且默认路径**零字节变化**（AC-009）：这个类型只决定
+/// 「取到行之后怎么渲染」，不进规划器、不进限额、不进审计。
+///
+/// REST 与 MCP **共用这一个类型与这一条解析**（[`QueryFormat::parse`]）：两个协议
+/// 各写一份「认哪些字符串」就会出现「REST 认、MCP 不认」这种静默分歧。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryFormat {
+    /// 行回执（`columns` / `rows` / …）。REQ-122 起的行为，⛔ 一个字节都不改。
+    #[default]
+    Rows,
+    /// JSON-LD 上下文子图（`@context` / `@graph` / `summary` / `meta`）。
+    JsonLd,
+}
+
+impl QueryFormat {
+    /// 字符串 → 格式（REST 的 `?format=` 用它；MCP 走 serde）。
+    ///
+    /// ⛔ 不做前缀 / 大小写 / 近义词匹配：`?view=` 的口径是「拼错不静默回退」，
+    /// 这里同样 —— `format=json-ld` 会 400 并列出两个合法值。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "rows" => Some(QueryFormat::Rows),
+            "jsonld" => Some(QueryFormat::JsonLd),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            QueryFormat::Rows => "rows",
+            QueryFormat::JsonLd => "jsonld",
+        }
+    }
+
+    pub const fn is_jsonld(self) -> bool {
+        matches!(self, QueryFormat::JsonLd)
+    }
 }
 
 impl SparqlRequest {
@@ -215,7 +267,8 @@ impl SparqlRequest {
                 ApiError::bad_request(
                     format!("请求体不合法：{e}"),
                     "可用字段只有 `query`（必填，字符串）、`max_rows`（可选，正整数）、\
-                     `tenant`（可选，**只用于核对**，必须等于凭证绑定的租户）。\
+                     `tenant`（可选，**只用于核对**，必须等于凭证绑定的租户）、\
+                     `format`（可选，`rows`(默认) / `jsonld`：后者返回 JSON-LD 上下文子图）。\
                      租户由凭证决定，正常调用不需要写 tenant。",
                 )
             })?;
@@ -862,6 +915,20 @@ impl Limiter {
 // 适配器（REST 与 MCP **都只调这里**）
 // ══════════════════════════════════════════════════════════════
 
+/// ⭐ REQ-140 · 一次查询的**完整产物** = 行回执 + 列的 RDF 身份（`var → 类 / 谓词 / xsd`）。
+///
+/// 为什么要多带一个 `projection`：JSON-LD 渲染需要「这一列是实体还是字面量、谓词叫什么」
+/// 这三件在**规划期**才知道的事。它**不是**第二个回执 —— `receipt` 就是
+/// [`run_sparql`] 返回的那一个（`format=rows` 的字节由它决定，⛔ 与这里无关）。
+///
+/// 两者同生共死：`projection` 只从 `Planned` 来（[`crate::sparql::run_query`]），
+/// 所以「列名 → 谓词」永远与**真正执行的那条 SQL** 同源，⛔ 不从返回的列名反猜。
+#[derive(Debug, Clone)]
+pub struct SparqlOutcome {
+    pub receipt: SparqlReceipt,
+    pub projection: Vec<crate::sparql::ProjectedColumn>,
+}
+
 /// 一条 SPARQL 查询（**唯一**入口：REST `POST /api/sparql` 与 MCP `sparql_query`）。
 ///
 /// 顺序是刻意的（最便宜的失败先报，且**每个失败都留一条审计**）：
@@ -871,11 +938,27 @@ impl Limiter {
 /// 就返回 503 `NO_DATA_SOURCE`。放在最前面是刻意的 —— 它让 R2（「该模式不许任何请求
 /// 尝试连源库」）成为一个**结构事实**：`svc.source` 是 `Option`，本函数在 `None` 分支里
 /// 直接 `return`，后面那句 `expect` 根本走不到，也没有别的路能拿到连接池。
+///
+/// ⭐ REQ-140 · `format` **不在这里**判：它只影响渲染，[`run_sparql_ex`] 把
+/// 「行回执 + 列的 RDF 身份」一起交出去，由 `http` 层按格式二选一序列化。
+/// 于是「格式」不会渗进规划 / 注入 / 限额 / 审计的任何分支（AC-009 的结构保证）。
 pub async fn run_sparql(
     svc: &QueryService,
     caller: &Caller,
     req: SparqlRequest,
 ) -> Result<SparqlReceipt, ApiError> {
+    Ok(run_sparql_event(svc, caller, "sparql", req).await?.receipt)
+}
+
+/// ⭐ REQ-140 · 同 [`run_sparql`]，但把「列的 RDF 身份」也带出来（JSON-LD 用）。
+///
+/// 与 [`run_sparql`] **同一个实现**（前者就是它 `.receipt`）—— 两个函数名只是
+/// 「要不要 projection」的区别，⛔ 不存在第二条查询链路。
+pub async fn run_sparql_ex(
+    svc: &QueryService,
+    caller: &Caller,
+    req: SparqlRequest,
+) -> Result<SparqlOutcome, ApiError> {
     run_sparql_event(svc, caller, "sparql", req).await
 }
 
@@ -884,7 +967,7 @@ async fn run_sparql_event(
     caller: &Caller,
     event: &'static str,
     req: SparqlRequest,
-) -> Result<SparqlReceipt, ApiError> {
+) -> Result<SparqlOutcome, ApiError> {
     let started = Instant::now();
 
     // ⓪ ⭐ REQ-136 · 本体服务模式：恒 503（不是 200 空结果、不是 500）。
@@ -968,7 +1051,8 @@ async fn run_sparql_event(
 
     match result {
         Ok(r) => {
-            let receipt = receipt_of(svc, r, effective, &caller.token, warnings, &req.query);
+            let (receipt, projection) =
+                receipt_of(svc, r, effective, &caller.token, warnings, &req.query);
             // ⭐ REQ-135 · 真的返回给调用方的行数（截断前；`truncated` 另有字段表达）。
             svc.metrics.rows(receipt.row_count as u64);
             audit_call(
@@ -981,7 +1065,7 @@ async fn run_sparql_event(
                 "OK",
                 None,
             );
-            Ok(receipt)
+            Ok(SparqlOutcome { receipt, projection })
         }
         Err(e) => {
             let err = ApiError::from_query_error(e);
@@ -1010,6 +1094,10 @@ async fn run_sparql_event(
 ///
 /// `sparql` 只用于判 `join_states[].used`（[`QueryService::used_join_predicates`]）——
 /// 回执的范围口径不随它变化（恒为 [`JOIN_STATES_SCOPE_ALL_EDGES`]）。
+///
+/// ⭐ REQ-140 · 返回值多一个 `projection`（列的 `var → 类 / 谓词 / xsd`）：
+/// 它**原样**来自 `QueryResult`（也就是 `Planned`），⛔ 不在这里重新推导 ——
+/// 回执的字段与字节一个都没变，JSON-LD 只是多拿了这一份「列的 RDF 身份」。
 fn receipt_of(
     svc: &QueryService,
     r: QueryResult,
@@ -1017,7 +1105,7 @@ fn receipt_of(
     token: &TokenEntry,
     mut warnings: Vec<String>,
     sparql: &str,
-) -> SparqlReceipt {
+) -> (SparqlReceipt, Vec<crate::sparql::ProjectedColumn>) {
     warnings.extend(r.warnings.iter().cloned());
     let coverage = r
         .tables
@@ -1039,7 +1127,7 @@ fn receipt_of(
         .collect();
     let used_predicates = svc.used_join_predicates(sparql);
     let join_states = svc.join_states(&r.tables, &used_predicates);
-    SparqlReceipt {
+    let receipt = SparqlReceipt {
         columns: r.columns,
         rows: r.rows,
         row_count: r.row_count,
@@ -1058,7 +1146,8 @@ fn receipt_of(
             token_max_rows: token.max_rows,
             timeout_ms: svc.timeout_ms,
         },
-    }
+    };
+    (receipt, r.projection)
 }
 
 /// `catalog`（REST `GET /api/catalog` 与 MCP `catalog`）。
@@ -1156,9 +1245,13 @@ pub async fn run_sample(
             query,
             max_rows: Some(limit.min(caller.token.max_rows)),
             tenant: None,
+            // ⭐ REQ-140 · `sample` 恒是行回执（JSON-LD 只有 `sparql_query` 一个入口，
+            // 需求表里也没有 `sample` 那一格）。
+            format: Some(QueryFormat::Rows),
         },
     )
     .await
+    .map(|o| o.receipt)
 }
 
 /// 名字 → 一条**安全的** SPARQL（先校验名字存在，⛔ 不把用户输入直接拼进查询）。
@@ -1499,6 +1592,47 @@ mod tests {
         assert_eq!(e.code, "BAD_REQUEST");
     }
 
+    /// ⭐ REQ-140 · `format` 字段：默认（不写）= rows；`jsonld` 认；拼错 **400**（⛔ 不回退）。
+    ///
+    /// MCP 的 `sparql_query` 与 REST 的 body 走**同一个** `from_value`，所以这一条
+    /// 同时钉住「MCP 入口认哪些值」。
+    #[test]
+    fn the_format_field_is_rows_by_default_and_rejects_typos() {
+        let base = serde_json::json!({"query": "SELECT ?s WHERE { ?s a :customers }"});
+
+        let none = SparqlRequest::from_value(&base).expect("不写 format");
+        assert_eq!(none.format, None, "不写就是 None（下游 unwrap_or_default ⇒ rows）");
+        assert_eq!(QueryFormat::default(), QueryFormat::Rows);
+
+        let rows = SparqlRequest::from_value(
+            &serde_json::json!({"query": "SELECT ?s WHERE { ?s a :customers }", "format": "rows"}),
+        )
+        .expect("format=rows");
+        assert_eq!(rows.format, Some(QueryFormat::Rows));
+
+        let jsonld = SparqlRequest::from_value(
+            &serde_json::json!({"query": "SELECT ?s WHERE { ?s a :customers }", "format": "jsonld"}),
+        )
+        .expect("format=jsonld");
+        assert_eq!(jsonld.format, Some(QueryFormat::JsonLd));
+        assert!(jsonld.format.unwrap().is_jsonld());
+        assert_eq!(QueryFormat::JsonLd.as_str(), "jsonld");
+
+        // ⛔ 近义词 / 大小写 / 拼错都不认（与 `?view=` 同一条口径）
+        for bad in ["json-ld", "JSONLD", "json", "graph", ""] {
+            let e = SparqlRequest::from_value(&serde_json::json!({
+                "query": "SELECT ?s WHERE { ?s a :customers }",
+                "format": bad
+            }))
+            .err()
+            .unwrap_or_else(|| panic!("format={bad:?} 不该被接受"));
+            assert_eq!(e.code, "BAD_REQUEST", "format={bad:?}");
+            assert!(e.hint.contains("jsonld"), "hint 要列出合法值：{}", e.hint);
+        }
+        assert_eq!(QueryFormat::parse("  jsonld  "), Some(QueryFormat::JsonLd));
+        assert_eq!(QueryFormat::parse("json-ld"), None);
+    }
+
     #[test]
     fn catalog_and_describe_params_are_validated() {
         let (p, s) = CatalogRequest::from_value(&serde_json::json!({"page": 2, "page_size": 10}))
@@ -1584,6 +1718,8 @@ mod tests {
             tables: vec!["orders".into(), "customers".into()],
             public_dimensions: vec![],
             warnings: vec![],
+            // ⭐ REQ-140 · 列的 RDF 身份（本判据只看回执，给空集即可）。
+            projection: vec![],
         };
         let token = TokenEntry {
             token: "x".repeat(24),
@@ -1593,7 +1729,7 @@ mod tests {
             max_concurrency: 1,
             label: None,
         };
-        let receipt = receipt_of(&svc, r, 10, &token, vec![], "");
+        let receipt = receipt_of(&svc, r, 10, &token, vec![], "").0;
         assert_eq!(
             receipt.coverage,
             vec![
@@ -1636,9 +1772,10 @@ mod tests {
                 tables: vec!["orders".into(), "customers".into()],
                 public_dimensions: vec![],
                 warnings: vec![],
+                projection: vec![],
             };
             let q = format!("SELECT ?a ?b WHERE {{ ?a :{pred} ?b }}");
-            let receipt = receipt_of(&svc, r, 10, &token, vec![], &q);
+            let receipt = receipt_of(&svc, r, 10, &token, vec![], &q).0;
             assert_eq!(receipt.join_states.len(), 1, "{q}: {:?}", receipt.join_states);
             assert!(receipt.join_states[0].used, "写了 :{pred} 就是用过：{q}");
         }
