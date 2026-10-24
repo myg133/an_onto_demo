@@ -70,11 +70,15 @@
 //!   需要 `method` + `signals`；文档断言没有这两种东西。所以 doc 条目的置信度只有
 //!   `band` 一栏 —— ⛔ 不编一个 0.5 分出来。
 //! - **合并器会重置已有签名**：`reviewed_by` 恒写 `null`（规则 2 是绝对的），
-//!   `signed_at` 一并清掉。重跑合并 = 重新生成提案 ⇒ 之前的签字作废，
-//!   计数在 [`MergeStats::reviewed_by_reset`]。
+//!   `signed_at` / `signed_at_source` 一并清掉。重跑合并 = 重新生成提案 ⇒
+//!   之前的签字作废，计数在 [`MergeStats::reviewed_by_reset`]。
 //! - **签字时间是事实，不是渲染选项**：`doc sign` 省略 `--at` 时取系统时钟，
 //!   所以「逐字节可复现」的口径是「同一份输入 + 同一组参数（含 `--at`）」；
 //!   重复签同一个人时**不改写**已有的 `signed_at`（幂等）。
+//! - **`signed_at_source` 只标注来源，不改变「时间是事实」**：`arg` = 由 `--at`
+//!   声明（人给的），`system` = 本次运行取的系统时钟（机器记的）。REQ-129 的老产物
+//!   没有这一栏 ⇒ 读回按 `legacy`（未记）处理，**不报错、也不补写**
+//!   （补写会把「不知道来源」伪装成某一种来源，审计上比缺字段更糟）。
 //!
 //! # 本模块零 I/O
 //!
@@ -1155,6 +1159,8 @@ pub fn merge_with(
         set_field(item, "reviewed_by", Value::Null);
         if let Some(o) = item.as_object_mut() {
             o.remove(SIGNED_AT_KEY);
+            // 来源也一起清：只清时间会留下「没人签、但有签字来源」的自相矛盾状态。
+            o.remove(SIGNED_AT_SOURCE_KEY);
         }
         set_field(item, "applicable", Value::Bool(true));
 
@@ -1508,6 +1514,20 @@ pub fn render_merged(proposal: &Value, items: &[Value], stats: &MergeStats) -> R
 /// 签字时间字段（与 `reviewed_by` 一起写在**条目顶层**）。
 pub const SIGNED_AT_KEY: &str = "signed_at";
 
+/// ⭐ REQ-130 · 签字时间的**来源**（写在条目顶层，紧挨 `signed_at`）。
+///
+/// 审计要回答的是「这个时间是人给的，还是机器取的」——
+/// 前者是**声明**（`arg`，可复现、可解释），后者是**记录**（`system`，只属于那一次运行），
+/// 两者可信度不同，所以必须分开标。
+pub const SIGNED_AT_SOURCE_KEY: &str = "signed_at_source";
+
+/// `signed_at` 来自 `--at`（调用方给的，声明）。
+pub const AT_SOURCE_ARG: &str = "arg";
+/// `signed_at` 来自系统时钟（本次运行取的，记录）。
+pub const AT_SOURCE_SYSTEM: &str = "system";
+/// 老产物（REQ-129 写的，没有这一栏）。**只出现在读回报表里，⛔ 不写进产物**。
+pub const AT_SOURCE_LEGACY: &str = "legacy";
+
 /// 签字的结果。
 #[derive(Debug, Clone)]
 pub struct SignOutcome {
@@ -1522,6 +1542,8 @@ pub struct SignOutcome {
     /// 条目来源（`doc` / `both`）。
     pub origin: String,
     pub signed_at: String,
+    /// `signed_at` 的来源：`arg` / `system` / `legacy`（老产物缺这一栏，按缺省处理）。
+    pub signed_at_source: String,
     /// 这一次是不是**幂等命中**（本来就已由同一个人签过）。
     pub already_signed: bool,
     /// 输入文本是否本来就是规范格式（否则 CLI 会警告「本次输出已规范化」）。
@@ -1737,16 +1759,30 @@ fn resolve_sign_target<'a>(items: &'a [Value], spec: &ItemSpec) -> Result<(usize
 /// | 1 | `--by` 必填、不许匿名 | 开头的空串判断 |
 /// | 2 | `--item` 认序号 / 稳定键，⛔ 不认下标 | [`parse_item_spec`] + [`resolve_sign_target`]（序号是 1 基的，与 `review decide --item N` 同一个 N） |
 /// | 3 | 只签 `doc` / `both` | [`origin_of_value`] 判定，其余一律拒绝并说明 |
-/// | 4 | 只加 `reviewed_by` + `signed_at` | 末尾的「其余不变」自检：剥掉这两栏后逐字节相同 |
+/// | 4 | 只加 `reviewed_by` + `signed_at` + `signed_at_source` | 末尾的「其余不变」自检：剥掉这三栏后逐字节相同 |
 /// | 5 | 重复签幂等 | 同一个人 ⇒ 原样返回（`already_signed`），值不变 |
 /// | 6 | 确定性 | 时间由 `at` 参数决定（不给才取系统时钟），同一份输入 + 同一个 `at` ⇒ 逐字节相同 |
+/// | 7 | ⭐REQ-130 · 时间来源可审计 | `at_source`（`arg` / `system`）写进 `signed_at_source`；老产物缺这一栏 ⇒ 读回 `legacy`，不报错、不补写 |
 ///
 /// # 为什么 `signed_at` 是一个参数
 ///
 /// 签字时间是**事实**（ADR-005 的溯源），不能像 TTL 导出那样「不写时间」。
 /// 所以确定性这条判据的口径是「同一份输入 + 同一组参数」：要逐字节复现就给
 /// `--at <RFC3339>`；不给则取系统时钟（那是**这一次签字**的时间）。
-pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcome> {
+///
+/// # 为什么来源要单独一栏
+///
+/// `--at` 是**可选**的（Q-3 的既有裁定），于是同一个字段有两种来历：
+/// 人声明的（可复现、可解释）与机器记录的（只属于那一次运行）。审计要能分辨，
+/// 所以写 [`SIGNED_AT_SOURCE_KEY`]；这一栏只是**标注来源**，不改变
+/// 「`signed_at` 是事实」的判断。
+pub fn sign(
+    doc_text: &str,
+    spec: &str,
+    by: &str,
+    at: &str,
+    at_source: &str,
+) -> Result<SignOutcome> {
     let by = by.trim();
     if by.is_empty() {
         bail!(
@@ -1757,6 +1793,13 @@ pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcom
     let at = at.trim();
     if at.is_empty() {
         bail!("签字时间不能为空（`--at` 省略时由 CLI 取当前 UTC 时间）");
+    }
+    let at_source = at_source.trim();
+    if !matches!(at_source, AT_SOURCE_ARG | AT_SOURCE_SYSTEM) {
+        bail!(
+            "内部错误：signed_at_source 只能是 {AT_SOURCE_ARG:?} / {AT_SOURCE_SYSTEM:?}\
+             （收到 {at_source:?}）"
+        );
     }
     // 时间必须是可解析的 RFC3339 —— 否则下游（审计 / 排序）读不懂这一栏。
     chrono::DateTime::parse_from_rfc3339(at).map_err(|e| {
@@ -1802,20 +1845,37 @@ pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcom
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    // ⭐ REQ-130 · 老产物（REQ-129 的签字）没有这一栏：**读回按缺省处理**，⛔ 不 panic。
+    // 缺省值是 `legacy`（「不知道来源」）而不是 `system` —— 老产物里 `arg` 与 `system`
+    // 已经分不出来了，猜一个等于伪造审计结论。
+    let existing_source = item
+        .get(SIGNED_AT_SOURCE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let mut signed_doc = doc.clone();
     let mut already_signed = false;
     let final_at;
+    let final_source;
     match existing {
         // ── 约束 5：同一个人重复签 ⇒ 幂等（值不变） ──
         Some(prev) if prev == by => {
             already_signed = true;
             match existing_at {
-                Some(t) => final_at = t.to_string(),
+                Some(t) => {
+                    final_at = t.to_string();
+                    // 已有来源原样保留（⛔ 老产物不补写：补写等于给「不知道」编一个答案）。
+                    final_source = existing_source
+                        .map(str::to_string)
+                        .unwrap_or_else(|| AT_SOURCE_LEGACY.to_string());
+                }
                 None => {
                     // 手工塞过 reviewed_by 却没写时间 ⇒ 补一次（这是修复，不是改判）。
                     final_at = at.to_string();
+                    final_source = at_source.to_string();
                     set_signed_at(&mut signed_doc, seq - 1, &final_at)?;
+                    set_signed_at_source(&mut signed_doc, seq - 1, &final_source)?;
                 }
             }
         }
@@ -1827,20 +1887,22 @@ pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcom
         ),
         None => {
             final_at = at.to_string();
+            final_source = at_source.to_string();
             set_signed_at(&mut signed_doc, seq - 1, &final_at)?;
+            set_signed_at_source(&mut signed_doc, seq - 1, &final_source)?;
         }
     }
     if !already_signed {
         set_reviewed_by(&mut signed_doc, seq - 1, by)?;
     }
 
-    // ── 约束 4 的自检：剥掉这两栏之后，文档与输入**逐值相同** ──
+    // ── 约束 4 的自检：剥掉这三栏之后，文档与输入**逐值相同** ──
     let mut probe = signed_doc.clone();
     strip_signature(&mut probe, seq - 1);
     let mut baseline = doc.clone();
     strip_signature(&mut baseline, seq - 1);
     if canonical_text(&probe)? != canonical_text(&baseline)? {
-        bail!("内部错误：签字改动了这两栏以外的内容（⛔ 其余字节必须不变）");
+        bail!("内部错误：签字改动了这三栏以外的内容（⛔ 其余字节必须不变）");
     }
 
     let input_canonical = canonical_text(&doc)? == doc_text;
@@ -1852,6 +1914,7 @@ pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcom
         label,
         origin,
         signed_at: final_at,
+        signed_at_source: final_source,
         already_signed,
         input_canonical,
     })
@@ -1875,6 +1938,14 @@ fn set_signed_at(doc: &mut Value, idx: usize, at: &str) -> Result<()> {
     Ok(())
 }
 
+/// ⭐ REQ-130 · 写 `signed_at_source`（**只**在写 `signed_at` 的同一次动作里写）。
+///
+/// 两者永远同进同退：单独补一栏会造出「有时间没来源」或「有来源没时间」的半状态。
+fn set_signed_at_source(doc: &mut Value, idx: usize, source: &str) -> Result<()> {
+    item_mut(doc, idx)?.insert(SIGNED_AT_SOURCE_KEY.to_string(), Value::from(source));
+    Ok(())
+}
+
 fn strip_signature(doc: &mut Value, idx: usize) {
     if let Some(o) = doc
         .get_mut("items")
@@ -1884,6 +1955,7 @@ fn strip_signature(doc: &mut Value, idx: usize) {
     {
         o.remove("reviewed_by");
         o.remove(SIGNED_AT_KEY);
+        o.remove(SIGNED_AT_SOURCE_KEY);
     }
 }
 
@@ -2562,7 +2634,7 @@ mod tests {
     #[test]
     fn sign_rejects_an_anonymous_signer() {
         for by in ["", "   ", "\t"] {
-            let err = sign(&merged_text(), "relation:订单→套餐模板", by, SIGNED_AT)
+            let err = sign(&merged_text(), "relation:订单→套餐模板", by, SIGNED_AT, AT_SOURCE_ARG)
                 .expect_err("匿名字必须被拒");
             assert!(format!("{err:#}").contains("匿名"), "{err:#}");
         }
@@ -2592,7 +2664,7 @@ mod tests {
             // `proposal apply` 报错里的原样（{seq}:{kind}:{target}）
             format!("{n}:add_link_type:订单→套餐模板"),
         ] {
-            let out = sign(&text, &spec, "qa-req129", SIGNED_AT)
+            let out = sign(&text, &spec, "qa-req129", SIGNED_AT, AT_SOURCE_ARG)
                 .unwrap_or_else(|e| panic!("--item {spec:?} 应当认得：{e:#}"));
             assert_eq!(out.seq, n, "--item {spec:?} 指错了条目");
             assert_eq!(out.label, "relation:订单→套餐模板");
@@ -2601,7 +2673,7 @@ mod tests {
         // 认不出 / 歧义 / 越界都要拒绝（⛔ 不猜一个最像的）
         for bad in ["relation:不存在的边", "relation:", "999", "entity:订单"] {
             assert!(
-                sign(&text, bad, "qa-req129", SIGNED_AT).is_err(),
+                sign(&text, bad, "qa-req129", SIGNED_AT, AT_SOURCE_ARG).is_err(),
                 "--item {bad:?} 应当被拒"
             );
         }
@@ -2621,17 +2693,17 @@ mod tests {
             kind_alias(item_kind(&db_item)),
             item_target(&db_item)
         );
-        let err = sign(&text, &spec, "qa-req129", SIGNED_AT).expect_err("DB 条目不许签");
+        let err = sign(&text, &spec, "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect_err("DB 条目不许签");
         let msg = format!("{err:#}");
         assert!(msg.contains("review decide"), "要说清该走哪条轨：{msg}");
         assert!(msg.contains("origin"), "{msg}");
     }
 
-    /// Q-1 · ④：只加 `reviewed_by` / `signed_at`，**其余逐值不变**。
+    /// Q-1 · ④：只加 `reviewed_by` / `signed_at` / `signed_at_source`，**其余逐值不变**。
     #[test]
-    fn sign_only_adds_the_two_signature_fields() {
+    fn sign_only_adds_the_signature_fields() {
         let text = merged_text();
-        let out = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("签");
+        let out = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect("签");
         let before: Value = serde_json::from_str(&text).unwrap();
         let after = &out.document;
 
@@ -2642,7 +2714,7 @@ mod tests {
         ka.sort();
         assert_eq!(kb, ka, "顶层键不许变");
 
-        // 逐条比：目标条目多两栏，其它条目**逐值相同**
+        // 逐条比：目标条目多三栏，其它条目**逐值相同**
         let signed_idx = out.seq - 1;
         for (i, (b, a)) in items(&before)
             .iter()
@@ -2650,18 +2722,21 @@ mod tests {
             .enumerate()
         {
             if i == signed_idx {
-                // 把这两栏还原成签字前的值 ⇒ 其余必须逐值相同
+                // 把这三栏还原成签字前的值 ⇒ 其余必须逐值相同
                 let mut a2 = a.clone();
                 a2["reviewed_by"] = b["reviewed_by"].clone();
                 a2.as_object_mut().unwrap().remove(SIGNED_AT_KEY);
-                assert_eq!(&a2, b, "目标条目除这两栏外不许变");
+                a2.as_object_mut().unwrap().remove(SIGNED_AT_SOURCE_KEY);
+                assert_eq!(&a2, b, "目标条目除这三栏外不许变");
                 assert_eq!(a["reviewed_by"], serde_json::json!("qa-req129"));
                 assert_eq!(a[SIGNED_AT_KEY], serde_json::json!(SIGNED_AT));
+                assert_eq!(a[SIGNED_AT_SOURCE_KEY], serde_json::json!(AT_SOURCE_ARG));
             } else {
                 assert_eq!(a, b, "第 {} 条被改动了", i + 1);
             }
         }
         assert_eq!(out.signed_at, SIGNED_AT);
+        assert_eq!(out.signed_at_source, AT_SOURCE_ARG);
         assert_eq!(out.origin, "doc");
         assert!(!out.already_signed);
         assert!(out.input_canonical, "merge 的产物本来就是规范格式");
@@ -2671,28 +2746,92 @@ mod tests {
     #[test]
     fn sign_is_idempotent_for_the_same_signer() {
         let text = merged_text();
-        let once = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("第一次");
-        let twice = sign(&once.rendered, "relation:订单→套餐模板", "qa-req129", SIGNED_AT)
+        let once = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect("第一次");
+        let twice = sign(&once.rendered, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG)
             .expect("重复签不许报错");
         assert!(twice.already_signed, "幂等命中要能看出来");
         assert_eq!(twice.rendered, once.rendered, "重复签必须逐字节相同");
         assert_eq!(twice.signed_at, SIGNED_AT, "签字时间不许被改写");
 
         // 换个人签同一 item ⇒ 拒绝（⛔ 不覆盖别人的签名）
-        let err = sign(&once.rendered, "relation:订单→套餐模板", "qa-other", SIGNED_AT)
+        let err = sign(&once.rendered, "relation:订单→套餐模板", "qa-other", SIGNED_AT, AT_SOURCE_ARG)
             .expect_err("别人的签名不许覆盖");
         assert!(format!("{err:#}").contains("不覆盖"), "{err:#}");
+    }
+
+    /// ⭐ REQ-130 · AC-003：给了 `--at` ⇒ 来源写 `arg`（人给的声明）。
+    #[test]
+    fn sign_records_arg_as_the_source_when_the_time_is_given() {
+        let out = sign(&merged_text(), "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG)
+            .expect("签");
+        let signed = &out.document["items"][out.seq - 1];
+        assert_eq!(signed[SIGNED_AT_SOURCE_KEY], serde_json::json!(AT_SOURCE_ARG));
+        assert_eq!(out.signed_at_source, AT_SOURCE_ARG);
+        assert_eq!(
+            signed[SIGNED_AT_KEY],
+            serde_json::json!(SIGNED_AT),
+            "来源与时间必须同进同退"
+        );
+    }
+
+    /// ⭐ REQ-130 · AC-003：省略 `--at` ⇒ 来源写 `system`（本次运行取的记录）。
+    ///
+    /// 判据不能只是「值等于 system」：还要证明**时间确实是本次取的系统时钟**，
+    /// 否则「恒写 system + 恒写死时间」也能骗过这条。
+    #[test]
+    fn sign_records_system_as_the_source_when_the_time_comes_from_the_clock() {
+        let now = chrono::Utc::now();
+        let at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let out = sign(&merged_text(), "relation:订单→套餐模板", "qa-req129", &at, AT_SOURCE_SYSTEM)
+            .expect("签");
+        let signed = &out.document["items"][out.seq - 1];
+        assert_eq!(signed[SIGNED_AT_SOURCE_KEY], serde_json::json!(AT_SOURCE_SYSTEM));
+        assert_eq!(out.signed_at_source, AT_SOURCE_SYSTEM);
+        let written = chrono::DateTime::parse_from_rfc3339(&out.signed_at).expect("RFC3339");
+        assert!(
+            (now - written.with_timezone(&chrono::Utc)).num_seconds().abs() <= 2,
+            "system 来源的时间必须就是本次取的时钟：{}",
+            out.signed_at
+        );
+    }
+
+    /// ⭐ REQ-130 · AC-004：老产物（REQ-129 写的签字，没有 `signed_at_source`）
+    /// 读回来**不报错、不补写**，按 `legacy` 缺省处理。
+    ///
+    /// ⛔ 不补写的理由：老产物里 `arg` 与 `system` 已经分不出来，
+    /// 给它编一个 `system` 就是**伪造审计结论** —— 缺字段比假字段诚实。
+    #[test]
+    fn sign_reads_a_legacy_artifact_without_a_source_field() {
+        let first = sign(&merged_text(), "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG)
+            .expect("第一次签");
+        let legacy = without_source_field(&first.rendered);
+        assert!(
+            !legacy.contains(SIGNED_AT_SOURCE_KEY),
+            "夹具必须是「老产物」：没有这一栏"
+        );
+
+        let again = sign(
+            &legacy,
+            "relation:订单→套餐模板",
+            "qa-req129",
+            SIGNED_AT,
+            AT_SOURCE_SYSTEM, // 就算这次是系统时钟，也不许改写老签字
+        )
+        .expect("老产物必须能读回（⛔ 缺字段不是错误）");
+        assert!(again.already_signed, "它本来就已经由同一个人签过");
+        assert_eq!(again.signed_at_source, AT_SOURCE_LEGACY);
+        assert_eq!(again.rendered, legacy, "老产物不补写 ⇒ 字节不变");
     }
 
     /// Q-1 · ⑥：确定性 —— 同输入同参数（含 `--at`）⇒ 逐字节相同。
     #[test]
     fn sign_is_deterministic_for_the_same_parameters() {
         let text = merged_text();
-        let a = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("a");
-        let b = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("b");
+        let a = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect("a");
+        let b = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect("b");
         assert_eq!(a.rendered, b.rendered);
         // 换一个签字时间 ⇒ 只有 signed_at 那一行变（证明「变的是参数，不是随机」）
-        let c = sign(&text, "relation:订单→套餐模板", "qa-req129", "2026-10-25T00:00:00Z")
+        let c = sign(&text, "relation:订单→套餐模板", "qa-req129", "2026-10-25T00:00:00Z", AT_SOURCE_ARG)
             .expect("c");
         assert_ne!(a.rendered, c.rendered);
         assert_eq!(
@@ -2704,7 +2843,7 @@ mod tests {
     /// Q-1 · 时间必须是 RFC3339（否则下游审计读不懂这一栏）。
     #[test]
     fn sign_rejects_a_non_rfc3339_timestamp() {
-        let err = sign(&merged_text(), "relation:订单→套餐模板", "qa", "昨天")
+        let err = sign(&merged_text(), "relation:订单→套餐模板", "qa", "昨天", AT_SOURCE_ARG)
             .expect_err("非法时间必须拒");
         assert!(format!("{err:#}").contains("RFC3339"), "{err:#}");
     }
@@ -2713,7 +2852,7 @@ mod tests {
     #[test]
     fn re_merging_clears_a_previous_signature() {
         let text = merged_text();
-        let signed = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("签");
+        let signed = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT, AT_SOURCE_ARG).expect("签");
         assert!(signed.rendered.contains("signed_at"));
         let jsonl = [
             concept_jsonl("客户", &[], "fact", true),
@@ -2724,10 +2863,25 @@ mod tests {
         let item = link_item(&again.document, "order_template_id__package_templates");
         assert!(item["reviewed_by"].is_null(), "重跑合并 ⇒ 未签");
         assert!(item.get(SIGNED_AT_KEY).is_none(), "签字时间也要清掉");
+        assert!(
+            item.get(SIGNED_AT_SOURCE_KEY).is_none(),
+            "签字时间来源也必须一起清掉（否则「没人签、但有来源」）"
+        );
         assert_eq!(again.stats.reviewed_by_reset, 1);
     }
 
     // ── 夹具读取小工具 ──
+    /// 把渲染好的文档**去掉** `signed_at_source` 再规范化 —— 模拟 REQ-129 的老产物。
+    fn without_source_field(text: &str) -> String {
+        let mut v: Value = serde_json::from_str(text).expect("解析");
+        for it in v["items"].as_array_mut().expect("items") {
+            if let Some(o) = it.as_object_mut() {
+                o.remove(SIGNED_AT_SOURCE_KEY);
+            }
+        }
+        canonical_text(&v).expect("规范化")
+    }
+
     fn items(doc: &Value) -> Vec<Value> {        doc["items"].as_array().cloned().unwrap_or_default()
     }
 
