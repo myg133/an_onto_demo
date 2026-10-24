@@ -2470,8 +2470,11 @@ mod tests {
 
     /// AC-011：JSON-LD 的响应**没有** `rows`（有也不会是行的形状）。
     ///
-    /// 这里走的是「不连库」的夹具：执行必然失败（500），所以只验**参数解析**这一层，
-    /// 真字节在 `tests/test_req140_jsonld_live.rs`（真库）。
+    /// 这里走的是「不连库」的夹具：执行必然失败（500），所以只验**参数解析**这一层。
+    /// ⛔ 正文层面的判据**不在本文件**（也不需要连库）——它在 `query::jsonld` 的两个单测里：
+    /// `meta_text_is_the_rows_receipt_minus_columns_and_rows`（钉住正文里没有 `"rows":[`
+    /// 与 `"columns":[`）与 `meta_carries_the_same_warnings_and_coverage_as_the_rows_receipt`
+    /// （钉住顶层没有 `rows` 键）。三入口的真库实测只写在交付报告里，⛔ 不在这里引用仓库外的文件。
     #[tokio::test]
     async fn a_bogus_format_is_rejected_before_any_query_runs() {
         let (status, _, body) = call(

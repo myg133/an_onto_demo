@@ -468,6 +468,35 @@ mod tests {
         }
     }
 
+    /// 任意类的实例列（`class` 同时当类 key 与本地名，与夹具一致）。
+    fn node_col_of(name: &str, class: &str) -> ProjectedColumn {
+        ProjectedColumn {
+            name: name.into(),
+            kind: ColumnKind::Node {
+                class: class.into(),
+                class_local: class.into(),
+            },
+        }
+    }
+
+    /// 任意类的字面量列。
+    fn literal_col_of(
+        name: &str,
+        class: &str,
+        predicate: &str,
+        xsd: &'static str,
+    ) -> ProjectedColumn {
+        ProjectedColumn {
+            name: name.into(),
+            kind: ColumnKind::Literal {
+                class: class.into(),
+                column: name.into(),
+                predicate: predicate.into(),
+                xsd,
+            },
+        }
+    }
+
     fn value_of(g: &JsonLd<'_>) -> Value {
         g.to_value()
     }
@@ -529,6 +558,112 @@ mod tests {
             ids,
             vec!["ontok:customers/C1", "ontok:orders/O1", "ontok:orders/O2", "ontok:orders/O3"],
             "节点必须按 @id 升序"
+        );
+    }
+
+    /// ⭐ R-1a · **冗余不漂**（⛔ 不是字面数字）：`summary.nodes` 恒等于 `@graph` 长度，
+    /// `summary.row_count` 恒等于 `meta.row_count`（= 回执的 `row_count`），
+    /// 且 `@graph` 里没有重复 `@id`。
+    ///
+    /// # 为什么必须写成「关系」而不是「数字」
+    ///
+    /// `assert_eq!(summary.nodes, 61)` 只在**数字被改**时红；它抓不住真正危险的那件事：
+    /// 两个字段**各算一遍**、并在某类数据下漂移。最典型的是把 `nodes` 写成 `row_count` ——
+    /// 「1 行 1 个实体」时两者恰好相等，**只有「多行同实体」才会露出来**。
+    /// 所以这里不写任何字面数字，只钉关系，且数据覆盖最容易让两者不等的四组：
+    /// **0 行 / 1 行 / 多行含重复实体（节点 < 行）/ 每行多个实体（节点 > 行）**。
+    ///
+    /// # 变异自证（QA 可复现）
+    ///
+    /// 把 `render()` 里的 `summary: plain_summary(nodes.len(), receipt.row_count, detached)`
+    /// 改成 `plain_summary(receipt.row_count, receipt.row_count, detached)`
+    /// ⇒ 本判据在**第 3 组**（3 行 → 1 节点）与**第 4 组**（3 行 → 4 节点）立刻红。
+    #[test]
+    fn summary_counts_are_invariants_of_the_graph_not_magic_numbers() {
+        let customer = || node_col_of("c", "customers");
+        let customer_name = || literal_col_of("n", "customers", "customers__customer_name", "string");
+        let order = || node_col_of("o", "orders");
+
+        let c1 = "https://x#customers/C1";
+        let cases: Vec<(&str, SparqlReceipt, Vec<ProjectedColumn>)> = vec![
+            (
+                "0 行（空结果）",
+                receipt(&["c", "n"], vec![]),
+                vec![customer(), customer_name()],
+            ),
+            (
+                "1 行（1 实体）",
+                receipt(&["c", "n"], vec![vec![Some(c1), Some("Ada")]]),
+                vec![customer(), customer_name()],
+            ),
+            (
+                "多行含重复实体（3 行 → 1 节点）",
+                receipt(
+                    &["c", "n"],
+                    vec![
+                        vec![Some(c1), Some("Ada")],
+                        vec![Some(c1), Some("Ada")],
+                        vec![Some(c1), Some("Ada")],
+                    ],
+                ),
+                vec![customer(), customer_name()],
+            ),
+            (
+                "每行多个实体（3 行 → 4 节点）",
+                receipt(
+                    &["o", "c"],
+                    vec![
+                        vec![Some("https://x#orders/O1"), Some(c1)],
+                        vec![Some("https://x#orders/O2"), Some(c1)],
+                        vec![Some("https://x#orders/O3"), Some(c1)],
+                    ],
+                ),
+                vec![order(), customer()],
+            ),
+        ];
+
+        for (case, r, proj) in cases {
+            let g = render(&r, &proj, ONT);
+            let v = value_of(&g);
+            let graph = v["@graph"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{case}: @graph 必须是数组：{v}"));
+            // ① `nodes` 与 `@graph` 的长度是**同一个数**（⛔ 两处各算一遍）
+            assert_eq!(
+                v["summary"]["nodes"],
+                json!(graph.len()),
+                "{case}: summary.nodes 必须恒等于 @graph 长度（漂了就是两处各算一遍）"
+            );
+            // ② `row_count` 两边同源（meta 借用回执，summary 也是回执的那个值）
+            assert_eq!(
+                v["summary"]["row_count"],
+                json!(r.row_count),
+                "{case}: summary.row_count 必须是回执的 row_count"
+            );
+            assert_eq!(
+                v["summary"]["row_count"], v["meta"]["row_count"],
+                "{case}: summary.row_count 必须恒等于 meta.row_count"
+            );
+            // ③ `@graph` 里没有重复 `@id`（否则「节点数」就没有意义）
+            let ids: Vec<&str> = graph.iter().map(|n| n["@id"].as_str().unwrap()).collect();
+            let mut uniq = ids.clone();
+            uniq.sort_unstable();
+            uniq.dedup();
+            assert_eq!(uniq.len(), ids.len(), "{case}: @graph 里不许有重复 @id：{ids:?}");
+        }
+
+        // 不变式的**适用范围**是「非聚合」：聚合没有实体 ⇒ summary 里只有聚合别名，
+        // ⛔ 不许为了「让不变式好看」给它补一个 nodes/row_count。
+        let agg = value_of(&render(
+            &receipt(&["n"], vec![vec![Some("42")]]),
+            &[agg_col("n", "COUNT")],
+            ONT,
+        ));
+        assert_eq!(agg["@graph"], json!([]));
+        assert!(agg["summary"].get("nodes").is_none(), "聚合结果不该有 nodes：{agg}");
+        assert!(
+            agg["summary"].get("row_count").is_none(),
+            "聚合结果不该有 row_count：{agg}"
         );
     }
 
