@@ -1,5 +1,11 @@
 //! REQ-129 · `ontok doc merge` 的可执行判据（AC-001…AC-008）。
 //!
+//! REQ-130 收尾了两条：
+//! - **N-3**：AC-002 的判据从「整文件 grep」改成「**按条目身份匹配**」，
+//!   并补了反向判据（[`ac002_reverse_injected_excluded_entry_turns_the_criterion_red`]）。
+//! - **N-2**：`doc sign` 多写一栏 `signed_at_source`（`arg` / `system`），
+//!   老产物缺这一栏时按缺省处理（见 AC-003 / AC-004 两节）。
+//!
 //! # 分工（⛔ 不重复判同一件事）
 //!
 //! | 层 | 判据 | 在哪 |
@@ -20,10 +26,11 @@
 //! cargo test --test test_req129_doc_merge
 //! ```
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 // ──────────────────────────────────────────────────────────
 // 夹具与夹具工具
@@ -372,7 +379,125 @@ fn sha256_of(bytes: &[u8]) -> String {
 
 // ──────────────────────────────────────────────────────────
 // AC-002 · 只并 alignable:true
+//
+// ⭐ REQ-130 · N-3：这条判据原来写成「在 merged.json 里 grep 不到这些名字」，
+// 那是**假阳性**：被排除的词会出现在**别的已并入条目**的 `evidence.quote` /
+// `payload.doc_evidence[].quote` 里 —— 那是**原文片段**，不是条目。
+// 真实 fixture 里「积分转赠」就出现在已并入条目 `客户` 的引文里。
+//
+// 所以判据改成**按条目身份**匹配（[`excluded_entries_in`]），并且分工如下：
+//
+// | 判据 | 抓什么 | 在哪 |
+// | --- | --- | --- |
+// | 按条目身份（本文件） | 被排除的概念/关系**变成了一个条目** | [`excluded_entries_in`] |
+// | `excluded_not_alignable` 计数 | 被排除的断言**被当成主张并进了已有条目**（不新增条目，只加 doc_evidence） | `stats.json` |
+//
+// 两条缺一不可：只有身份匹配会漏掉「并进已有条目」；只有计数会漏掉
+// 「计数没算错、但条目还是被塞进去了」。⛔ 整文件 grep 两条都不是。
 // ──────────────────────────────────────────────────────────
+
+/// N-3 · **按条目**判「这些被排除的概念/谓词有没有混进来」（⛔ 不是整文件 grep）。
+///
+/// 只读条目的**身份**字段，⛔ 不读任何 `evidence` / `doc_evidence` / `claim`：
+/// 引文是原文片段，里面提到被排除的词是正常的。条目身份是：
+///
+/// - `add_entity_type`（概念）：`target` / `payload.display_name` / `payload.key`（**相等**才算）
+/// - `add_link_type`（关系）：`target` 的两端、`payload.from_type` / `to_type`（两端 + 表 key）、
+///   `payload.semantic` / `payload.key`（谓词）—— 这些字段**含**被排除词就算（含谓词，
+///   因为夹具里被排除的关系正是「订单 -[退款]-> 客户」，只靠两端查不出来）。
+///
+/// 返回**违规描述**（空 = 绿）。红了要能点名第几条、哪个字段 —— 否则人只能看到一坨红。
+fn excluded_entries_in(doc: &Value, excluded: &[&str]) -> Vec<String> {
+    let mut leaks: Vec<String> = Vec::new();
+    for (i, it) in items(doc).iter().enumerate() {
+        let no = i + 1;
+        match it["kind"].as_str().unwrap_or("") {
+            "add_entity_type" => {
+                let fields = [
+                    ("target", it["target"].as_str().unwrap_or("")),
+                    (
+                        "payload.display_name",
+                        it["payload"]["display_name"].as_str().unwrap_or(""),
+                    ),
+                    ("payload.key", it["payload"]["key"].as_str().unwrap_or("")),
+                ];
+                for term in excluded {
+                    for (field, v) in fields {
+                        // 概念是「名字」，所以判**相等**；引文里那句「支持积分转赠」不该命中。
+                        if v == *term {
+                            leaks.push(format!(
+                                "第 {no} 条：concept 的 {field} = {v:?} —— 被排除的概念成了一个条目"
+                            ));
+                        }
+                    }
+                }
+            }
+            "add_link_type" => {
+                // 两端：target 写成 `A→B`（也接受 `->`），再拆成 A / B
+                let mut identity: Vec<(&str, String)> = Vec::new();
+                if let Some(t) = it["target"].as_str() {
+                    identity.push(("target", t.to_string()));
+                    let normalized = t.replace("->", "→");
+                    for half in normalized.split('→').map(str::trim).filter(|s| !s.is_empty()) {
+                        identity.push(("target 的一端", half.to_string()));
+                    }
+                }
+                for f in ["from_type", "to_type", "key"] {
+                    if let Some(v) = it["payload"][f].as_str() {
+                        identity.push((f, v.to_string()));
+                    }
+                }
+                // 谓词单独点名（别和 from/to 混成一条难读的报错）
+                if let Some(v) = it["payload"]["semantic"].as_str() {
+                    identity.push(("payload.semantic", v.to_string()));
+                }
+                for term in excluded {
+                    for (field, v) in &identity {
+                        if v.contains(term) {
+                            leaks.push(format!(
+                                "第 {no} 条：relation 的 {field} = {v:?} 含被排除的 {term:?}\
+                                 —— 被排除的关系成了一个条目"
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    leaks
+}
+
+/// 从断言 JSONL 里推出「被排除的身份词」：`alignable:false` 的概念取 `name`，
+/// 关系取 `predicate`（⛔ 不拿 subject/object：那两端可能正是已并入的合法实体）。
+fn excluded_terms(jsonl: &str) -> Vec<String> {
+    let mut set: BTreeSet<String> = BTreeSet::new();
+    for (ln, raw) in jsonl.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("断言 JSONL 第 {} 行不是合法 JSON：{e}", ln + 1));
+        if v["alignable"].as_bool() != Some(false) {
+            continue;
+        }
+        match v["kind"].as_str().unwrap_or("") {
+            "concept" => {
+                if let Some(n) = v["name"].as_str() {
+                    set.insert(n.to_string());
+                }
+            }
+            "relation" => {
+                if let Some(p) = v["predicate"].as_str() {
+                    set.insert(p.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    set.into_iter().collect()
+}
 
 #[test]
 fn ac002_only_alignable_true_is_merged() {
@@ -392,15 +517,20 @@ fn ac002_only_alignable_true_is_merged() {
     );
     assert!(o.status.success(), "{}", stderr(&o));
 
-    let text = std::fs::read_to_string(&m).expect("读产物");
-    // AC-002 的判据①：名字 grep 不到
-    assert!(!text.contains("积分转赠"), "future 的概念不许出现在产物里");
-    assert!(!text.contains("退款"), "example 的谓词不许出现在产物里");
+    // AC-002 的判据①（REQ-130 改法）：**按条目身份**判，⛔ 不是整文件 grep
+    let doc = read_json(&m);
+    let terms = excluded_terms(&std::fs::read_to_string(&a).expect("读断言"));
+    assert_eq!(terms, vec!["积分转赠".to_string(), "退款".to_string()], "夹具里的被排除身份词");
+    let leaks = excluded_entries_in(&doc, &terms.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        leaks.is_empty(),
+        "future 的概念 / example 的关系都不许成为条目：{leaks:#?}"
+    );
     // AC-002 的判据②：计数与输入的该类条数相等
     let stats = read_json(&s);
-    assert_eq!(stats["excluded_not_alignable"], serde_json::json!(2));
-    assert_eq!(stats["excluded_future"], serde_json::json!(1));
-    assert_eq!(stats["excluded_example"], serde_json::json!(1));
+    assert_eq!(stats["excluded_not_alignable"], json!(2));
+    assert_eq!(stats["excluded_future"], json!(1));
+    assert_eq!(stats["excluded_example"], json!(1));
     // 闭合式：读到的每一条断言都落进了某一档
     let read = stats["assertions_read"].as_u64().unwrap();
     let sum = ["merged", "excluded_not_alignable", "doc_unmapped", "conflicts"]
@@ -408,6 +538,203 @@ fn ac002_only_alignable_true_is_merged() {
         .map(|k| stats[*k].as_u64().unwrap())
         .sum::<u64>();
     assert_eq!(read, sum, "统计必须闭合（{read} ≠ {sum}）");
+}
+
+/// ⭐ REQ-130 · AC-002 的**反向判据**（「判据有牙」的唯一证明）。
+///
+/// 两半，缺一不可：
+///
+/// ① **假阳性底料**：往**已经并入**的条目（`客户`）的 `payload.doc_evidence[].quote`
+///    里塞一句提到「积分转赠」的原文 ⇒ 按条目判据必须**绿**。
+///    真实 fixture 里就是这样（`客户` 的引文：「平台计划在下一财年支持积分转赠」）。
+///    把判据改回整文件 grep ⇒ 这一半立刻红 —— 这就是 N-3 说的假阳性。
+/// ② **塞条目**：手工往 `items[]` 塞一条 `alignable:false` 的 concept 条目 / 一条
+///    端点含被排除概念的边 / 一条谓词是被排除谓词的边 ⇒ 判据必须**红**，且点名。
+///    把判据改松（只看某个顶层键 / 只数个数）⇒ 这一半红。
+///
+/// 只有①没有② = 判据被改松了没人知道；只有②没有① = 改回 grep 也能绿。
+#[test]
+fn ac002_reverse_injected_excluded_entry_turns_the_criterion_red() {
+    let dir = temp_dir("ac002-reverse");
+    let (a, p) = write_fixtures(&dir, "req129_ac002_rev");
+    let m = dir.join("merged.json");
+    let o = cli(
+        &[
+            "doc", "merge",
+            "--assertions", a.to_str().unwrap(),
+            "--proposal", p.to_str().unwrap(),
+            "--out", m.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+
+    let terms = ["积分转赠", "退款"];
+    let base = items(&read_json(&m));
+    assert!(!base.is_empty(), "夹具必须真的产出条目，否则这条判据空转");
+
+    // ── ① 假阳性底料：引文里出现被排除词 ⇒ 不许判成「并入」 ──
+    let mut bait = base.clone();
+    let victim = bait
+        .iter_mut()
+        .find(|it| it["payload"]["key"] == json!("customers"))
+        .expect("夹具里必须有 customers 条目（both）");
+    victim["payload"]["doc_evidence"]
+        .as_array_mut()
+        .expect("both 条目必须有 doc_evidence")
+        .push(json!({
+            "kind": "concept",
+            "name": "客户",
+            "quote": "## 未来规划\n\n平台计划在下一财年支持积分转赠",
+            "file": "03-points.md",
+            "chunk_id": "aa:367-429",
+            "span": [367, 429]
+        }));
+    let mut bait_doc = read_json(&m);
+    bait_doc["items"] = Value::Array(bait);
+    let leaks = excluded_entries_in(&bait_doc, &terms);
+    assert!(
+        leaks.is_empty(),
+        "引文里提到「积分转赠」≠ 条目被并入（这正是 N-3 的假阳性）：{leaks:#?}"
+    );
+    // ①b 同一份文档，**整文件 grep 会红** —— 证明这一半真的能抓住「判据改回 grep」
+    assert!(
+        serde_json::to_string(&bait_doc).unwrap().contains("积分转赠"),
+        "底料必须能被整文件搜索命中，否则它证明不了 grep 会假红"
+    );
+
+    // ── ② 塞一条 `alignable:false` 的**概念条目** ⇒ 必须红 ──
+    let mut injected = base.clone();
+    injected.push(json!({
+        "kind": "add_entity_type",
+        "target": "积分转赠",
+        "alignable": false,
+        "payload": {"key": "points_transfer", "display_name": "积分转赠"}
+    }));
+    let mut red = read_json(&m);
+    red["items"] = Value::Array(injected);
+    let leaks = excluded_entries_in(&red, &terms);
+    let expect_seq = format!("第 {} 条", base.len() + 1);
+    assert!(
+        !leaks.is_empty(),
+        "塞一条被排除的概念条目，判据必须红（⛔ 只改判据不补反向 = 没验证）"
+    );
+    assert!(
+        leaks.iter().all(|l| l.contains("积分转赠") && l.contains(&expect_seq)),
+        "报错必须点名是哪一条、哪个字段，实际：{leaks:#?}"
+    );
+
+    // ── ②b 关系的**端点**含被排除概念 ⇒ 必须红 ──
+    let mut link_leak = base.clone();
+    link_leak.push(json!({
+        "kind": "add_link_type",
+        "target": "客户→积分转赠",
+        "payload": {
+            "key": "customers_points_transfer",
+            "from_type": "customers",
+            "to_type": "points_transfer",
+            "semantic": "转赠"
+        }
+    }));
+    let mut red = read_json(&m);
+    red["items"] = Value::Array(link_leak);
+    let leaks = excluded_entries_in(&red, &terms);
+    assert!(
+        !leaks.is_empty(),
+        "端点含被排除概念的 relation 条目必须被抓到（subject/object 一侧）"
+    );
+    assert!(leaks.iter().any(|l| l.contains("积分转赠")), "{leaks:#?}");
+
+    // ── ②c 关系的**谓词**是被排除词（夹具里「订单 -[退款]-> 客户」）⇒ 必须红 ──
+    let mut pred_leak = base.clone();
+    pred_leak.push(json!({
+        "kind": "add_link_type",
+        "target": "订单→客户",
+        "payload": {
+            "key": "order_refund_customers",
+            "from_type": "order",
+            "to_type": "customers",
+            "semantic": "退款"
+        }
+    }));
+    let mut red = read_json(&m);
+    red["items"] = Value::Array(pred_leak);
+    let leaks = excluded_entries_in(&red, &terms);
+    assert!(
+        leaks.iter().any(|l| l.contains("退款") && l.contains("payload.semantic")),
+        "谓词是被排除词的 relation 条目必须被抓到：{leaks:#?}"
+    );
+}
+
+/// 真实 fixture 的产物路径（**找不到就响亮 SKIP**，⛔ 不静默当绿）。
+///
+/// 两种布局都认：worktree 内（`<crate>/out/...`）与 workspace 布局
+/// （`<workspace>/code/out/...`，本 worktree 就是这种）。
+fn real_fixture() -> Option<(PathBuf, PathBuf)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut bases = vec![root.to_path_buf()];
+    if let Some(parent) = root.parent() {
+        bases.push(parent.join("code"));
+    }
+    let first = |rel: &str| bases.iter().map(|b| b.join(rel)).find(|p| p.is_file());
+    let assertions = first("out/req116/cache/assertions.jsonl")?;
+    let proposal = first("out/proposal.json")?;
+    Some((assertions, proposal))
+}
+
+/// ⭐ REQ-130 · AC-001/AC-002 在**真实 fixture** 上的判据：
+/// `excluded_not_alignable == 28` **且** 产物里没有任何被排除的条目。
+///
+/// 这条同时是 N-3 的自证：同一份产物里「积分转赠」**确实出现**（在已并入条目
+/// `客户` 的引文里）——所以旧的整文件 grep 判据在这里必红，而按条目的判据必须绿。
+#[test]
+fn ac002_real_fixture_excludes_28_and_no_excluded_entry() {
+    const NAME: &str = "ac002_real_fixture_excludes_28_and_no_excluded_entry";
+    let Some((a, p)) = real_fixture() else {
+        return missing("out/req116/cache/assertions.jsonl", NAME).unwrap();
+    };
+    let dir = temp_dir("ac002-real");
+    let m = dir.join("merged.json");
+    let s = dir.join("stats.json");
+    let o = cli(
+        &[
+            "doc", "merge",
+            "--assertions", a.to_str().unwrap(),
+            "--proposal", p.to_str().unwrap(),
+            "--out", m.to_str().unwrap(),
+            "--stats", s.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "真实 fixture 合并失败：{}", stderr(&o));
+
+    // ① 计数判据（保留：这条是对的）
+    let stats = read_json(&s);
+    assert_eq!(stats["assertions_read"], json!(56), "真实 fixture 是 56 行");
+    assert_eq!(
+        stats["excluded_not_alignable"],
+        json!(28),
+        "56 行里 28 条 alignable:false ⇒ 必须全记在排除档：{stats}"
+    );
+
+    // ② 按条目判据
+    let terms = excluded_terms(&std::fs::read_to_string(&a).expect("读断言"));
+    assert_eq!(terms.len(), 2, "真实 fixture 有两类被排除概念：{terms:?}");
+    let doc = read_json(&m);
+    let leaks = excluded_entries_in(&doc, &terms.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        leaks.is_empty(),
+        "真实 fixture 上不许有被排除的条目：{leaks:#?}"
+    );
+
+    // ③ 假阳性证据：整文件里**确实**能搜到被排除的词（在引文里）
+    //    ⇒ 证明「改回 grep 就假红」不是纸上谈兵。
+    let raw = std::fs::read_to_string(&m).expect("读产物");
+    assert!(
+        raw.contains("积分转赠"),
+        "真实产物里应当保留这个假阳性证据（引文提到被排除词）；\
+         若哪天夹具变了，这条判据要重新说明它为什么还有意义"
+    );
 }
 
 // ──────────────────────────────────────────────────────────
@@ -975,16 +1302,20 @@ fn q1_sign_is_idempotent_byte_stable_and_deterministic() {
     let b1 = std::fs::read(&s1).expect("读 s1");
     assert_eq!(b1, std::fs::read(&s2).expect("读 s2"), "同参数两次必须逐字节相同");
 
-    // ④ 其余字节不变：签后文本 = 原文本 + 恰好两行（reviewed_by / signed_at）
+    // ④ 其余字节不变：签后文本 = 原文本 + 恰好两行（signed_at / signed_at_source）
     //
-    // 两边都按「去掉 `reviewed_by` 与 `signed_at` 行」比 —— 因为签字前的
+    // 两边都按「去掉 `reviewed_by` 与签字两栏」比 —— 因为签字前的
     // `reviewed_by: null` 与签字后的 `reviewed_by: "qa-req129"` 是同一行的两种值，
     // 直接比会把「这一栏的值变了」误判成「别的行被改了」。
     let orig = std::fs::read_to_string(&m).expect("读输入");
     let signed = String::from_utf8(b1.clone()).expect("UTF-8");
     let strip = |text: &str| -> Vec<String> {
         text.lines()
-            .filter(|l| !l.contains("\"signed_at\"") && !l.contains("\"reviewed_by\":"))
+            .filter(|l| {
+                !l.contains("\"signed_at\"")
+                    && !l.contains("\"signed_at_source\"")
+                    && !l.contains("\"reviewed_by\":")
+            })
             .map(str::to_string)
             .collect()
     };
@@ -992,12 +1323,12 @@ fn q1_sign_is_idempotent_byte_stable_and_deterministic() {
     let before_lines = strip(&orig);
     assert_eq!(
         after_lines, before_lines,
-        "除这两栏外，其余行必须逐字节相同"
+        "除这三栏外，其余行必须逐字节相同"
     );
     assert_eq!(
         signed.lines().count(),
-        orig.lines().count() + 1,
-        "签字只该多加 `signed_at` 一行（`reviewed_by` 是改值不是加行）"
+        orig.lines().count() + 2,
+        "签字只该多加 `signed_at` 与 `signed_at_source` 两行（`reviewed_by` 是改值不是加行）"
     );
 
     // ⑤ 重复签 ⇒ 幂等（exit 0、值不变、字节相同）
@@ -1036,6 +1367,256 @@ fn q1_sign_is_idempotent_byte_stable_and_deterministic() {
         std::fs::read(&s1).expect("读 s1"),
         b1,
         "幂等的就地重签不该改字节"
+    );
+}
+
+// ──────────────────────────────────────────────────────────
+// REQ-130 · AC-003 / AC-004 · `signed_at_source` + 老产物兼容
+//
+// 审计要能回答「这个时间是人给的还是机器取的」：`--at` 给的是**声明**（可复现），
+// 省略时取的是**记录**（只属于那一次运行），可信度不同 ⇒ 必须分栏记。
+// 这一栏**不改变 Q-3 的裁定**（`--at` 仍可选），只标注来源。
+// ──────────────────────────────────────────────────────────
+
+/// 夹具里**被签过**的那一条（必须恰有一条 —— 否则判据空转或走眼）。
+fn the_signed_item(doc: &Value) -> Value {
+    let signed: Vec<Value> = items(doc)
+        .into_iter()
+        .filter(|it| !it["reviewed_by"].is_null())
+        .collect();
+    assert_eq!(signed.len(), 1, "夹具里应当恰有 1 条被签的条目：{signed:#?}");
+    signed[0].clone()
+}
+
+/// 把渲染好的 JSON 里的 `signed_at_source` 全去掉（模拟 REQ-129 的老产物）。
+fn without_signed_at_source(doc: &Value) -> Value {
+    let mut v = doc.clone();
+    for it in v["items"].as_array_mut().expect("items") {
+        if let Some(o) = it.as_object_mut() {
+            o.remove("signed_at_source");
+        }
+    }
+    v
+}
+
+/// ⭐ AC-003（前半）：给了 `--at` ⇒ `signed_at_source: "arg"`。
+#[test]
+fn ac003_signed_at_source_is_arg_when_at_is_given() {
+    let dir = temp_dir("src-arg");
+    let m = merged_fixture(&dir, "req130_src_arg");
+    let out = dir.join("signed-arg.json");
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req130",
+            "--out", out.to_str().unwrap(),
+            "--at", AT,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+
+    let it = the_signed_item(&read_json(&out));
+    assert_eq!(
+        it["signed_at_source"], json!("arg"),
+        "给了 --at ⇒ 来源是 arg（人给的声明）：{it}"
+    );
+    assert_eq!(it["signed_at"], json!(AT), "时间与来源必须同进同退");
+    assert!(
+        stderr(&o).contains("时间来源") && stderr(&o).contains("arg"),
+        "报告里要写出这一栏（可数、可见）：{}",
+        stderr(&o)
+    );
+}
+
+/// ⭐ AC-003（后半）：省略 `--at` ⇒ `signed_at_source: "system"`，且时间**确实**是
+/// 本次运行的系统时钟（否则「恒写 system + 恒写死时间」也能骗过这条判据）。
+#[test]
+fn ac003_signed_at_source_is_system_when_at_is_omitted() {
+    let dir = temp_dir("src-system");
+    let m = merged_fixture(&dir, "req130_src_system");
+    let out = dir.join("signed-system.json");
+    let before = chrono::Utc::now();
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req130",
+            "--out", out.to_str().unwrap(),
+        ],
+        None,
+    );
+    let after = chrono::Utc::now();
+    assert!(o.status.success(), "{}", stderr(&o));
+
+    let it = the_signed_item(&read_json(&out));
+    assert_eq!(
+        it["signed_at_source"], json!("system"),
+        "省略 --at ⇒ 来源是 system（本次运行取的记录）：{it}"
+    );
+    let written = chrono::DateTime::parse_from_rfc3339(it["signed_at"].as_str().unwrap())
+        .expect("signed_at 必须是 RFC3339");
+    assert!(
+        written.with_timezone(&chrono::Utc) >= before - chrono::Duration::seconds(2)
+            && written.with_timezone(&chrono::Utc) <= after + chrono::Duration::seconds(2),
+        "system 来源的时间必须落在这次运行的时钟窗口里：{} ∉ [{before}, {after}]",
+        it["signed_at"]
+    );
+    assert!(
+        stderr(&o).contains("时间来源") && stderr(&o).contains("system"),
+        "报告里要写出这一栏：{}",
+        stderr(&o)
+    );
+}
+
+/// ⛔ AC-003 反空转：`arg` 与 `system` 必须真的**分得开** ——
+/// 同一条目、同一份输入，只差「有没有给 `--at`」，两栏值必须不同。
+#[test]
+fn ac003_arg_and_system_are_distinguishable() {
+    let dir = temp_dir("src-both");
+    let m = merged_fixture(&dir, "req130_src_both");
+    let with_at = dir.join("with-at.json");
+    let without_at = dir.join("without-at.json");
+    for (out, at) in [(&with_at, Some(AT)), (&without_at, None)] {
+        let mut args = vec![
+            "doc".to_string(), "sign".to_string(),
+            "--file".to_string(), m.to_str().unwrap().to_string(),
+            "--item".to_string(), "relation:订单→套餐模板".to_string(),
+            "--by".to_string(), "qa-req130".to_string(),
+            "--out".to_string(), out.to_str().unwrap().to_string(),
+        ];
+        if let Some(t) = at {
+            args.push("--at".to_string());
+            args.push(t.to_string());
+        }
+        let strs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = cli(&strs, None);
+        assert!(o.status.success(), "{}", stderr(&o));
+    }
+    let a = the_signed_item(&read_json(&with_at));
+    let b = the_signed_item(&read_json(&without_at));
+    assert_eq!(a["signed_at_source"], json!("arg"));
+    assert_eq!(b["signed_at_source"], json!("system"));
+    assert_ne!(
+        a["signed_at_source"], b["signed_at_source"],
+        "两种情形必须分得开（否则这一栏等于没写）"
+    );
+}
+
+/// ⭐ AC-004：读回**缺少** `signed_at_source` 的老产物 ⇒ 不报错（按缺省处理）。
+///
+/// 两个方向都判：
+/// 1. 对老产物**重签同一条**（幂等）⇒ exit 0、字节不变（⛔ 不补写，也不 panic）；
+/// 2. 在同一份老产物上签**另一条** ⇒ 新签名带 `signed_at_source`，老那条仍缺这一栏。
+///
+/// ⛔ 「不补写」是刻意的：老产物里 `arg` 与 `system` 已经分不出来，
+/// 补一个 `system` 就是**伪造审计结论**。缺字段比假字段诚实。
+#[test]
+fn ac004_legacy_artifact_without_source_is_read_back_without_error() {
+    let dir = temp_dir("legacy");
+    let m = merged_fixture(&dir, "req130_legacy");
+    let signed = dir.join("signed.json");
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req130",
+            "--out", signed.to_str().unwrap(),
+            "--at", AT,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+
+    // 造一份「REQ-129 老产物」：签字在，但没有 signed_at_source
+    let legacy = dir.join("legacy-signed.json");
+    let legacy_doc = without_signed_at_source(&read_json(&signed));
+    std::fs::write(
+        &legacy,
+        serde_json::to_string_pretty(&legacy_doc).expect("序列化") + "\n",
+    )
+    .expect("写老产物");
+    let legacy_text = std::fs::read_to_string(&legacy).expect("读老产物");
+    assert!(
+        !legacy_text.contains("signed_at_source"),
+        "夹具必须是老产物：没有这一栏"
+    );
+
+    // ① 重签同一条 ⇒ 幂等，不报错、字节不变
+    let before_bytes = std::fs::read(&legacy).expect("读老产物");
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", legacy.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req130",
+            "--in-place",
+            "--at", AT,
+        ],
+        None,
+    );
+    assert!(
+        o.status.success(),
+        "老产物（缺 signed_at_source）必须能读回、不许报错：{}",
+        stderr(&o)
+    );
+    assert_eq!(
+        std::fs::read(&legacy).expect("读老产物"),
+        before_bytes,
+        "幂等的重签不许改字节（更不许偷偷补上这一栏）"
+    );
+    let text = format!("{}{}", stdout(&o), stderr(&o));
+    assert!(
+        text.contains("老产物") && text.contains("缺省"),
+        "报告要说清这是「老产物缺字段、按缺省处理」：{text}"
+    );
+    let doc = read_json(&legacy);
+    let it = the_signed_item(&doc);
+    assert!(
+        it.get("signed_at_source").is_none(),
+        "⛔ 不补写：老产物里的来源仍然是未知"
+    );
+
+    // ② 同一份老产物上签**另一条** ⇒ 新签名带来源，老那条不变
+    let out = dir.join("legacy-plus.json");
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", legacy.to_str().unwrap(),
+            "--item", "entity:客户", // 夹具里 customers 是 both ⇒ 可签
+            "--by", "qa-req130",
+            "--out", out.to_str().unwrap(),
+            "--at", AT,
+        ],
+        None,
+    );
+    assert!(
+        o.status.success(),
+        "老产物里另一条可签条目也必须能签：{}",
+        stderr(&o)
+    );
+    let doc = read_json(&out);
+    let fresh: Vec<Value> = items(&doc)
+        .into_iter()
+        .filter(|it| it["payload"]["key"] == json!("customers"))
+        .collect();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(
+        fresh[0]["signed_at_source"], json!("arg"),
+        "新签名必须带来源：{fresh:?}"
+    );
+    let old: Vec<Value> = items(&doc)
+        .into_iter()
+        .filter(|it| it["payload"]["key"] == json!("order_template_id__package_templates"))
+        .collect();
+    assert_eq!(old.len(), 1);
+    assert!(
+        old[0]["signed_at_source"].is_null(),
+        "老签名（本来就缺这一栏）不许被顺手补写：{old:?}"
     );
 }
 

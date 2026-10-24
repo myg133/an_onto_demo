@@ -68,7 +68,7 @@ pub enum Cmd {
     /// | --- | --- | --- | --- |
     /// | `doc ingest` | `.md` / `.txt` → 带证据片段的 concept / relation 断言 | 是 | 否 |
     /// | `doc merge` | 断言 → 机械并进一份提案（同 `proposal.json` 形状） | 否 | 否 |
-    /// | `doc sign` | 给一条 doc/both 条目签字（只写 `reviewed_by` + `signed_at`） | 否 | 否 |
+    /// | `doc sign` | 给一条 doc/both 条目签字（只写 `reviewed_by` + `signed_at` + `signed_at_source`） | 否 | 否 |
     ///
     /// 【可以照抄的一整条】
     ///
@@ -457,7 +457,11 @@ pub enum DocCmd {
     /// `relation:order_template_id__package_templates`）、以及 `apply` 报错里那个
     /// `136:add_link_type:订单→套餐模板`。⛔ 不认数组下标（顺序会变，按它签迟早签错人）。
     /// ⚠️ 只签 `origin: doc | both` 的条目；DB 轨条目请走 `review decide`（两条轨有意分开）。
-    /// ⚠️ 只写 `reviewed_by` + `signed_at` 两栏，**其余字节不变**；重复签同一个人 ⇒ 幂等。
+    /// ⚠️ 只写 `reviewed_by` + `signed_at` + `signed_at_source` 三栏，**其余字节不变**；
+    /// 重复签同一个人 ⇒ 幂等。
+    /// ⚠️ `signed_at_source` 标的是时间来源：给了 `--at` ⇒ `arg`（声明，可复现）；
+    /// 省略 ⇒ `system`（本次运行的系统时钟，记录）。REQ-129 的老产物没有这一栏 ⇒
+    /// 读回按缺省处理（不报错、也⛔ 不补写）。
     /// ⚠️ ⛔ 不就地改输入：必须给 `--out`（或显式 `--in-place`）。
     /// ⚠️ 签字时间是事实，所以默认取当前 UTC 时间；要逐字节复现就给 `--at <RFC3339>`。
     #[command(verbatim_doc_comment)]
@@ -2434,13 +2438,19 @@ async fn doc_sign_cmd(
 
     let text = std::fs::read_to_string(file)
         .with_context(|| format!("读不到提案文件：{}", file.display()))?;
-    let at = match at {
-        Some(t) => t.to_string(),
-        None => chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    // ⭐ REQ-130 · 时间的**来源**必须跟时间一起记下来：
+    // `--at` 给了 ⇒ `arg`（人给的**声明**，可复现）；省略 ⇒ `system`（本次取的**记录**）。
+    // ⛔ 这一栏不改变 `--at` 可选（Q-3），只是把「这个时间是谁定的」写进产物。
+    let (at, at_source) = match at {
+        Some(t) => (t.to_string(), dm::AT_SOURCE_ARG),
+        None => (
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            dm::AT_SOURCE_SYSTEM,
+        ),
     };
 
     // 纯签字：失败 ⇒ 一个字节都不写。
-    let outcome = dm::sign(&text, item, by, &at)?;
+    let outcome = dm::sign(&text, item, by, &at, at_source)?;
     write_local(target, outcome.rendered.as_bytes())?;
 
     eprintln!("✓ 文档条目签字");
@@ -2458,7 +2468,16 @@ async fn doc_sign_cmd(
             ""
         }
     );
-    eprintln!("  其余字节    : 未变（只写了 reviewed_by / signed_at 两栏）");
+    eprintln!(
+        "  时间来源    : {}{}",
+        outcome.signed_at_source,
+        match outcome.signed_at_source.as_str() {
+            dm::AT_SOURCE_ARG => "（--at 给的：声明，可复现）",
+            dm::AT_SOURCE_SYSTEM => "（本次运行的系统时钟：记录，不可复现为同一秒）",
+            _ => "（老产物没有 signed_at_source：按缺省处理，⛔ 不补写）",
+        }
+    );
+    eprintln!("  其余字节    : 未变（只写了 reviewed_by / signed_at / signed_at_source 三栏）");
     if !outcome.input_canonical {
         eprintln!(
             "  ⚠ 格式提示  : 输入不是规范格式（键序/缩进），本次输出已规范化 —— 条目内容未变"
