@@ -35,8 +35,12 @@
 
 ### AC-006 · 普通模式零行为变化
 
-- 不带 `--ontology-only` 时，anspire 项目上：health/catalog/TTL/SPARQL 与基线一致（catalog counts、TTL 字节数、SPARQL 行数）
-- 判据：三个数字对比基线（TTL 293,814 B / catalog 83 类 / SPARQL 5 行）
+- 不带 `--ontology-only` 时，anspire 项目上：health/catalog/TTL/SPARQL 与基线一致
+- **具体数字（BA 订正，实测自 `5163cfb` 二进制）**：
+  - catalog：`classes=84` · `properties=952` · `relations=70` · `excluded_relations=8` · `skipped_classes=0`
+  - TTL 客户视图：**293,814 B**，sha256 `A420BBCE…C070`
+  - SPARQL `SELECT ?m WHERE { ?m a :llm_model } LIMIT 5` ⇒ **5 行**
+- ⚠️ **不要把 TTL 的数字和 catalog 的数字混用**：TTL 里是 83 类 / 78 条边（70 true + 1 inherit + 7 false）；catalog 只列可查的 70 条，另报 `excluded_relations=8`
 
 ### AC-007 · 模式互斥
 
@@ -108,3 +112,48 @@ Dev 提出可把 `feature/REQ-135` 快进合入本分支以拿到 `/metrics`。
 **理由**：MCP 客户端把 HTTP 5xx 当**传输故障**会重试——而 R4 恰恰说"重试无效"。
 
 **要求**：两边 `code` 与 `hint` **逐字相同**，并在测试里断言这一点（这才叫"同语义"）。
+
+
+---
+
+## 四 · 交付与两条 **AC 数字勘误**（2026-10-24）
+
+### E-1 · AC-002 的 `properties` 是 47（不是 67）
+
+已裁定 R-2。原文的 67 = 47 + 20 个**我合成出来的 `id` 列**。已改。
+
+### E-2 · AC-006 的 catalog 数字：**84 类 / 70 关系 / excluded 8**（不是 83 / 78）
+
+**我错了**，实测（`5163cfb` 二进制，我自己跑的）：
+
+```
+classes=84 · properties=952 · relations=70 · excluded_relations=8 · skipped_classes=0
+```
+
+**错因**：我把 **TTL 的数字**当成了 **catalog 的数字**——
+
+| 口径 | 类 | 关系 |
+| --- | --- | --- |
+| **TTL**（客户视图） | 83 | **78**（70 `true` + 1 `inherit` + 7 `false`） |
+| **catalog**（可查的） | **84** | **70** + `excluded_relations=8` |
+
+**教训**：这两个口径**不是一回事**，TTL 里有证据等级不全的边，catalog 只列能真查的。
+写 AC 时必须写清是**哪个口径**的数字。
+
+### S-1 · 「两个模式只在过滤处分叉」——**放宽为「只在过滤与取值处分叉」**
+
+Dev 指出：它在**取值**上也分叉了（`datatype` 走 schema vs 启发式、`primary_key` 有 vs 空、`display_name` 只在有快照事实时出现）。
+
+**裁定：接受**，理由：
+
+| 项 | 判断 |
+| --- | --- |
+| 枚举来自哪 | 同一个 `snapshot_index()`（`catalog.rs:266`），无分叉 |
+| 取值能不能一致 | **不可能**——没有 schema 的模式拿不出 schema 派生的值 |
+| 硬要一致会怎样 | 只能**造假**（编一个 `primary_key` 或猜一个 `datatype`），正是需求「不做」的事 |
+
+⇒ **纪律 H 的准确表述**：**枚举同一处，取值按模式如实给（缺就缺），⛔ 不许造假填平。**
+
+### S-2 · MCP `sparql_query` 走 HTTP 200
+
+按 R-3，已实测 `code`/`hint` 与 REST **逐字相同**。这是有意的：MCP 客户端把 5xx 当传输故障会重试，而 R4 说「重试无效」。
