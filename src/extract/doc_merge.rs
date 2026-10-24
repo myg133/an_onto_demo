@@ -1,12 +1,13 @@
-//! **REQ-129 · 文档断言 → 本体提案** 的机械合并（`ontok doc merge`）。
+//! **REQ-129 · 文档断言 → 本体提案** 的机械合并（`ontok doc merge`）+ 签字（`ontok doc sign`）。
 //!
 //! # 一句话
 //!
 //! REQ-116 把文档变成了**带逐字证据的断言**（`assertions.jsonl`）；本模块把它们
-//! **机械地**并进一份提案（`proposal.json`），好让那条链路继续往下走：
+//! **机械地**并进一份提案（`proposal.json`），再让一条签了字的条目进入那条链路：
 //!
 //! ```text
 //! assertions.jsonl ──合并（本模块，纯函数）──▶ merged.json（与 proposal.json 同形状）
+//!                                              ├─ doc sign（只写 reviewed_by / signed_at）
 //!                                              └─ propose import → review decide → proposal apply
 //! ```
 //!
@@ -16,11 +17,11 @@
 //! | --- | --- | --- |
 //! | 1 | 只并 `alignable: true`；`future` / `example` 排除并计数 | [`exclusion`]，按模态分档 |
 //! | 2 | doc 条目 band 最高 `medium`、`reviewed_by: null`；⛔ 不许 `strong` | [`cap_band`]（**唯一**的压档实现）+ [`DOC_BAND_CAP`] |
-//! | 3 | 关系必须有显式 `maps_to`（child 列 + parent 列）；没有 ⇒ `doc_unmapped`；⛔ 不许猜表 | [`Index::resolve_relation`]：三个端点各自对提案校验 |
+//! | 3 | 关系必须有显式 `maps_to`（child 列 + parent 列）；没有 ⇒ `doc_unmapped`；⛔ 不许猜表 | [`Index::resolve_relation`]：端点逐个校验（给了 `--schema` 就严格到列） |
 //! | 4 | 同实体 ⇒ 一条，`origin: "both"`，两侧证据都保留 | [`Slot`] + `payload.doc_evidence`（DB 的 `payload.evidence` 原样不动） |
 //! | 5 | 冲突双保留 + `applicable: false` | [`Conflict`]（`doc_says` / `db_says` 都在） |
 //! | 6 | 确定性：同一输入两次 ⇒ 逐字节相同 | 无时间戳 / 无随机 / 全程 `BTreeMap` + 稳定排序 + [`render_merged`] |
-//! | 7 | 未签 ⇒ apply 时忽略 | 本模块只写 `reviewed_by: null`；忽略发生在 `domain::apply::unsigned_doc_only`（**同一判据**） |
+//! | 7 | 未签 ⇒ apply 时忽略 | 合并器只写 `reviewed_by: null`；签字走 [`sign`]（文件级、只写两栏）；忽略发生在 `domain::apply::unsigned_doc_only`（**同一判据**） |
 //!
 //! # 合并器**只做机械对齐**，不做语义猜测（demand §「关键裁定」）
 //!
@@ -33,22 +34,26 @@
 //! ⛔ 没有第三条。本模块**没有任何**模糊匹配 / 编辑距离 / 词干 / 向量相似度 ——
 //! 「『套餐』这词像 `package_templates` 就自动映射」正是 demand 点名不许做的事。
 //!
-//! # 校验面的唯一来源是**提案自己**
+//! # 校验面：提案是**必答项**，`schema.json` 是**严格档**（`--schema`）
 //!
-//! 命令签名里没有 `--schema`（demand 钉死的三条必填参数）。这不是偷懒：
 //! `proposal apply` 判定一条关系能不能建的判据就是**提案里的实体集合**
-//! （`domain::apply::ApplyError::DanglingLink`）。若合并器拿另一份 `schema.json`
-//! 校验，就会出现「合并器说表存在、apply 说两端不存在」的两套事实。
+//! （`domain::apply::ApplyError::DanglingLink`）。所以「表是否存在于提案」永远是
+//! 必答项 —— 若只信 `schema.json`，就会出现「合并器说表存在、apply 说两端不存在」。
 //!
 //! ⇒ 表 = `add_entity_type.payload.key`；列 = 该实体 `payload.properties[].column`。
 //!
+//! 但提案里**没有主键列**（抽取侧把 PK 剥掉了，见 `domain::apply` B-2），父端列
+//! （`customers.id`）只能靠约定名顶着。**给了 `--schema` 就严格校验**（表/列都查，
+//! 含父端主键列）；**没给**则退回 fallback，并把 fallback 的用量记进 stats
+//! （[`MergeStats::parent_key_id_convention`]）—— AC-004 订正后的口径是
+//! 「给了 `--schema` 时 0 例外；没给时 fallback 必须可数、可见」。
+//!
 //! # 已知限制（⛔ 不许写成「已支持」）
 //!
-//! - 🔴 **父端列校验不完整**：抽取侧把主键列从 `properties` 里剥掉了
-//!   （`domain::apply` B-2 记着这条），所以 `customers.id` 这类父端列在提案里**查不到**。
-//!   本模块只接受「列在 properties 里」或「列名恰好是 `id`」（后者记
-//!   [`MergeStats::parent_key_id_convention`]，**可见**）；其它一律 `doc_unmapped`。
-//!   严格校验需要 `schema.json`，本轮命令签名里没有它 —— 已登记为限制。
+//! - **没给 `--schema` 时父端列校验不完整**：`customers.id` 这类父端列在提案里
+//!   **查不到**，只接受「列在 properties 里」或「列名恰好是 `id`」（后者记
+//!   [`MergeStats::parent_key_id_convention`] + stderr 警告）。要 0 例外请给
+//!   `--schema <schema.json>` —— 那条路才真的查主键列。
 //! - **不许新增实体**：doc 概念映射不到提案里的实体 ⇒ `doc_unmapped`。
 //!   理由与上一条同源：凭空造一张表，apply 就会写进一个没有任何列的本体类。
 //!   所以 `origin: "doc"` 的**条目只可能是关系**（`add_link_type`）。
@@ -64,8 +69,12 @@
 //! - **doc 条目没有置信度分数**（`confidence` 块）：它是 ADR-005 的语义提案形状，
 //!   需要 `method` + `signals`；文档断言没有这两种东西。所以 doc 条目的置信度只有
 //!   `band` 一栏 —— ⛔ 不编一个 0.5 分出来。
-//! - **合并器会重置已有签名**：`reviewed_by` 恒写 `null`（规则 2 是绝对的）。
-//!   重跑合并 = 重新生成提案 ⇒ 之前的签字作废，计数在 [`MergeStats::reviewed_by_reset`]。
+//! - **合并器会重置已有签名**：`reviewed_by` 恒写 `null`（规则 2 是绝对的），
+//!   `signed_at` 一并清掉。重跑合并 = 重新生成提案 ⇒ 之前的签字作废，
+//!   计数在 [`MergeStats::reviewed_by_reset`]。
+//! - **签字时间是事实，不是渲染选项**：`doc sign` 省略 `--at` 时取系统时钟，
+//!   所以「逐字节可复现」的口径是「同一份输入 + 同一组参数（含 `--at`）」；
+//!   重复签同一个人时**不改写**已有的 `signed_at`（幂等）。
 //!
 //! # 本模块零 I/O
 //!
@@ -321,6 +330,15 @@ pub struct MergeStats {
     pub reviewed_by_reset: usize,
     /// 父端列只靠 [`PK_CONVENTION`] 通过的断言数（口径见模块头已知限制）。
     pub parent_key_id_convention: usize,
+    /// ⭐ `--schema` 严格面：本次是否给了真实 schema（`true` ⇒ 下面两个 fallback 计数必须是 0）。
+    pub schema_checked: bool,
+    /// 严格面的规模（schema 里几张表）—— 「没查」与「查了 0 张」必须可区分。
+    pub schema_tables: usize,
+    /// 给了 `--schema` 时，child 列只出现在 schema、不在提案 `properties` 里的条数。
+    pub child_column_schema_only: usize,
+    /// 给了 `--schema` 时，父端列只出现在 schema、不在提案 `properties` 里的条数
+    /// （父端主键列的正常路径 —— 这也是「严格校验真的用上了」的证据）。
+    pub parent_column_schema_only: usize,
     /// 关系断言没写基数、用了 `N:1` 默认值的条数。
     pub cardinality_defaulted: usize,
     /// 未映射按原因分档（键是稳定码，`BTreeMap` ⇒ 输出顺序确定）。
@@ -360,6 +378,9 @@ impl MergeStats {
             "merged_both": self.merged_both,
             "merged_doc_only": self.merged_doc_only,
             "band_cap": DOC_BAND_CAP,
+            "schema_checked": self.schema_checked,
+            "schema_tables": self.schema_tables,
+            "parent_key_id_convention": self.parent_key_id_convention,
             "unsigned_doc_items_are_ignored_on_apply": true,
         })
     }
@@ -383,12 +404,68 @@ pub fn render_stats(stats: &MergeStats) -> Result<String> {
 }
 
 // ──────────────────────────────────────────────────────────
+// 可选的真实 schema（`--schema`）—— 严格校验面
+// ──────────────────────────────────────────────────────────
+
+/// 真实库 schema 的**只读索引**（`ontok-introspect` 的 `schema.json`）。
+///
+/// # 为什么需要它（AC-004 的原话）
+///
+/// 「`M` 中所有 `maps_to` 的表/列都存在于 `schema.json`」。提案里**没有主键列**
+/// （抽取侧把 PK 从 `properties` 里剥掉了，见 `domain::apply` B-2），所以
+/// `customers.id` 这类**父端列**无法用提案校验 —— 只能靠约定名 `id` 顶着。
+/// 给了 `--schema` 就**严格**校验（0 例外）；不给就退回 fallback，
+/// 并把 fallback 的用量记进 stats（**可数、可见**，见
+/// [`MergeStats::parent_key_id_convention`]）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaIndex {
+    tables: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl SchemaIndex {
+    /// 从 `ontok-introspect` 的报告建索引（**唯一**的构造入口 —— 形状只有一处）。
+    pub fn from_report(report: &crate::extract::introspect::SchemaReport) -> Self {
+        let mut tables = BTreeMap::new();
+        for t in &report.tables {
+            let cols = t.columns.iter().map(|c| c.name.clone()).collect();
+            tables.insert(t.name.clone(), cols);
+        }
+        Self { tables }
+    }
+
+    /// 表数（报告里报一句「校验面多大」，免得人以为「没查」）。
+    pub fn table_count(&self) -> usize {
+        self.tables.len()
+    }
+
+    pub fn has_table(&self, table: &str) -> bool {
+        self.tables.contains_key(table)
+    }
+
+    pub fn has_column(&self, table: &str, column: &str) -> bool {
+        self.tables
+            .get(table)
+            .is_some_and(|cols| cols.contains(column))
+    }
+}
+
+/// 合并的选项（今天是 `--schema`；留结构体是为了不生出第二个 `merge_*` 变体）。
+#[derive(Debug, Clone, Default)]
+pub struct MergeOptions {
+    /// `Some` ⇒ **严格**校验 `maps_to` 的每个表/列（含父端主键列）。
+    pub schema: Option<SchemaIndex>,
+}
+
+// ──────────────────────────────────────────────────────────
 // 提案索引（**校验面的唯一来源**）
 // ──────────────────────────────────────────────────────────
 
 /// 提案里一个实体（表）的可用信息。
 #[derive(Debug, Clone, Default)]
 struct Entity {
+    /// 人读名（doc-only 条目的 `target` 用它 —— 与 DB 侧条目的写法一致，
+    /// 于是 `apply` 的报错与 `doc sign --item relation:订单→套餐模板` 都是人话）。
+    display_name: String,
     columns: BTreeSet<String>,
 }
 
@@ -462,7 +539,8 @@ impl Index {
                     let display_name = payload
                         .get("display_name")
                         .and_then(Value::as_str)
-                        .unwrap_or(&key);
+                        .unwrap_or(&key)
+                        .to_string();
                     let aliases: Vec<String> = payload
                         .get("aliases")
                         .and_then(Value::as_array)
@@ -484,7 +562,7 @@ impl Index {
                         })
                         .unwrap_or_default();
                     for n in std::iter::once(key.as_str())
-                        .chain(std::iter::once(display_name))
+                        .chain(std::iter::once(display_name.as_str()))
                         .chain(aliases.iter().map(String::as_str))
                     {
                         let n = norm_name(n);
@@ -493,7 +571,13 @@ impl Index {
                         }
                     }
                     ix.entity_items.insert(key.clone(), Slot::Existing(i));
-                    ix.entities.insert(key, Entity { columns });
+                    ix.entities.insert(
+                        key,
+                        Entity {
+                            display_name,
+                            columns,
+                        },
+                    );
                 }
                 "add_link_type" => {
                     let from = payload.get("from_type").and_then(Value::as_str);
@@ -521,6 +605,7 @@ impl Index {
         &self,
         c: &ConceptAssertion,
         maps: Option<&MapsTo>,
+        opts: &MergeOptions,
     ) -> std::result::Result<String, Unmapped> {
         if let Some(m) = maps {
             if m.child.is_some() || m.parent.is_some() {
@@ -533,7 +618,21 @@ impl Index {
                 ));
             }
             match m.table.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(t) if self.entities.contains_key(t) => return Ok(t.to_string()),
+                Some(t) if self.entities.contains_key(t) => {
+                    // ⭐ --schema：概念映射的表也必须在**真实库**里（AC-004 的字面要求）
+                    if let Some(schema) = &opts.schema {
+                        if !schema.has_table(t) {
+                            return Err(Unmapped::new(
+                                "table_not_in_schema",
+                                format!(
+                                    "concept「{}」的 maps_to.table = {t:?} 不在 schema.json 里",
+                                    c.name
+                                ),
+                            ));
+                        }
+                    }
+                    return Ok(t.to_string());
+                }
                 Some(t) => {
                     return Err(Unmapped::new(
                         "table_not_in_proposal",
@@ -586,13 +685,17 @@ impl Index {
 
     /// 关系 → 一条边的实现（`Ok`）或未映射原因（`Err`）。
     ///
-    /// **三个端点逐一对提案校验**（规则 3）：child 表、child 列、parent 表。
-    /// parent 列的口径见模块头的已知限制（主键列被抽取侧剥掉了）。
+    /// **端点逐一对齐**（规则 3）：
+    /// - 两张表必须在**提案的实体集合**里（`apply` 的 `DanglingLink` 同一条判据）；
+    /// - 给了 `--schema` ⇒ 每个表/列（**含父端主键列**）必须在真实 schema 里；
+    /// - 没给 `--schema` ⇒ fallback：列必须在 `properties` 里，父端列额外接受约定名
+    ///   `id`（并计数 —— AC-004 订正后要求 fallback「可数可见」）。
     fn resolve_relation(
         &self,
         r: &RelationAssertion,
         maps: Option<&MapsTo>,
         stats: &mut MergeStats,
+        opts: &MergeOptions,
     ) -> std::result::Result<LinkTarget, Unmapped> {
         let Some(m) = maps else {
             return Err(Unmapped::new(
@@ -646,32 +749,63 @@ impl Index {
                 ));
             }
         }
+        // ⭐ 严格面（`--schema`）：**每个端点**都要在真实 schema 里，0 例外。
+        if let Some(schema) = &opts.schema {
+            for (role, ep) in [("child", child), ("parent", parent)] {
+                if !schema.has_table(&ep.table) {
+                    return Err(Unmapped::new(
+                        "table_not_in_schema",
+                        format!(
+                            "{} -[{}]-> {}：maps_to.{role}.table = {:?} 不在 schema.json 里",
+                            r.subject, r.predicate, r.object, ep.table
+                        ),
+                    ));
+                }
+                if !schema.has_column(&ep.table, &ep.column) {
+                    return Err(Unmapped::new(
+                        "column_not_in_schema",
+                        format!(
+                            "{} -[{}]-> {}：maps_to.{role} = {}.{} —— schema.json 里没有这一列",
+                            r.subject, r.predicate, r.object, ep.table, ep.column
+                        ),
+                    ));
+                }
+            }
+        }
         let child_entity = &self.entities[&child.table];
         if !child_entity.columns.contains(&child.column) {
-            return Err(Unmapped::new(
-                "column_not_in_proposal",
-                format!(
-                    "{} -[{}]-> {}：maps_to.child = {}.{} —— {} 的属性里没有列 {:?}",
-                    r.subject,
-                    r.predicate,
-                    r.object,
-                    child.table,
-                    child.column,
-                    child.table,
-                    child.column
-                ),
-            ));
+            // 有 schema 撑着（列确实存在）⇒ 收，但要**计数**：这是「提案里没有的列」。
+            if opts.schema.is_some() {
+                stats.child_column_schema_only += 1;
+            } else {
+                return Err(Unmapped::new(
+                    "column_not_in_proposal",
+                    format!(
+                        "{} -[{}]-> {}：maps_to.child = {}.{} —— {} 的属性里没有列 {:?}",
+                        r.subject,
+                        r.predicate,
+                        r.object,
+                        child.table,
+                        child.column,
+                        child.table,
+                        child.column
+                    ),
+                ));
+            }
         }
         let parent_entity = &self.entities[&parent.table];
         if !parent_entity.columns.contains(&parent.column) {
-            if parent.column == PK_CONVENTION {
+            if opts.schema.is_some() {
+                // 严格面已经在上面验过它在 schema 里（父端主键列的正常路径）。
+                stats.parent_column_schema_only += 1;
+            } else if parent.column == PK_CONVENTION {
                 stats.parent_key_id_convention += 1;
             } else {
                 return Err(Unmapped::new(
                     "parent_column_not_in_proposal",
                     format!(
                         "{} -[{}]-> {}：maps_to.parent = {}.{} —— {} 的属性里没有列 {:?}\
-                         （只接受属性列，或约定的主键名 {:?}）",
+                         （只接受属性列，或约定的主键名 {:?}；给 `--schema` 可严格校验）",
                         r.subject,
                         r.predicate,
                         r.object,
@@ -836,8 +970,19 @@ fn assertion_label(a: &Assertion) -> String {
 // 合并（唯一实现）
 // ──────────────────────────────────────────────────────────
 
-/// 把 `assertions.jsonl` 与一份提案合并成**同形状**的新提案。
+/// 把 `assertions.jsonl` 与一份提案合并成**同形状**的新提案（不给 `--schema`）。
+///
+/// 等价于 [`merge_with`] + 默认选项（fallback 校验面）。
 pub fn merge(assertions_jsonl: &str, proposal: &Value) -> Result<MergeOutcome> {
+    merge_with(assertions_jsonl, proposal, &MergeOptions::default())
+}
+
+/// 同 [`merge`]，但可以给**真实 schema** 做严格校验（`--schema`）。
+pub fn merge_with(
+    assertions_jsonl: &str,
+    proposal: &Value,
+    opts: &MergeOptions,
+) -> Result<MergeOutcome> {
     let items_in = proposal
         .get("items")
         .and_then(Value::as_array)
@@ -859,6 +1004,8 @@ pub fn merge(assertions_jsonl: &str, proposal: &Value) -> Result<MergeOutcome> {
         items_in: items.len(),
         assertions_sha256: sha256_hex(assertions_jsonl.as_bytes()),
         proposal_sha256,
+        schema_checked: opts.schema.is_some(),
+        schema_tables: opts.schema.as_ref().map(|s| s.table_count()).unwrap_or(0),
         ..Default::default()
     };
 
@@ -923,6 +1070,7 @@ pub fn merge(assertions_jsonl: &str, proposal: &Value) -> Result<MergeOutcome> {
                 &mut claims,
                 &mut band_of_slot,
                 &mut touched,
+                opts,
             )?,
             Assertion::Relation(r) => merge_relation(
                 &index,
@@ -936,6 +1084,7 @@ pub fn merge(assertions_jsonl: &str, proposal: &Value) -> Result<MergeOutcome> {
                 &mut touched,
                 &mut doc_slots,
                 &mut pending,
+                opts,
             )?,
         }
     }
@@ -997,10 +1146,16 @@ pub fn merge(assertions_jsonl: &str, proposal: &Value) -> Result<MergeOutcome> {
         set_field(item, "origin", Value::from(origin));
         set_field(item, "band", Value::from(merged_band));
         // 规则 2：doc 条目必须**未签**。已有签名一律重置（并计数 —— 静默丢签名是事故）。
+        //
+        // ⚠️ 签字时间也一起清掉（`doc sign` 写的 `signed_at`）：只清 `reviewed_by`
+        // 会留下「没人签、但有签字时间」的自相矛盾状态。
         if item.get("reviewed_by").is_some_and(|v| !v.is_null()) {
             stats.reviewed_by_reset += 1;
         }
         set_field(item, "reviewed_by", Value::Null);
+        if let Some(o) = item.as_object_mut() {
+            o.remove(SIGNED_AT_KEY);
+        }
         set_field(item, "applicable", Value::Bool(true));
 
         // doc 证据：已在文件里的（本模块上一轮的产物）不算「重复断言」，只做去重合并。
@@ -1085,8 +1240,9 @@ fn merge_concept(
     claims: &mut BTreeMap<Slot, Vec<DocClaim>>,
     band_of_slot: &mut BTreeMap<Slot, &'static str>,
     touched: &mut BTreeSet<Slot>,
+    opts: &MergeOptions,
 ) -> Result<()> {
-    match index.resolve_concept(c, maps) {
+    match index.resolve_concept(c, maps, opts) {
         Ok(key) => {
             let slot = index
                 .entity_items
@@ -1125,8 +1281,9 @@ fn merge_relation(
     touched: &mut BTreeSet<Slot>,
     doc_slots: &mut BTreeSet<Slot>,
     pending: &mut BTreeMap<String, Value>,
+    opts: &MergeOptions,
 ) -> Result<()> {
-    let target = match index.resolve_relation(r, maps, stats) {
+    let target = match index.resolve_relation(r, maps, stats, opts) {
         Ok(t) => t,
         Err(u) => {
             stats.note_unmapped(u.code, u.detail);
@@ -1219,7 +1376,7 @@ fn merge_relation(
             "N:1".to_string()
         }
     };
-    let item = build_doc_link(&target, r, &cardinality);
+    let item = build_doc_link(&target, r, &cardinality, index);
     pending.insert(key.clone(), item);
     let slot = Slot::Pending(key);
     claims
@@ -1238,7 +1395,26 @@ fn merge_relation(
 /// `payload.evidence` 的**唯一来源**是 `maps_to`：`{table: child 表, column: child 列}`。
 /// 这条证据是 `ModelLinkView.column` 的唯一来源（REQ-120 的教训）——
 /// 没有它，同一对 (from, to) 的两条边在 TTL 里会写成同一个 IRI。
-fn build_doc_link(t: &LinkTarget, r: &RelationAssertion, cardinality: &str) -> Value {
+///
+/// `target` 用**展示名**（`订单→套餐模板`），与 DB 侧条目同一写法：
+/// 它既是 `apply` 报错里点名的那个串，也是 `doc sign --item relation:订单→套餐模板`
+/// 认的稳定键（⛔ 不用数组下标 —— 顺序会变）。
+fn build_doc_link(
+    t: &LinkTarget,
+    r: &RelationAssertion,
+    cardinality: &str,
+    index: &Index,
+) -> Value {
+    let child_label = index
+        .entities
+        .get(&t.table)
+        .map(|e| e.display_name.as_str())
+        .unwrap_or(t.table.as_str());
+    let parent_label = index
+        .entities
+        .get(&t.parent_table)
+        .map(|e| e.display_name.as_str())
+        .unwrap_or(t.parent_table.as_str());
     let claim = format!(
         "文档断言（REQ-129）：{} -[{}]-> {} · 实现列 {}.{} → {}.{}（未做值域重叠实测）",
         r.subject,
@@ -1251,7 +1427,7 @@ fn build_doc_link(t: &LinkTarget, r: &RelationAssertion, cardinality: &str) -> V
     );
     serde_json::json!({
         "kind": "add_link_type",
-        "target": format!("{}→{}", t.table, t.parent_table),
+        "target": format!("{child_label}→{parent_label}"),
         "origin": ORIGIN_DOC,
         "band": DOC_BAND_CAP,
         "reviewed_by": Value::Null,
@@ -1321,6 +1497,399 @@ pub fn render_merged(proposal: &Value, items: &[Value], stats: &MergeStats) -> R
     doc.insert("items".to_string(), Value::Array(items.to_vec()));
     doc.insert("doc_merge".to_string(), stats.summary_json());
     let mut text = serde_json::to_string_pretty(&Value::Object(doc)).context("合并结果序列化失败")?;
+    text.push('\n');
+    Ok(text)
+}
+
+// ══════════════════════════════════════════════════════════
+// 签字（`ontok doc sign`）—— 规则 7 的另一半
+// ══════════════════════════════════════════════════════════
+
+/// 签字时间字段（与 `reviewed_by` 一起写在**条目顶层**）。
+pub const SIGNED_AT_KEY: &str = "signed_at";
+
+/// 签字的结果。
+#[derive(Debug, Clone)]
+pub struct SignOutcome {
+    /// 签完的文档。
+    pub document: Value,
+    /// 落盘字节（pretty JSON + 末尾换行）—— 与 `doc merge` 同一个渲染器。
+    pub rendered: String,
+    /// 条目在 `items[]` 里的**1 基**序号（就是 `review decide --item N` 的那个 N）。
+    pub seq: usize,
+    /// 稳定键（`relation:订单→套餐模板` / `entity:客户`）。
+    pub label: String,
+    /// 条目来源（`doc` / `both`）。
+    pub origin: String,
+    pub signed_at: String,
+    /// 这一次是不是**幂等命中**（本来就已由同一个人签过）。
+    pub already_signed: bool,
+    /// 输入文本是否本来就是规范格式（否则 CLI 会警告「本次输出已规范化」）。
+    pub input_canonical: bool,
+}
+
+/// `--item` 的三种写法。
+///
+/// ⛔ **不认数组下标**：`items[]` 的顺序会随抽取轮次变，用下标签字的脚本迟早签错人。
+/// 序号（1 基）是**给人用的稳定编号**（`propose import` 按它写 `seq`，
+/// `review decide --item N` 也按它指），稳定键是给脚本用的。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ItemSpec {
+    /// 1 基序号。
+    Seq(usize),
+    /// `{kind}:{payload.key 或 target}`（如 `relation:订单→套餐模板`、
+    /// `entity:customers`、`relation:order_template_id__package_templates`）。
+    KindRef(&'static str, String),
+    /// `{seq}:{kind}:{target}` —— `ItemView.id` 的原样（`proposal apply` 的报错里就是它）。
+    ItemId {
+        seq: usize,
+        kind: &'static str,
+        target: String,
+    },
+}
+
+/// 类型别名 → 条目的 `kind`。只认这两类（doc 合并只会产出这两类）。
+fn kind_norm(raw: &str) -> Result<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "relation" | "link" | "edge" | "add_link_type" => Ok("add_link_type"),
+        "entity" | "concept" | "type" | "add_entity_type" => Ok("add_entity_type"),
+        other => bail!(
+            "--item 里的类型 {other:?} 认不出（可用 relation / entity，\
+             或原样写 add_link_type / add_entity_type）"
+        ),
+    }
+}
+
+/// `kind` → 稳定键里的短名（与人读报错一致）。
+fn kind_alias(kind: &str) -> &'static str {
+    match kind {
+        "add_link_type" => "relation",
+        "add_entity_type" => "entity",
+        _ => "item",
+    }
+}
+
+/// 箭头的三种写法归一：`->` / `⇒` / `→` 都当 `→`。
+///
+/// 只归一箭头（不是模糊匹配）：`订单→套餐模板` 与 `订单->套餐模板` 是**同一个东西**
+/// 的两种敲法，而 `订单到套餐` 不是 —— 后者依然对不上。
+fn norm_arrows(s: &str) -> String {
+    s.trim().replace("->", "→").replace('⇒', "→")
+}
+
+fn parse_item_spec(spec: &str) -> Result<ItemSpec> {
+    let s = spec.trim();
+    if s.is_empty() {
+        bail!(
+            "--item 不能为空：给 1 基序号（如 136）或稳定键\
+             （如 relation:订单→套餐模板 / entity:customers）"
+        );
+    }
+    if let Ok(n) = s.parse::<usize>() {
+        if n == 0 {
+            bail!("--item 的序号从 1 开始（0 不存在）");
+        }
+        return Ok(ItemSpec::Seq(n));
+    }
+    let parts: Vec<&str> = s.splitn(3, ':').collect();
+    match parts.len() {
+        2 => Ok(ItemSpec::KindRef(kind_norm(parts[0])?, parts[1].to_string())),
+        3 => {
+            let seq = parts[0].trim().parse::<usize>().map_err(|_| {
+                anyhow::anyhow!(
+                    "--item 的第 1 段应当是序号（{s:?}）—— 三种写法：1 基序号 / \
+                     relation:订单→套餐模板 / 136:add_link_type:订单→套餐模板"
+                )
+            })?;
+            if seq == 0 {
+                bail!("--item 的序号从 1 开始（0 不存在）");
+            }
+            Ok(ItemSpec::ItemId {
+                seq,
+                kind: kind_norm(parts[1])?,
+                target: parts[2].to_string(),
+            })
+        }
+        _ => bail!(
+            "--item 认不出：{s:?}（三种写法：1 基序号 / relation:订单→套餐模板 / \
+             136:add_link_type:订单→套餐模板）"
+        ),
+    }
+}
+
+/// 条目的来源（顶层优先，其次 payload —— 导入后两处都有）。
+fn origin_of_value(item: &Value) -> Option<&str> {
+    item.get("origin")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.get("payload")
+                .and_then(|p| p.get("origin"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn item_key(item: &Value) -> &str {
+    item.get("payload")
+        .and_then(|p| p.get("key"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn item_target(item: &Value) -> &str {
+    item.get("target").and_then(Value::as_str).unwrap_or("")
+}
+
+fn item_kind(item: &Value) -> &str {
+    item.get("kind").and_then(Value::as_str).unwrap_or("")
+}
+
+/// 列出现有可签条目（找不到 / 歧义时点名，⛔ 不让调用方自己去数）。
+fn signable_listing(items: &[Value]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        if matches!(origin_of_value(it), Some(ORIGIN_DOC) | Some(ORIGIN_BOTH)) {
+            lines.push(format!(
+                "    [{}] {}:{}",
+                i + 1,
+                kind_alias(item_kind(it)),
+                item_target(it)
+            ));
+            if lines.len() >= 20 {
+                lines.push("    …（只列前 20 条）".to_string());
+                break;
+            }
+        }
+    }
+    if lines.is_empty() {
+        "    （这份提案里一条 doc/both 条目都没有 —— 先跑 `ontok doc merge`）".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn resolve_sign_target<'a>(items: &'a [Value], spec: &ItemSpec) -> Result<(usize, &'a Value)> {
+    match spec {
+        ItemSpec::Seq(n) => {
+            let idx = n - 1;
+            items.get(idx).map(|it| (*n, it)).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--item {n} 超出范围：这份提案只有 {} 条",
+                    items.len()
+                )
+            })
+        }
+        ItemSpec::KindRef(kind, needle) => {
+            let want = norm_arrows(needle);
+            let hits: Vec<(usize, &Value)> = items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| {
+                    item_kind(it) == *kind
+                        && (item_key(it) == needle.trim() || norm_arrows(item_target(it)) == want)
+                })
+                .map(|(i, it)| (i + 1, it))
+                .collect();
+            match hits.len() {
+                0 => bail!(
+                    "--item {:?} 在提案里找不到（按 {kind} 的 key 或 target 精确匹配）。\n\
+                     可签的条目：\n{}",
+                    needle,
+                    signable_listing(items)
+                ),
+                1 => Ok(hits[0]),
+                _ => {
+                    let names: Vec<String> = hits
+                        .iter()
+                        .map(|(n, it)| format!("[{n}] {}", item_target(it)))
+                        .collect();
+                    bail!(
+                        "--item {:?} 命中 {} 条（{}）—— ⛔ 有歧义就不签，请改用 1 基序号",
+                        needle,
+                        hits.len(),
+                        names.join(" / ")
+                    )
+                }
+            }
+        }
+        ItemSpec::ItemId { seq, kind, target } => {
+            let (n, it) = resolve_sign_target(items, &ItemSpec::Seq(*seq))?;
+            if item_kind(it) != *kind || norm_arrows(item_target(it)) != norm_arrows(target) {
+                bail!(
+                    "--item {:?} 与第 {n} 条对不上：那是 {}:{} —— ⛔ 不按序号硬签",
+                    target,
+                    kind_alias(item_kind(it)),
+                    item_target(it)
+                );
+            }
+            Ok((n, it))
+        }
+    }
+}
+
+/// **签一条 doc/both 条目**（`ontok doc sign` 的唯一实现，纯函数）。
+///
+/// # 六条判据落在哪
+///
+/// | # | 约束 | 落点 |
+/// | --- | --- | --- |
+/// | 1 | `--by` 必填、不许匿名 | 开头的空串判断 |
+/// | 2 | `--item` 认序号 / 稳定键，⛔ 不认下标 | [`parse_item_spec`] + [`resolve_sign_target`]（序号是 1 基的，与 `review decide --item N` 同一个 N） |
+/// | 3 | 只签 `doc` / `both` | [`origin_of_value`] 判定，其余一律拒绝并说明 |
+/// | 4 | 只加 `reviewed_by` + `signed_at` | 末尾的「其余不变」自检：剥掉这两栏后逐字节相同 |
+/// | 5 | 重复签幂等 | 同一个人 ⇒ 原样返回（`already_signed`），值不变 |
+/// | 6 | 确定性 | 时间由 `at` 参数决定（不给才取系统时钟），同一份输入 + 同一个 `at` ⇒ 逐字节相同 |
+///
+/// # 为什么 `signed_at` 是一个参数
+///
+/// 签字时间是**事实**（ADR-005 的溯源），不能像 TTL 导出那样「不写时间」。
+/// 所以确定性这条判据的口径是「同一份输入 + 同一组参数」：要逐字节复现就给
+/// `--at <RFC3339>`；不给则取系统时钟（那是**这一次签字**的时间）。
+pub fn sign(doc_text: &str, spec: &str, by: &str, at: &str) -> Result<SignOutcome> {
+    let by = by.trim();
+    if by.is_empty() {
+        bail!(
+            "⛔ 不许签成匿名：`--by` 必填（ADR-005：`reviewed_by` 是「谁认可了这条提案」的\
+             溯源字段，空串等于把这一栏作废）"
+        );
+    }
+    let at = at.trim();
+    if at.is_empty() {
+        bail!("签字时间不能为空（`--at` 省略时由 CLI 取当前 UTC 时间）");
+    }
+    // 时间必须是可解析的 RFC3339 —— 否则下游（审计 / 排序）读不懂这一栏。
+    chrono::DateTime::parse_from_rfc3339(at).map_err(|e| {
+        anyhow::anyhow!(
+            "签字时间 {at:?} 不是合法的 RFC3339（{e}）；例：2026-10-24T04:00:00Z"
+        )
+    })?;
+
+    let doc: Value = serde_json::from_str(doc_text).context("--file 不是合法 JSON")?;
+    let items = doc
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("--file 顶层没有 `items` 数组 —— 这不是一份提案"))?;
+
+    let item_spec = parse_item_spec(spec)?;
+    let (seq, item) = resolve_sign_target(items, &item_spec)?;
+
+    // ── 约束 3：只签 doc / both ──
+    let origin = match origin_of_value(item) {
+        Some(o @ (ORIGIN_DOC | ORIGIN_BOTH)) => o.to_string(),
+        Some(other) => bail!(
+            "第 {seq} 条（{}:{}）的 origin = {other:?} —— `doc sign` 只签 doc / both",
+            kind_alias(item_kind(item)),
+            item_target(item)
+        ),
+        None => bail!(
+            "第 {seq} 条（{}:{}）没有 `origin` ⇒ 它是 **DB 轨**的条目（`ontok-propose` 的产物）。\n\
+             签它要走 `ontok review decide`（那条轨的签字记在数据库的双轨状态上）；\n\
+             `doc sign` 只签 `ontok doc merge` 产出的 `origin: doc | both` 条目。",
+            kind_alias(item_kind(item)),
+            item_target(item)
+        ),
+    };
+
+    let label = format!("{}:{}", kind_alias(item_kind(item)), item_target(item));
+    let existing = item
+        .get("reviewed_by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let existing_at = item
+        .get(SIGNED_AT_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let mut signed_doc = doc.clone();
+    let mut already_signed = false;
+    let final_at;
+    match existing {
+        // ── 约束 5：同一个人重复签 ⇒ 幂等（值不变） ──
+        Some(prev) if prev == by => {
+            already_signed = true;
+            match existing_at {
+                Some(t) => final_at = t.to_string(),
+                None => {
+                    // 手工塞过 reviewed_by 却没写时间 ⇒ 补一次（这是修复，不是改判）。
+                    final_at = at.to_string();
+                    set_signed_at(&mut signed_doc, seq - 1, &final_at)?;
+                }
+            }
+        }
+        // 别人已经签过：⛔ 不覆盖别人的签名（ADR-005：签名是溯源，不是状态位）
+        Some(prev) => bail!(
+            "第 {seq} 条（{label}）已被 {prev} 签于 {}；⛔ `doc sign` 不覆盖别人的签名\
+             （要换人签，先由本人/负责人明确撤销）",
+            existing_at.unwrap_or("（未记时间）")
+        ),
+        None => {
+            final_at = at.to_string();
+            set_signed_at(&mut signed_doc, seq - 1, &final_at)?;
+        }
+    }
+    if !already_signed {
+        set_reviewed_by(&mut signed_doc, seq - 1, by)?;
+    }
+
+    // ── 约束 4 的自检：剥掉这两栏之后，文档与输入**逐值相同** ──
+    let mut probe = signed_doc.clone();
+    strip_signature(&mut probe, seq - 1);
+    let mut baseline = doc.clone();
+    strip_signature(&mut baseline, seq - 1);
+    if canonical_text(&probe)? != canonical_text(&baseline)? {
+        bail!("内部错误：签字改动了这两栏以外的内容（⛔ 其余字节必须不变）");
+    }
+
+    let input_canonical = canonical_text(&doc)? == doc_text;
+    let rendered = canonical_text(&signed_doc)?;
+    Ok(SignOutcome {
+        document: signed_doc,
+        rendered,
+        seq,
+        label,
+        origin,
+        signed_at: final_at,
+        already_signed,
+        input_canonical,
+    })
+}
+
+fn item_mut(doc: &mut Value, idx: usize) -> Result<&mut Map<String, Value>> {
+    doc.get_mut("items")
+        .and_then(Value::as_array_mut)
+        .and_then(|a| a.get_mut(idx))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow::anyhow!("内部错误：第 {} 条不存在", idx + 1))
+}
+
+fn set_reviewed_by(doc: &mut Value, idx: usize, by: &str) -> Result<()> {
+    item_mut(doc, idx)?.insert("reviewed_by".to_string(), Value::from(by));
+    Ok(())
+}
+
+fn set_signed_at(doc: &mut Value, idx: usize, at: &str) -> Result<()> {
+    item_mut(doc, idx)?.insert(SIGNED_AT_KEY.to_string(), Value::from(at));
+    Ok(())
+}
+
+fn strip_signature(doc: &mut Value, idx: usize) {
+    if let Some(o) = doc
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .and_then(|a| a.get_mut(idx))
+        .and_then(Value::as_object_mut)
+    {
+        o.remove("reviewed_by");
+        o.remove(SIGNED_AT_KEY);
+    }
+}
+
+/// 规范渲染：pretty JSON + 末尾换行（与 `doc merge` 同一个形状）。
+fn canonical_text(doc: &Value) -> Result<String> {
+    let mut text = serde_json::to_string_pretty(doc).context("序列化失败")?;
     text.push('\n');
     Ok(text)
 }
@@ -1819,9 +2388,347 @@ mod tests {
         assert_eq!(out.stats.unmapped_reasons.get("bad_maps_to").copied(), Some(1));
     }
 
+    // ══════════════════════════════════════════════════════
+    // Q-2 · `--schema` 的严格校验面
+    // ══════════════════════════════════════════════════════
+
+    /// 造一份 `SchemaReport`（只填本 REQ 用得到的字段）。
+    fn schema_index(tables: &[(&str, &[&str])]) -> SchemaIndex {
+        let tables_json: Vec<Value> = tables
+            .iter()
+            .map(|(name, cols)| {
+                let columns: Vec<Value> = cols
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "name": c,
+                            "data_type": "text",
+                            "nullable": false,
+                            "comment": null,
+                            "is_primary_key": *c == "id",
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "name": name,
+                    "comment": null,
+                    "columns": columns,
+                    "column_count": cols.len(),
+                    "commented_count": 0,
+                })
+            })
+            .collect();
+        let v = serde_json::json!({
+            "server_version": "test",
+            "transaction_read_only": "on",
+            "schema": "public",
+            "table_count": tables.len(),
+            "column_count": 0,
+            "commented_column_count": 0,
+            "foreign_key_count": 0,
+            "tables": tables_json,
+            "introspected_at": "2026-10-24T00:00:00Z",
+        });
+        let report: crate::extract::introspect::SchemaReport =
+            serde_json::from_value(v).expect("schema 夹具");
+        SchemaIndex::from_report(&report)
+    }
+
+    fn maps_new_edge() -> Value {
+        serde_json::json!({
+            "child": {"table": "order", "column": "template_id"},
+            "parent": {"table": "package_templates", "column": "id"}
+        })
+    }
+
+    /// 给了 `--schema` ⇒ 父端**主键列**（`package_templates.id`）被严格校验通过，
+    /// 且 fallback 计数为 0（AC-004 订正：给了 schema 就 0 例外）。
+    #[test]
+    fn with_schema_the_parent_key_is_validated_strictly() {
+        let schema = schema_index(&[
+            ("customers", &["id", "customer_name"]),
+            ("order", &["id", "customer_id", "template_id"]),
+            ("package_templates", &["id", "name"]),
+        ]);
+        let jsonl = relation_jsonl(Some("1:1"), Some(maps_new_edge()), false);
+        let out = merge_with(
+            &jsonl,
+            &proposal(),
+            &MergeOptions {
+                schema: Some(schema),
+            },
+        )
+        .expect("合并应当成功");
+        assert_eq!(out.stats.schema_checked, true);
+        assert_eq!(out.stats.schema_tables, 3);
+        assert_eq!(out.stats.merged_doc_only, 1, "父端主键列应当严格通过");
+        assert_eq!(
+            out.stats.parent_key_id_convention, 0,
+            "给了 schema 就不许再走 `id` 约定 fallback"
+        );
+        assert_eq!(out.stats.parent_column_schema_only, 1, "走的是 schema 严格校验");
+        assert!(out.stats.close());
+    }
+
+    /// 给了 `--schema` 而 schema 里**没有**这一列 ⇒ `doc_unmapped`（0 例外）。
+    #[test]
+    fn with_schema_a_column_missing_from_the_schema_is_unmapped() {
+        // 父端表存在、但没有 `id` 这一列
+        let schema = schema_index(&[
+            ("customers", &["customer_name"]),
+            ("order", &["customer_id", "template_id"]),
+            ("package_templates", &["name"]),
+        ]);
+        let jsonl = relation_jsonl(Some("N:1"), Some(maps_new_edge()), false);
+        let out = merge_with(
+            &jsonl,
+            &proposal(),
+            &MergeOptions {
+                schema: Some(schema),
+            },
+        )
+        .expect("合并应当成功");
+        assert_eq!(out.stats.merged, 0, "schema 里没有的列一律不并");
+        assert_eq!(
+            out.stats.unmapped_reasons.get("column_not_in_schema").copied(),
+            Some(1),
+            "{:?}",
+            out.stats.unmapped_reasons
+        );
+        assert!(out.stats.close());
+    }
+
+    /// 给了 `--schema` 而 schema 里**没有**这张表 ⇒ `doc_unmapped`。
+    #[test]
+    fn with_schema_a_table_missing_from_the_schema_is_unmapped() {
+        let schema = schema_index(&[
+            ("customers", &["id", "customer_name"]),
+            ("order", &["customer_id", "template_id"]),
+        ]);
+        let jsonl = relation_jsonl(Some("N:1"), Some(maps_new_edge()), false);
+        let out = merge_with(
+            &jsonl,
+            &proposal(),
+            &MergeOptions {
+                schema: Some(schema),
+            },
+        )
+        .expect("合并应当成功");
+        assert_eq!(out.stats.merged, 0);
+        assert_eq!(
+            out.stats.unmapped_reasons.get("table_not_in_schema").copied(),
+            Some(1),
+            "{:?}",
+            out.stats.unmapped_reasons
+        );
+    }
+
+    /// 不给 `--schema` ⇒ 保持 fallback，且用量**可数可见**。
+    #[test]
+    fn without_schema_the_fallback_is_counted_and_visible() {
+        let jsonl = relation_jsonl(Some("N:1"), Some(maps_new_edge()), false);
+        let out = merge(&jsonl, &proposal()).expect("合并应当成功");
+        assert_eq!(out.stats.schema_checked, false);
+        assert_eq!(out.stats.merged_doc_only, 1);
+        assert_eq!(
+            out.stats.parent_key_id_convention, 1,
+            "没给 schema 时父端 `id` 只靠约定 ⇒ 必须记数"
+        );
+        assert_eq!(out.stats.parent_column_schema_only, 0);
+        // 摘要块里也要有这一位（文件读者不看 stderr 也知道有没有严格校验）
+        assert_eq!(
+            out.document["doc_merge"]["schema_checked"],
+            serde_json::json!(false)
+        );
+    }
+
+    // ══════════════════════════════════════════════════════
+    // Q-1 · `ontok doc sign`（文件级签字）
+    // ══════════════════════════════════════════════════════
+
+    /// 一份**已经合并过**的提案文本（含一条 doc-only 边 + 一条 both 实体）。
+    fn merged_text() -> String {
+        let jsonl = [
+            concept_jsonl("客户", &[], "fact", true),
+            relation_jsonl(Some("1:1"), Some(maps_new_edge()), false),
+        ]
+        .join("\n");
+        merge(&jsonl, &proposal()).expect("合并应当成功").rendered
+    }
+
+    const SIGNED_AT: &str = "2026-10-24T04:00:00Z";
+
+    /// Q-1 · ①：`--by` 空/空白 ⇒ 拒绝（⛔ 不许匿名签）。
+    #[test]
+    fn sign_rejects_an_anonymous_signer() {
+        for by in ["", "   ", "\t"] {
+            let err = sign(&merged_text(), "relation:订单→套餐模板", by, SIGNED_AT)
+                .expect_err("匿名字必须被拒");
+            assert!(format!("{err:#}").contains("匿名"), "{err:#}");
+        }
+    }
+
+    /// Q-1 · ②：序号 / 稳定键 / `apply` 报错里那个 id，三种写法都要认。
+    #[test]
+    fn sign_accepts_seq_stable_key_and_item_id_forms() {
+        let text = merged_text();
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        let n = items(&doc)
+            .iter()
+            .position(|it| {
+                it["origin"] == serde_json::json!("doc")
+                    && it["payload"]["key"] == serde_json::json!("order_template_id__package_templates")
+            })
+            .map(|i| i + 1)
+            .expect("夹具里应当有一条 doc-only 边");
+
+        for spec in [
+            n.to_string(),
+            "relation:订单→套餐模板".to_string(),
+            // 箭头写成 ASCII 也算同一个东西
+            "relation:订单->套餐模板".to_string(),
+            // 按 payload.key 也认
+            "relation:order_template_id__package_templates".to_string(),
+            // `proposal apply` 报错里的原样（{seq}:{kind}:{target}）
+            format!("{n}:add_link_type:订单→套餐模板"),
+        ] {
+            let out = sign(&text, &spec, "qa-req129", SIGNED_AT)
+                .unwrap_or_else(|e| panic!("--item {spec:?} 应当认得：{e:#}"));
+            assert_eq!(out.seq, n, "--item {spec:?} 指错了条目");
+            assert_eq!(out.label, "relation:订单→套餐模板");
+        }
+
+        // 认不出 / 歧义 / 越界都要拒绝（⛔ 不猜一个最像的）
+        for bad in ["relation:不存在的边", "relation:", "999", "entity:订单"] {
+            assert!(
+                sign(&text, bad, "qa-req129", SIGNED_AT).is_err(),
+                "--item {bad:?} 应当被拒"
+            );
+        }
+    }
+
+    /// Q-1 · ③：只签 `doc` / `both`；DB 条目拒绝并说明走 `review decide`。
+    #[test]
+    fn sign_refuses_db_track_items() {
+        let text = merged_text();
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        let db_item = items(&doc)
+            .into_iter()
+            .find(|it| it.get("origin").is_none())
+            .expect("夹具里应当有 DB 轨条目");
+        let spec = format!(
+            "{}:{}",
+            kind_alias(item_kind(&db_item)),
+            item_target(&db_item)
+        );
+        let err = sign(&text, &spec, "qa-req129", SIGNED_AT).expect_err("DB 条目不许签");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("review decide"), "要说清该走哪条轨：{msg}");
+        assert!(msg.contains("origin"), "{msg}");
+    }
+
+    /// Q-1 · ④：只加 `reviewed_by` / `signed_at`，**其余逐值不变**。
+    #[test]
+    fn sign_only_adds_the_two_signature_fields() {
+        let text = merged_text();
+        let out = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("签");
+        let before: Value = serde_json::from_str(&text).unwrap();
+        let after = &out.document;
+
+        // 顶层键一个不多一个不少
+        let mut kb: Vec<&String> = before.as_object().unwrap().keys().collect();
+        let mut ka: Vec<&String> = after.as_object().unwrap().keys().collect();
+        kb.sort();
+        ka.sort();
+        assert_eq!(kb, ka, "顶层键不许变");
+
+        // 逐条比：目标条目多两栏，其它条目**逐值相同**
+        let signed_idx = out.seq - 1;
+        for (i, (b, a)) in items(&before)
+            .iter()
+            .zip(items(after).iter())
+            .enumerate()
+        {
+            if i == signed_idx {
+                // 把这两栏还原成签字前的值 ⇒ 其余必须逐值相同
+                let mut a2 = a.clone();
+                a2["reviewed_by"] = b["reviewed_by"].clone();
+                a2.as_object_mut().unwrap().remove(SIGNED_AT_KEY);
+                assert_eq!(&a2, b, "目标条目除这两栏外不许变");
+                assert_eq!(a["reviewed_by"], serde_json::json!("qa-req129"));
+                assert_eq!(a[SIGNED_AT_KEY], serde_json::json!(SIGNED_AT));
+            } else {
+                assert_eq!(a, b, "第 {} 条被改动了", i + 1);
+            }
+        }
+        assert_eq!(out.signed_at, SIGNED_AT);
+        assert_eq!(out.origin, "doc");
+        assert!(!out.already_signed);
+        assert!(out.input_canonical, "merge 的产物本来就是规范格式");
+    }
+
+    /// Q-1 · ⑤：同一个人重复签 ⇒ 幂等（不报错、值不变、字节相同）。
+    #[test]
+    fn sign_is_idempotent_for_the_same_signer() {
+        let text = merged_text();
+        let once = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("第一次");
+        let twice = sign(&once.rendered, "relation:订单→套餐模板", "qa-req129", SIGNED_AT)
+            .expect("重复签不许报错");
+        assert!(twice.already_signed, "幂等命中要能看出来");
+        assert_eq!(twice.rendered, once.rendered, "重复签必须逐字节相同");
+        assert_eq!(twice.signed_at, SIGNED_AT, "签字时间不许被改写");
+
+        // 换个人签同一 item ⇒ 拒绝（⛔ 不覆盖别人的签名）
+        let err = sign(&once.rendered, "relation:订单→套餐模板", "qa-other", SIGNED_AT)
+            .expect_err("别人的签名不许覆盖");
+        assert!(format!("{err:#}").contains("不覆盖"), "{err:#}");
+    }
+
+    /// Q-1 · ⑥：确定性 —— 同输入同参数（含 `--at`）⇒ 逐字节相同。
+    #[test]
+    fn sign_is_deterministic_for_the_same_parameters() {
+        let text = merged_text();
+        let a = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("a");
+        let b = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("b");
+        assert_eq!(a.rendered, b.rendered);
+        // 换一个签字时间 ⇒ 只有 signed_at 那一行变（证明「变的是参数，不是随机」）
+        let c = sign(&text, "relation:订单→套餐模板", "qa-req129", "2026-10-25T00:00:00Z")
+            .expect("c");
+        assert_ne!(a.rendered, c.rendered);
+        assert_eq!(
+            canonical_text(&a.document).unwrap().lines().count() + 0,
+            canonical_text(&b.document).unwrap().lines().count()
+        );
+    }
+
+    /// Q-1 · 时间必须是 RFC3339（否则下游审计读不懂这一栏）。
+    #[test]
+    fn sign_rejects_a_non_rfc3339_timestamp() {
+        let err = sign(&merged_text(), "relation:订单→套餐模板", "qa", "昨天")
+            .expect_err("非法时间必须拒");
+        assert!(format!("{err:#}").contains("RFC3339"), "{err:#}");
+    }
+
+    /// 重跑合并会清掉签名**和**签字时间（不留「没人签却有签字时间」的状态）。
+    #[test]
+    fn re_merging_clears_a_previous_signature() {
+        let text = merged_text();
+        let signed = sign(&text, "relation:订单→套餐模板", "qa-req129", SIGNED_AT).expect("签");
+        assert!(signed.rendered.contains("signed_at"));
+        let jsonl = [
+            concept_jsonl("客户", &[], "fact", true),
+            relation_jsonl(Some("1:1"), Some(maps_new_edge()), false),
+        ]
+        .join("\n");
+        let again = merge(&jsonl, &signed.document).expect("重新合并");
+        let item = link_item(&again.document, "order_template_id__package_templates");
+        assert!(item["reviewed_by"].is_null(), "重跑合并 ⇒ 未签");
+        assert!(item.get(SIGNED_AT_KEY).is_none(), "签字时间也要清掉");
+        assert_eq!(again.stats.reviewed_by_reset, 1);
+    }
+
     // ── 夹具读取小工具 ──
-    fn items(doc: &Value) -> Vec<Value> {
-        doc["items"].as_array().cloned().unwrap_or_default()
+    fn items(doc: &Value) -> Vec<Value> {        doc["items"].as_array().cloned().unwrap_or_default()
     }
 
     fn entity_item(doc: &Value, key: &str) -> Value {

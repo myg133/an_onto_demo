@@ -646,7 +646,7 @@ fn ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it() {
         "**未签**的 doc 边的 key 也不许出现在 TTL 里（AC-007）"
     );
 
-    // ② 签一条：只改 `reviewed_by`（签字是评审流程对提案文件的写入，不是新命令）
+    // ② 签一条：**用 `ontok doc sign`**（Q-1 的一等入口；不再手工改 JSON）
     let p_signed = format!("req129_ac007_s_{}_{}", std::process::id(), stamp);
     let (a2, p2) = write_fixtures(&dir, &p_signed);
     let m_unsigned2 = dir.join("merged-unsigned2.json");
@@ -664,17 +664,37 @@ fn ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it() {
         None,
     );
     assert!(o.status.success(), "{}", stderr(&o));
-    let mut signed_doc = read_json(&m_unsigned2);
-    let mut n = 0;
-    for it in signed_doc["items"].as_array_mut().expect("items 是数组") {
-        if it["origin"] == serde_json::json!("doc") {
-            it["reviewed_by"] = serde_json::json!("qa-req129");
-            n += 1;
-        }
-    }
-    assert_eq!(n, 1, "夹具里应当恰有 1 条 doc-only 条目可签");
     let m_signed = dir.join("merged-signed.json");
-    std::fs::write(&m_signed, format!("{signed_doc}\n")).expect("写已签提案");
+    let o = cli(
+        &[
+            "doc",
+            "sign",
+            "--file",
+            m_unsigned2.to_str().unwrap(),
+            "--item",
+            "relation:订单→套餐模板",
+            "--by",
+            "qa-req129",
+            "--out",
+            m_signed.to_str().unwrap(),
+            "--at",
+            "2026-10-24T04:00:00Z",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "doc sign 失败：{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("其余字节"),
+        "签字报告要写明「其余字节未变」：{}",
+        stderr(&o)
+    );
+    let signed = read_json(&m_signed);
+    let signed_items: Vec<Value> = signed["items"].as_array().cloned().unwrap_or_default();
+    let n = signed_items
+        .iter()
+        .filter(|it| it["origin"] == serde_json::json!("doc") && !it["reviewed_by"].is_null())
+        .count();
+    assert_eq!(n, 1, "夹具里应当恰有 1 条 doc-only 条目被签");
 
     let ttl_signed = run_to_ttl(&url, &m_signed, "signed");
     // 正控：签过的那条边**必须**在（否则「未签时没有」是恒真判据 —— 反空转）。
@@ -685,5 +705,357 @@ fn ac007_unsigned_doc_edges_stay_out_of_the_ttl_and_signed_ones_enter_it() {
     assert!(
         ttl_signed.contains("order_template_id__package_templates"),
         "**签了**的 doc 边的 key 也必须出现在 TTL 里（AC-007）"
+    );
+}
+
+// ──────────────────────────────────────────────────────────
+// Q-1 · `ontok doc sign`（7 条判据，CLI 层）
+// ──────────────────────────────────────────────────────────
+
+/// 造一份「已合并」的提案（一回 `doc merge`），供签字测试用。
+fn merged_fixture(dir: &Path, project: &str) -> PathBuf {
+    let (a, p) = write_fixtures(dir, project);
+    let m = dir.join("merged-for-sign.json");
+    let o = cli(
+        &[
+            "doc",
+            "merge",
+            "--assertions",
+            a.to_str().unwrap(),
+            "--proposal",
+            p.to_str().unwrap(),
+            "--out",
+            m.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    m
+}
+
+const AT: &str = "2026-10-24T04:00:00Z";
+
+#[test]
+fn q1_sign_requires_a_named_signer_and_an_explicit_output() {
+    let dir = temp_dir("sign-anon");
+    let m = merged_fixture(&dir, "req129_sign_anon");
+    let out = dir.join("signed.json");
+
+    // ① `--by` 空/空白 ⇒ 拒绝（⛔ 不许匿名签）
+    for by in ["", "   "] {
+        let o = cli(
+            &[
+                "doc", "sign",
+                "--file", m.to_str().unwrap(),
+                "--item", "relation:订单→套餐模板",
+                "--by", by,
+                "--out", out.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert!(!o.status.success(), "--by {by:?} 必须被拒");
+        let text = format!("{}{}", stdout(&o), stderr(&o));
+        assert!(text.contains("匿名"), "要说明拒绝理由：{text}");
+        assert!(!out.exists(), "被拒时不许写出文件");
+    }
+
+    // ⑥ 既没 `--out` 也没 `--in-place` ⇒ 拒绝，且⛔ 不就地改输入
+    let before = std::fs::read(&m).expect("读输入");
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req129",
+        ],
+        None,
+    );
+    assert!(!o.status.success(), "缺 --out 必须被拒");
+    assert!(
+        format!("{}{}", stdout(&o), stderr(&o)).contains("不提供「默认就地改」")
+            || format!("{}{}", stdout(&o), stderr(&o)).contains("必须落盘"),
+        "要说明为什么不默认就地改"
+    );
+    assert_eq!(std::fs::read(&m).expect("读输入"), before, "输入一个字节都不许动");
+
+    // `--out` 指向输入文件 ⇒ 也要拒（要就地必须显式 --in-place）
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req129",
+            "--out", m.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(!o.status.success(), "--out 指向输入必须被拒");
+    assert_eq!(std::fs::read(&m).expect("读输入"), before, "输入一个字节都不许动");
+}
+
+#[test]
+fn q1_sign_refuses_db_items_and_unknown_items() {
+    let dir = temp_dir("sign-db");
+    let m = merged_fixture(&dir, "req129_sign_db");
+    let out = dir.join("signed.json");
+
+    // ③ 只签 doc/both：DB 轨条目（没有 origin）拒绝并说明走 review decide
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "entity:客户",   // 夹具里 customers 是 both（可签）
+            "--by", "qa-req129",
+            "--out", out.to_str().unwrap(),
+            "--at", AT,
+        ],
+        None,
+    );
+    // `entity:客户` 是 both ⇒ **允许**（这里证明 both 可签）
+    assert!(o.status.success(), "both 条目应当可签：{}", stderr(&o));
+
+    let o = cli(
+        &[
+            "doc", "sign",
+            "--file", m.to_str().unwrap(),
+            "--item", "entity:订单",   // 夹具里 order 没有 origin ⇒ DB 轨
+            "--by", "qa-req129",
+            "--out", dir.join("signed2.json").to_str().unwrap(),
+            "--at", AT,
+        ],
+        None,
+    );
+    assert!(!o.status.success(), "DB 轨条目不许签");
+    let text = format!("{}{}", stdout(&o), stderr(&o));
+    assert!(text.contains("review decide"), "要说清该走哪条轨：{text}");
+    assert!(text.contains("origin"), "{text}");
+
+    // ② 认不出 / 越界 ⇒ 拒绝（⛔ 不猜一个最像的）
+    for bad in ["relation:不存在的边", "999", "relation:"] {
+        let o = cli(
+            &[
+                "doc", "sign",
+                "--file", m.to_str().unwrap(),
+                "--item", bad,
+                "--by", "qa-req129",
+                "--out", out.to_str().unwrap(),
+                "--at", AT,
+            ],
+            None,
+        );
+        assert!(!o.status.success(), "--item {bad:?} 必须被拒");
+    }
+}
+
+#[test]
+fn q1_sign_is_idempotent_byte_stable_and_deterministic() {
+    let dir = temp_dir("sign-stable");
+    let m = merged_fixture(&dir, "req129_sign_stable");
+    let s1 = dir.join("signed1.json");
+    let s2 = dir.join("signed2.json");
+    let args = |out: &Path| {
+        vec![
+            "doc".to_string(),
+            "sign".to_string(),
+            "--file".to_string(),
+            m.to_str().unwrap().to_string(),
+            "--item".to_string(),
+            "relation:订单→套餐模板".to_string(),
+            "--by".to_string(),
+            "qa-req129".to_string(),
+            "--out".to_string(),
+            out.to_str().unwrap().to_string(),
+            "--at".to_string(),
+            AT.to_string(),
+        ]
+    };
+    let run = |out: &Path| {
+        let a = args(out);
+        let strs: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        cli(&strs, None)
+    };
+
+    // ⑥ 确定性（同输入同参数） + ④ 只加两栏：同参数两次输出逐字节相同
+    let o1 = run(&s1);
+    assert!(o1.status.success(), "{}", stderr(&o1));
+    let o2 = run(&s2);
+    assert!(o2.status.success(), "{}", stderr(&o2));
+    let b1 = std::fs::read(&s1).expect("读 s1");
+    assert_eq!(b1, std::fs::read(&s2).expect("读 s2"), "同参数两次必须逐字节相同");
+
+    // ④ 其余字节不变：签后文本 = 原文本 + 恰好两行（reviewed_by / signed_at）
+    //
+    // 两边都按「去掉 `reviewed_by` 与 `signed_at` 行」比 —— 因为签字前的
+    // `reviewed_by: null` 与签字后的 `reviewed_by: "qa-req129"` 是同一行的两种值，
+    // 直接比会把「这一栏的值变了」误判成「别的行被改了」。
+    let orig = std::fs::read_to_string(&m).expect("读输入");
+    let signed = String::from_utf8(b1.clone()).expect("UTF-8");
+    let strip = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.contains("\"signed_at\"") && !l.contains("\"reviewed_by\":"))
+            .map(str::to_string)
+            .collect()
+    };
+    let after_lines = strip(&signed);
+    let before_lines = strip(&orig);
+    assert_eq!(
+        after_lines, before_lines,
+        "除这两栏外，其余行必须逐字节相同"
+    );
+    assert_eq!(
+        signed.lines().count(),
+        orig.lines().count() + 1,
+        "签字只该多加 `signed_at` 一行（`reviewed_by` 是改值不是加行）"
+    );
+
+    // ⑤ 重复签 ⇒ 幂等（exit 0、值不变、字节相同）
+    let o3 = cli(
+        &[
+            "doc", "sign",
+            "--file", s1.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req129",
+            "--out", s2.to_str().unwrap(),
+            "--at", "2026-10-25T00:00:00Z", // 换了时间也不许改已有的签字时间
+        ],
+        None,
+    );
+    assert!(o3.status.success(), "重复签不许报错：{}", stderr(&o3));
+    assert!(stderr(&o3).contains("幂等"), "要报告这是幂等命中：{}", stderr(&o3));
+    assert_eq!(
+        std::fs::read(&s1).expect("读 s1"),
+        std::fs::read(&s2).expect("读 s2"),
+        "重复签必须逐字节相同（含 signed_at 不被改写）"
+    );
+
+    // `--in-place` 是**显式**的就地开关（不加时必须给 --out）
+    let o4 = cli(
+        &[
+            "doc", "sign",
+            "--file", s1.to_str().unwrap(),
+            "--item", "relation:订单→套餐模板",
+            "--by", "qa-req129",
+            "--in-place",
+        ],
+        None,
+    );
+    assert!(o4.status.success(), "--in-place 应当可用：{}", stderr(&o4));
+    assert_eq!(
+        std::fs::read(&s1).expect("读 s1"),
+        b1,
+        "幂等的就地重签不该改字节"
+    );
+}
+
+// ──────────────────────────────────────────────────────────
+// Q-2 · `--schema` 严格校验（CLI 层）
+// ──────────────────────────────────────────────────────────
+
+/// 写一份最小 `schema.json`（只填本 REQ 用到的字段）。
+fn write_schema(dir: &Path, name: &str, tables: &[(&str, &[&str])]) -> PathBuf {
+    let tables_json: Vec<Value> = tables
+        .iter()
+        .map(|(t, cols)| {
+            let columns: Vec<Value> = cols
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c, "data_type": "text", "nullable": false,
+                        "comment": null, "is_primary_key": *c == "id",
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "name": t, "comment": null, "columns": columns,
+                "column_count": cols.len(), "commented_count": 0,
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "server_version": "test",
+        "transaction_read_only": "on",
+        "schema": "public",
+        "table_count": tables.len(),
+        "column_count": 0,
+        "commented_column_count": 0,
+        "foreign_key_count": 0,
+        "tables": tables_json,
+        "introspected_at": "2026-10-24T00:00:00Z",
+    });
+    let p = dir.join(name);
+    std::fs::write(&p, serde_json::to_string_pretty(&doc).unwrap()).expect("写 schema");
+    p
+}
+
+#[test]
+fn q2_schema_flag_makes_the_parent_key_check_strict() {
+    let dir = temp_dir("schema-strict");
+    let (a, p) = write_fixtures(&dir, "req129_schema");
+
+    // ① 给了 `--schema` 且父端主键列存在 ⇒ 严格通过，fallback 计数为 0
+    let good = write_schema(
+        &dir,
+        "schema-good.json",
+        &[
+            ("customers", &["id", "customer_name"]),
+            ("order", &["id", "customer_id", "template_id"]),
+            ("package_templates", &["id", "name"]),
+        ],
+    );
+    let m = dir.join("merged-strict.json");
+    let s = dir.join("stats-strict.json");
+    let o = cli(
+        &[
+            "doc", "merge",
+            "--assertions", a.to_str().unwrap(),
+            "--proposal", p.to_str().unwrap(),
+            "--out", m.to_str().unwrap(),
+            "--stats", s.to_str().unwrap(),
+            "--schema", good.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let stats = read_json(&s);
+    assert_eq!(stats["schema_checked"], serde_json::json!(true));
+    assert_eq!(stats["schema_tables"], serde_json::json!(3));
+    assert_eq!(stats["merged_doc_only"], serde_json::json!(1), "父端 id 应当严格通过");
+    assert_eq!(
+        stats["parent_key_id_convention"],
+        serde_json::json!(0),
+        "给了 schema 就不许再走 `id` 约定的 fallback"
+    );
+    assert_eq!(stats["parent_column_schema_only"], serde_json::json!(1));
+
+    // ② 给了 `--schema` 而 schema 里没有这一列 ⇒ 未映射（0 例外）
+    let bad = write_schema(
+        &dir,
+        "schema-bad.json",
+        &[
+            ("customers", &["customer_name"]),
+            ("order", &["customer_id", "template_id"]),
+            ("package_templates", &["name"]),
+        ],
+    );
+    let m2 = dir.join("merged-strict-bad.json");
+    let s2 = dir.join("stats-strict-bad.json");
+    let o = cli(
+        &[
+            "doc", "merge",
+            "--assertions", a.to_str().unwrap(),
+            "--proposal", p.to_str().unwrap(),
+            "--out", m2.to_str().unwrap(),
+            "--stats", s2.to_str().unwrap(),
+            "--schema", bad.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let stats2 = read_json(&s2);
+    assert_eq!(stats2["merged_doc_only"], serde_json::json!(0), "schema 里没有的列不许并");
+    assert_eq!(
+        stats2["unmapped_reasons"]["column_not_in_schema"],
+        serde_json::json!(1),
+        "{stats2}"
     );
 }

@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **1** 条 `doc merge` 合并提案落盘点（I26，**内部轨**）⇒ **61（客户 17 / 建模 10 / 内部 31 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -371,6 +371,11 @@ pub enum OutletId {
     /// 才可能进本体。物理上复用 I10 的唯一 `fs::write` 写点（`cli::write_local`），
     /// 这条登记钉的是**本命令的写出调用** —— 新命令必须有出口登记（REQ-107 收口的那个洞）。
     I26,
+    /// ⭐ REQ-129 · `ontok doc sign` 的**签字产物落盘点**（`signed.json`）。
+    ///
+    /// 内部轨：与 I26 同一类候选提案（含表名/列名/逐字证据），只多两栏
+    /// `reviewed_by` / `signed_at`。⛔ 本命令不写库、不改本体。
+    I27,
 }
 
 impl OutletId {
@@ -417,6 +422,7 @@ impl OutletId {
             OutletId::I24 => "I24",
             OutletId::I25 => "I25",
             OutletId::I26 => "I26",
+            OutletId::I27 => "I27",
         }
     }
 }
@@ -530,6 +536,8 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I25 => OutletSpec::of("I25", Track::Internal, Format::Text, Granularity::Whole),
         // ⭐ REQ-129 · `doc merge` 的合并提案（JSON）+ 统计：**内部**轨（候选提案，不是视图）。
         OutletId::I26 => OutletSpec::of("I26", Track::Internal, Format::Json, Granularity::Whole),
+        // ⭐ REQ-129 · `doc sign` 的签字产物（同一份 JSON + 两栏签名）：**内部**轨。
+        OutletId::I27 => OutletSpec::of("I27", Track::Internal, Format::Json, Granularity::Whole),
     }
 }
 
@@ -1739,6 +1747,17 @@ pub const OUTLETS: &[Outlet] = &[
          登记在内部轨 ⇒ 不过客户发布闸（与 I10 / AC-009 同一条口径）。",
     },
     Outlet {
+        id: "I27",
+        path: "src/cli.rs",
+        // 同 I26：钉**本命令的写出调用**（物理写点仍是 I10 的 `write_local`）。
+        call_site: "write_local(target, outcome.rendered.as_bytes())",
+        spec: spec_of(OutletId::I27),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-129）：`ontok doc sign` 的签字产物落盘 —— \
+         与 I26 同一份候选提案（含表名/列名/逐字证据），只多了 `reviewed_by` / `signed_at`\
+         两栏（ADR-005 的溯源字段）。客户视图零读取；⛔ 本命令不写库、不改本体。",
+    },
+    Outlet {
         id: "Z1",
         path: "src/server/http.rs",
         call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
@@ -1813,29 +1832,30 @@ mod tests {
     /// ⇒ 57（内部 27）；REQ-126 再加 I23/I24（客户门户的页面壳与 API，**内部轨**）
     /// ⇒ **59（内部 29）**；REQ-127 再加 I25（查询服务的整份 OWL TTL 响应，**内部轨**）
     /// ⇒ **60（内部 30）**；REQ-129 再加 I26（`doc merge` 的合并提案落盘点，**内部轨**）
-    /// ⇒ **61（内部 31）**。
+    /// ⇒ **61（内部 31）**；REQ-129 的签字命令再加 I27（`doc sign` 的签字产物，**内部轨**）
+    /// ⇒ **62（内部 32）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            61,
+            62,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
              + 4（REQ-124 的控制面出口）+ 1（REQ-125 的工作台页面壳）\
              + 2（REQ-126 的客户门户：页面壳 + API）\
              + 1（REQ-127 的查询服务 OWL TTL 响应）\
-             + 1（REQ-129 的 doc merge 合并提案落盘点）"
+             + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            31,
+            32,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
              + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24 \
-             + REQ-127 的 I25 + REQ-129 的 I26"
+             + REQ-127 的 I25 + REQ-129 的 I26/I27"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

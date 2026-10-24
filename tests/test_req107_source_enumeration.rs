@@ -1768,6 +1768,12 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "doc_merge_cmd",
         "子命令 handler（`doc merge`：断言 + 提案 → 合并提案；**不连产品库、不调模型**）",
     ),
+    // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
+    (
+        "src/cli.rs",
+        "doc_sign_cmd",
+        "子命令 handler（`doc sign`：给一条 doc/both 条目签字；**不连产品库、不调模型**）",
+    ),
     (
         "src/cli.rs",
         "same_path",
