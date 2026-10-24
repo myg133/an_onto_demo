@@ -65,10 +65,14 @@ pub struct Auth(pub super::tokens::TokenEntry);
 
 /// 组装路由。
 pub fn build_router(svc: Arc<ConsoleService>) -> Router {
+    // ⭐ REQ-135 · 指标层在最外层：401 / 403 / 404 也计数。
+    let metrics = svc.metrics.clone();
     Router::new()
         // ⭐ REQ-125 · 工作台页面壳：**在身份门之外**（只回零数据的界面骨架）。
         .route(PAGE_PATH, get(index))
         .route(HEALTH_PATH, get(health))
+        // ⭐ REQ-135 · 免 token 的聚合数字（与 `/api/health` 同口径；零业务数据）。
+        .route(crate::metrics::METRICS_PATH, get(get_metrics))
         .route("/api/projects", get(get_projects))
         .route("/api/import", post(post_import))
         .route("/api/apply", post(post_apply))
@@ -86,6 +90,7 @@ pub fn build_router(svc: Arc<ConsoleService>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(svc.clone(), require_token))
         .with_state(svc)
+        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -184,8 +189,9 @@ async fn require_token(
 ) -> Response {
     let path = req.uri().path();
     // ⭐ REQ-125：`/` 是**页面壳**（零数据）—— 浏览器导航带不了头，必须匿名可达。
-    // ⛔ 只豁免这两个**精确**路径；别的一律过门（拼错的路径也先得到 401）。
-    if path == HEALTH_PATH || path == PAGE_PATH {
+    // ⭐ REQ-135：`/metrics` 与 `/api/health` 同口径（免 token，只给聚合数字）。
+    // ⛔ 只豁免这三个**精确**路径；别的一律过门（拼错的路径也先得到 401）。
+    if path == HEALTH_PATH || path == PAGE_PATH || path == crate::metrics::METRICS_PATH {
         return next.run(req).await;
     }
     let started = Instant::now();
@@ -198,6 +204,9 @@ async fn require_token(
         // ⛔ R1：**认得**它，但不接受它。401 会说「你没有凭据」——那是假话，
         // 因为这张 token 是真的，只是不是管理凭据。
         Some(entry) => {
+            // ⭐ REQ-135 · 「拿查询 token 打管理端点」是安全信号：计一次拒绝。
+            svc.metrics
+                .note_denial_code("TOKEN_KIND_FORBIDDEN");
             svc.audit.record(
                 entry,
                 "auth",
@@ -327,6 +336,14 @@ async fn health() -> Response {
             "api": "v1",
         }),
     )
+}
+
+/// ⭐ REQ-135 · `GET /metrics` —— **免 token** 的聚合数字（与 `/api/health` 同口径）。
+///
+/// 响应体由 [`crate::metrics::Metrics::http_response`] 唯一构造；⛔ 不读任何业务字段
+/// （项目名 / 版本 / 声明路径 / 租户都不在指标里）。
+async fn get_metrics(State(svc): State<Arc<ConsoleService>>) -> Response {
+    svc.metrics.http_response()
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -617,7 +634,17 @@ async fn get_export_ttl(
             prep.object_count(),
             prep.relation_count()
         );
-        Ok::<_, ApiError>(rendered.into_text())
+        let text = rendered.into_text();
+        // ⭐ REQ-135 · `ontok_ttl_bytes{view}`：导出成功时按视图记下**真实字节数**。
+        svc.metrics.set_ttl_bytes(
+            if model_view {
+                crate::metrics::VIEW_MODEL
+            } else {
+                crate::metrics::VIEW_CUSTOMER
+            },
+            text.len() as u64,
+        );
+        Ok::<_, ApiError>(text)
     }
     .await;
     match result {
@@ -691,6 +718,9 @@ async fn post_r2rml(
             target,
             out.doc.stats().triples_maps
         );
+        // ⭐ REQ-135 · 映射规模（`rr:joinCondition` 数）：与 `r2rml generate --out` 同一份映射。
+        svc.metrics
+            .set_mapping_joins(out.doc.stats().join_conditions() as u64);
         Ok::<_, ApiError>(out.doc.into_doc())
     }
     .await;

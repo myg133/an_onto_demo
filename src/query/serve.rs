@@ -195,7 +195,11 @@ pub fn banner(
         "· 只读会话（读回）：transaction_read_only = {} · standard_conforming_strings = {}\n",
         facts.transaction_read_only, facts.standard_conforming_strings
     ));
-    s.push_str("· 审计：每次调用一行（token 只记摘要、不记查询原文）\n");
+    s.push_str("· 审计：每次调用一行（token 只记摘要、不记查询原文；stdout 恒写）\n");
+    s.push_str(&format!(
+        "· 指标（免 token）：http://{addr}{}\n",
+        crate::metrics::METRICS_PATH
+    ));
     if verdict.needs_warning() {
         s.push_str(&format!(
             "⚠ 警告：绑定的是 {addr}（{}）—— 查询服务可被本机以外访问。\
@@ -369,11 +373,11 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     let audit = match &args.audit_out {
         Some(path) => AuditSink::open(path).map_err(|e| {
             anyhow::anyhow!(
-                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stderr」，
+                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，
                  请换一个可写的路径或去掉 --audit-out"
             )
         })?,
-        None => AuditSink::stderr_only(),
+        None => AuditSink::stdout_only(),
     };
 
     let svc = std::sync::Arc::new(QueryService::new(ServiceParts {

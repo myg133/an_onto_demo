@@ -1948,6 +1948,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/lib.rs", "extract"),
     ("src/lib.rs", "mcp"),
     ("src/lib.rs", "server"),
+    // ⭐ REQ-135 · 生产可观测性（`/metrics` 的指标登记表 / 渲染 / 格式校验）。
+    // 出口 I28 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "metrics"),
     ("src/agent/mod.rs", "acp"),
     ("src/agent/mod.rs", "assemble"),
     ("src/agent/mod.rs", "factory"),

@@ -11,7 +11,7 @@
 //! # 落点复用查询面的那一个
 //!
 //! 行在这里拼，写出去走 [`crate::query::audit::AuditSink::record_line`]：
-//! **stderr 恒写 + 可选文件追加**。⛔ 不另开第二个 sink —— 那会出现
+//! **stdout 恒写 + 可选文件追加**。⛔ 不另开第二个 sink —— 那会出现
 //! 「一个文件两种行、其中一种忘了 append」这类问题（OUTLETS 的 I17 只有一个写点）。
 //!
 //! # 为什么要一个内存环
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn the_ring_is_bounded_and_recent_keeps_the_tail_in_order() {
-        let log = AuditLog::new(AuditSink::stderr_only());
+        let log = AuditLog::new(AuditSink::stdout_only());
         let started = Instant::now();
         for i in 0..(RING_CAP + 3) {
             log.push(AuditEntry {

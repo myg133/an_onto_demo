@@ -98,7 +98,7 @@ fn test_service(tag: &str) -> (Arc<ConsoleService>, DeclPaths) {
         tokens,
         schema,
         paths: paths.clone(),
-        audit: AuditLog::new(AuditSink::stderr_only()),
+        audit: AuditLog::new(AuditSink::stdout_only()),
         bind: "127.0.0.1:8899".parse().unwrap(),
         allow_public: false,
     }));
@@ -631,4 +631,94 @@ async fn paths_that_do_not_exist_are_400_with_the_path_named() {
 #[allow(dead_code)]
 fn _crate_root_is_available() -> std::path::PathBuf {
     common::crate_root()
+}
+
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-135 · `/metrics`（控制面）
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ AC-001：`GET /metrics` **免 token**、`Content-Type` 逐字正确、六个指标都在、
+/// 文本通过格式校验器，且零业务数据（项目名 / 声明路径 / token 都不出现）。
+#[tokio::test]
+async fn metrics_is_anonymous_valid_and_carries_no_console_data() {
+    let (svc, _) = test_service("metrics");
+    let res = ontok::console::http::build_router(Arc::clone(&svc))
+        .oneshot(get("/metrics", None))
+        .await
+        .expect("oneshot");
+    assert_eq!(res.status(), StatusCode::OK, "AC-001：/metrics 免 token");
+    assert_eq!(
+        res.headers()[header::CONTENT_TYPE],
+        "text/plain; version=0.0.4",
+        "AC-001：Content-Type"
+    );
+    let bytes = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+        .await
+        .expect("读 body");
+    let body = String::from_utf8_lossy(&bytes).to_string();
+    for name in [
+        "ontok_requests_total",
+        "ontok_request_duration_seconds",
+        "ontok_rows_returned_total",
+        "ontok_tenant_denied_total",
+        "ontok_ttl_bytes",
+        "ontok_mapping_joins",
+    ] {
+        assert!(body.contains(&format!("# HELP {name} ")), "缺 # HELP {name}：\n{body}");
+        assert!(body.contains(&format!("# TYPE {name} ")), "缺 # TYPE {name}：\n{body}");
+    }
+    if let Err(errs) = ontok::metrics::validate_exposition(&body) {
+        panic!("AC-002：控制面 /metrics 不合法：\n{}", errs.join("\n") + "\n\n" + &body);
+    }
+    for forbidden in ["demo", "exclusions.json", "query-policy", "tenancy.json", ADMIN, QUERY] {
+        assert!(
+            !body.contains(forbidden),
+            "/metrics 里出现了控制面数据 {forbidden:?}：\n{body}"
+        );
+    }
+}
+
+/// ⭐ AC-004：拿 **query token** 打管理端点（403 `TOKEN_KIND_FORBIDDEN`）⇒
+/// `ontok_tenant_denied_total{reason="TOKEN_KIND_FORBIDDEN"}` 真的 +1。
+///
+/// 变异：把 `require_token` 里那次 `note_denial_code` 删掉 ⇒ 本测试红。
+#[tokio::test]
+async fn a_query_token_on_the_admin_gate_bumps_the_security_counter() {
+    let (svc, _) = test_service("metrics-denied");
+    let metric = |body: &str| -> String {
+        body.lines()
+            .find(|l| {
+                l.starts_with(
+                    "ontok_tenant_denied_total{service=\"ontok-console\",reason=\"TOKEN_KIND_FORBIDDEN\"}",
+                )
+            })
+            .unwrap_or_else(|| panic!("缺 TOKEN_KIND_FORBIDDEN 序列：\n{body}"))
+            .to_string()
+    };
+    let fetch = || async {
+        let res = ontok::console::http::build_router(Arc::clone(&svc))
+            .oneshot(get("/metrics", None))
+            .await
+            .expect("oneshot");
+        let bytes = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .expect("读 body");
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+    assert!(metric(&fetch().await).ends_with(" 0"), "起始必须是 0");
+
+    let (status, body) = call(
+        ontok::console::http::build_router(Arc::clone(&svc)),
+        get("/api/projects", Some(QUERY)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.contains("TOKEN_KIND_FORBIDDEN"), "{body}");
+
+    let after = fetch().await;
+    assert!(
+        metric(&after).ends_with(" 1"),
+        "一次越权尝试必须记 1：{}",
+        metric(&after)
+    );
 }

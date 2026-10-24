@@ -141,11 +141,16 @@ pub fn banner(
         tenancy.display()
     ));
     s.push_str(
-        "· 审计：每个写操作一行（含失败），token 只记 sha256 前 12 位；stderr 恒写\n",
+        "· 审计：每个写操作一行（含失败），token 只记 sha256 前 12 位；stdout 恒写\
+         （--audit-out 只是**追加**第二份，⛔ 不是替代）\n",
     );
     s.push_str(&format!(
         "· 健康检查（免 token）：http://{addr}{HEALTH_PATH}\n",
         HEALTH_PATH = super::http::HEALTH_PATH
+    ));
+    s.push_str(&format!(
+        "· 指标（免 token）：http://{addr}{METRICS_PATH}\n",
+        METRICS_PATH = crate::metrics::METRICS_PATH
     ));
     s.push_str(&format!(
         "· 工作台（页面壳零数据、免 token）：http://{addr}/ —— 口令只存 sessionStorage；\
@@ -260,11 +265,11 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     let sink = match &args.audit_out {
         Some(path) => AuditSink::open(path).map_err(|e| {
             anyhow::anyhow!(
-                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stderr」，\
+                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，\
                  请换一个可写的路径或去掉 --audit-out"
             )
         })?,
-        None => AuditSink::stderr_only(),
+        None => AuditSink::stdout_only(),
     };
 
     // ── ⑦ 服务状态 + 横幅 ──────────────────────────────────

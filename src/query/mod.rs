@@ -482,6 +482,8 @@ pub struct QueryService {
     pub audit: AuditSink,
     /// ⭐ REQ-127 · 两视图的 TTL（启动时算好；版本冻结 ⇒ 内容不变）。
     pub ttl: crate::query::ttl::OntologyTtl,
+    /// ⭐ REQ-135 · `/metrics` 的注册表（进程私有；测试各自一份 ⇒ 断言不互相干扰）。
+    pub metrics: crate::metrics::Metrics,
     /// 目录条目（启动时拍平一次，翻页只做切片）。
     pub catalog_items: Vec<catalog::CatalogItem>,
     limiter: Arc<Limiter>,
@@ -511,6 +513,15 @@ pub struct ServiceParts {
 impl QueryService {
     pub fn new(p: ServiceParts) -> Self {
         let catalog_items = catalog::build_items(&p.mapping, &p.model);
+        // ⭐ REQ-135 · 两个启动即确定的仪表：映射规模（joinCondition 数）与两视图字节数。
+        // 它们随「版本冻结」而固定 —— 只在 `new` 里设一次（运行期不会变）。
+        let metrics = crate::metrics::Metrics::for_query();
+        metrics.set_mapping_joins(p.mapping.join_count() as u64);
+        metrics.set_ttl_bytes(
+            crate::metrics::VIEW_CUSTOMER,
+            p.ttl.customer().bytes() as u64,
+        );
+        metrics.set_ttl_bytes(crate::metrics::VIEW_MODEL, p.ttl.model().bytes() as u64);
         Self {
             source: p.source,
             facts: p.facts,
@@ -528,6 +539,7 @@ impl QueryService {
             tokens: p.tokens,
             audit: p.audit,
             ttl: p.ttl,
+            metrics,
             catalog_items,
             limiter: Arc::new(Limiter::default()),
         }
@@ -785,6 +797,8 @@ async fn run_sparql_event(
     if let Some(claim) = req.tenant.as_deref() {
         if claim.trim() != caller.token.tenant {
             let e = ApiError::tenant_mismatch(&caller.token.tenant);
+            // ⭐ REQ-135 · 越权信号（AC-004 的核心）：请求体带别人的租户 ⇒ 计数 +1。
+            svc.metrics.note_denial_code(e.code);
             audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
             return Err(e);
         }
@@ -838,6 +852,8 @@ async fn run_sparql_event(
     match result {
         Ok(r) => {
             let receipt = receipt_of(svc, r, effective, &caller.token, warnings, &req.query);
+            // ⭐ REQ-135 · 真的返回给调用方的行数（截断前；`truncated` 另有字段表达）。
+            svc.metrics.rows(receipt.row_count as u64);
             audit_call(
                 svc,
                 event,
@@ -852,6 +868,9 @@ async fn run_sparql_event(
         }
         Err(e) => {
             let err = ApiError::from_query_error(e);
+            // ⭐ REQ-135 · `TENANT_UNRESOLVED`（表没登记 ⇒ fail-closed）也是越权信号之一：
+            // 调用点拿不到「为什么」，所以按**错误码**在一个地方翻译（`metrics::denied_reason`）。
+            svc.metrics.note_denial_code(err.code);
             audit_call(
                 svc,
                 event,
@@ -1414,7 +1433,7 @@ mod tests {
             sse_max_connections: 1,
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
-            audit: AuditSink::stderr_only(),
+            audit: AuditSink::stdout_only(),
             ttl: crate::query::ttl::fixture(),
         });
 
@@ -1522,7 +1541,7 @@ mod tests {
             sse_max_connections: 1,
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
-            audit: AuditSink::stderr_only(),
+            audit: AuditSink::stdout_only(),
             ttl: crate::query::ttl::fixture(),
         });
 

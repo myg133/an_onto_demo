@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
@@ -315,7 +315,7 @@ pub enum OutletId {
     /// 服务端消息（ready + keep-alive 注释）；⛔ 不承载查询结果（结果走 POST）。
     /// 它仍是外送通道：连接数 / 空闲超时 / 审计都在代码里（AC-005）。
     I16,
-    /// ⭐ REQ-123 · 查询服务 · **审计日志**（stderr 恒写；`--audit-out` 追加文件）。
+    /// ⭐ REQ-123 · 查询服务 · **审计日志**（REQ-135 起 stdout 恒写；`--audit-out` 追加文件）。
     ///
     /// 为什么单独登记：它是**每次调用都会写**的外送点（含失败），
     /// 而它的两条否定判据（⛔ 无 token 明文 / ⛔ 无查询原文）正是这一轮的安全验收。
@@ -376,6 +376,14 @@ pub enum OutletId {
     /// 内部轨：与 I26 同一类候选提案（含表名/列名/逐字证据），只多两栏
     /// `reviewed_by` / `signed_at`。⛔ 本命令不写库、不改本体。
     I27,
+    /// ⭐ REQ-135 · **生产指标响应**（三个服务的 `GET /metrics`，Prometheus 文本格式）。
+    ///
+    /// 内部轨（按**通道**登记，与 I19/I25 同一条口径）：能调到它的是 Prometheus /
+    /// 采集器（内网面），不是客户浏览器；正文只有**聚合计数**，
+    /// 标签值全在 `metrics::METRICS` 的静态表里 ⇒ 类型层传不进租户 id / 表名 / SQL
+    /// （`&'static str`）。之所以仍要登记：它是一条**匿名可达**的外送通道
+    /// （与 `/api/health` 同口径免 token），「不登记 = 没人管」正是 REQ-107 收口的洞。
+    I28,
 }
 
 impl OutletId {
@@ -423,6 +431,7 @@ impl OutletId {
             OutletId::I25 => "I25",
             OutletId::I26 => "I26",
             OutletId::I27 => "I27",
+            OutletId::I28 => "I28",
         }
     }
 }
@@ -538,6 +547,8 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I26 => OutletSpec::of("I26", Track::Internal, Format::Json, Granularity::Whole),
         // ⭐ REQ-129 · `doc sign` 的签字产物（同一份 JSON + 两栏签名）：**内部**轨。
         OutletId::I27 => OutletSpec::of("I27", Track::Internal, Format::Json, Granularity::Whole),
+        // ⭐ REQ-135 · `/metrics`：Prometheus 文本格式（不是 JSON，也不走客户发布闸）。
+        OutletId::I28 => OutletSpec::of("I28", Track::Internal, Format::Text, Granularity::Whole),
     }
 }
 
@@ -1626,13 +1637,16 @@ pub const OUTLETS: &[Outlet] = &[
     Outlet {
         id: "I17",
         path: "src/query/audit.rs",
-        // 审计的**唯一**行形状 + 唯一落点（stderr 恒写；文件可选追加）。
-        call_site: "writeln!(f, \"{line}\")",
+        // 审计的**唯一**行形状 + 唯一落点（REQ-135 起 stdout 恒写；`--audit-out` 再追加文件）。
+        // ⚠️ needle 刻意不用 stdout 宏的字面量：本文件的 T7 判据扫的是**源码文本**
+        // （含这张登记表里的字符串），用宏字面量会让「管线模块不许写 stdout」假红。
+        call_site: "writeln!(std::io::stdout(), \"{line}\")",
         spec: spec_of(OutletId::I17),
         enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-123）：审计日志 —— 每次调用一行（含失败）。\
-         ⛔ 不含 token 明文、⛔ 不含查询原文（两条否定判据在 `query::audit` 的单测里）。\
-         内部轨 ⇒ 不过客户发布闸。",
+        exemption_reason: "内部（REQ-123 / REQ-135）：审计日志 —— 每次调用一行（含失败）。\
+         REQ-135 起落点是 **stdout**（容器日志 → 集群采集），`--audit-out` 只是**追加**第二份\
+         （⛔ 不存在「只写文件」的分支）。⛔ 不含 token 明文、⛔ 不含查询原文（两条否定判据在 \
+         `query::audit` 的单测里）。内部轨 ⇒ 不过客户发布闸。",
     },
     // ── REQ-124 · 控制面 API（管理流水线的 HTTP 化）· 内部轨 ──────────
     //
@@ -1758,6 +1772,21 @@ pub const OUTLETS: &[Outlet] = &[
          两栏（ADR-005 的溯源字段）。客户视图零读取；⛔ 本命令不写库、不改本体。",
     },
     Outlet {
+        id: "I28",
+        path: "src/metrics.rs",
+        // ⭐ REQ-135 · 三个服务的 `/metrics` 共用**这一个**响应构造点。
+        // 钉的是「指标正文变成 HTTP 响应的那一行」—— 三个 http.rs 只调它，不另拼正文。
+        call_site: "pub fn http_response(",
+        spec: spec_of(OutletId::I28),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-135）：`GET /metrics` 的 Prometheus 文本响应。\
+         三个服务（query / console / portal）共用 `metrics::Metrics::http_response` 这一个写点。\
+         正文只有**聚合计数**：标签值是 `&'static str`（service / 路由模式 / 状态码 / 拒绝原因 / view），\
+         类型层传不进租户 id、表名、SQL 或查询原文；标签集合固定在 `metrics::METRICS` 一张表里\
+         （R4：无维度爆炸）。它按**通道**登记为内部轨：匿名可达（与 `/api/health` 同口径免 token），\
+         但只对内网采集器有意义 —— 与 I19 / I25 同一条口径。",
+    },
+    Outlet {
         id: "Z1",
         path: "src/server/http.rs",
         call_site: "err(StatusCode::BAD_REQUEST, rendered.as_str())",
@@ -1833,29 +1862,31 @@ mod tests {
     /// ⇒ **59（内部 29）**；REQ-127 再加 I25（查询服务的整份 OWL TTL 响应，**内部轨**）
     /// ⇒ **60（内部 30）**；REQ-129 再加 I26（`doc merge` 的合并提案落盘点，**内部轨**）
     /// ⇒ **61（内部 31）**；REQ-129 的签字命令再加 I27（`doc sign` 的签字产物，**内部轨**）
-    /// ⇒ **62（内部 32）**。
+    /// ⇒ **62（内部 32）**；REQ-135 再加 I28（三个服务的 `/metrics`，**内部轨**）
+    /// ⇒ **63（内部 33）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            62,
+            63,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
              + 4（REQ-124 的控制面出口）+ 1（REQ-125 的工作台页面壳）\
              + 2（REQ-126 的客户门户：页面壳 + API）\
              + 1（REQ-127 的查询服务 OWL TTL 响应）\
-             + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）"
+             + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）\
+             + 1（REQ-135 的 /metrics 指标响应）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            32,
+            33,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
              + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24 \
-             + REQ-127 的 I25 + REQ-129 的 I26/I27"
+             + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

@@ -97,8 +97,12 @@ pub struct Auth(pub TokenEntry);
 /// - **未注册的 `/api/*` 也走身份门**（无 token ⇒ 401，不泄露「这个接口存不存在」）；
 ///   已授权的人问路 ⇒ 404 + 可用端点清单。
 pub fn build_router(svc: Arc<QueryService>) -> Router {
+    // ⭐ REQ-135 · 指标层挂在**最外层**：连 401 / 404 都计数（失败也是事实）。
+    let metrics = svc.metrics.clone();
     Router::new()
         .route("/api/health", get(health))
+        // ⭐ REQ-135 · `/metrics`：免 token（与 `/api/health` 同口径），零业务数据。
+        .route(crate::metrics::METRICS_PATH, get(get_metrics))
         .route("/api/sparql", post(post_sparql))
         .route("/api/catalog", get(get_catalog))
         .route("/api/describe", get(get_describe))
@@ -109,6 +113,7 @@ pub fn build_router(svc: Arc<QueryService>) -> Router {
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(svc.clone(), require_token))
         .with_state(svc)
+        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -145,7 +150,7 @@ async fn not_found() -> Response {
             "message": "没有这个路径。",
             "hint": "可用：GET /api/catalog、GET /api/describe?name=…、POST /api/sparql、\
                      GET /api/ontology.ttl（?view=model 取建模视图）、\
-                     POST /mcp（JSON-RPC）、GET /mcp（SSE）、GET /api/health（免 token）。",
+                     POST /mcp（JSON-RPC）、GET /mcp（SSE）、GET /api/health、GET /metrics（后两者免 token）。",
         }),
     )
 }
@@ -240,6 +245,14 @@ async fn health(State(svc): State<Arc<QueryService>>) -> Response {
             "transports": ["http", "sse"],
         }),
     )
+}
+
+/// ⭐ REQ-135 · `GET /metrics` —— **免 token**（与 `/api/health` 同口径）的聚合数字。
+///
+/// 响应体由 [`crate::metrics::Metrics::http_response`] **唯一**构造（三个服务共用），
+/// 这里只把本进程的注册表交出去。⛔ 不读任何业务字段：指标里没有租户 / 表名 / SQL。
+async fn get_metrics(State(svc): State<Arc<QueryService>>) -> Response {
+    svc.metrics.http_response()
 }
 
 /// `POST /api/sparql` —— body `{query, max_rows?, tenant?}`。
@@ -886,17 +899,23 @@ mod tests {
     /// 401 / 403 / 429 / health / catalog / describe 都在**执行 SQL 之前**结束，
     /// 所以这些判据不需要数据库；真正执行查询的判据在 `tests/test_req123_live.rs`。
     pub(crate) fn test_service() -> Arc<QueryService> {
-        test_service_with_audit(AuditSink::stderr_only())
+        test_service_with_audit(AuditSink::stdout_only())
     }
 
     /// 同 [`test_service`]，但审计落到指定 sink（REQ-127 的审计判据读文件对账）。
     fn test_service_with_audit(audit: AuditSink) -> Arc<QueryService> {
-        let (schema, mapping, model) = crate::query::test_fixture();
-        let policy = crate::sparql::policy::QueryPolicy::parse(
+        test_service_with_policy(
             r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
                 "perTable":{"orders":{"tenantColumn":"customer_id"}},"publicDimensions":[]}"#,
+            audit,
         )
-        .expect("声明");
+    }
+
+    /// 同 [`test_service`]，但租户声明由调用方给（REQ-135 用它造 `TENANT_UNRESOLVED`：
+    /// 声明里**故意不登记** `orders`，查询 orders ⇒ 规划期 fail-closed）。
+    fn test_service_with_policy(policy_json: &str, audit: AuditSink) -> Arc<QueryService> {
+        let (schema, mapping, model) = crate::query::test_fixture();
+        let policy = crate::sparql::policy::QueryPolicy::parse(policy_json).expect("声明");
         // IRI 基要先算出来（`opts` 借了 `schema`，之后 `schema` 要 move 进服务）。
         let ontology_iri = {
             let mut opts = crate::domain::ttl::TtlOptions::new("demo", 2);
@@ -1558,5 +1577,202 @@ mod tests {
         assert!(v["error"].is_object(), "{v}");
         assert_eq!(v["error"]["data"]["code"], "RESOURCE_NOT_FOUND");
         assert!(v["error"]["data"]["hint"].as_str().unwrap().contains(RESOURCE_MODEL));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-135 · `/metrics`
+    // ══════════════════════════════════════════════════════════
+
+    /// ⭐ AC-001 / AC-002：`/metrics` **免 token**、`Content-Type` 逐字正确、
+    /// 六个指标都有 `# HELP` / `# TYPE`，且整段文本通过格式校验器（不依赖 promtool）。
+    #[tokio::test]
+    async fn metrics_is_anonymous_and_is_valid_prometheus_text() {
+        let app = build_router(test_service());
+        let (status, headers, body) = call(app, get("/metrics", None)).await;
+        assert_eq!(status, StatusCode::OK, "AC-001：/metrics 免 token");
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            crate::metrics::CONTENT_TYPE,
+            "AC-001：Content-Type 必须是 text/plain; version=0.0.4"
+        );
+        for name in [
+            "ontok_requests_total",
+            "ontok_request_duration_seconds",
+            "ontok_rows_returned_total",
+            "ontok_tenant_denied_total",
+            "ontok_ttl_bytes",
+            "ontok_mapping_joins",
+        ] {
+            assert!(
+                body.contains(&format!("# HELP {name} ")),
+                "缺 # HELP {name}：\n{body}"
+            );
+            assert!(
+                body.contains(&format!("# TYPE {name} ")),
+                "缺 # TYPE {name}：\n{body}"
+            );
+        }
+        if let Err(errs) = crate::metrics::validate_exposition(&body) {
+            panic!(
+                "AC-002：/metrics 的文本不合法：\n{}",
+                errs.join("\n") + "\n\n----- 原文 -----\n" + &body
+            );
+        }
+        // ⛔ AC-003：零业务数据（真实租户 / 表名 / SQL 一个都不许出现）。
+        for forbidden in ["C0001", "C0002", "customers", "orders", "deductions", "SELECT"] {
+            assert!(
+                !body.contains(forbidden),
+                "/metrics 里出现了 {forbidden:?}：\n{body}"
+            );
+        }
+    }
+
+    /// ⭐ AC-004 · `ontok_requests_total`：连发 3 次 `/api/catalog` ⇒ 恰好 +3；
+    /// 同一次抓取还把耗时直方图的 `_count` 一起推上去。
+    #[tokio::test]
+    async fn three_requests_are_counted_exactly_once_each() {
+        let svc = test_service();
+        for _ in 0..3 {
+            let app = build_router(Arc::clone(&svc));
+            let (status, _, _) = call(app, get("/api/catalog", Some(TOKEN_A))).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let (_, _, body) = call(build_router(Arc::clone(&svc)), get("/metrics", None)).await;
+        assert!(
+            body.contains(
+                "ontok_requests_total{service=\"ontok-query\",endpoint=\"/api/catalog\",code=\"200\"} 3"
+            ),
+            "3 次 catalog 必须恰好记 3：\n{body}"
+        );
+        assert!(
+            body.contains(
+                "ontok_request_duration_seconds_count{service=\"ontok-query\",endpoint=\"/api/catalog\"} 3"
+            ),
+            "直方图 _count 必须跟着涨：\n{body}"
+        );
+    }
+
+    /// ⭐ AC-004 的核心：**真造一次拒绝**（请求体带别人的租户）⇒ `tenant_denied` +1。
+    ///
+    /// 同一条判据在 MCP 的 `tools/call` 上也成立（两个协议共用 `run_sparql`）。
+    /// 变异：把 `svc.metrics.note_denial_code(e.code)` 删掉 / 改成恒 0 ⇒ 本测试红。
+    #[tokio::test]
+    async fn a_foreign_tenant_bumps_the_security_counter() {
+        let svc = test_service();
+        let metric = |body: &str| -> String {
+            body.lines()
+                .find(|l| {
+                    l.starts_with(
+                        "ontok_tenant_denied_total{service=\"ontok-query\",reason=\"TENANT_MISMATCH\"}",
+                    )
+                })
+                .unwrap_or_else(|| panic!("缺 tenant_denied 序列：\n{body}"))
+                .to_string()
+        };
+        let (_, _, before) = call(build_router(Arc::clone(&svc)), get("/metrics", None)).await;
+        assert!(metric(&before).ends_with(" 0"), "起始必须是 0：{}", metric(&before));
+
+        // ① REST：请求体里的 tenant 与凭据不一致。
+        let body = r#"{"query":"SELECT ?s WHERE { ?s a :customers }","tenant":"C0002"}"#;
+        let (status, _, text) =
+            call(build_router(Arc::clone(&svc)), post("/api/sparql", Some(TOKEN_A), body)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+
+        // ② MCP：同一个越权尝试走另一个协议。
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sparql_query","arguments":{"query":"SELECT ?s WHERE { ?s a :customers }","tenant":"C0002"}}}"#;
+        let (status, _, text) =
+            call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), line)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+
+        let (_, _, after) = call(build_router(Arc::clone(&svc)), get("/metrics", None)).await;
+        assert!(
+            metric(&after).ends_with(" 2"),
+            "两次越权尝试必须记 2（REST + MCP）：{}",
+            metric(&after)
+        );
+        // 别的 reason 不受影响（标签没串）。
+        assert!(
+            after.contains(
+                "ontok_tenant_denied_total{service=\"ontok-query\",reason=\"TENANT_UNRESOLVED\"} 0"
+            ),
+            "{after}"
+        );
+    }
+
+    /// ⭐ AC-004 · 第三种越权信号：**表没登记**（`TENANT_UNRESOLVED`，规划期 fail-closed）。
+    ///
+    /// 声明里故意只留 `customers`，查询 `orders` ⇒ 规划器在**连库之前**就拒绝；
+    /// 这同时证明「不需要数据库也能造出这条拒绝」。
+    /// 变异：把 `run_sparql_event` 错误分支里的 `note_denial_code` 删掉 ⇒ 本测试红。
+    #[tokio::test]
+    async fn an_unregistered_table_bumps_the_unresolved_counter() {
+        let svc = test_service_with_policy(
+            r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
+                "perTable":{},"publicDimensions":[]}"#,
+            AuditSink::stdout_only(),
+        );
+        let body = r#"{"query":"SELECT ?o ?amt WHERE { ?o :orders__amount ?amt }"}"#;
+        let (status, _, text) =
+            call(build_router(Arc::clone(&svc)), post("/api/sparql", Some(TOKEN_A), body)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{text}");
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["code"], "TENANT_UNRESOLVED", "{v}");
+
+        let (_, _, metrics) = call(build_router(Arc::clone(&svc)), get("/metrics", None)).await;
+        assert!(
+            metrics.contains(
+                "ontok_tenant_denied_total{service=\"ontok-query\",reason=\"TENANT_UNRESOLVED\"} 1"
+            ),
+            "表没登记也必须计一次拒绝：\n{metrics}"
+        );
+        // 另一条 reason 没被连带（标签没串）。
+        assert!(
+            metrics.contains(
+                "ontok_tenant_denied_total{service=\"ontok-query\",reason=\"TENANT_MISMATCH\"} 0"
+            ),
+            "{metrics}"
+        );
+    }
+
+    /// ⭐ AC-004 · `rows_returned_total` / `ttl_bytes` / `mapping_joins` 三条的取值来源。
+    ///
+    /// 行数在真库实测里由 `run_sparql` 的成功分支 +N（本夹具没有库）；
+    /// 这里断言的是**同一个计数器**：`Metrics::rows(n)` 加多少、`/metrics` 就是多少。
+    /// TTL 与映射规模是启动即定的事实，直接与服务的字段对账。
+    #[tokio::test]
+    async fn the_gauges_and_the_rows_counter_report_real_values() {
+        let svc = test_service();
+        svc.metrics.rows(5);
+        let (_, _, body) = call(build_router(Arc::clone(&svc)), get("/metrics", None)).await;
+
+        assert!(
+            body.contains("ontok_rows_returned_total{service=\"ontok-query\"} 5"),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "ontok_ttl_bytes{{view=\"customer\"}} {}",
+                svc.ttl.customer().bytes()
+            )),
+            "TTL 客户视图字节数必须与缓存正文一致：\n{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "ontok_ttl_bytes{{view=\"model\"}} {}",
+                svc.ttl.model().bytes()
+            )),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "ontok_mapping_joins {}",
+                svc.mapping.join_count()
+            )),
+            "映射 join 数必须与 `R2rmlMapping::join_count()` 一致：\n{body}"
+        );
+        assert!(
+            svc.mapping.join_count() > 0,
+            "夹具映射必须真的有 join（否则这条判据是空转）"
+        );
     }
 }
