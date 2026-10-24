@@ -43,13 +43,6 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// 缺哪个变量就**响亮地**说，然后 `None`（测试提前返回 = SKIP）。
-fn missing(name: &str, test: &str) {
-    use std::io::Write as _;
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "*** SKIP: {test} -- missing {name} ***");
-}
-
 fn meta_url() -> Option<String> {
     env("ONTOK_DATABASE_URL").or_else(|| env("ONTOK_TEST_DATABASE_URL"))
 }
@@ -132,11 +125,11 @@ fn args_for(tag: &str, tenant_a: &str, tenant_b: &str, questions: &Path, max_row
 
 async fn live(tag: &str, tenant_a: &str, tenant_b: &str, questions: &Path, max_rows_b: u64) -> Option<Live> {
     let Some(meta) = meta_url() else {
-        missing("ONTOK_DATABASE_URL", tag);
+        common::skip::missing("ONTOK_DATABASE_URL", tag);
         return None;
     };
     if env("ONTOK_SOURCE_DATABASE_URL").is_none() {
-        missing("ONTOK_SOURCE_DATABASE_URL", tag);
+        common::skip::missing("ONTOK_SOURCE_DATABASE_URL", tag);
         return None;
     }
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -360,11 +353,11 @@ fn rows_and_truncated(body: &str) -> (Vec<Vec<String>>, bool) {
 
 fn tenants(test: &str) -> Option<(String, String)> {
     let a = env("ONTOK_REQ126_TENANT_A").or_else(|| {
-        missing("ONTOK_REQ126_TENANT_A", test);
+        common::skip::missing("ONTOK_REQ126_TENANT_A", test);
         None
     })?;
     let b = env("ONTOK_REQ126_TENANT_B").or_else(|| {
-        missing("ONTOK_REQ126_TENANT_B", test);
+        common::skip::missing("ONTOK_REQ126_TENANT_B", test);
         None
     })?;
     Some((a, b))
@@ -381,7 +374,7 @@ async fn ac001_two_real_tenants_see_disjoint_data_and_no_internals() {
     };
     let questions = common::crate_root().join("portal-questions.json");
     if !questions.is_file() {
-        missing("portal-questions.json", "ac001_two_real_tenants");
+        common::skip::missing("portal-questions.json", "ac001_two_real_tenants");
         return;
     }
     let Some(l) = live("disjoint", &tenant_a, &tenant_b, &questions, 200).await else {
@@ -504,7 +497,7 @@ async fn n1_a_hardcoded_tenant_is_caught() {
     };
     let questions = common::crate_root().join("portal-questions.json");
     if !questions.is_file() {
-        missing("portal-questions.json", "n1_mutant");
+        common::skip::missing("portal-questions.json", "n1_mutant");
         return;
     }
     // ⚠️ 参数顺序**故意反着传**：TOKEN_A 现在绑的是 tenant_b。
@@ -619,7 +612,7 @@ async fn ac004_the_main_only_coverage_warning_is_visible() {
     };
     let questions = common::crate_root().join("portal-questions.json");
     if !questions.is_file() {
-        missing("portal-questions.json", "ac004_coverage");
+        common::skip::missing("portal-questions.json", "ac004_coverage");
         return;
     }
     let Some(l) = live("coverage", &tenant_a, &tenant_b, &questions, 200).await else {
@@ -732,7 +725,7 @@ async fn ac010_three_concurrent_requests_on_a_cap_2_token_are_2x200_plus_1x429()
     };
     let questions = common::crate_root().join("portal-questions.json");
     if !questions.is_file() {
-        missing("portal-questions.json", "ac010_concurrent");
+        common::skip::missing("portal-questions.json", "ac010_concurrent");
         return;
     }
     let Some(l) = live("concurrent", &tenant_a, &tenant_b, &questions, 200).await else {
@@ -788,7 +781,7 @@ async fn ac010_a_saturated_token_does_not_starve_another_token_on_real_data() {
     };
     let questions = common::crate_root().join("portal-questions.json");
     if !questions.is_file() {
-        missing("portal-questions.json", "ac010_isolation");
+        common::skip::missing("portal-questions.json", "ac010_isolation");
         return;
     }
     let Some(l) = live("iso", &tenant_a, &tenant_b, &questions, 200).await else {

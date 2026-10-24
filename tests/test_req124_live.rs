@@ -46,14 +46,6 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// 缺哪个变量就**响亮地**说，然后 `None`（测试提前返回 = SKIP）。
-fn missing(name: &str, test: &str) -> Option<()> {
-    use std::io::Write as _;
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "*** SKIP: {test} -- missing {name} ***");
-    None
-}
-
 fn meta_url() -> Option<String> {
     env("ONTOK_DATABASE_URL").or_else(|| env("ONTOK_TEST_DATABASE_URL"))
 }
@@ -176,10 +168,10 @@ fn cli(pool_url: &str, args: &[&str]) -> std::process::Output {
 #[tokio::test]
 async fn live_console_pipeline_is_byte_identical_to_the_cli_and_conflicts_are_409() {
     let Some(_) = meta_url() else {
-        return missing("ONTOK_TEST_DATABASE_URL", "live_console_pipeline").unwrap();
+        return common::skip::missing("ONTOK_TEST_DATABASE_URL", "live_console_pipeline");
     };
     let Some(schema_path) = schema_path() else {
-        return missing("ONTOK_REQ124_SCHEMA", "live_console_pipeline").unwrap();
+        return common::skip::missing("ONTOK_REQ124_SCHEMA", "live_console_pipeline");
     };
     let url = meta_url().unwrap();
     let pool = ontok::db::pool::connect(&url)
@@ -417,10 +409,10 @@ async fn live_console_pipeline_is_byte_identical_to_the_cli_and_conflicts_are_40
 #[tokio::test]
 async fn live_export_and_r2rml_are_byte_identical_to_the_cli_on_a_frozen_production_snapshot() {
     let Some(_) = meta_url() else {
-        return missing("ONTOK_TEST_DATABASE_URL", "live_export_r2rml").unwrap();
+        return common::skip::missing("ONTOK_TEST_DATABASE_URL", "live_export_r2rml");
     };
     let Some(schema_path) = schema_path() else {
-        return missing("ONTOK_REQ124_SCHEMA", "live_export_r2rml").unwrap();
+        return common::skip::missing("ONTOK_REQ124_SCHEMA", "live_export_r2rml");
     };
     let url = meta_url().unwrap();
     let project = env("ONTOK_REQ124_PROJECT").unwrap_or_else(|| "anspire_r2rml_excl".into());

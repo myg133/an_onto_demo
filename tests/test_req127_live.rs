@@ -56,14 +56,6 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// 缺哪个变量就**响亮地**说，然后 `None`（测试提前返回 = SKIP）。
-fn missing(name: &str, test: &str) -> Option<()> {
-    use std::io::Write as _;
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "*** SKIP: {test} -- missing {name} ***");
-    None
-}
-
 fn meta_url() -> Option<String> {
     env("ONTOK_DATABASE_URL").or_else(|| env("ONTOK_TEST_DATABASE_URL"))
 }
@@ -178,7 +170,7 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
     let pool = match ontok::db::pool::connect(pool_url).await {
         Ok(p) => p,
         Err(e) => {
-            missing(&format!("可连的元数据库（{e}）"), tag);
+            common::skip::missing(&format!("可连的元数据库（{e}）"), tag);
             return None;
         }
     };
@@ -306,10 +298,10 @@ mod tempfile {
 #[tokio::test]
 async fn live_two_views_are_byte_identical_to_the_cli_on_a_frozen_production_snapshot() {
     let Some(url) = meta_url() else {
-        return missing("ONTOK_TEST_DATABASE_URL", "live_two_views").unwrap();
+        return common::skip::missing("ONTOK_TEST_DATABASE_URL", "live_two_views");
     };
     let Some(schema_file) = schema_path() else {
-        return missing("ONTOK_REQ127_SCHEMA", "live_two_views").unwrap();
+        return common::skip::missing("ONTOK_REQ127_SCHEMA", "live_two_views");
     };
     let Some((svc, _audit_dir)) = live_service(&url, "bytes").await else {
         return;
@@ -393,7 +385,7 @@ async fn live_two_views_are_byte_identical_to_the_cli_on_a_frozen_production_sna
 
     // ── 建模视图：`?view=model` vs CLI --model-view --schema --tenancy ──
     let Some(tenancy) = tenancy_path() else {
-        return missing("ONTOK_REQ127_TENANCY", "live_two_views（建模视图那一半）").unwrap();
+        return common::skip::missing("ONTOK_REQ127_TENANCY", "live_two_views（建模视图那一半）");
     };
     let tenancy_arg = tenancy.to_string_lossy().replace('\\', "/");
     let out = dir.join("model.ttl");
@@ -470,7 +462,7 @@ async fn live_two_views_are_byte_identical_to_the_cli_on_a_frozen_production_sna
 #[tokio::test]
 async fn live_auth_etag_audit_and_mcp_resource() {
     let Some(url) = meta_url() else {
-        return missing("ONTOK_TEST_DATABASE_URL", "live_auth_etag").unwrap();
+        return common::skip::missing("ONTOK_TEST_DATABASE_URL", "live_auth_etag");
     };
     let Some((svc, audit_dir)) = live_service(&url, "auth").await else {
         return;
