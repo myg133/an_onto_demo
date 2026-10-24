@@ -642,6 +642,8 @@ async fn ac007_audit_has_no_token_and_no_query_text() {
         query: q.to_string(),
         max_rows: None,
         tenant: None,
+        // ⭐ REQ-140 · 新增字段（默认 rows ⇒ 行为与以前逐字节相同）。
+        format: None,
     })
     .await;
     assert!(ok.is_ok(), "{ok:?}");
@@ -649,6 +651,7 @@ async fn ac007_audit_has_no_token_and_no_query_text() {
         query: "SELECT ?x WHERE { OPTIONAL { ?x a :balances } }".to_string(),
         max_rows: None,
         tenant: None,
+        format: None,
     })
     .await;
     assert_eq!(bad.unwrap_err().code, "SPARQL_UNSUPPORTED");

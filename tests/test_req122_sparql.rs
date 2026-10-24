@@ -540,6 +540,9 @@ fn ac009_the_result_json_has_every_required_field() {
         tables: vec!["orders".into()],
         public_dimensions: vec![],
         warnings: vec![],
+        // ⭐ REQ-140 · 列的 RDF 身份（`#[serde(skip)]` ⇒ 不在下面这八个字段里，
+        // 本判据正好钉住「多了一个字段但回执字节不变」）。
+        projection: vec![],
     };
     let v: serde_json::Value = serde_json::to_value(&r).unwrap();
     for key in [
