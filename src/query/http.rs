@@ -7,7 +7,11 @@
 //! ① 只认 `Authorization: Bearer`（⛔ query string / cookie）；② 查 token 表；
 //! ③ 把 [`Auth`] 放进请求扩展（handler 只能用表里那一行，⛔ 读不到请求体里的 tenant）。
 //!
-//! `/api/health` **在门之外**（AC-001：免 token），但它只给版本与语法版本 —— 零数据。
+//! `/api/health` **在门之外**（AC-001：免 token）。它只给「这个部署是什么」：
+//! `service` / `version`（**产品**版本）/ `project` / `ontology_version`（**本体**版本，
+//! ⭐ REQ-139）/ `syntax` / `protocols` / `transports`（本体模式另带 `mode`）——
+//! ⛔ 租户 id、连接串、表名一个都不给（R2）。`project` / `ontology_version` 与
+//! `/api/catalog` 的 `project` / `version` 是**同一对字段**（R4）。
 //!
 //! # 每个 handler 都只做「解析 → 调适配器 → 序列化」
 //!
@@ -92,7 +96,7 @@ pub struct Auth(pub TokenEntry);
 
 /// 组装路由。
 ///
-/// - `/api/health` 免 token（只给版本 + 语法版本，零数据）；
+/// - `/api/health` 免 token（产品版本 + 项目名 + **本体**版本 + 语法版本；⛔ 无租户/表名）；
 /// - `/api/*` 与 `/mcp` 全部过 [`require_token`]；
 /// - **未注册的 `/api/*` 也走身份门**（无 token ⇒ 401，不泄露「这个接口存不存在」）；
 ///   已授权的人问路 ⇒ 404 + 可用端点清单。
@@ -229,15 +233,27 @@ fn proto_of(path: &str) -> Protocol {
 // REST
 // ══════════════════════════════════════════════════════════════
 
-/// `GET /api/health` —— **免 token**，只给版本与语法版本（AC-001：不含任何数据）。
+/// `GET /api/health` —— **免 token**，给产品版本 + 语法版本 + **本部署是哪个项目 / 哪版本体**。
 ///
 /// ⭐ REQ-136 · 本体服务模式多一个 `"mode":"ontology-only"`（AC-001 的判据）。
 /// 普通模式**不加**这个字段（既有响应逐字节不变，AC-006）—— 探针要区分部署时，
 /// 看「有没有 mode 字段」即可；带上它的部署就是「只有本体、没有数据源」。
+///
+/// ⭐ REQ-139 · 两个新字段（两种模式都有，R3）：
+///
+/// - `project`：项目名（`--project`）。它本来就出现在 TTL (`ontok:sourceProject`) 与
+///   `/api/catalog` 里，公开无害；⛔ 租户 id / 连接串 / 表名**照样一个都不给**（R2）。
+/// - `ontology_version`：**本体**版本（`--version` 指向的、已冻结的快照版本号，整数）。
+///   与 `version`（**产品**版本 = `CARGO_PKG_VERSION`，如 `0.1.0`）是两件事，⛔ 别混读。
+///
+/// ⛔ R4：这两个值**就是** `svc.project` / `svc.version` —— 与 [`catalog::page`] 里
+/// `CatalogPage { project, version }` 填的是**同一对字段**（都在 [`QueryService::new`] 里由
+/// `ServiceParts` 一次定下，运行期不变）。所以不存在「两处各算一次」：health 不重新查库、
+/// 不从 IRI/TTL 里反解项目名，只把启动时那一个事实读出来。
 async fn health(State(svc): State<Arc<QueryService>>) -> Response {
     let started = Instant::now();
-    // ⛔ 这里刻意**不读** svc 的任何数据字段（项目名、租户、类清单都不出去）。
-    // 只把「这个服务是什么版本、说哪种语法（以及哪种模式）」告诉探针。
+    // ⛔ 只读「这个服务是哪个项目 / 哪版本体 / 什么产品版本 / 说哪种语法（以及哪种模式）」。
+    // 租户、连接串、表清单、类清单**仍然一个都不出去**（R2）。
     audit_anonymous(&svc, "health", Protocol::Rest, None, "OK", started);
     let mut body = json!({
         "service": "ontok-query",
@@ -245,6 +261,9 @@ async fn health(State(svc): State<Arc<QueryService>>) -> Response {
         "syntax": SYNTAX_VERSION,
         "protocols": ["rest", "mcp-http"],
         "transports": ["http", "sse"],
+        // ⭐ REQ-139 · 与 `/api/catalog` 的 `project` / `version` 同一对字段（R4）。
+        "project": svc.project,
+        "ontology_version": svc.version,
     });
     if svc.mode.is_ontology_only() {
         // `mode` 是**部署形状**，不是数据：它告诉探针「这个进程不会去连业务库」。
@@ -1062,9 +1081,13 @@ mod tests {
         b.body(Body::from(body.to_string())).unwrap()
     }
 
-    /// AC-001：`/api/health` 免 token，且**不含任何数据**（项目名 / 租户 / 类名都不出现）。
+    /// AC-001 / R2：`/api/health` 免 token，且**不含业务数据**（租户 / 表名 / SQL / 连接串）。
+    ///
+    /// ⭐ REQ-139 · 项目名与**本体**版本现在**该**出现（`project` / `ontology_version`；
+    /// 普通模式也有 —— R3），但下面这些仍然零出现（R2）。
+    /// 变异：把整个 `QueryService` / 快照序列化进 health ⇒ 红。
     #[tokio::test]
-    async fn health_needs_no_token_and_carries_no_data() {
+    async fn health_needs_no_token_and_carries_no_business_data() {
         let app = build_router(test_service());
         let (status, headers, body) = call(app, get("/api/health", None)).await;
         assert_eq!(status, StatusCode::OK);
@@ -1073,12 +1096,103 @@ mod tests {
         assert_eq!(v["service"], "ontok-query");
         assert_eq!(v["syntax"], SYNTAX_VERSION);
         assert!(v["version"].as_str().is_some());
-        // ⛔ 零数据：项目名、租户 id、类名都不许出现。
-        for forbidden in ["demo", "C0001", "customers", "orders", "sql"] {
+        // ⭐ REQ-139 · 这两个字段**必须**在（普通模式 —— R3）。
+        assert_eq!(v["project"], "demo", "{v}");
+        assert_eq!(v["ontology_version"], 2, "{v}");
+        // ⛔ 零业务数据：租户 id、表名、类名、SQL、连接串、口令都不许出现。
+        for forbidden in [
+            "C0001",
+            "customers",
+            "orders",
+            "sql",
+            "postgres",
+            "password",
+        ] {
             assert!(
                 !body.contains(forbidden),
-                "health 里出现了 {forbidden:?}（AC-001 要求零数据）：{body}"
+                "health 里出现了 {forbidden:?}（R2 要求不泄数据）：{body}"
             );
+        }
+    }
+
+    /// ⭐ REQ-139 · AC-003（R4）：health 的 `project` / `ontology_version` 与 catalog 的
+    /// `project` / `version` **是同一个数** —— 两个模式各断言一次。
+    ///
+    /// 为什么这条不是空转：断言「两边相等」**并且**「等于服务的已知值」—— 只写前者时，
+    /// 两处一起退化成 `""` / `0` 也会绿；只写后者时，health 自己另算一遍也看不出来。
+    /// 变异（把 `ontology_version` 恒写 `0`）⇒ 相等断言立刻红（catalog 仍是 2）。
+    #[tokio::test]
+    async fn health_identity_equals_catalog_in_both_modes() {
+        for (mode, svc) in [
+            ("query", test_service()),
+            ("ontology-only", test_service_ontology_only()),
+        ] {
+            let (status, _, health_body) =
+                call(build_router(Arc::clone(&svc)), get("/api/health", None)).await;
+            assert_eq!(status, StatusCode::OK, "{mode}");
+            let h: Value = serde_json::from_str(&health_body).unwrap();
+
+            let (status, _, catalog_body) = call(
+                build_router(Arc::clone(&svc)),
+                get("/api/catalog?page=1&page_size=1", Some(TOKEN_A)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{mode}: {catalog_body}");
+            let c: Value = serde_json::from_str(&catalog_body).unwrap();
+
+            assert_eq!(
+                h["project"], c["project"],
+                "{mode}：health 的 project 必须与 catalog 的 project 同值\n\
+                 health={h}\ncatalog={c}"
+            );
+            assert_eq!(
+                h["ontology_version"], c["version"],
+                "{mode}：health 的 ontology_version 必须与 catalog 的 version 同值\n\
+                 health={h}\ncatalog={c}"
+            );
+            // 两边一起退化也过不了：这两个必须等于服务里那**一对**字段。
+            assert_eq!(h["project"], svc.project.as_str(), "{mode}: {h}");
+            assert_eq!(h["ontology_version"], svc.version, "{mode}: {h}");
+            assert!(h["ontology_version"].as_i64().is_some_and(|n| n > 0), "{mode}: {h}");
+        }
+    }
+
+    /// ⭐ REQ-139 · AC-004（R5）：与基线响应做**键集合**对比。
+    ///
+    /// 基线（`develop` `93e6af2`）的 `/api/health` 键集合就是下面这 5 个；
+    /// REQ-139 只**新增** `project` / `ontology_version`，⛔ 不删不改任何一个旧字段，
+    /// 且 `mode` 仍然**只**在本体模式出现（有客户端靠它在不在判断部署形状）。
+    #[tokio::test]
+    async fn health_keeps_all_baseline_keys_and_mode_stays_ontology_only() {
+        const BASELINE: [&str; 5] = ["service", "version", "syntax", "protocols", "transports"];
+        const ADDED: [&str; 2] = ["project", "ontology_version"];
+
+        for (mode, svc, is_ontology) in [
+            ("query", test_service(), false),
+            ("ontology-only", test_service_ontology_only(), true),
+        ] {
+            let (_, _, body) = call(build_router(svc), get("/api/health", None)).await;
+            let v: Value = serde_json::from_str(&body).unwrap();
+            let obj = v.as_object().expect("health 必须是 JSON 对象");
+
+            let mut want: Vec<&str> = BASELINE.iter().chain(ADDED.iter()).copied().collect();
+            if is_ontology {
+                want.push("mode");
+            }
+            let mut got: Vec<&str> = obj.keys().map(String::as_str).collect();
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "{mode}：health 的键集合变了\n{body}");
+
+            // 键在、值被改，同样是破坏 ⇒ 旧字段的值也照样钉住。
+            assert_eq!(v["service"], "ontok-query", "{mode}");
+            assert_eq!(v["version"], env!("CARGO_PKG_VERSION"), "{mode}");
+            assert_eq!(v["syntax"], SYNTAX_VERSION, "{mode}");
+            assert_eq!(v["protocols"], json!(["rest", "mcp-http"]), "{mode}");
+            assert_eq!(v["transports"], json!(["http", "sse"]), "{mode}");
+            if is_ontology {
+                assert_eq!(v["mode"], "ontology-only", "{mode}");
+            }
         }
     }
 
@@ -1853,11 +1967,13 @@ mod tests {
     // ⭐ REQ-136 · 本体服务模式（`--ontology-only`）
     // ══════════════════════════════════════════════════════════
 
-    /// ⭐ AC-001：health 200 且带 `mode:"ontology-only"`；**普通模式一个字节都不多**。
+    /// ⭐ AC-001：health 200 且带 `mode:"ontology-only"`；普通模式**没有** `mode` 键。
     ///
+    /// ⭐ REQ-139 · 两种模式现在都多了 `project` / `ontology_version`（R3），所以
+    /// 「普通模式逐字节不变」这句只对 **`mode`** 成立：探针仍然靠「有没有 `mode`」判部署形状。
     /// 变异：把 `mode` 无条件写进 health ⇒ 第二条断言红（普通模式的行为变了，AC-006）。
     #[tokio::test]
-    async fn ontology_mode_health_says_so_and_query_mode_stays_byte_identical() {
+    async fn ontology_mode_health_says_so_and_query_mode_has_no_mode_key() {
         let (status, _, body) = call(
             build_router(test_service_ontology_only()),
             get("/api/health", None),
