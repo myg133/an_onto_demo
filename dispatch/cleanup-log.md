@@ -325,3 +325,12 @@
 - 结果：缺夹具默认**响亮跳过**（exit 0 / 21 条用例 21 行标记 1:1）；`ONTOK_REQUIRE_FIXTURES=1` ⇒ **失败**（exit 101）
 - **假红清零后暴露 5 条真红/门禁** ⇒ 已建 `BA/dispatch/baseline-reds.md` 台账，每条有归属，并登记 REQ-132（flake）/ REQ-133（抽取回归）/ REQ-134（登记表过期）
 - 顺手修掉 2 条既有红（裸 `env!` ⇒ `common::crate_root()`），`test_anchor_guard` 转绿
+
+
+## 2026-10-24 — REQ-135 合并与回收
+
+- 代码合并：`feature/REQ-135` → `develop` **`c37b21b`**（禁改面零 diff；`Cargo.*` 零改动）
+- 部署侧：`Deploy` **`55cfd99`**（prod 真 prometheus 注解 ×3 + 审计落 PVC + 镜像路径 `an_onto`）
+- 结果：三服务 `/metrics` 免 token、六指标真库实测、四类安全计数全真造、格式校验器反空转（7 种坏格式全拒）
+- 审计：默认 stdout；给文件时**文件+stdout 各一份且逐行相同**
+- **上线待办**：27 张表未登记进 `query-policy.json`（否则查询 500）；`/metrics` 需 NetworkPolicy 限内网
