@@ -1,0 +1,102 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Ops360 本体服务（合作方接入用）
+#
+# 与 uat 的差别：**只部署 query**，且用 `--ontology-only`：
+#   · 无业务库（Ops360 没有数据库）⇒ 不需要 --schema / --policy / 源库连接
+#   · catalog / describe / ontology.ttl 直接读快照
+#   · SPARQL ⇒ 503 NO_DATA_SOURCE（REST）/ 200+isError（MCP）
+#
+# 为什么不用 console/portal：合作方只要本体接口，多开一个面就多一份暴露。
+namespace: anspire-ontok-uat
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+images:
+  - name: ontok
+    newName: aigccontainer.azurecr.cn/an_onto/ontok
+    newTag: 0.1.1
+
+replicas:
+  - { name: ontok-query, count: 1 }
+
+patches:
+  # ① 删掉 console 与 portal（只留 query）
+  - target: { kind: Deployment, name: ontok-console }
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-console }
+  - target: { kind: Deployment, name: ontok-portal }
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-portal }
+  - target: { kind: Service, name: ontok-console }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: ontok-console }
+  - target: { kind: Service, name: ontok-portal }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: ontok-portal }
+
+  # ② 本体模式的启动参数：去掉 --schema / --policy（R1 互斥），加 --ontology-only
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - query
+          - serve
+          - --bind=0.0.0.0:8800
+          - --allow-public
+          - --tokens=/etc/ontok/secrets/query-tokens.json
+          - --project=$(ONTOK_PROJECT)
+          - --version=$(ONTOK_VERSION)
+          - --ontology-only
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "ops360"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: "2"
+      # 本体模式不读源库：把这个 env 去掉，避免"看起来需要它"
+      - op: remove
+        path: /spec/template/spec/containers/0/env/3
+  # ③ ConfigMap / Secret 由部署流程**单独 provision**（含真 token），
+  #    ⛔ 不能交给 base 的空占位版本 —— 否则 apply 会把合作方 token 抹成空列表。
+  - target: { kind: ConfigMap, name: ontok-config }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: { name: ontok-config }
+  - target: { kind: Secret, name: ontok-secrets }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata: { name: ontok-secrets }
+  - target: { kind: Secret, name: ontok-db }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata: { name: ontok-db }
+  # ④ 从 ACR 拉镜像需要凭据（命名空间里的 postgres17-wal-registry 已复制过来）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: postgres17-wal-registry

@@ -1,0 +1,25 @@
+# 合作方入口：只暴露本体接口
+#
+# 本集群的约定（照其他命名空间的写法）：
+#   · traefik 配了 HTTP→HTTPS 永久重定向 ⇒ Ingress **必须配 TLS**，否则 404
+#   · 通配证书 secret 名固定 `wildcard-local-anspire-cn`，且**必须在同一命名空间**
+#   · 注解 `traefik.ingress.kubernetes.io/router.tls: "true"`
+#
+# ⚠️ /metrics 免 token，必须在网关层挡住（ingress 不做鉴权；靠不暴露路径 + NetworkPolicy）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontok-ops360
+  annotations:
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: an-onto.local.anspire.cn
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: ontok-query, port: { number: 8800 } } } }
+  tls:
+    - hosts:
+        - an-onto.local.anspire.cn
+      secretName: wildcard-local-anspire-cn
