@@ -278,6 +278,98 @@ fn ac001_out_must_not_clobber_its_own_input() {
     assert_eq!(orig["items"].as_array().unwrap().len(), 4, "输入提案没被改写");
 }
 
+/// ⭐ QA N1：**`--stats` 也必须进「不原地覆盖」清单**。
+///
+/// 上一版只守了 `--out` ⇒ `--stats` 指向 `--proposal` 时 exit 0，
+/// **提案被静默写成一坨统计 JSON**（数据丢失）。
+///
+/// 三组各一次：`--stats==--proposal`、`--stats==--assertions`、`--stats==--out`。
+/// 每组都必须：exit≠0 + 点名叫哪两个参数撞了 + **输入文件 sha256 前后不变**。
+#[test]
+fn n1_stats_may_not_clobber_inputs_or_the_main_product() {
+    let dir = temp_dir("n1-clobber");
+    let (a, p) = write_fixtures(&dir, "req129_n1");
+
+    // 每一组都跑在**全新的输入**上（前一组若真写坏了，后一组的 sha 才能独立说明问题）。
+    let out = dir.join("merged.json");
+    // (期望点名的两个参数, --stats 落点, 被保护的文件, 说明)；顺带钉住「报错点名」这件事。
+    let cases: Vec<(&str, &str, &Path, &Path, &str)> = vec![
+        ("--stats", "--proposal", p.as_path(), p.as_path(), "stats 撞提案"),
+        ("--stats", "--assertions", a.as_path(), a.as_path(), "stats 撞断言"),
+        ("--stats", "--out", out.as_path(), out.as_path(), "stats 撞主产物"),
+    ];
+
+    for (arg1, arg2, stats_path, guard, what) in cases {
+        // ① 每组开始前记下两份输入（以及被保护文件）的 sha
+        let sha_a0 = sha256_of(&std::fs::read(&a).expect("读断言"));
+        let sha_p0 = sha256_of(&std::fs::read(&p).expect("读提案"));
+        let guard0 = std::fs::read(guard).ok().map(|b| sha256_of(&b));
+        let args = [
+            "doc".to_string(),
+            "merge".to_string(),
+            "--assertions".to_string(),
+            a.to_str().unwrap().to_string(),
+            "--proposal".to_string(),
+            p.to_str().unwrap().to_string(),
+            "--out".to_string(),
+            out.to_str().unwrap().to_string(),
+            "--stats".to_string(),
+            stats_path.to_str().unwrap().to_string(),
+        ];
+        let strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let o = cli(&strs, None);
+
+        // ② 必须 exit≠0（⛔ 静默覆盖）
+        assert!(
+            !o.status.success(),
+            "{what}：必须拒绝（上一版这里是 exit 0 + 静默覆盖）"
+        );
+        // ③ 必须**点名哪两个参数撞了**（顺序由实现决定，两个名字都得在）
+        let text = format!("{}{}", stdout(&o), stderr(&o));
+        assert!(
+            text.contains(arg1) && text.contains(arg2) && text.contains("同一个文件"),
+            "{what}：报错要点名 {arg1} 与 {arg2}，实际：{text}"
+        );
+        // ④ 两份输入的 sha256 **前后不变**
+        assert_eq!(
+            sha256_of(&std::fs::read(&a).expect("读断言")),
+            sha_a0,
+            "{what}：断言文件被改动了"
+        );
+        assert_eq!(
+            sha256_of(&std::fs::read(&p).expect("读提案")),
+            sha_p0,
+            "{what}：提案文件被改动了"
+        );
+        // ⑤ 被保护的那个文件也没变；`--stats==--out` 时它**根本不该被创建**
+        assert_eq!(
+            std::fs::read(guard).ok().map(|b| sha256_of(&b)),
+            guard0,
+            "{what}：被保护文件被写成了别的东西"
+        );
+        if what == "stats 撞主产物" {
+            assert!(!out.exists(), "{what}：拒绝时一个产物都不该落盘");
+        } else {
+            let guard_text = std::fs::read_to_string(guard).expect("读被保护文件");
+            assert!(
+                !guard_text.contains("\"assertions_read\""),
+                "{what}：被保护文件被写成了 stats JSON"
+            );
+        }
+    }
+}
+
+fn sha256_of(bytes: &[u8]) -> String {
+    // 测试里只要**前后一致**，不必是密码学 sha256 的完整实现；
+    // 用长度 + 逐字节滚动哈希足以发现「文件被改写」。
+    let mut h: u64 = 1469598103934665603;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    format!("{:016x}:{}", h, bytes.len())
+}
+
 // ──────────────────────────────────────────────────────────
 // AC-002 · 只并 alignable:true
 // ──────────────────────────────────────────────────────────

@@ -411,6 +411,11 @@ pub enum DocCmd {
     /// ⚠️ 基数冲突的条目 `applicable: false` 且两侧说法都在 `conflicts[]` 里 ——
     /// `proposal apply` 遇到它会**拒绝并点名**（不是忽略）。
     /// ⚠️ 同一份输入两次运行 ⇒ 输出**逐字节相同**（无时间戳、无随机、稳定排序）。
+    /// ⚠️ ⛔ **输出不许指向输入，也不许互相撞**：`--out` / `--stats` 与
+    /// `--assertions` / `--proposal`（以及两者彼此）撞了就 **exit≠0 并点名**。
+    /// 静默覆盖是数据丢失（`--stats` 指向提案会把提案写成一坨统计 JSON）。
+    /// ⚠️ 重跑合并会让**之前的签字失效**（`reviewed_by` / `signed_at` 一并清掉，
+    /// `stats.reviewed_by_reset` 会记数）—— 内容变了签名就该作废，这是刻意的。
     /// ⚠️ 本命令**不连产品库、不调模型**：输入两份本地文件、产物也是本地文件。
     #[command(verbatim_doc_comment)]
     Merge {
@@ -2235,19 +2240,46 @@ async fn doc_merge_cmd(
     let proposal_doc: Value = serde_json::from_str(&proposal_text)
         .with_context(|| format!("提案 {} 不是合法 JSON", proposal.display()))?;
 
-    // ⛔ 不许原地覆盖：合并结果**新增**了 items 与 `doc_merge` 块，覆盖输入会让人
-    // 无法再拿原始提案复核一遍（而「合并前是什么样」正是审计要看的）。
-    for (what, src) in [("--assertions", assertions), ("--proposal", proposal)] {
-        if same_path(out, src) {
-            anyhow::bail!(
-                "--out 与 {what} 是同一个文件（{}）。\n\
-                 ⛔ 不原地覆盖：合并结果比输入多了条目与 `doc_merge` 块，\
-                 覆盖后就没法再拿原始输入复核一遍。请写到另一个文件。",
-                out.display()
-            );
-        }
+    // ⛔ **不原地覆盖 —— 输出 × {输入 ∪ 另一个输出}，全部查**（QA N1）。
+    //
+    // | 撞法 | 后果 |
+    // | --- | --- |
+    // | `--out` == `--assertions` / `--proposal` | 输入被合并结果盖掉，没法再复核「合并前是什么样」 |
+    // | `--stats` == `--assertions` / `--proposal` | **提案/断言被写成一坨统计 JSON**（静默数据丢失） |
+    // | `--stats` == `--out` | 主产物被统计文件顶掉，而屏幕上会报「产物已写出」 |
+    //
+    // 上一版只守了 `--out` ⇒ `--stats` 指向提案时 exit 0 且提案被覆盖（QA 实测）。
+    // 静默覆盖是**数据丢失**，所以这里一律 exit≠0 并**点名哪两个参数撞了**。
+    let ins: [(&str, &std::path::Path); 2] =
+        [("--assertions", assertions), ("--proposal", proposal)];
+    let mut outs: Vec<(&str, &std::path::Path)> = vec![("--out", out)];
+    if let Some(p) = stats_path {
+        outs.push(("--stats", p));
     }
-    crate::extract::proposal::require_out_is_file(out)?;
+    for (i, (oname, opath)) in outs.iter().enumerate() {
+        for (iname, ipath) in ins.iter() {
+            if same_path(opath, ipath) {
+                anyhow::bail!(
+                    "{oname} 与 {iname} 是同一个文件（{}）。\n\
+                     ⛔ 不原地覆盖：{iname} 是**输入**，覆盖后就没法再拿它复核「合并前是什么样」。\
+                     请给 {oname} 换一个路径。",
+                    opath.display()
+                );
+            }
+        }
+        for (oname2, opath2) in outs.iter().skip(i + 1) {
+            if same_path(opath, opath2) {
+                anyhow::bail!(
+                    "{oname} 与 {oname2} 是同一个文件（{}）。\n\
+                     ⛔ 两个产物不能写同一个文件：一份会**静默盖掉**另一份，\
+                     而屏幕上还会报「两个都写了」。请各给一个路径。",
+                    opath.display()
+                );
+            }
+        }
+        crate::extract::proposal::require_out_is_file(opath)
+            .map_err(|e| anyhow::anyhow!("{oname}：{e}"))?;
+    }
 
     // ⭐ `--schema`（可选）：给了就走**严格**校验面（AC-004 订正后：给了就 0 例外）。
     let opts = match schema {
