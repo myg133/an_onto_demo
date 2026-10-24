@@ -308,3 +308,12 @@
 - 结果：`doc merge`（14 并入 / 28 排除 / 14 未映射 / 0 冲突）+ `doc sign`；AC-007 端到端 52→53 关系
 - **文档链路闭环**：ingest → merge → sign → import → review → apply → freeze → TTL
 - 新手册：`BA/runbook/doc-to-ontology.md`（含「先合并后签字」顺序坑）
+
+
+## 2026-10-24 — REQ-130 合并与回收
+
+- 合并：`feature/REQ-130` → `develop` **`1772507`**（2 个提交）
+- 禁改面零 diff；合并后 `cargo check --lib` ✅
+- 回收：feature worktree + 分支
+- 结果：AC-002 判据改**身份三元组相等**（无 `contains`，绿红成对且绿判据自带牙）；`signed_at_source` 三值（arg/system/legacy）
+- **新规程**：变异实验必须用独立 `CARGO_TARGET_DIR`（共享 target 的缓存假象两个方向都会错）
