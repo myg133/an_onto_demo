@@ -985,6 +985,11 @@ mod tests {
     /// 所有端点走的是同一套 handler（这正是「两个模式只在过滤处分叉」的证据）。
     /// 判据里它还带一条硬约束：任何请求都**不许**尝试连库（这里连连接池都不存在）。
     pub(crate) fn test_service_ontology_only() -> Arc<QueryService> {
+        test_service_ontology_only_with_audit(AuditSink::stdout_only())
+    }
+
+    /// ⭐ REQ-137 · 本体模式 + 可读审计（AC-005：审计行 `tenant=-`）。
+    fn test_service_ontology_only_with_audit(audit: AuditSink) -> Arc<QueryService> {
         let (schema, _mapping, model) = crate::query::test_fixture();
         let policy = crate::sparql::policy::QueryPolicy::parse(
             r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
@@ -995,11 +1000,15 @@ mod tests {
             let opts = crate::domain::ttl::TtlOptions::new("demo", 2);
             opts.ontology_iri()
         };
-        let tokens = TokenTable::parse(&format!(
-            r#"{{"version":"1.0.0","tokens":[
-                {{"label":"a","token":"{TOKEN_A}","tenant":"C0001","max_rows":5,"max_concurrency":1}}
+        // ⭐ REQ-137 · 本体模式的 token **不带 tenant**（带上会被 `parse_for_mode` 拒绝）。
+        let tokens = TokenTable::parse_for_mode(
+            &format!(
+                r#"{{"version":"1.0.0","tokens":[
+                {{"label":"a","token":"{TOKEN_A}","max_rows":5,"max_concurrency":1}}
             ]}}"#
-        ))
+            ),
+            crate::query::ServiceMode::OntologyOnly,
+        )
         .expect("token 表");
         let _ = schema;
         Arc::new(QueryService::new(ServiceParts {
@@ -1019,7 +1028,7 @@ mod tests {
             sse_max_connections: 2,
             max_concurrent_queries: 2,
             tokens,
-            audit: AuditSink::stdout_only(),
+            audit,
             ttl: crate::query::ttl::fixture(),
         }))
     }
@@ -2055,5 +2064,59 @@ mod tests {
             instructions.contains("本体服务模式") && instructions.contains("NO_DATA_SOURCE"),
             "instructions 必须说清没有数据源：{instructions}"
         );
+    }
+
+    /// ⭐ REQ-137 · AC-005 / R3：本体模式的审计行写 `tenant=-`，
+    /// ⛔ 日志里不出现任何占位租户（尤其全 0 UUID）。
+    ///
+    /// 变异：把 `audit_call` 里的 `tenant` 改回 `Some(..)`（哪怕写空串）⇒ 第一条断言红；
+    /// 把 token 解析放行一个全 0 租户 ⇒ 第二条断言红。
+    #[tokio::test]
+    async fn ontology_mode_audit_has_dash_tenant_and_no_placeholder_uuid() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontok-req137-audit-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("audit.log");
+        let svc = test_service_ontology_only_with_audit(AuditSink::open(&path).expect("审计文件"));
+
+        // 一次 catalog（200）+ 一次 SPARQL（503）：两种出口各一行。
+        let (status, _, body) = call(
+            build_router(Arc::clone(&svc)),
+            get("/api/catalog?page=1&page_size=200", Some(TOKEN_A)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, _, body) = call(
+            build_router(Arc::clone(&svc)),
+            post(
+                "/api/sparql",
+                Some(TOKEN_A),
+                r#"{"query":"SELECT ?s WHERE { ?s a :customers }"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+
+        let text = std::fs::read_to_string(&path).expect("读审计");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "两次请求两行：\n{text}");
+        for line in &lines {
+            assert!(
+                line.contains("tenant=-"),
+                "本体模式的审计行必须是 tenant=-（⛔ 不是空串、不是占位租户）：{line}"
+            );
+        }
+        assert!(
+            !text.contains("00000000-0000-0000-0000-000000000000"),
+            "⛔ 占位租户进了审计：{text}"
+        );
+        assert!(!text.contains(TOKEN_A), "⛔ 审计里出现了 token 明文：{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

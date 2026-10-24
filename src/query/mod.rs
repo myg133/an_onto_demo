@@ -896,9 +896,14 @@ async fn run_sparql_event(
     }
 
     // ① 租户只能来自 token：请求体里的 tenant 只**用来核对**。
+    //
+    // ⭐ REQ-137 · 走到这里租户一定 `Some`：本体模式在 ⓪ 就 503 了，而普通模式的 token
+    // 解析阶段强制要求 tenant（缺失/空串都拒绝）。`unwrap_or_default()` 只是让类型闭合，
+    // ⛔ 它不是「给本体模式编一个空租户」—— 那条路根本到不了这里。
     if let Some(claim) = req.tenant.as_deref() {
-        if claim.trim() != caller.token.tenant {
-            let e = ApiError::tenant_mismatch(&caller.token.tenant);
+        let bound = caller.token.tenant.as_deref().unwrap_or_default();
+        if claim.trim() != bound {
+            let e = ApiError::tenant_mismatch(bound);
             // ⭐ REQ-135 · 越权信号（AC-004 的核心）：请求体带别人的租户 ⇒ 计数 +1。
             svc.metrics.note_denial_code(e.code);
             audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
@@ -955,7 +960,7 @@ async fn run_sparql_event(
         schema: &svc.schema,
         ontology_iri: &svc.ontology_iri,
         policy: &svc.policy,
-        tenant: caller.token.tenant.as_str(),
+        tenant: caller.token.tenant.as_deref().unwrap_or_default(),
         max_rows: effective,
     };
     let result = crate::sparql::run_query(source, &input, &req.query, svc.timeout_ms).await;
@@ -1226,7 +1231,8 @@ pub fn audit_call(
         event,
         proto: caller.protocol.as_str(),
         token_digest: Some(caller.token.audit_digest()),
-        tenant: Some(caller.token.tenant.clone()),
+        // ⭐ REQ-137 · 本体模式的凭证没有租户 ⇒ `None` ⇒ 审计写 `tenant=-`（R3）。
+        tenant: caller.token.tenant.clone(),
         query_digest: query.map(|q| {
             format!(
                 "sha256:{}",
@@ -1260,7 +1266,8 @@ pub fn audit_ttl(
         event: "ttl",
         proto: caller.protocol.as_str(),
         token_digest: Some(caller.token.audit_digest()),
-        tenant: Some(caller.token.tenant.clone()),
+        // ⭐ REQ-137 · 同 [`audit_call`]：本体模式没有租户 ⇒ `tenant=-`。
+        tenant: caller.token.tenant.clone(),
         query_digest: None,
         rows: None,
         elapsed_ms: started.elapsed().as_millis(),
@@ -1581,7 +1588,7 @@ mod tests {
         let token = TokenEntry {
             token: "x".repeat(24),
             digest: "d".repeat(64),
-            tenant: "C0001".into(),
+            tenant: Some("C0001".into()),
             max_rows: 10,
             max_concurrency: 1,
             label: None,
