@@ -10,7 +10,8 @@
 
 ### AC-002 · catalog 必须列出**关系**（本需求存在的理由）
 
-- 用 **ops360 真实快照**（v2）⇒ `counts.classes=20`、**`counts.relations=10`**、`counts.properties≥67`
+- 用 **ops360 真实快照**（v2）⇒ `counts.classes=20`、**`counts.relations=10`**、**`counts.properties=47`**
+- ⛔ 不许出现合成出来的 `id` 列（那是自动造 schema）
 - ⛔ `relations` 不许是 0；⛔ 不许出现 `excluded_relations=10`
 - 判据：catalog 响应原文（含 counts 与至少 2 条 relation 条目）
 
@@ -48,10 +49,11 @@
 - `sparql_query` ⇒ 与 REST 同语义（503 `NO_DATA_SOURCE`）
 - 判据：各一次
 
-### AC-009 · `/metrics` 同 REQ-135
+### AC-009 · `/metrics` 由 REQ-135 提供（本分支不实现）
 
-- `/metrics` 200、免 token、六指标在；`ontok_ttl_bytes{view="customer"}` = TTL 实际字节
-- 判据：一次抓取
+- 本分支**不写** `/metrics` 代码（1 worktree = 1 req）
+- REQ-135 合入 develop 后，本分支 rebase 并补一次集成验证：`/metrics` 200、免 token、六指标在、`ontok_ttl_bytes{view="customer"}` == ops360 TTL 字节（21,335）
+- 判据：rebase 后的抓取；若 135 尚未合入 ⇒ 明确标注「依赖未合入」，不许写成已验
 
 ### AC-010 · 不退化 / 零依赖
 
@@ -67,3 +69,42 @@
 - **H** 「从快照取类/关系」只许一个函数，两个模式只在**过滤**处分叉
 - **G** 变异：让 catalog 走 schema 对账（回到现状）/ 让 SPARQL 返回 200 空结果 / 让无源库时仍尝试连接 ⇒ 每条必须被抓
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 三 · Dev 开工前的三条裁定（2026-10-24）
+
+### R-1 · REQ-135 不合进本分支（选 b）
+
+Dev 提出可把 `feature/REQ-135` 快进合入本分支以拿到 `/metrics`。
+
+**裁定：不合。** 理由：**1 worktree = 1 req**；合进来会让本分支同时含「审计 stderr→stdout」这种会改变 AC-006 对照口径的改动，出问题分不清归因。
+
+**执行**：本分支不写 `/metrics`；AC-009 改为**依赖 REQ-135**，rebase 后补集成验证；AC-006 的对照口径**按 `5163cfb` 纯 develop 算**。
+
+### R-2 · **AC-002 是错的：`properties = 47`，不是 67**
+
+我写 `≥67` 是**把合成 schema 的数字当成了本体事实**——那 20 个 `id` 列是 `make_schema.py` 硬塞的，不是本体里的。
+
+| 数 | 来源 | 是否本体事实 |
+| --- | --- | --- |
+| 47 | `object_types.properties` 合计 | ✅ 是 |
+| 67 | 47 + 20 个合成 `id` 列 | ❌ 否 |
+
+**裁定**：`properties = 47`，⛔ 不许合成 `id` 列。
+
+**理由**：对外平台拿到假的 `id` 列，比少 20 条属性**更糟**——他们会以为真有这个字段，然后来问"为什么查不到"。
+
+> **这是「AC 也会错」的一个实例**：我把测试脚手架的产物当成了被测对象的事实。
+
+### R-3 · MCP 保持 JSON-RPC 契约（200 + `isError` + `code`）
+
+| 层 | 语义 | 状态码 |
+| --- | --- | --- |
+| REST `/api/sparql` | 应用错误 | **503 `NO_DATA_SOURCE`** |
+| MCP `sparql_query` | 传输正常、工具执行失败 | **200 + `result.isError=true` + `structuredContent.code="NO_DATA_SOURCE"`** |
+
+**理由**：MCP 客户端把 HTTP 5xx 当**传输故障**会重试——而 R4 恰恰说"重试无效"。
+
+**要求**：两边 `code` 与 `hint` **逐字相同**，并在测试里断言这一点（这才叫"同语义"）。
