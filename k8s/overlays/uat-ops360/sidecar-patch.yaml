@@ -20,7 +20,7 @@
   path: /spec/template/spec/containers/-
   value:
     name: cloudflared
-    image: aigccontainer.azurecr.cn/an_onto/cloudflared:2024.12.2
+    image: aigccontainer.azurecr.cn/an_onto/cloudflared:2026.10.1
     args: ["tunnel", "--no-autoupdate", "run"]
     env:
       - name: TUNNEL_TOKEN
