@@ -1,0 +1,37 @@
+# CF Tunnel sidecar 的 JSON6902 补丁体（**只有操作数组**）
+# target 在 kustomization.yaml 里给：
+#   - path: sidecar-patch.yaml
+#     target: { kind: Deployment, name: ontok-query }
+#
+# 链路：公网 → Cloudflare → cloudflared(本 Pod) → 127.0.0.1:8800
+#       ⚠️ 不过 traefik ⇒ 与内网 ingress 是两条独立入口
+#       ⚠️ token 模式是**远程管理隧道**：集群里的 config.yaml 会被忽略，
+#          /metrics 的拦截必须在 Cloudflare 面板加 WAF 规则（见 sidecar.md §五）
+
+# ① 只读根文件系统下，cloudflared 需要一个可写 /tmp
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: cf-tmp
+    emptyDir: {}
+
+# ② sidecar 容器：与 ontok 共享 Pod 网络，直接连 127.0.0.1:8800
+- op: add
+  path: /spec/template/spec/containers/-
+  value:
+    name: cloudflared
+    image: aigccontainer.azurecr.cn/an_onto/cloudflared:2024.12.2
+    args: ["tunnel", "--no-autoupdate", "run"]
+    env:
+      - name: TUNNEL_TOKEN
+        valueFrom:
+          secretKeyRef: { name: cloudflared-token, key: token }
+    resources:
+      requests: { cpu: 20m, memory: 48Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: { drop: ["ALL"] }
+    volumeMounts:
+      - { name: cf-tmp, mountPath: /tmp }
