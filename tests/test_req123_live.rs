@@ -156,9 +156,11 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
     .expect("两视图 TTL 必须能渲染");
 
     Some(Arc::new(QueryService::new(ServiceParts {
-        source: src.pool.clone(),
-        facts: src.facts.clone(),
-        mapping,
+        // ⭐ REQ-136 · 普通模式（有源库 + schema）：模式字段显式写 Query。
+        mode: ontok::query::ServiceMode::Query,
+        source: Some(src.pool.clone()),
+        facts: Some(src.facts.clone()),
+        mapping: Some(mapping),
         model,
         schema,
         policy,

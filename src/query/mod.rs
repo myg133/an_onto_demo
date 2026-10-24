@@ -8,6 +8,21 @@
 //! GET  /mcp (SSE)      ─┘
 //! ```
 //!
+//! # ⭐ REQ-136 · 两种模式（[`ServiceMode`]），一套适配器
+//!
+//! | | [`ServiceMode::Query`]（默认） | [`ServiceMode::OntologyOnly`]（`--ontology-only`） |
+//! | --- | --- | --- |
+//! | 源库 | 启动时连、读回只读会话 | **`None`**（启动时不连、任何请求也不连 —— R2） |
+//! | schema / R2RML 映射 | 必须有 | **`None`**（不做对账，不来自动造 schema） |
+//! | `catalog` / `describe` | 只列映射里可查的类/关系 | 直接读快照（类/关系**全列**，R3） |
+//! | `/api/ontology.ttl` | 同 CLI 导出 | 同 CLI 导出（客户视图与无 `--schema` 的导出逐字节相同） |
+//! | `sparql_query` / `sample` | 真查 | **503 `NO_DATA_SOURCE`**（R4；⛔ 不是 200 空结果、⛔ 不是 500） |
+//!
+//! 分叉只有两处：**数据源有没有**（[`run_sparql`] 的第一段）与
+//! **目录的过滤**（[`catalog::build_items`] 的 `mapping: Option<…>`）。
+//! 鉴权 / 限额 / 审计 / 错误契约 / TTL / 分页**完全共用** —— 于是「REST 拦了、MCP 忘了拦」
+//! 在这两个模式下都没有发生的位置。
+//!
 //! # 纪律 H：两个协议只是**适配器**
 //!
 //! | 事 | 唯一实现 |
@@ -108,6 +123,52 @@ impl Protocol {
         match self {
             Protocol::Rest => "rest",
             Protocol::Mcp => "mcp",
+        }
+    }
+}
+
+/// ⭐ REQ-136 · **服务的两种模式**（启动时按 `--ontology-only` 定，运行期不变）。
+///
+/// | 模式 | 源库 | schema / R2RML 对账 | catalog / describe | SPARQL |
+/// | --- | --- | --- | --- | --- |
+/// | [`ServiceMode::Query`] | ✅ 必须连 | ✅ 必须 | 只列**可查**的类/关系 | 真查 |
+/// | [`ServiceMode::OntologyOnly`] | ⛔ **一处都不连** | ⛔ 不做 | 直接读快照（关系照列） | 恒 **503** `NO_DATA_SOURCE` |
+///
+/// 类型上是**一个枚举**而不是两个 `bool`：「既接库又不接库」写不出来。
+/// 两个模式共用的部分（鉴权 / 限额 / 审计 / 错误契约 / TTL / 目录构建）是同一段代码，
+/// 分叉只在**过滤**（见 [`catalog::build_items`]）与**数据源有无**（见 [`run_sparql`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceMode {
+    /// 普通模式：有源库，做 R2RML 对账，SPARQL 真查（REQ-123 起的既有行为）。
+    Query,
+    /// 本体服务模式：不接业务库、不做 schema 对账；catalog/describe 直接读快照。
+    OntologyOnly,
+}
+
+impl ServiceMode {
+    /// 对外出现在 `/api/health` 与启动横幅里的字符串。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ServiceMode::Query => "query",
+            ServiceMode::OntologyOnly => "ontology-only",
+        }
+    }
+
+    /// 本体服务模式？（数据源 / 对账相关分支的唯一判据）
+    pub const fn is_ontology_only(self) -> bool {
+        matches!(self, ServiceMode::OntologyOnly)
+    }
+
+    /// 横幅里那个人读的一行（需求风险 2：该模式被误用于有库项目时，横幅要说清）。
+    ///
+    /// 普通模式返回 `None`：既有横幅**一个字节都不改**（AC-006 的「零行为变化」从日志
+    /// 也照做）；本体模式多印一行 `mode=ontology-only（不接业务库）`（AC-001 的判据）。
+    pub const fn banner_line(self) -> Option<&'static str> {
+        match self {
+            ServiceMode::Query => None,
+            ServiceMode::OntologyOnly => Some(
+                "· 模式：mode=ontology-only（不接业务库）· 无数据源 · SPARQL/取样恒 503 NO_DATA_SOURCE\n",
+            ),
         }
     }
 }
@@ -459,12 +520,24 @@ fn predicate_local(iri: &str) -> &str {
 
 /// 服务状态（启动时一次性载入，运行期不再查元数据库）。
 pub struct QueryService {
+    /// ⭐ REQ-136 · 哪个模式（启动时定；`Option` 字段的解释权都在它手里）。
+    pub mode: ServiceMode,
     /// **源库**只读连接池（REQ-122 的 `connect_read_only`）。
-    pub source: PgPool,
+    ///
+    /// `None` = 本体服务模式：**启动时就没连过**（不是连失败），运行期也没有任何分支会去连
+    /// （[`run_sparql`] 在碰它之前就返回 503 —— 类型上 `Option` 让「忘了判」变成编译错误）。
+    pub source: Option<PgPool>,
     /// 只读会话的**读回事实**（启动横幅打印它，⛔ 不写死）。
-    pub facts: SessionFacts,
-    pub mapping: crate::domain::r2rml::R2rmlMapping,
+    ///
+    /// 与 [`Self::source`] 同生共死：没有会话就没有可读回的事实，`None` 时横幅改印
+    /// 「无数据源」而不是编一个 `on`。
+    pub facts: Option<SessionFacts>,
+    /// R2RML 映射（`None` = 本体服务模式：没有 schema 可对账，也就没有映射）。
+    ///
+    /// ⛔ 不是「映射建失败了」：本模式**刻意不建**（需求「不做自动造 schema、不猜 join」）。
+    pub mapping: Option<crate::domain::r2rml::R2rmlMapping>,
     pub model: crate::domain::model_view::ModelTrackView,
+    /// 真实列类型（本体模式恒为空 schema：`SchemaTypes::default()`，⛔ 不读文件、不猜类型）。
     pub schema: crate::domain::ttl::SchemaTypes,
     pub policy: QueryPolicy,
     pub ontology_iri: String,
@@ -491,9 +564,10 @@ pub struct QueryService {
 
 /// 构造参数（`serve` 与测试共用**这一个**构造器 —— 不另搭一份接线）。
 pub struct ServiceParts {
-    pub source: PgPool,
-    pub facts: SessionFacts,
-    pub mapping: crate::domain::r2rml::R2rmlMapping,
+    pub mode: ServiceMode,
+    pub source: Option<PgPool>,
+    pub facts: Option<SessionFacts>,
+    pub mapping: Option<crate::domain::r2rml::R2rmlMapping>,
     pub model: crate::domain::model_view::ModelTrackView,
     pub schema: crate::domain::ttl::SchemaTypes,
     pub policy: QueryPolicy,
@@ -512,17 +586,23 @@ pub struct ServiceParts {
 
 impl QueryService {
     pub fn new(p: ServiceParts) -> Self {
-        let catalog_items = catalog::build_items(&p.mapping, &p.model);
+        // ⭐ REQ-136 · 目录的**唯一**构建点：把快照（model）与映射（可选）一起交出去，
+        // 两个模式在 `catalog::build_items` 内部只在**过滤**处分叉（纪律 H）。
+        let catalog_items = catalog::build_items(&p.model, p.mapping.as_ref());
         // ⭐ REQ-135 · 两个启动即确定的仪表：映射规模（joinCondition 数）与两视图字节数。
         // 它们随「版本冻结」而固定 —— 只在 `new` 里设一次（运行期不会变）。
+        // ⭐ REQ-136 · 本体服务模式**没有映射** ⇒ `ontok_mapping_joins` 记 0（这是事实：
+        // 那个部署不做对账，join 数不存在，⛔ 不是「0 条 join 的映射」）。
         let metrics = crate::metrics::Metrics::for_query();
-        metrics.set_mapping_joins(p.mapping.join_count() as u64);
+        metrics.set_mapping_joins(p.mapping.as_ref().map_or(0, |m| m.join_count()) as u64);
         metrics.set_ttl_bytes(
             crate::metrics::VIEW_CUSTOMER,
             p.ttl.customer().bytes() as u64,
         );
         metrics.set_ttl_bytes(crate::metrics::VIEW_MODEL, p.ttl.model().bytes() as u64);
+
         Self {
+            mode: p.mode,
             source: p.source,
             facts: p.facts,
             mapping: p.mapping,
@@ -545,14 +625,23 @@ impl QueryService {
         }
     }
 
+    /// 本模式有没有数据源（横幅与 `run_sparql` 的唯一判据）。
+    pub fn has_source(&self) -> bool {
+        !self.mode.is_ontology_only() && self.source.is_some()
+    }
+
     /// 查 join 证据：**涉及的表之间**的**全部**映射边（范围见模块头，⛔ 不是「实走边」）。
     ///
     /// `used` 由 `used_predicates`（= [`Self::used_join_predicates`] 的结果）判定：
     /// 该边的谓词或其反向谓词在本次查询里出现过 ⇒ `true`，否则 `false`（涉及但未用）。
     pub fn join_states(&self, tables: &[String], used_predicates: &[String]) -> Vec<JoinStateEntry> {
         let mut out: Vec<JoinStateEntry> = Vec::new();
+        // ⭐ REQ-136 · 本体模式没有映射 ⇒ 没有「映射边」这个概念（回执本身也不可达：SPARQL 503）。
+        let Some(mapping) = self.mapping.as_ref() else {
+            return out;
+        };
         for t in tables {
-            let Some(class) = self.mapping.class(t) else { continue };
+            let Some(class) = mapping.class(t) else { continue };
             for j in &class.joins {
                 if !tables.iter().any(|x| x == &j.child_table) {
                     continue;
@@ -776,7 +865,12 @@ impl Limiter {
 /// 一条 SPARQL 查询（**唯一**入口：REST `POST /api/sparql` 与 MCP `sparql_query`）。
 ///
 /// 顺序是刻意的（最便宜的失败先报，且**每个失败都留一条审计**）：
-/// ① 租户比对 → ② `max_rows` 收口 → ③ 并发名额 → ④ 规划 + 注入 + 执行 → ⑤ 回执。
+/// ⓪ 有没有数据源 → ① 租户比对 → ② `max_rows` 收口 → ③ 并发名额 → ④ 规划 + 注入 + 执行 → ⑤ 回执。
+///
+/// ⭐ REQ-136 · 第 ⓪ 步是本体服务模式的**唯一**出口：在**碰任何身份 / 限额 / 连接之前**
+/// 就返回 503 `NO_DATA_SOURCE`。放在最前面是刻意的 —— 它让 R2（「该模式不许任何请求
+/// 尝试连源库」）成为一个**结构事实**：`svc.source` 是 `Option`，本函数在 `None` 分支里
+/// 直接 `return`，后面那句 `expect` 根本走不到，也没有别的路能拿到连接池。
 pub async fn run_sparql(
     svc: &QueryService,
     caller: &Caller,
@@ -792,6 +886,14 @@ async fn run_sparql_event(
     req: SparqlRequest,
 ) -> Result<SparqlReceipt, ApiError> {
     let started = Instant::now();
+
+    // ⓪ ⭐ REQ-136 · 本体服务模式：恒 503（不是 200 空结果、不是 500）。
+    // 审计照样留一行（「谁在这个部署上试过查数据」是一个可数的事实）。
+    if svc.mode.is_ontology_only() {
+        let e = ApiError::no_data_source();
+        audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
+        return Err(e);
+    }
 
     // ① 租户只能来自 token：请求体里的 tenant 只**用来核对**。
     if let Some(claim) = req.tenant.as_deref() {
@@ -838,15 +940,25 @@ async fn run_sparql_event(
     };
 
     // ④ 规划 + 注入 + 只读执行（REQ-122 的**同一个** `run_query`）。
+    //
+    // ⭐ REQ-136 · 到这里 `mode` 只可能是 Query（上面 ⓪ 已经分流）；
+    // 两个 `Option` 同时为 `None` 的状态**只属于本体模式**，所以这里是「不可能」而不是
+    // 「尽力而为」—— 真发生了也不 panic 成 500，而是按同一个 503 契约回答（⛔ 让调用方
+    // 看到「服务内部错误」并去重试，比说清「本部署没有数据源」更糟）。
+    let (Some(mapping), Some(source)) = (svc.mapping.as_ref(), svc.source.as_ref()) else {
+        let e = ApiError::no_data_source();
+        audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
+        return Err(e);
+    };
     let input = PlanInput {
-        mapping: &svc.mapping,
+        mapping,
         schema: &svc.schema,
         ontology_iri: &svc.ontology_iri,
         policy: &svc.policy,
         tenant: caller.token.tenant.as_str(),
         max_rows: effective,
     };
-    let result = crate::sparql::run_query(&svc.source, &input, &req.query, svc.timeout_ms).await;
+    let result = crate::sparql::run_query(source, &input, &req.query, svc.timeout_ms).await;
     drop(slot);
 
     match result {
@@ -1000,11 +1112,21 @@ pub fn run_describe(
 
 /// `sample`（MCP `sample`）—— **不另开一条数据路径**：它把名字翻译成一条 SPARQL，
 /// 再走 [`run_sparql_event`]（同一套注入 / 限额 / 审计）。
+///
+/// ⭐ REQ-136 · `sample` 的本质是**取数据**（它只是「由服务端代写一条 SELECT」），
+/// 所以本体服务模式下它与 `sparql_query` 同一个 503 `NO_DATA_SOURCE`
+/// （⛔ 不返回空样例：那会被读成「这个类没有实例」，而事实是「这个部署没有库」）。
+/// 工具本身仍然出现在 `tools/list` 里（AC-008 的第一半判的是**清单**）。
 pub async fn run_sample(
     svc: &QueryService,
     caller: &Caller,
     req: SampleRequest,
 ) -> Result<SparqlReceipt, ApiError> {
+    if svc.mode.is_ontology_only() {
+        let e = ApiError::no_data_source();
+        audit_call(svc, "sample", caller, None, None, Instant::now(), e.code, None);
+        return Err(e);
+    }
     let limit = req.limit.unwrap_or(10);
     if limit == 0 {
         let e = ApiError::bad_request(
@@ -1044,13 +1166,17 @@ fn sample_query(svc: &QueryService, raw: &str, limit: u64) -> Result<String, Api
             "name 写类本地名（`:customers`）或属性本地名（`:customers__id`）。",
         ));
     }
+    // ⭐ REQ-136 · 没有映射 ⇒ 没有可翻译的名字（本体模式下 `run_sample` 已经先 503 了，
+    // 这里只是防御：⛔ 不 panic 成 500）。
+    let Some(mapping) = svc.mapping.as_ref() else {
+        return Err(ApiError::no_data_source());
+    };
     // 名字必须能在映射里找到 —— 这既是「可行动」提示，也是拼接的安全边界
     // （本地名只含字母/数字/下划线，⛔ 不接受任意字符串）。
-    if svc.mapping.class_by_local(local).is_some() || svc.mapping.class(local).is_some() {
-        let class = svc
-            .mapping
+    if mapping.class_by_local(local).is_some() || mapping.class(local).is_some() {
+        let class = mapping
             .class_by_local(local)
-            .or_else(|| svc.mapping.class(local))
+            .or_else(|| mapping.class(local))
             .expect("上面刚判过");
         return Ok(format!(
             "SELECT ?s WHERE {{ ?s a :{} }} LIMIT {}",
@@ -1071,7 +1197,7 @@ fn find_property<'a>(
     svc: &'a QueryService,
     local: &str,
 ) -> Option<(&'a str, &'a crate::domain::r2rml::MappedProperty)> {
-    for c in svc.mapping.classes() {
+    for c in svc.mapping.as_ref()?.classes() {
         if let Some(p) = c.property(local) {
             return Some((c.key.as_str(), p));
         }
@@ -1413,15 +1539,18 @@ mod tests {
             opts.ontology_iri()
         };
         let svc = QueryService::new(ServiceParts {
+            mode: ServiceMode::Query,
             // 懒连接：本测试**不连库**（只看回执扩展的构造）。
-            source: sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
-                .expect("lazy pool"),
-            facts: SessionFacts {
+            source: Some(
+                sqlx::postgres::PgPoolOptions::new()
+                    .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+                    .expect("lazy pool"),
+            ),
+            facts: Some(SessionFacts {
                 transaction_read_only: "on".into(),
                 standard_conforming_strings: "on".into(),
-            },
-            mapping,
+            }),
+            mapping: Some(mapping),
             model,
             schema,
             policy,
@@ -1481,6 +1610,8 @@ mod tests {
         // 同一条边，查询里**真的写了**这个谓词 ⇒ `used: true`（两种方向都认）。
         let join = svc
             .mapping
+            .as_ref()
+            .expect("夹具映射")
             .class("orders")
             .expect("夹具订单类")
             .joins
@@ -1522,14 +1653,17 @@ mod tests {
             opts.ontology_iri()
         };
         let svc = QueryService::new(ServiceParts {
-            source: sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
-                .expect("lazy pool"),
-            facts: SessionFacts {
+            mode: ServiceMode::Query,
+            source: Some(
+                sqlx::postgres::PgPoolOptions::new()
+                    .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+                    .expect("lazy pool"),
+            ),
+            facts: Some(SessionFacts {
                 transaction_read_only: "on".into(),
                 standard_conforming_strings: "on".into(),
-            },
-            mapping,
+            }),
+            mapping: Some(mapping),
             model,
             schema,
             policy,

@@ -218,6 +218,32 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "BAD_REQUEST", message, hint)
     }
 
+    /// ⭐ REQ-136 · **本部署没有数据源**（`--ontology-only`：只提供本体，不接业务库）。
+    ///
+    /// 为什么是 **503** 而不是 200 空结果 / 500：
+    ///
+    /// | 码 | 调用方会读成 | 对不对 |
+    /// | --- | --- | --- |
+    /// | 200 + `rows: []` | 「查了，没有数据」 | ❌ 把「查不了」说成「查不到」 |
+    /// | 500 | 「服务坏了，重试/报障」 | ❌ 服务是好的，只是这个部署没有库 |
+    /// | **503 + `NO_DATA_SOURCE`** | 「这个能力在当前部署里不存在」 | ✅ |
+    ///
+    /// hint 必须让调用方**不要重试**（R4 / 需求风险 3）：503 常被当成瞬时故障，
+    /// 而这里重试一万次也还是同一句话。REST 与 MCP 用的是**同一个**函数与同一份
+    /// `message` / `hint`（两个协议的错误正文逐字相同）。
+    pub fn no_data_source() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "NO_DATA_SOURCE",
+            "本部署只提供本体，未接业务库 —— 没有可查询的数据源，SPARQL / 取样都不可用。",
+            "这个部署是**本体服务模式**（`query serve --ontology-only`）：只有本体（类 / 关系 / 属性 / TTL），\
+             **没有接业务库**。⛔ **重试无效**（这不是暂时故障，也不是你的查询写法问题）。\n  \
+             要数据请：① 继续用 GET /api/catalog、GET /api/describe、GET /api/ontology.ttl（或 MCP 的 \
+             catalog / describe / resources/read）；② 需要真查数据时，让运维在有源库的环境里以**普通模式**\
+             （`ONTOK_SOURCE_DATABASE_URL` + `--schema` + `--policy`，不带 `--ontology-only`）另起一个查询服务。",
+        )
+    }
+
     /// 把 planner 的错误归到有限个 code（见模块头的已知边界）。
     ///
     /// 归不出来的一律 `SPARQL_UNSUPPORTED`（语法/子集问题最多），并给出支持清单 ——

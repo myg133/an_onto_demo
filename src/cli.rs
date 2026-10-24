@@ -742,6 +742,32 @@ pub enum QueryCmd {
     /// `balances__customers__source_customer_id`，本次没走到它），`true` = 该边的谓词写进了
     /// 查询。要「只列走过的边」是后续需求（planner 的 `Planned` 暂未暴露用过的边）。
     ///
+    /// ⭐ **本体服务模式（`--ontology-only`，REQ-136）** —— 没有业务库也能起服务：
+    ///
+    /// ```text
+    /// ontok query serve --bind 0.0.0.0:8800 --allow-public --tokens tokens.json \
+    ///   --project ops360 --version 2 --ontology-only
+    /// ```
+    ///
+    /// 该模式**不需要** `ONTOK_SOURCE_DATABASE_URL`、**不需要** `--schema`、**不需要** `--policy`
+    /// （给了 `--schema` 反而拒绝启动：R1 互斥）；仍然需要 `--project` / `--version`（版本必须
+    /// 已冻结）与 `--tokens`。各端点在两种模式下的差别：
+    ///
+    /// | 端点 | 普通模式 | `--ontology-only` |
+    /// | --- | --- | --- |
+    /// | `GET /api/health` | 200 | 200 + `"mode":"ontology-only"` |
+    /// | `GET /api/catalog` | 只列**可查**的类/关系（schema + R2RML 对账） | **直接读快照**：类/属性/关系**全列**；关系带 `evidence_level`（= `ontok:joinVerified`：`true`/`inherit`/`false`/**`unverified`**），类带 `display_name`；`counts` 里**没有** `excluded_relations` |
+    /// | `GET /api/describe` | 类/属性详情（含租户口径） | 同上，另给 `display_name` / `key`；`tenant.mode = not_applicable`（没有数据源） |
+    /// | `GET /api/ontology.ttl` | 同 CLI 导出 | **与 `ontok ontology export --project <p> --version <v>`（不带 `--schema`）逐字节相同**；`?view=model` 是同一份无 schema/tenancy 的建模视图 |
+    /// | `POST /api/sparql` | 真查 | **503 `NO_DATA_SOURCE`**（⛔ 不是 500、⛔ 不是 200 空结果；hint 说明「重试无效」） |
+    /// | MCP `sparql_query` / `sample` | 真查 | 同一个 `code` / `hint`（JSON-RPC 信封里 `isError:true`；HTTP 仍是 200 —— 传输没坏，是工具执行失败） |
+    /// | MCP `catalog` / `describe` / `resources/read` | 正常 | 正常（与 REST 同一段代码） |
+    ///
+    /// ⛔ 该模式**一处都不连业务库**（启动时不连，任何请求也不会连 —— `QueryService::source`
+    /// 是 `None`，SPARQL 在碰它之前就 503）；`--include-inherit` 不生效（不做对账）。
+    /// catalog 的类/关系由**同一个**函数从快照取（`query::catalog::build_items`），
+    /// 两个模式只在**过滤**处分叉（纪律 H）。
+    ///
     /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。⛔ 放 query string / cookie **不生效**。
     /// ⚠️ 限额：`max_rows`（token 级上限，调用方只能往下压）、超时、每 token 并发、
     /// SSE 连接数 + 空闲超时；超限 **429**。
@@ -761,12 +787,23 @@ pub enum QueryCmd {
         /// 第几版（该版必须已冻结）
         #[arg(long)]
         version: i32,
-        /// 真实 schema（`ontok-introspect` 产物）—— 列存在性 / 列类型只能来自它
+        /// 真实 schema（`ontok-introspect` 产物）—— 列存在性 / 列类型只能来自它。
+        ///
+        /// **普通模式必填**；`--ontology-only` 下**互斥**（同时给 ⇒ 拒绝启动，R1）。
         #[arg(long)]
-        schema: PathBuf,
-        /// 租户声明（`query-policy.json`，ADR-006）—— **没有默认值**
+        schema: Option<PathBuf>,
+        /// 租户声明（`query-policy.json`，ADR-006）—— **普通模式必填**。
+        ///
+        /// `--ontology-only` 下可省（没有数据源 ⇒ 没有租户口径）。
         #[arg(long)]
-        policy: PathBuf,
+        policy: Option<PathBuf>,
+        /// ⭐ **本体服务模式**：不连业务库、不做 schema / R2RML 对账。
+        ///
+        /// 只要 `--project` / `--version`（已冻结）+ `--tokens`；catalog/describe 直接读快照、
+        /// `/api/ontology.ttl` 与 CLI 导出逐字节相同、SPARQL/取样恒 503 `NO_DATA_SOURCE`。
+        /// ⛔ 与 `--schema` 互斥（同时给 ⇒ 拒绝启动并说明原因）。
+        #[arg(long)]
+        ontology_only: bool,
         /// ⭐ 租户标注声明（与 `ontology export --tenancy` 同一份）—— **只在 `?view=model` 生效**。
         ///
         /// 省略时自动取 `--policy` 同目录的 `tenancy.json`（存在才用；取不到会在启动时警告，
@@ -785,7 +822,7 @@ pub enum QueryCmd {
         /// 全局 SSE 连接上限（超限 429）
         #[arg(long, default_value_t = 32)]
         sse_max_connections: usize,
-        /// 全局并发查询上限（按源库只读池的连接数取，默认 2）
+        /// 全局并发查询上限（按源库只读池的连接数取，默认 2；本体模式无意义）
         #[arg(long, default_value_t = 2)]
         max_concurrent_queries: usize,
         /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**（容器日志 → 集群采集）；给了它 = stdout **+** 这个文件（同时写）
@@ -795,6 +832,8 @@ pub enum QueryCmd {
         #[arg(long, default_value = "https://ontok.local/")]
         base: String,
         /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 `r2rml generate` 一致）
+        ///
+        /// 只在普通模式生效；`--ontology-only` 下不做对账，本开关被忽略（启动会提示）。
         #[arg(long)]
         include_inherit: bool,
     },
@@ -5149,6 +5188,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         version,
         schema,
         policy,
+        ontology_only,
         tenancy,
         allow_public,
         timeout_ms,
@@ -5167,6 +5207,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         version,
         schema,
         policy,
+        ontology_only,
         tenancy,
         allow_public,
         timeout_ms,
