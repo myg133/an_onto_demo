@@ -31,7 +31,7 @@
 //! | 层 | 字段 | 为什么必须显式 |
 //! | --- | --- | --- |
 //! | `sources[]` | `id` / `kind` / `base_url` / `auth.mode` / `auth.credential_env` | 契约会随本体分发 ⇒ **⛔ 不含任何真凭据**，只写环境变量名 |
-//! | `entities[]` | `id` / `class` / `source` / `operation` / `iterator` / `identity` / `iri_template` / `fields` / `request` / `paging` / `capability` / `freshness` / `reviewed_by` / `fixture` | 缺一样，执行器就得**猜**；猜出来的东西没法审 |
+//! | `entities[]` | `id` / `class` / `source` / `operation` / `iterator` / `identity` / `iri_template` / `fields` / `request` / `paging` / `capability` / `freshness` / `reviewed_by` / **`fixture`（可选）** | 缺一样，执行器就得**猜**；猜出来的东西没法审（`fixture` 例外：没有它只是「没校准」，不是「能猜」） |
 //! | `relations[]` | `predicate` / `from` / `to` / `via` / `cross_source` / `traversable` | 跨源边要能被标记（demand §三 R-4） |
 //!
 //! # `request` 是**模板**，不是「参数表」（阶段 1 复审后的裁定）
@@ -42,9 +42,15 @@
 //!                 "Clauses": [ { "Field": "zone", "Values": ["{zone}"] } ] },
 //!   "bindings": { "region": { "source": "default" },
 //!                 "zone":   { "source": "filter" } },
-//!   "paging":   { "offset": "Offset", "limit": "Limit" }
+//!   "paging":   { "offset": "Offset", "limit": "Limit",
+//!                 "value_type": "string", "offset_base": 0 }
 //! }
 //! ```
+//!
+//! 分页的**类型**（`value_type`：`number` / `string`）、**起点**（`offset_base`：`0` / `1`，
+//! 或更清楚的 `"page": "PageNumber"`）、绑定的**值类型 / 形状**
+//! （`value_type`：`string` / `integer` / `boolean`；`shape`：`scalar` / `array`）
+//! 都是 REQ-149 加的通用表达力 —— **全可选**，不写时行为与旧版逐字节相同。
 //!
 //! 三种真实存在的请求体形状（顶层标量 / 数组里放对象 / 深层嵌套）**一种代码路径**全覆盖；
 //! 执行器只替换字符串值里的 `{name}`，⛔ 不改键名、⛔ 不按厂商或接口名分支。
@@ -63,7 +69,7 @@
 //! | 6 | `freshness` 必填且回执要带 | [`parse`] + `meta.freshness` |
 //! | 7 | `relations.via.join` 只允许同一 source 内 | [`validate::check_relations`]（跨源 join ⇒ 报错） |
 //! | 8 | 未签 entity 不许取数 | [`fetch::dry_run`] 的第一道闸（`UNREVIEWED_MAPPING`） |
-//! | 9 | 有 `fixture` ⇒ `--dry-run` 必须能跑 | 阶段 0 **只**有这条通路（[`fetch`]） |
+//! | 9 | `fixture` **可选**：有它 ⇒ `--dry-run` 必须能跑；没有 ⇒ `validate` 只给 `FIELD_PATH_NOT_CHECKED`（⛔ 不假通过），`--dry-run-fixture` 明确拒绝 | [`fetch`] / [`validate`]（REQ-149 · D） |
 //! | 10 | 契约版本只增不减 | [`CONTRACT_VERSION`] + [`parse`] 的版本闸 |
 //!
 //! # 关于 `identity` 的两种写法
@@ -143,6 +149,19 @@ pub const CODE_UNKNOWN_FILTER: &str = "UNKNOWN_FILTER_FIELD";
 pub const CODE_DRY_RUN_REQUIRED: &str = "DRY_RUN_REQUIRED";
 /// `--entity` 指的那条映射不存在。
 pub const CODE_ENTITY_UNKNOWN: &str = "ENTITY_NOT_IN_MAPPING";
+
+// ── REQ-149 · 「没证据」必须长得像「没证据」 ──────────────────────
+//
+// 这两条不是错误码（都不让 `validate` 失败），而是**醒目的警告标签**：
+// 一个没有 fixture 的实体，字段路径**根本没被校验过** ——
+// 把它显示成「通过 / 1/1」和「SKIP 记成 passed」是同一类病。
+
+/// 该实体没有 `fixture` ⇒ 字段路径校验**没做**（⛔ 不是通过）。
+pub const CODE_FIELD_PATH_NOT_CHECKED: &str = "FIELD_PATH_NOT_CHECKED";
+/// 夹具疑似（或被声明为）由映射键**反向生成** ⇒ 字段路径全过属于自证，无独立证据力。
+pub const CODE_FIXTURE_LOOKS_DERIVED: &str = "FIXTURE_LOOKS_DERIVED";
+/// `--dry-run-fixture` 需要夹具，而这条 entity 没有声明。
+pub const CODE_FIXTURE_REQUIRED: &str = "FIXTURE_REQUIRED";
 
 // ══════════════════════════════════════════════════════════════
 // 阶段 1 的网络通路错误码（R4：五种失败各报各的，⛔ 不许一律 failed）
@@ -277,8 +296,42 @@ pub struct Entity {
     pub request: RequestSpec,
     pub capability: Capability,
     pub freshness: Freshness,
-    /// 离线 fixture（阶段 0 **必填**：没有它这条映射无法被验）。
-    pub fixture: String,
+    /// 离线 fixture。**可选**（REQ-149 · 缺口 D）。
+    ///
+    /// | 有 `fixture` | `validate` 走原来的字段路径校验 |
+    /// | --- | --- |
+    /// | **没有** | `validate` **不报错**，改为一条 `FIELD_PATH_NOT_CHECKED` 警告 + 该实体**不出现在** `field_coverage` 里；`fetch --dry-run-fixture` 则**明确拒绝**并点名（`FIXTURE_REQUIRED`） |
+    /// | 任意情况 | `fetch --allow-network` 不受影响（真调用不需要夹具） |
+    ///
+    /// ⛔ 刻意**不**要求「没有夹具也要有一条」：旧口径逼着人从映射反向造夹具，
+    /// 于是「1/1 覆盖」变成了自证。宁可显示「未校准」，也不要假证据。
+    pub fixture: Option<String>,
+    /// 夹具的**来源声明**（可选）：`declared`（独立采集的真实/手工响应）或
+    /// `derived`（由映射键反向生成）。缺省 ⇒ 工具按结构做**启发式**判断。
+    ///
+    /// 声明为 `derived` 时，`validate` 会明确说「这份夹具没有独立证据力」。
+    /// 它不是安全边界（作者可以写 `declared`），而是**让人无法在不知情的情况下**
+    /// 把自证夹具当成校准过的证据。
+    pub fixture_source: Option<FixtureSource>,
+}
+
+/// 夹具来源（REQ-149 · 缺口 D 的「可看出来」落点）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FixtureSource {
+    /// 作者声明：独立采集的响应（工具**不**核实）。
+    Declared,
+    /// 作者声明：由映射键反向生成 ⇒ 字段路径全过是自证。
+    Derived,
+}
+
+impl FixtureSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FixtureSource::Declared => "declared",
+            FixtureSource::Derived => "derived",
+        }
+    }
 }
 
 /// **请求体模板 + 绑定**：请求体长什么样由作者逐字写，执行器只做占位符替换。
@@ -299,6 +352,31 @@ pub struct Entity {
 /// 1. `template` 是**请求体原样**：任意深度嵌套、任意数组，键名一个都不改；
 /// 2. 字符串值里的 `{name}` 按 `bindings[name]` 取值替换（⛔ 不替换键名）；
 /// 3. `paging.offset` / `.limit` 是**路径**（`Offset` 或 `Page.Number`），由分页器写进去。
+///
+/// # 分页的三种真实形态（REQ-149 · 缺口 A/B）
+///
+/// | 接口怎么数 | 契约怎么写 | 第 1 页 / 第 2 页发出的值 |
+/// | --- | --- | --- |
+/// | **偏移量、0 基**（默认） | `"offset": "Offset"` | `0` / `100` |
+/// | **偏移量、1 基**（少见） | 本实现对 `offset_base: 1` 按**页码**解释（见下） | `1` / `2` |
+/// | **页码、1 基** | `"page": "PageNumber"`（推荐） | `1` / `2` |
+/// | **页码、0 基** | `"page": "PageNumber"` + `"offset_base": 0` | `0` / `1` |
+///
+/// ⚠️ **`offset_base: 1` 的语义是「页码」，不是「已取条数 + 1」**。
+/// 理由：位置值 = 0 时唯一自然的读法是「跳过多少条」；= 1 时唯一自然的读法是「第几页」。
+/// 若接口真的要「1 基的条数偏移」，本实现没有表达它 —— 请写成 `page`（如果那其实是页码），
+/// 或开需求（⛔ 不要靠猜：猜错的表现是「第 2 页返回第 1 页」）。
+/// 想要**不歧义**就写 `page`：`"page": "PageNumber"` 与 `"offset_base": 1` 等价且更清楚。
+///
+/// `value_type`（`number` 默认 / `string`）决定**写进请求体的 JSON 类型**：
+/// 有些接口把 `Offset/Limit` 在文档里定义成 String（`"0"` / `"100"`），发数字会被拒。
+/// 它同时作用于 `{offset}` / `{limit}` 两个内建占位符。
+///
+/// # 绑定的值类型 / 形状（REQ-149 · 缺口 C）
+///
+/// `bindings.<名>.value_type ∈ {string(默认), integer, boolean}`、`shape ∈ {scalar(默认), array}`。
+/// 于是「整数数组」这类筛选能真正下推：`{"source":"filter","value_type":"integer","shape":"array"}`
+/// ⇒ `[1, 2]`（不是 `["1"]`）。取值集合封闭；不认识的组合**报错并点名**，⛔ 不静默降级成字符串。
 ///
 /// # 为什么要「模板」而不是「参数表」
 ///
@@ -332,12 +410,97 @@ pub struct RequestSpec {
     pub paging_offset: Option<String>,
     /// 同上，limit。
     pub paging_limit: Option<String>,
+    /// 页码写到哪个路径（`PageNumber`）。与 [`RequestSpec::paging_offset`] **互斥**。
+    ///
+    /// 有它 ⇒ 分页器发的是**页码**（`已取页数 + offset_base`，
+    /// `offset_base` 缺省 1）。见类型级文档的「分页的三种真实形态」。
+    pub paging_page: Option<String>,
+    /// 分页值的 JSON 类型（`number` 默认 / `string`）。
+    pub paging_value_type: PagingValueType,
+    /// 位置基（`0` / `1`）。`None` ⇒ 随语义取默认：`offset` 0 基、`page` 1 基。
+    ///
+    /// ⚠️ `offset_base: 1` 把 `offset` 解释成**页码**（不是「已取条数 + 1」）。
+    /// 想要不歧义请写 `page`。
+    pub offset_base: Option<u32>,
 }
 
-/// 一个占位符的取值来源。
+/// 分页值写进请求体时的 JSON 类型（REQ-149 · 缺口 A）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PagingValueType {
+    /// 数字（默认，与阶段 0/1 的旧行为逐字节相同）。
+    #[default]
+    Number,
+    /// 字符串（文档把 `Offset/Limit` 定义成 String 的接口）。
+    String,
+}
+
+impl PagingValueType {
+    /// 把一个非负整数按本类型转成 JSON 值。
+    pub fn json(self, n: usize) -> Value {
+        match self {
+            PagingValueType::Number => Value::from(n),
+            PagingValueType::String => Value::String(n.to_string()),
+        }
+    }
+}
+
+/// 一个占位符的取值来源 + 值类型 / 形状（REQ-149 · 缺口 C）。
+///
+/// `value_type` / `shape` 都**可选**；缺省 = `string` + `scalar`（旧行为）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Binding {
     pub source: BindingSource,
+    /// 值类型。`None` ⇒ `string`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_type: Option<BindingValueType>,
+    /// 形状。`None` ⇒ `scalar`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<BindingShape>,
+}
+
+impl Binding {
+    /// 只带来源的绑定（旧写法 / 默认值）。
+    pub fn new(source: BindingSource) -> Self {
+        Self { source, value_type: None, shape: None }
+    }
+
+    pub fn value_type(&self) -> BindingValueType {
+        self.value_type.unwrap_or_default()
+    }
+
+    pub fn shape(&self) -> BindingShape {
+        self.shape.unwrap_or_default()
+    }
+
+    /// 有没有显式声明类型 / 形状（没有 ⇒ 走**逐字节不变**的旧路径）。
+    pub fn has_type_decl(&self) -> bool {
+        self.value_type.is_some() || self.shape.is_some()
+    }
+}
+
+/// 绑定值的类型（封闭集合；REQ-149 · R3）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BindingValueType {
+    /// 字符串（默认）。
+    #[default]
+    String,
+    /// 整数（`"1"` ⇒ `1`；`[1,2]` 可下推整数数组）。
+    Integer,
+    /// 布尔（`"true"` ⇒ `true`）。
+    Boolean,
+}
+
+/// 绑定值的形状（封闭集合；REQ-149 · R3）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BindingShape {
+    /// 单值（默认）。
+    #[default]
+    Scalar,
+    /// 数组（单值也包成 `[v]`）。
+    Array,
 }
 
 /// 值从哪来。
@@ -759,6 +922,19 @@ fn parse_entity(
     });
     let paging = paging_obj.map(|p| {
         let loc2 = format!("{loc} 字段 paging");
+        // REQ-149 · 新字段只在 `request.paging` 生效（分页器读的是那里）。
+        // 写到实体级 `paging` 里 ⇒ **报错点名**，⛔ 不静默忽略（忽略 = 以为声明了却发旧值）。
+        for wrong in ["value_type", "offset_base", "page"] {
+            if p.contains_key(wrong) {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc2}.{wrong}"),
+                    "这个字段属于 `request.paging`（分页器读的是那里），不是实体级 `paging`。\
+                     实体级 `paging` 只认 `offset_param` / `limit_param` / `max_limit` / `total_path`。\
+                     请把它挪进 `request.paging` —— ⛔ 本实现不会静默忽略（否则你以为声明了，发出去的还是旧值）。",
+                ));
+            }
+        }
         Paging {
             offset_param: need_str(p, "offset_param", &loc2, problems)
                 .unwrap_or_else(|| "Offset".to_string()),
@@ -860,10 +1036,47 @@ fn parse_entity(
         Freshness { mode: "unknown".to_string(), note: None }
     });
 
-    let fixture = need_str(obj, "fixture", &loc, problems).or_else(|| {
-        // need_str 已经记了一条；这里只保证返回 None 时不再重记。
-        None
-    });
+    // REQ-149 · 缺口 D：`fixture` **可选**。没有它 ⇒ validate 不报错（改为
+    // `FIELD_PATH_NOT_CHECKED` 警告 + 不出现在 field_coverage 里），
+    // 只有 `fetch --dry-run-fixture` 会明确拒绝。
+    let fixture = opt_str(obj, "fixture").filter(|s| !s.trim().is_empty());
+
+    // 来源声明（可选）：declared / derived，封闭取值。
+    let fixture_source = match obj.get("fixture_source") {
+        None => None,
+        Some(Value::Null) => None,
+        Some(Value::String(s)) => match s.trim() {
+            "declared" => Some(FixtureSource::Declared),
+            "derived" => Some(FixtureSource::Derived),
+            other => {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc} 字段 fixture_source"),
+                    format!(
+                        "只能是 `declared`（独立采集的响应）或 `derived`（由映射键反向生成），\
+                         不认识 `{other}`。⛔ 本字段不写也合法（缺省时工具按结构做启发式判断）。"
+                    ),
+                ));
+                None
+            }
+        },
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 fixture_source"),
+                "必须是字符串 `declared` / `derived`（或缺省）。",
+            ));
+            None
+        }
+    };
+    if fixture_source.is_some() && fixture.is_none() {
+        problems.push(Problem::new(
+            CODE_SCHEMA,
+            format!("{loc} 字段 fixture_source"),
+            "写了 `fixture_source` 却没有 `fixture` —— 没有夹具就无从谈来源；\
+             要么补 `fixture`，要么把 `fixture_source` 去掉。",
+        ));
+    }
 
     Some(Entity {
         id,
@@ -879,7 +1092,8 @@ fn parse_entity(
         request,
         capability,
         freshness,
-        fixture: fixture?,
+        fixture,
+        fixture_source,
     })
 }
 
@@ -993,12 +1207,67 @@ fn parse_request_spec(
         }
     }
 
-    // ④ 分页路径（`request.paging.{offset,limit}`，覆盖实体级 `paging.offset_param`）
+    // ④ 分页路径 + 类型 + 位置基（REQ-149 · 缺口 A/B）
     if let Some(p) = obj.get("paging") {
         match p.as_object() {
             Some(p) => {
+                let ploc = format!("{loc} 字段 request.paging");
                 out.paging_offset = opt_str(p, "offset");
                 out.paging_limit = opt_str(p, "limit");
+                out.paging_page = opt_str(p, "page");
+
+                // `offset` 与 `page` 是对同一件事的两种读法 —— 同时写就是语义打架。
+                if out.paging_offset.is_some() && out.paging_page.is_some() {
+                    problems.push(Problem::new(
+                        CODE_SCHEMA,
+                        format!("{ploc}.page"),
+                        "`offset` 与 `page` 只能写**一个**：前者是「跳过多少条」，\
+                         后者是「第几页」。同时写会让执行器无法判断该发哪一个\
+                         （本实现 ⛔ 不按「谁先出现」猜）。",
+                    ));
+                }
+
+                // 位置基：封闭取值 0 / 1（⛔ 不收任意整数）。
+                if let Some(v) = p.get("offset_base") {
+                    match v.as_u64() {
+                        Some(0) => out.offset_base = Some(0),
+                        Some(1) => out.offset_base = Some(1),
+                        _ => problems.push(Problem::new(
+                            CODE_SCHEMA,
+                            format!("{ploc}.offset_base"),
+                            format!(
+                                "只能是整数 `0` 或 `1`，不认识 {v}。\
+                                 `0` = 偏移量从 0 开始（默认）；`1` = 从 1 开始（按页码解释）。
+                                 ⛔ 不是「任意基数」—— 本实现只表达真实存在的两种。"
+                            ),
+                        )),
+                    }
+                }
+
+                // 分页值的 JSON 类型：封闭取值 number / string。
+                if let Some(v) = p.get("value_type") {
+                    out.paging_value_type = match v.as_str().map(str::trim) {
+                        Some("number") => PagingValueType::Number,
+                        Some("string") => PagingValueType::String,
+                        other => {
+                            problems.push(Problem::new(
+                                CODE_SCHEMA,
+                                format!("{ploc}.value_type"),
+                                format!(
+                                    "只能是 `number`（默认）或 `string`，不认识 {}。\
+                                     文档把 `Offset/Limit` 定义成 String 的接口要写 `string`\
+                                     （否则发数字会被服务端判 `InvalidParameter`）。\
+                                     ⛔ 本实现不会替你猜类型。",
+                                    match other {
+                                        Some(s) => format!("`{s}`"),
+                                        None => "非字符串值".to_string(),
+                                    }
+                                ),
+                            ));
+                            PagingValueType::Number
+                        }
+                    };
+                }
             }
             None => problems.push(Problem::new(
                 CODE_SCHEMA,
@@ -1034,7 +1303,7 @@ fn parse_request_spec(
                         template
                             .insert(param.to_string(), Value::String(format!("{{{name}}}")));
                         out.bindings
-                            .insert(name.clone(), Binding { source: BindingSource::Filter });
+                            .insert(name.clone(), Binding::new(BindingSource::Filter));
                     }
                     out.template = Some(Value::Object(template));
                 }
@@ -1052,13 +1321,13 @@ fn parse_request_spec(
         for name in template_placeholders(t) {
             if name == "offset" || name == "limit" {
                 // 分页器的两个值是**内建**的，不必显式绑定
-                out.bindings.entry(name.clone()).or_insert(Binding {
-                    source: BindingSource::Paging(if name == "offset" {
+                out.bindings.entry(name.clone()).or_insert(Binding::new(
+                    BindingSource::Paging(if name == "offset" {
                         PagingValue::Offset
                     } else {
                         PagingValue::Limit
                     }),
-                });
+                ));
                 continue;
             }
             if !out.bindings.contains_key(&name) {
@@ -1146,7 +1415,77 @@ fn parse_binding(spec: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option
             return None;
         }
     };
-    Some(Binding { source: src })
+    // REQ-149 · 缺口 C：值类型 / 形状（封闭取值；⛔ 不静默降级）。
+    //
+    // 只对 `default` / `filter` 生效。`paging` 的类型由 `request.paging.value_type`
+    // 控制（它写的是**位置值**，不是过滤值）—— 两处都写就会有两个真相。
+    let value_type = match obj.get("value_type") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => match s.trim() {
+            "string" => Some(BindingValueType::String),
+            "integer" => Some(BindingValueType::Integer),
+            "boolean" => Some(BindingValueType::Boolean),
+            other => {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc}.value_type"),
+                    format!(
+                        "只能是 `string`（默认）/ `integer` / `boolean`，不认识 `{other}`。\
+                         整数数组筛选（`\"N\"` 位置的数组）写 `\"value_type\":\"integer\"`；\
+                         ⛔ 本实现不会把不认识的值静默当成字符串。"
+                    ),
+                ));
+                None
+            }
+        },
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc}.value_type"),
+                "必须是字符串 `string` / `integer` / `boolean`（或省略）。",
+            ));
+            None
+        }
+    };
+    let shape = match obj.get("shape") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => match s.trim() {
+            "scalar" => Some(BindingShape::Scalar),
+            "array" => Some(BindingShape::Array),
+            other => {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc}.shape"),
+                    format!(
+                        "只能是 `scalar`（默认）或 `array`，不认识 `{other}`。\
+                         `array` ⇒ 单值也包成 `[v]`（多值直接展开）；\
+                         ⛔ 本实现不会把标量静默塞进数组。"
+                    ),
+                ));
+                None
+            }
+        },
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc}.shape"),
+                "必须是字符串 `scalar` / `array`（或省略）。",
+            ));
+            None
+        }
+    };
+    if matches!(src, BindingSource::Paging(_)) && (value_type.is_some() || shape.is_some()) {
+        problems.push(Problem::new(
+            CODE_SCHEMA,
+            loc,
+            "`source: paging` 的绑定不能再写 `value_type` / `shape` —— \
+             分页值的类型由 `request.paging.value_type` 统一控制。\
+             两处都写会出现两个真相（本实现 ⛔ 不挑其中一个）。",
+        ));
+        return None;
+    }
+
+    Some(Binding { source: src, value_type, shape })
 }
 
 /// 模板里出现的全部占位符（**只认字符串值**，键名不算）。
@@ -1836,6 +2175,106 @@ mod tests {
         .unwrap_err();
         assert!(
             errs.iter().any(|p| p.message.contains("不能同时写")),
+            "{errs:?}"
+        );
+    }
+
+    // ── REQ-149 · 新字段的封闭取值 / 不支持组合（R3/R4）────────────
+
+    /// 新字段写错 / 写错位置 ⇒ **报错并点名**，⛔ 不静默降级。
+    ///
+    /// 变异：把 `parse_request_spec` 里任何一处 `problems.push` 删掉
+    /// ⇒ 对应的 `unwrap_err()` 会变成 `Ok` ⇒ 这条测试立刻红。
+    #[test]
+    fn req149_new_fields_are_closed_sets_and_named_on_bad_combinations() {
+        // ① 分页 value_type 只认 number / string
+        let errs = parse(&with_request(serde_json::json!({
+            "paging": { "offset": "Offset", "value_type": "float" }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("request.paging.value_type")
+                && p.message.contains("number")),
+            "{errs:?}"
+        );
+
+        // ② offset 与 page 同时写 ⇒ 语义打架，拒绝
+        let errs = parse(&with_request(serde_json::json!({
+            "paging": { "offset": "Offset", "page": "PageNumber" }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.message.contains("只能写**一个**")),
+            "{errs:?}"
+        );
+
+        // ③ offset_base 只认 0 / 1
+        let errs = parse(&with_request(serde_json::json!({
+            "paging": { "offset": "Offset", "offset_base": 2 }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("offset_base")),
+            "{errs:?}"
+        );
+
+        // ④ 绑定 value_type 的封闭集合（⛔ 没有 number）
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Status": "{status}" },
+            "bindings": { "status": { "source": "filter", "value_type": "number" } }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("bindings.status.value_type")
+                && p.message.contains("integer")),
+            "{errs:?}"
+        );
+
+        // ⑤ 绑定 shape 的封闭集合
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Status": "{status}" },
+            "bindings": { "status": { "source": "filter", "shape": "map" } }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("bindings.status.shape")),
+            "{errs:?}"
+        );
+
+        // ⑥ 分页绑定上再写类型 ⇒ 两个真相，拒绝
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Offset": "{offset}" },
+            "bindings": {
+                "offset": { "source": "paging", "from": "offset", "value_type": "string" }
+            }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.message.contains("request.paging.value_type")),
+            "{errs:?}"
+        );
+
+        // ⑦ 写到**实体级** `paging` 里 ⇒ 点名「挪进 request.paging」（⛔ 不静默忽略）
+        let mut v: serde_json::Value = serde_json::from_str(&minimal()).unwrap();
+        v["entities"][0]["paging"] = serde_json::json!({
+            "offset_param": "Offset", "limit_param": "Limit", "value_type": "string"
+        });
+        let errs = parse(&serde_json::to_string(&v).unwrap()).unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("paging.value_type")
+                && p.message.contains("request.paging")),
+            "{errs:?}"
+        );
+
+        // ⑧ fixture_source 的封闭集合
+        let bad = minimal().replace(
+            "\"fixture\": \"f.json\"",
+            "\"fixture\": \"f.json\", \"fixture_source\": \"guessed\"",
+        );
+        let errs = parse(&bad).unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.location.contains("fixture_source")
+                && p.message.contains("declared")),
             "{errs:?}"
         );
     }

@@ -21,6 +21,23 @@
 //! | `iterator` 在 fixture 里选得出节点 | 空 ⇒ 第 4 条恒真（0 行循环一遍，什么都没检查） | [`CODE_ITERATOR_EMPTY`] |
 //! | `identity.key_path` 每行都有 | 缺一行 ⇒ 那条实例的 IRI 拼成 `…/{id}` 字面量 | [`CODE_KEY_MISSING`] |
 //!
+//! # REQ-149 · 没有 fixture 不是错误，是「没证据」
+//!
+//! 旧口径把「没有夹具」判成 `FIXTURE_UNREADABLE`，于是为了让体检过，只能**从映射反向造夹具**：
+//! `1/1` 覆盖、却零证据力。现在：
+//!
+//! | 情形 | 行为 |
+//! | --- | --- |
+//! | 有 `fixture` | 走原来的字段路径校验（不变） |
+//! | **没有** `fixture` | **`ok = true`**（退出码 0）+ 一条 [`CODE_FIELD_PATH_NOT_CHECKED`] 警告（点名实体）+ 该实体**不出现在** `field_coverage` 里 |
+//! | 写了 `fixture` 但读不到 | 仍是错误（说了要有却拿不出来，不能算通过） |
+//!
+//! 另外会说明这份夹具的**证据力**（`fixture_note`）：
+//! `fixture_source: declared` = 作者声明独立采集（工具不核实）；
+//! `fixture_source: derived` = 明确警告「由映射键反向生成，无独立证据力」；
+//! 没声明时按结构启发式判断（每行只含映射引用到的字段 ⇒ 疑似反向生成，
+//! 见 [`CODE_FIXTURE_LOOKS_DERIVED`]）。
+//!
 //! # 口径：**一次报全**，且每处都点名「哪条 entity / 哪个字段」
 //!
 //! ⛔ 不是「遇到第一条就退」—— 作者改一处、重跑一次、再改一处，是最劝退的体验，
@@ -40,8 +57,8 @@ use serde::Serialize;
 use super::{
     expand_iri_template, expand_ttl_instance_iri, path, placeholders, Entity, Mapping, Ontology,
     Problem, CODE_CAPABILITY_OVERLAP, CODE_CLASS_NOT_IN_ONTOLOGY, CODE_FIELD_PATH,
-    CODE_FIXTURE_UNREADABLE, CODE_IRI_TEMPLATE, CODE_ITERATOR_EMPTY, CODE_KEY_MISSING,
-    CODE_RELATION_ENDPOINT,
+    CODE_FIELD_PATH_NOT_CHECKED, CODE_FIXTURE_LOOKS_DERIVED, CODE_FIXTURE_UNREADABLE,
+    CODE_IRI_TEMPLATE, CODE_ITERATOR_EMPTY, CODE_KEY_MISSING, CODE_RELATION_ENDPOINT,
 };
 
 /// 一条 entity 的对账面（`validate` 报告里逐条给出，AC-007 直接贴它）。
@@ -59,13 +76,28 @@ pub struct EntityCheck {
     pub ttl_instance_iri: Option<String>,
     /// 本体模板按**本类**展开后的期望值 —— 与上一栏逐字对比就是 AC-007。
     pub ttl_expanded: Option<String>,
-    pub fixture: String,
+    /// 契约里声明的 fixture（`None` ⇒ 这个实体**没做**字段路径校准）。
+    ///
+    /// ⚠️ REQ-149 · 缺口 D：没有夹具时这个键**整个不出现**，而不是显示一个空字符串
+    /// —— 空字符串会让人以为「有夹具，只是路径是空的」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture: Option<String>,
     pub fixture_rows: usize,
+    /// 夹具来源（`declared` / `derived`）；缺省 ⇒ 不写（旧输出的键集合不变）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture_source: Option<String>,
+    /// 关于这份夹具**证据力**的人话（缺省 ⇒ 不写；见 [`CODE_FIXTURE_LOOKS_DERIVED`]）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture_note: Option<String>,
     pub key_path: String,
     pub fields_checked: usize,
     pub reviewed: bool,
     /// `fields.<名>` 在 fixture 里的覆盖率（`1/1` 表示每一行都有）。
-    pub field_coverage: BTreeMap<String, String>,
+    ///
+    /// ⚠️ **没有 fixture 时整个键不出现**（REQ-149 · D）：⛔ 不许显示成 `1/1`，
+    /// 也不许显示成 `0/0` —— 那会看起来像「检查过，0 行」而不是「没检查」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_coverage: Option<BTreeMap<String, String>>,
 }
 
 /// 体检报告（stdout 的唯一内容）。
@@ -86,12 +118,25 @@ pub struct Report {
 impl Report {
     /// 人读的一行结论（stderr 用）。
     pub fn headline(&self) -> String {
+        // REQ-149 · 没有 fixture 的实体**没做**字段路径校验：
+        // 头上那句「四条检查全过」必须补一句，否则又是「没证据看起来像有证据」。
+        let unchecked = self
+            .entities
+            .iter()
+            .filter(|e| e.field_coverage.is_none())
+            .count();
+        let unchecked_note = if unchecked == 0 {
+            String::new()
+        } else {
+            format!("；其中 {unchecked} 条**未做字段路径校准**（没有 fixture，⛔ 不是通过）")
+        };
         if self.ok {
             format!(
-                "✓ access 契约自洽：{} 条 entity / {} 条关系，四条检查全过（{} 条提醒）",
+                "✓ access 契约自洽：{} 条 entity / {} 条关系，四条检查全过（{} 条提醒）{}",
                 self.entity_count,
                 self.relation_count,
-                self.warnings.len()
+                self.warnings.len(),
+                unchecked_note
             )
         } else {
             format!(
@@ -125,10 +170,14 @@ pub fn validate(mapping: &Mapping, ontology: &Ontology, mapping_dir: &Path) -> R
             ttl_expanded: None,
             fixture: e.fixture.clone(),
             fixture_rows: 0,
+            fixture_source: e.fixture_source.map(|s| s.as_str().to_string()),
+            fixture_note: None,
             key_path: e.key_path.clone(),
             fields_checked: e.fields.len(),
             reviewed: e.reviewed(),
-            field_coverage: BTreeMap::new(),
+            // 有 fixture ⇒ 与旧输出一样是个（可能为空的）对象；
+            // 没 fixture ⇒ `None`，序列化时整个键不出现。
+            field_coverage: e.fixture.as_ref().map(|_| BTreeMap::new()),
         };
 
         check_iri_template(e, &loc, ontology, &mut check, &mut errors, &mut warnings);
@@ -420,7 +469,29 @@ fn check_fixture(
     errors: &mut Vec<Problem>,
     warnings: &mut Vec<String>,
 ) {
-    let path_on_disk = resolve_fixture(mapping_dir, &e.fixture);
+    // REQ-149 · 缺口 D：没有 fixture **不是错误**。
+    //
+    // 旧口径把「没有夹具」判成 FIXTURE_UNREADABLE，于是为了让 validate 过，
+    // 只能从映射反向造夹具 —— 那不是证据，是自证。现在显式区分：
+    //   · 没夹具 ⇒ warning + 该实体**不出现在** field_coverage 里 + exit 0；
+    //   · `fetch --dry-run-fixture` 才拒绝（`FIXTURE_REQUIRED`）；
+    //   · `fetch --allow-network` 不受影响。
+    let Some(fixture) = e.fixture.as_deref().filter(|s| !s.trim().is_empty()) else {
+        check.field_coverage = None;
+        check.fixture_note = Some(
+            "没有 `fixture` ⇒ 字段路径**未校准**（⛔ 不是通过）。\
+             补一份真实响应，或用 `fetch --allow-network --dump-raw` 采一份。"
+                .to_string(),
+        );
+        warnings.push(format!(
+            "{CODE_FIELD_PATH_NOT_CHECKED} · {loc}：契约没有 `fixture` ⇒ 字段路径**没做校验**；\
+             该实体**不会**出现在 `field_coverage` 里（⛔ 不显示成 1/1，也不显示成 0/0）。\
+             这是「没证据」，不是「通过」—— 补 `fixture` 或改用真调用通路。"
+        ));
+        return;
+    };
+
+    let path_on_disk = resolve_fixture(mapping_dir, fixture);
     let text = match std::fs::read_to_string(&path_on_disk) {
         Ok(t) => t,
         Err(err) => {
@@ -429,8 +500,9 @@ fn check_fixture(
                 format!("{loc} 字段 fixture"),
                 format!(
                     "读不到 fixture `{}`（按 `--mapping` 所在目录找过，也按 CWD 找过）：{err}。\
-                     阶段 0 的每条 entity 都必须带一份脱敏响应 —— 没有它，\
-                     「字段路径存在吗」这条最便宜的检查就无从谈起。",
+                     写了 `fixture` 却读不到 ⇒ 字段路径没法校验；\
+                     ⛔ 不会跳过检查算通过。要么把文件放回去，要么删掉 `fixture`\
+                     （那样会得到一条 FIELD_PATH_NOT_CHECKED 警告，而不是假通过）。",
                     path_on_disk.display()
                 ),
             ));
@@ -496,7 +568,9 @@ fn check_fixture(
                 hit += 1;
             }
         }
-        check.field_coverage.insert(name.clone(), format!("{hit}/{total}"));
+        if let Some(cov) = check.field_coverage.as_mut() {
+            cov.insert(name.clone(), format!("{hit}/{total}"));
+        }
         if hit == 0 {
             errors.push(Problem::new(
                 CODE_FIELD_PATH,
@@ -516,6 +590,92 @@ fn check_fixture(
             ));
         }
     }
+
+    annotate_fixture_provenance(e, loc, &rows, check, warnings);
+}
+
+/// REQ-149 · 缺口 D 的第二落点：**这份夹具有没有独立证据力**。
+///
+/// 工具无法凭文件内容证明夹具是真实响应；它能做两件事：
+///
+/// 1. 作者显式声明（`fixture_source: declared | derived`）⇒ 照声明说，并说明「不核实」；
+/// 2. 未声明时按**结构**做启发式：如果夹具的每一行**只**包含映射引用到的字段
+///    （没有任何未映射字段），那它极可能是从映射键反向生成的 —— 此时 `1/1`
+///    覆盖是**自证**。真实响应几乎总会带一些没被映射的字段（`RequestId` / 额外属性），
+///    所以这个判据是「疑似」而不是「证明」，措辞也必须是「疑似」。
+fn annotate_fixture_provenance(
+    e: &Entity,
+    loc: &str,
+    rows: &[&serde_json::Value],
+    check: &mut EntityCheck,
+    warnings: &mut Vec<String>,
+) {
+    match e.fixture_source {
+        Some(super::FixtureSource::Derived) => {
+            check.fixture_note = Some(
+                "fixture_source = \"derived\"：作者声明这份夹具由**映射键反向生成** ⇒ \
+                 `field_coverage` 全过属于自证，**没有独立证据力**。"
+                    .to_string(),
+            );
+            warnings.push(format!(
+                "{CODE_FIXTURE_LOOKS_DERIVED} · {loc}：`fixture_source` = \"derived\" —— \
+                 这份夹具是由映射键反向生成的，字段路径 1/1 只是**自证**。\
+                 要真正的校准，请用真实响应替换它（`fetch --allow-network --dump-raw`）。"
+            ));
+        }
+        Some(super::FixtureSource::Declared) => {
+            check.fixture_note = Some(
+                "fixture_source = \"declared\"：作者声明这是独立采集的响应。\
+                 ⚠️ 本工具**不核实**这个声明 —— 它只说明「作者认为这份夹具有证据力」。"
+                    .to_string(),
+            );
+        }
+        None => {
+            if fixture_looks_reverse_generated(e, rows) {
+                check.fixture_note = Some(
+                    "自动判断：fixture 的每一行**只**包含映射引用到的字段（没有任何未映射字段）\
+                     —— 疑似按映射键反向生成，`field_coverage` 全过属于自证，\
+                     **没有独立证据力**。若这确实是真实响应，请在契约里写 \
+                     `\"fixture_source\": \"declared\"`。"
+                        .to_string(),
+                );
+                warnings.push(format!(
+                    "{CODE_FIXTURE_LOOKS_DERIVED} · {loc}：夹具的每一行只含映射引用到的字段\
+                     （零个未映射字段）⇒ 疑似由映射键反向生成，字段路径全过是**自证**。\
+                     真实响应通常带有未被映射的字段；请用 `--dump-raw` 采一份，或显式声明来源。"
+                ));
+            }
+        }
+    }
+}
+
+/// 夹具是否**看起来**由映射键反向生成：每一行（对象）的键都落在
+/// 「`fields.*.path` 的首段 ∪ `identity.key_path` 的首段」里。
+///
+/// 只是启发式：真实响应若被作者裁剪到只剩映射字段，也会命中 —— 所以提示语是「疑似」。
+fn fixture_looks_reverse_generated(e: &Entity, rows: &[&serde_json::Value]) -> bool {
+    use std::collections::BTreeSet;
+    let mut mapped: BTreeSet<&str> = BTreeSet::new();
+    for f in e.fields.values() {
+        if let Some(top) = f.path.split('.').find(|s| !s.is_empty()) {
+            mapped.insert(top);
+        }
+    }
+    if let Some(top) = e.key_path.split('.').find(|s| !s.is_empty()) {
+        mapped.insert(top);
+    }
+
+    let mut saw_object = false;
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            return false;
+        };
+        saw_object = true;
+        if obj.keys().any(|k| !mapped.contains(k.as_str())) {
+            return false; // 有未映射字段 ⇒ 至少不是「只按映射键拼出来的」
+        }
+    }
+    saw_object
 }
 
 #[cfg(test)]
@@ -570,7 +730,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("cvm.json"),
-            r#"{"Response":{"TotalCount":1,"InstanceSet":[{"InstanceId":"ins-1","InstanceName":"web-1"}]}}"#,
+            r#"{"Response":{"TotalCount":1,"InstanceSet":[{"InstanceId":"ins-1","InstanceName":"web-1","ExtraUnmapped":"x"}]}}"#,
         )
         .unwrap();
         dir
@@ -590,7 +750,15 @@ mod tests {
         );
         assert!(r.ok, "{:?}", r.errors);
         assert_eq!(r.entities[0].fixture_rows, 1);
-        assert_eq!(r.entities[0].field_coverage.get("name").map(|s| s.as_str()), Some("1/1"));
+        assert_eq!(
+            r.entities[0]
+                .field_coverage
+                .as_ref()
+                .expect("有 fixture ⇒ field_coverage 必须在")
+                .get("name")
+                .map(|s| s.as_str()),
+            Some("1/1")
+        );
     }
 
     #[test]
@@ -663,5 +831,86 @@ mod tests {
         let r = run("iter", &json);
         assert!(r.errors.iter().any(|p| p.code == CODE_ITERATOR_EMPTY));
         assert!(!r.ok, "iterator 选不出节点时绝不许判通过");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // REQ-149 · 缺口 D：没夹具 ≠ 不通过，但也不是「通过」
+    // ══════════════════════════════════════════════════════════
+
+    /// 删掉 `fixture` ⇒ `validate` **exit 0**（`ok == true`）+ 一条 `FIELD_PATH_NOT_CHECKED`
+    /// + 该实体**没有** `field_coverage`（序列化后键都不出现）。
+    ///
+    /// 变异：把下面 `"fixture": null` 改回 `"fixture": "cvm.json"` ⇒
+    /// `field_coverage` 又出现、警告消失 —— 这条断言会红。
+    #[test]
+    fn missing_fixture_is_a_named_warning_not_an_error_and_no_coverage() {
+        let json = mapping_json("ontok:云资源/{id}", "[]", "[]", "InstanceName")
+            .replace("\"fixture\": \"cvm.json\"", "\"fixture\": null");
+        let r = run("nofixture", &json);
+        assert!(r.ok, "没有 fixture 不许判失败：{:?}", r.errors);
+        let w = r
+            .warnings
+            .iter()
+            .find(|w| w.contains(CODE_FIELD_PATH_NOT_CHECKED))
+            .unwrap_or_else(|| panic!("必须有一条 FIELD_PATH_NOT_CHECKED：{:?}", r.warnings));
+        assert!(w.contains("cvm_instance"), "警告必须点名实体：{w}");
+        assert!(w.contains("没做校验"), "要说清是「没做」，不是「通过」：{w}");
+        assert!(r.entities[0].field_coverage.is_none(), "没有 fixture 时 field_coverage 必须是 None");
+
+        // 序列化层面也要「不出现」——⛔ 不许变成 `{}` 或 `1/1`。
+        let text = serde_json::to_string(&r).unwrap();
+        let entity_json = &serde_json::from_str::<serde_json::Value>(&text).unwrap()["entities"][0];
+        assert!(
+            entity_json.get("field_coverage").is_none(),
+            "没有 fixture 的实体不许在输出里出现 field_coverage 键：{entity_json}"
+        );
+        assert!(text.contains("fixture_note"), "要能看出「这份夹具没有独立证据力」：{text}");
+    }
+
+    /// 显式声明 `fixture_source: derived` ⇒ 明确告知「自证、无独立证据力」。
+    #[test]
+    fn declared_derived_fixture_is_called_out() {
+        let json = mapping_json("ontok:云资源/{id}", "[]", "[]", "InstanceName").replace(
+            "\"fixture\": \"cvm.json\"",
+            "\"fixture\": \"cvm.json\", \"fixture_source\": \"derived\"",
+        );
+        let r = run("derived", &json);
+        assert!(r.ok, "{:?}", r.errors);
+        assert!(
+            r.warnings.iter().any(|w| w.contains(CODE_FIXTURE_LOOKS_DERIVED)),
+            "声明 derived 必须有一条醒目警告：{:?}",
+            r.warnings
+        );
+        let note = r.entities[0].fixture_note.as_deref().unwrap_or_default();
+        assert!(note.contains("没有独立证据力"), "{note}");
+    }
+
+    /// 未声明来源、但夹具每行**只**含映射引用到的字段 ⇒ 启发式提醒「疑似反向生成」。
+    #[test]
+    fn reverse_generated_looking_fixture_gets_a_heuristic_note() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontok-access-validate-reverse-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cvm.json"),
+            r#"{"Response":{"TotalCount":1,"InstanceSet":[{"InstanceId":"ins-1","InstanceName":"web-1"}]}}"#,
+        )
+        .unwrap();
+        let m = parse(&mapping_json("ontok:云资源/{id}", "[]", "[]", "InstanceName")).unwrap();
+        let o = parse_ontology(TTL);
+        let r = validate(&m, &o, &dir);
+        assert!(r.ok, "{:?}", r.errors);
+        assert!(
+            r.entities[0]
+                .fixture_note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("疑似"),
+            "要能看出可疑：{:?}",
+            r.entities[0].fixture_note
+        );
+        assert!(r.warnings.iter().any(|w| w.contains(CODE_FIXTURE_LOOKS_DERIVED)));
     }
 }
