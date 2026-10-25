@@ -197,6 +197,68 @@ pub struct TtlOptions<'a> {
     /// 并标 `ontok:rangeSource "schema"`。未命中/未给 schema ⇒ 启发式 + `"heuristic"`。
     /// 客户视图没有列名（结构上不发布），所以这一栏对它不生效（见模块头）。
     pub schema: Option<&'a SchemaTypes>,
+    /// ⭐ REQ-145 · **api 源类**（`query serve --access-mapping` 的产物）。
+    ///
+    /// `None` = 这个部署没加载 access 映射 ⇒ **一个字节都不变**（R1 零回归）：
+    /// 客户视图 / 建模视图都不出现 `ontok:sourceKind`。
+    /// `Some(..)` 时**只有 api 类**写 `ontok:sourceKind "api"`（库源默认 db，不写）。
+    ///
+    /// ⛔ 这里只有「这个类来自 API」这一个事实：端点 / 参数 / 凭据 / 迭代器
+    /// 一个字节都进不了 TTL（需求 §1 的禁令）。它们留在服务端的 access 映射里。
+    pub api_classes: Option<&'a ApiClasses>,
+}
+
+/// ⭐ REQ-145 · **api 源类**的集合 —— TTL 只问它一个问题：「这个类来自 API 吗」。
+///
+/// 为什么是这样一个独立的小结构（而不是把整份 access 映射搬进 `domain`）：
+/// 序列化器需要的只有「是 / 不是」，而 access 契约里的其余内容（源、操作、
+/// 迭代器、字段路径、凭据变量名）**都不许**进 TTL —— 结构上不传进来，就不会漏出去。
+///
+/// 两个视图的匹配键**不同**（这是客户视图与建模视图的结构差异，不是笔误）：
+///
+/// | 视图 | 类的标识 | 匹配字段 |
+/// | --- | --- | --- |
+/// | 建模视图 | `entity_types.key`（`ontok:key`） | [`Self::is_api_key`] |
+/// | 客户视图 | `display_name`（名字就是标识，同名合并） | [`Self::is_api_name`] |
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ApiClasses {
+    /// 类 key（= 快照 `entity_types.key`）。
+    keys: BTreeSet<String>,
+    /// 类的人读名（= 快照 `display_name`）。
+    names: BTreeSet<String>,
+}
+
+impl ApiClasses {
+    /// 由「api 类 key」+「这些人读名」构造。两个集合都由调用方（`query::access`）
+    /// 从**同一份映射**解析出来，⛔ 不在这里再解析一次 JSON。
+    pub fn new(
+        keys: impl IntoIterator<Item = String>,
+        names: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            keys: keys.into_iter().collect(),
+            names: names.into_iter().collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// 类的 key 是不是 api 源（建模视图用它）。
+    pub fn is_api_key(&self, key: &str) -> bool {
+        self.keys.contains(key)
+    }
+
+    /// 类的人读名是不是 api 源（客户视图用它）。
+    pub fn is_api_name(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    /// api 类的 key（升序；判据与启动横幅用）。
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.keys.iter()
+    }
 }
 
 impl<'a> TtlOptions<'a> {
@@ -209,6 +271,7 @@ impl<'a> TtlOptions<'a> {
             action_type_count: 0,
             tenancy: None,
             schema: None,
+            api_classes: None,
         }
     }
 
@@ -1414,12 +1477,15 @@ pub fn serialize_customer(view: &CustomerView, opts: &TtlOptions<'_>) -> TtlDocu
     let mut class_blocks: Vec<String> = Vec::new();
     for (i, (name, c)) in classes.iter().enumerate() {
         let parents: Vec<String> = c.parents.iter().map(|p| ns.local_for(p)).collect();
+        // ⭐ REQ-145 · 客户视图里类的标识是**名字**（同名对象已被合并）⇒ 按名字判。
+        let is_api = opts.api_classes.is_some_and(|a| a.is_api_name(name));
         class_blocks.push(customer_class_block(
             &class_locals[i],
             name,
             &parents,
             c,
             &iri_template,
+            is_api,
         ));
     }
 
@@ -1472,12 +1538,15 @@ pub fn serialize_model(view: &ModelTrackView, opts: &TtlOptions<'_>) -> TtlDocum
         };
         let pk: Option<String> =
             opts.schema.and_then(|s| s.primary_key(&e.key)).map(str::to_string);
+        // ⭐ REQ-145 · 建模视图里类的标识是 **key**（`ontok:key`）⇒ 按 key 判。
+        let is_api = opts.api_classes.is_some_and(|a| a.is_api_key(&e.key));
         class_blocks.push(model_class_block(
             &class_local,
             e,
             &iri_template,
             &tenant_columns,
             pk.as_deref(),
+            is_api,
         ));
         let mut props: Vec<&ModelPropertyView> = e.properties.iter().collect();
         props.sort_by(|a, b| a.column.cmp(&b.column).then_with(|| a.name.cmp(&b.name)));
@@ -1635,6 +1704,13 @@ const JOIN_EVIDENCE_HEADER: &str = "ontok:joinVerified 是**抽样证据**（每
 /// 客户视图本体节点上的说明（**不含守门词**：它是正文，要过闸）。
 const CUSTOMER_ONTOLOGY_NOTE: &str =
     "本导出为 OWL 本体，只描述世界由什么构成，不描述能对它做什么。动作层未导出，见文件头有损声明。";
+
+/// ⭐ REQ-145 · `ontok:sourceKind` 的**唯一取值**（api 类）。
+///
+/// 为什么只有一个取值：库源是**默认**（不写）；写出来只有「这个类来自 API、
+/// 数据不在这套本体落的那张表里」这一件事。契约 §三 3.1 的表：
+/// 「默认 db —— 库源不写 `sourceKind`（客户视图保持干净）」。
+pub const API_SOURCE_KIND: &str = "api";
 
 /// 建模视图本体节点上的说明（与参照脚本逐字一致，只替换动作层条数）。
 fn model_ontology_note(action_types: usize) -> String {
@@ -1929,6 +2005,7 @@ fn customer_class_block(
     parent_locals: &[String],
     c: &CustomerClass<'_>,
     iri_template: &str,
+    is_api: bool,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("a owl:Class".to_string());
@@ -1936,6 +2013,11 @@ fn customer_class_block(
     lines.push(format!("rdfs:label {}", zh(name)));
     // REQ-119 · 实例 IRI 模板（AC-003）：每个类都有，不含时间/随机。
     lines.push(format!("ontok:instanceIri {}", plain(iri_template)));
+    // ⭐ REQ-145 · 「这个类的数据不在本库」—— 与 `instanceIri` **同一层**（都挂类上）。
+    // ⛔ 只有 api 类写：库源默认 db，客户视图保持干净（R1 / AC-001）。
+    if is_api {
+        lines.push(format!("ontok:sourceKind {}", plain(API_SOURCE_KIND)));
+    }
     for n in &c.notes {
         lines.push(format!("rdfs:comment {}", zh(n)));
     }
@@ -2211,6 +2293,7 @@ fn model_class_block(
     iri_template: &str,
     tenant_columns: &[String],
     primary_key: Option<&str>,
+    is_api: bool,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("a owl:Class".to_string());
@@ -2219,6 +2302,10 @@ fn model_class_block(
     lines.push(format!("ontok:key {}", plain(&e.key)));
     // REQ-119 · 实例 IRI 模板（AC-003）。
     lines.push(format!("ontok:instanceIri {}", plain(iri_template)));
+    // ⭐ REQ-145 · 与 `instanceIri` 同一层；⛔ 只有 api 类写（库源默认 db）。
+    if is_api {
+        lines.push(format!("ontok:sourceKind {}", plain(API_SOURCE_KIND)));
+    }
     // REQ-119 B-2 · 主键列（只在有真实 schema 时写；⛔ 不猜）。
     if let Some(pk) = primary_key {
         lines.push(format!("ontok:primaryKeyColumn {}", plain(pk)));
@@ -2614,6 +2701,7 @@ mod tests {
             action_type_count: 0,
             tenancy: None,
             schema: None,
+            api_classes: None,
         }
     }
 
@@ -3054,6 +3142,7 @@ mod tests {
             action_type_count: 0,
             tenancy: None,
             schema: Some(schema),
+            api_classes: None,
         }
     }
 
@@ -3183,6 +3272,7 @@ mod tests {
             action_type_count: 0,
             tenancy: Some(decl),
             schema: None,
+            api_classes: None,
         }
     }
 

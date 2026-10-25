@@ -228,6 +228,7 @@ async fn setup() -> Option<Ctx> {
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema),
+        api_classes: None,
     };
     let mapping =
         build_mapping(&model, &opts, false, Default::default()).expect("映射必须生成");

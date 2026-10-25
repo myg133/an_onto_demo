@@ -84,6 +84,8 @@
 //! - 审计的 token 摘要不加盐（见 [`audit`] 的已知边界）。
 
 pub mod audit;
+// ⭐ REQ-145 · access 映射（`--access-mapping`）：哪些类来自 API、跨源边在哪、查询落到哪一类。
+pub mod access;
 pub mod catalog;
 pub mod error;
 pub mod http;
@@ -558,6 +560,22 @@ pub struct SparqlReceipt {
     /// 范围的**人话**说明（[`JOIN_STATES_SCOPE_NOTE`]；与上一个字段同义）。
     pub join_states_scope_note: &'static str,
     pub limits: LimitInfo,
+    // ── ⭐ REQ-145 的扩展（**只有加载了 access 映射才有**）──
+    /// 这份结果**完整吗**：`false` ⇒ 至少有一条 `@pending`（契约规则 1）。
+    ///
+    /// ⚠️ `None` = 这个部署没加载 `--access-mapping` ⇒ 字段不出现（R1：与基线逐字节相同）。
+    /// `Some(true)` = 查询只落在库源（或全空结果）；`Some(false)` = 有 api 源没取。
+    ///
+    /// 不变式（AC-007）：`complete == unresolved_classes.is_empty()`，即
+    /// **`complete == @pending.is_empty()`** —— 一个字段说了算，不靠调用方推断。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub complete: Option<bool>,
+    /// 本次**没算进去**的类（SPARQL 侧的本地名，升序去重）。
+    ///
+    /// 表挂不住 `@pending` 的明细（行没有图结构），所以只报「哪几类缺了」；
+    /// 明细（`get` / `ids` / `ref`）只在 `format=jsonld` 的 `@pending` 里给。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_classes: Option<Vec<String>>,
 }
 
 impl SparqlReceipt {
@@ -627,6 +645,12 @@ pub struct QueryService {
     pub metrics: crate::metrics::Metrics,
     /// 目录条目（启动时拍平一次，翻页只做切片）。
     pub catalog_items: Vec<catalog::CatalogItem>,
+    /// ⭐ REQ-145 · access 映射（`--access-mapping` 的产物）。
+    ///
+    /// `None` = 这个部署没加载映射 ⇒ **与基线逐字节相同**（R1）：没有 `access` 字段、
+    /// 没有 `@pending`、没有 `complete`、没有 `mapping_version`；api 类照常按库源处理。
+    /// 客户侧部署天然不加载它 ⇒ 也就拿不到 `get`（R6，不做额外身份裁剪）。
+    pub access: Option<access::AccessMapping>,
     limiter: Arc<Limiter>,
 }
 
@@ -650,13 +674,17 @@ pub struct ServiceParts {
     pub audit: AuditSink,
     /// ⭐ REQ-127 · 两视图的 TTL（`query::ttl::OntologyTtl::prepare` 的产物）。
     pub ttl: crate::query::ttl::OntologyTtl,
+    /// ⭐ REQ-145 · access 映射（可选；`None` = 没加载 `--access-mapping`）。
+    pub access: Option<access::AccessMapping>,
 }
 
 impl QueryService {
     pub fn new(p: ServiceParts) -> Self {
         // ⭐ REQ-136 · 目录的**唯一**构建点：把快照（model）与映射（可选）一起交出去，
         // 两个模式在 `catalog::build_items` 内部只在**过滤**处分叉（纪律 H）。
-        let catalog_items = catalog::build_items(&p.model, p.mapping.as_ref());
+        // ⭐ REQ-145 · access 映射（可选）只**追加** `access` 字段 / 让 api 类也列出来；
+        // `None` 时逐字节不变（R1）。
+        let catalog_items = catalog::build_items(&p.model, p.mapping.as_ref(), p.access.as_ref());
         // ⭐ REQ-135 · 两个启动即确定的仪表：映射规模（joinCondition 数）与两视图字节数。
         // 它们随「版本冻结」而固定 —— 只在 `new` 里设一次（运行期不会变）。
         // ⭐ REQ-136 · 本体服务模式**没有映射** ⇒ `ontok_mapping_joins` 记 0（这是事实：
@@ -689,6 +717,7 @@ impl QueryService {
             ttl: p.ttl,
             metrics,
             catalog_items,
+            access: p.access,
             limiter: Arc::new(Limiter::default()),
         }
     }
@@ -944,6 +973,43 @@ pub struct SparqlOutcome {
     pub projection: Vec<crate::sparql::ProjectedColumn>,
 }
 
+/// ⭐ REQ-145 · 一次查询的**源判定结果**（`format` 不参与这个决定）。
+///
+/// 为什么是一个枚举而不是「在回执里加一个字段」：`@pending` 是**顶层**的、与 `@graph`
+/// 并列的另一种东西（契约 §九 第 1 点），它挂不到「一行一条」的行回执上。两种格式
+/// 从**同一个**判定出发，各自表达同一件事：
+///
+/// | 判定 | `format=jsonld` | `format=rows` |
+/// | --- | --- | --- |
+/// | [`SparqlAnswer::Rows`] | `@graph` + `meta.complete: true` | 行回执 + `complete: true` |
+/// | [`SparqlAnswer::Pending`] | `@graph: []` + `@pending` + `meta.complete: false` | **`NOT_DB_SOURCE`**（⛔ 不返回空表） |
+#[derive(Debug, Clone)]
+pub enum SparqlAnswer {
+    /// 库源能算完：回执 + 列的 RDF 身份（JSON-LD 用）。
+    Rows(SparqlOutcome),
+    /// 只碰 api 源：**一行 SQL 都没执行**，产物是「半成品 + 说明书」。
+    Pending(PendingAnswer),
+}
+
+/// `@pending` 的**服务端事实**（渲染成 JSON-LD 的形状在 [`jsonld`]）。
+#[derive(Debug, Clone)]
+pub struct PendingAnswer {
+    /// 空回执（0 行 / 无列）—— 与行回执**同一个类型**，所以 `meta` 的形状不会漂。
+    /// 它带 `complete: Some(false)` + `unresolved_classes: Some([...])`。
+    pub receipt: SparqlReceipt,
+    /// 一条一条待取（**不进 `@graph`**，契约规则 2）。
+    pub pending: Vec<access::ApiPending>,
+    /// 加载的映射版本（`meta.mapping_version`）。
+    pub mapping_version: u64,
+}
+
+impl PendingAnswer {
+    /// `meta.unresolved_classes`：这次没算进去的类（本地名，升序去重）。
+    pub fn unresolved_classes(&self) -> Vec<String> {
+        self.receipt.unresolved_classes.clone().unwrap_or_default()
+    }
+}
+
 /// 一条 SPARQL 查询（**唯一**入口：REST `POST /api/sparql` 与 MCP `sparql_query`）。
 ///
 /// 顺序是刻意的（最便宜的失败先报，且**每个失败都留一条审计**）：
@@ -957,23 +1023,39 @@ pub struct SparqlOutcome {
 /// ⭐ REQ-140 · `format` **不在这里**判：它只影响渲染，[`run_sparql_ex`] 把
 /// 「行回执 + 列的 RDF 身份」一起交出去，由 `http` 层按格式二选一序列化。
 /// 于是「格式」不会渗进规划 / 注入 / 限额 / 审计的任何分支（AC-009 的结构保证）。
+///
+/// ⭐ REQ-145 · **行回执的契约是「要么完整、要么报错」**：只碰 api 源时这里直接给
+/// `NOT_DB_SOURCE`（R5：⛔ 不返回 `rows: []` —— 空表会被读成「查了，没有数据」）。
+/// 要 `@pending` 的明细走 [`run_sparql_ex`]（JSON-LD 那条路）。
 pub async fn run_sparql(
     svc: &QueryService,
     caller: &Caller,
     req: SparqlRequest,
 ) -> Result<SparqlReceipt, ApiError> {
-    Ok(run_sparql_event(svc, caller, "sparql", req).await?.receipt)
+    match run_sparql_event(svc, caller, "sparql", req).await? {
+        SparqlAnswer::Rows(out) => Ok(out.receipt),
+        // 审计已经在事件函数里留过了（`code=API_PENDING`）；这里只把「表挂不住 pending」
+        // 这件事翻译成一个**可行动**的错误。⛔ 不再写第二行审计（一次调用一行）。
+        SparqlAnswer::Pending(p) => {
+            let e = ApiError::not_db_source(&p.unresolved_classes());
+            svc.metrics.note_denial_code(e.code);
+            Err(e)
+        }
+    }
 }
 
 /// ⭐ REQ-140 · 同 [`run_sparql`]，但把「列的 RDF 身份」也带出来（JSON-LD 用）。
 ///
-/// 与 [`run_sparql`] **同一个实现**（前者就是它 `.receipt`）—— 两个函数名只是
+/// 与 [`run_sparql`] **同一个实现**（前者就是它的 `.receipt`）—— 两个函数名只是
 /// 「要不要 projection」的区别，⛔ 不存在第二条查询链路。
+///
+/// ⭐ REQ-145 · 区别还有一条：**这里能拿到 [`SparqlAnswer::Pending`]**（JSON-LD 挂得住
+/// `@pending`），而行回执那条路必须报错。
 pub async fn run_sparql_ex(
     svc: &QueryService,
     caller: &Caller,
     req: SparqlRequest,
-) -> Result<SparqlOutcome, ApiError> {
+) -> Result<SparqlAnswer, ApiError> {
     run_sparql_event(svc, caller, "sparql", req).await
 }
 
@@ -982,7 +1064,7 @@ async fn run_sparql_event(
     caller: &Caller,
     event: &'static str,
     req: SparqlRequest,
-) -> Result<SparqlOutcome, ApiError> {
+) -> Result<SparqlAnswer, ApiError> {
     let started = Instant::now();
 
     // ⓪ ⭐ REQ-136 · 本体服务模式：恒 503（不是 200 空结果、不是 500）。
@@ -1042,6 +1124,75 @@ async fn run_sparql_event(
         }
     };
 
+    // ③.5 ⭐ REQ-145 · **源判定**：这条查询会不会碰到 api 源？
+    //
+    // 位置在「拿名额之后、规划之前」：规划器会真的去解析类名 / 建 SQL，而一条只碰 api 源
+    // 的查询**一行 SQL 都不该执行**（库里的那份副本不是事实源）。判据只读 AST + 映射
+    // （⛔ 不做字符串匹配），见 `access::AccessMapping::check`。
+    if let Some(access) = svc.access.as_ref() {
+        if let Some(check) = source_check(svc, access, &req.query) {
+            match check {
+                access::SourceCheck::DbOnly => {}
+                access::SourceCheck::CrossSource { predicate, from, to } => {
+                    let e = ApiError::cross_source_unsupported(&predicate, &from, &to);
+                    svc.metrics.note_denial_code(e.code);
+                    audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
+                    drop(slot);
+                    return Err(e);
+                }
+                access::SourceCheck::Api { pending } => {
+                    // 「半成品 + 说明书」不是失败：审计按**事实**记（`API_PENDING`），
+                    // 行数 0（这一路一行 SQL 都没跑）。
+                    audit_call(
+                        svc,
+                        event,
+                        caller,
+                        Some(&req.query),
+                        Some(0),
+                        started,
+                        "API_PENDING",
+                        None,
+                    );
+                    let mut classes: Vec<String> =
+                        pending.iter().map(|p| p.class_local.clone()).collect();
+                    classes.sort();
+                    classes.dedup();
+                    let receipt = SparqlReceipt {
+                        // 一行 SQL 都没执行 ⇒ 没有列、没有行、没有 SQL 可回声。
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        row_count: 0,
+                        truncated: false,
+                        sql_echo: String::new(),
+                        tenant_applied: Vec::new(),
+                        tables: Vec::new(),
+                        public_dimensions: Vec::new(),
+                        warnings,
+                        coverage: Vec::new(),
+                        join_states: Vec::new(),
+                        join_states_scope: JOIN_STATES_SCOPE_ALL_EDGES,
+                        join_states_scope_note: JOIN_STATES_SCOPE_NOTE,
+                        limits: LimitInfo {
+                            max_rows: effective,
+                            token_max_rows: caller.token.max_rows,
+                            timeout_ms: svc.timeout_ms,
+                        },
+                        // 契约规则 1：有 `@pending` ⇒ 必为 `false`；与 `unresolved_classes`
+                        // 同源（同一个 `pending` 切片算出来的），满足 AC-007 的不变式。
+                        complete: Some(false),
+                        unresolved_classes: Some(classes),
+                    };
+                    drop(slot);
+                    return Ok(SparqlAnswer::Pending(PendingAnswer {
+                        receipt,
+                        pending,
+                        mapping_version: access.mapping_version(),
+                    }));
+                }
+            }
+        }
+    }
+
     // ④ 规划 + 注入 + 只读执行（REQ-122 的**同一个** `run_query`）。
     //
     // ⭐ REQ-136 · 到这里 `mode` 只可能是 Query（上面 ⓪ 已经分流）；
@@ -1080,7 +1231,7 @@ async fn run_sparql_event(
                 "OK",
                 None,
             );
-            Ok(SparqlOutcome { receipt, projection })
+            Ok(SparqlAnswer::Rows(SparqlOutcome { receipt, projection }))
         }
         Err(e) => {
             let err = ApiError::from_query_error(e);
@@ -1100,6 +1251,19 @@ async fn run_sparql_event(
             Err(err)
         }
     }
+}
+
+/// ⭐ REQ-145 · 解析这条查询并按 access 映射判定源。
+///
+/// 解析失败 ⇒ `None`（不在这里报错）：语法错的查询交给**真正的**规划器去报，
+/// 那样错误码与 hint 只有一处来源（`SPARQL_UNSUPPORTED` 的支持清单）。
+fn source_check(
+    svc: &QueryService,
+    access: &access::AccessMapping,
+    sparql: &str,
+) -> Option<access::SourceCheck> {
+    let q = crate::sparql::query::parse(sparql, &svc.ontology_iri).ok()?;
+    Some(access.check(&q, &svc.ontology_iri, svc.mapping.as_ref()))
 }
 
 /// `QueryResult` → 回执（**唯一**的回执构造函数）。
@@ -1161,6 +1325,10 @@ fn receipt_of(
             token_max_rows: token.max_rows,
             timeout_ms: svc.timeout_ms,
         },
+        // ⭐ REQ-145 · 走到这里说明这条查询**只落在库源**（api 源在 ③.5 就分流了）
+        // ⇒ 结果完整、没有未解析的类。`None` = 没加载映射 ⇒ 两个字段都不出现（R1）。
+        complete: svc.access.as_ref().map(|_| true),
+        unresolved_classes: svc.access.as_ref().map(|_| Vec::new()),
     };
     (receipt, r.projection)
 }
@@ -1252,7 +1420,10 @@ pub async fn run_sample(
             return Err(e);
         }
     };
-    run_sparql_event(
+    // ⭐ REQ-145 · `sample` 也是**行回执**（表），所以对「只碰 api 源」的回答与
+    // `format=rows` 一致：`NOT_DB_SOURCE`。取样取自库里的那份副本恰恰是最容易骗人的
+    // （副本可能一周没更新）—— ⛔ 不给它开一条旁路。
+    match run_sparql_event(
         svc,
         caller,
         "sample",
@@ -1265,8 +1436,15 @@ pub async fn run_sample(
             format: Some(QueryFormat::Rows),
         },
     )
-    .await
-    .map(|o| o.receipt)
+    .await?
+    {
+        SparqlAnswer::Rows(out) => Ok(out.receipt),
+        SparqlAnswer::Pending(p) => {
+            let e = ApiError::not_db_source(&p.unresolved_classes());
+            svc.metrics.note_denial_code(e.code);
+            Err(e)
+        }
+    }
 }
 
 /// 名字 → 一条**安全的** SPARQL（先校验名字存在，⛔ 不把用户输入直接拼进查询）。
@@ -1534,6 +1712,9 @@ mod tests {
                 token_max_rows: 10,
                 timeout_ms: 1000,
             },
+            // ⭐ REQ-145 · `None` = 没加载映射 ⇒ 这两个字段不进正文（R1 的字节判据靠它）。
+            complete: None,
+            unresolved_classes: None,
         };
         let a = receipt.serialize();
         let b = receipt.serialize();
@@ -1728,6 +1909,7 @@ mod tests {
             tokens: TokenTable::default(),
             audit: AuditSink::stdout_only(),
             ttl: crate::query::ttl::fixture(),
+            access: None,
         });
 
         // 直接构造一个 QueryResult（等价于 run_query 的成功返回）来验证回执扩展。
@@ -1844,6 +2026,7 @@ mod tests {
             tokens: TokenTable::default(),
             audit: AuditSink::stdout_only(),
             ttl: crate::query::ttl::fixture(),
+            access: None,
         });
 
         let q = sample_query(&svc, ":customers", 5).expect("已知类");

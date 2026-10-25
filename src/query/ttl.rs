@@ -136,6 +136,10 @@ pub struct TtlSource<'a> {
     pub schema: Option<&'a Path>,
     /// `--tenancy`（只在建模视图生效）。
     pub tenancy: Option<&'a Path>,
+    /// ⭐ REQ-145 · `--access-mapping` 里的 api 类（`None` = 没加载映射 ⇒ 两视图不变）。
+    ///
+    /// 只交「哪些类是 api」这一件事；端点 / 参数 / 凭据在这一层**根本拿不到**。
+    pub api_classes: Option<&'a crate::domain::ttl::ApiClasses>,
 }
 
 impl OntologyTtl {
@@ -189,6 +193,12 @@ impl OntologyTtl {
             },
         )
         .await?;
+        // ⭐ REQ-145 · api 源类（`--access-mapping`）在**两视图**都写 `ontok:sourceKind "api"`
+        // （这是「数据不在这套本体里」的事实，不涉端点/凭据）。没加载映射 ⇒ 一个字节都不变。
+        let customer = match src.api_classes {
+            Some(api) => customer.with_api_classes(api.clone()),
+            None => customer,
+        };
         let customer = crate::console::ops::render_ttl_export(&customer)?;
 
         let model = crate::cli::prepare_ttl_export(
@@ -203,6 +213,10 @@ impl OntologyTtl {
             },
         )
         .await?;
+        let model = match src.api_classes {
+            Some(api) => model.with_api_classes(api.clone()),
+            None => model,
+        };
         let model = crate::console::ops::render_ttl_export(&model)?;
 
         Ok(Self::build(customer, model))
@@ -224,6 +238,8 @@ impl OntologyTtl {
             action_type_count: meta.action_type_count,
             tenancy: None,
             schema: None,
+            // ⭐ REQ-145 · 这条入口（判据 / 单测）不加载映射 ⇒ 两视图不带 `sourceKind`。
+            api_classes: None,
         };
         let customer_rendered = pipeline::render(
             OutletId::C6,

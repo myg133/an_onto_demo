@@ -116,6 +116,7 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema),
+        api_classes: None,
     };
     let model = ontok::domain::model_view::project_model_track(&snap);
     let mapping = ontok::domain::r2rml::build_mapping(
@@ -174,6 +175,8 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
         tokens,
         audit: ontok::query::audit::AuditSink::stdout_only(),
         ttl,
+        // REQ-145：本条判据不加载 access 映射（回执字节与 REQ-123 基线对齐）。
+        access: None,
     })))
 }
 

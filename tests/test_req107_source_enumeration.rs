@@ -2093,6 +2093,9 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；**不新增响应写点** ——
     // 复用 I14 的同一个 `Json(` 写点，只换 Content-Type，见 `query::http::respond_jsonld`）。
     ("src/query/mod.rs", "jsonld"),
+    // ⭐ REQ-145 · access 映射（`--access-mapping`）：只做**判定**（哪些类来自 API、
+    // 查询落到哪一类），⛔ 不写任何出口 —— 它的产物经既有 I14/I25 与 TTL 两视图送出。
+    ("src/query/mod.rs", "access"),
     // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),

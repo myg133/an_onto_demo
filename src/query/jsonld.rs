@@ -86,8 +86,61 @@ pub struct JsonLd<'a> {
     pub context: BTreeMap<&'static str, String>,
     #[serde(rename = "@graph")]
     pub graph: Vec<Value>,
+    /// ⭐ REQ-145 · **待取的节点**（顶层，与 `@graph` 并列 —— 契约 §九 第 1 点）。
+    ///
+    /// 三条纪律（**结构上**成立，不靠人记）：
+    ///
+    /// | # | 纪律 | 怎么保证的 |
+    /// | --- | --- | --- |
+    /// | 1 | **不进 `@graph`**（契约规则 2） | 它是**另一个字段**，[`Self::graph`] 只由有事实的行构造 |
+    /// | 2 | `meta.complete == @pending.is_empty()`（AC-007） | 两个值都从**同一个** `pending` 切片算 |
+    /// | 3 | 没 pending 时也要能看出来「完整」 | `Some([])` ⇒ `"@pending": []`；`None` ⇒ 字段不出现（没加载映射） |
+    #[serde(rename = "@pending", skip_serializing_if = "Option::is_none")]
+    pub pending: Option<Vec<PendingNode>>,
     pub summary: Value,
     pub meta: Meta<'a>,
+}
+
+/// ⭐ REQ-145 · `@pending[]` 的一条 ——「这一块平台没算，你要这样自己取」。
+///
+/// 字段顺序即序列化顺序（`to_text` 与 REST 正文逐字节相同）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingNode {
+    /// 待取节点的 IRI（**认不出实例标识时不出现** —— ⛔ 不编一个假 id）。
+    #[serde(rename = "@id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// 它属于哪个类（`ontok:<类本地名>`）。
+    #[serde(rename = "@type")]
+    pub class_iri: String,
+    /// 这一类**来自 API**（与 TTL 的 `ontok:sourceKind "api"` 是同一件事）。
+    #[serde(rename = "ontok:sourceKind")]
+    pub source_kind: &'static str,
+    /// 为什么拿不到：`source_is_api` / `cross_source_edge`（稳定字符串，Agent 按它分支）。
+    pub reason: &'static str,
+    /// 取数指引。**跨源边没有它**（契约规则 4：给了也查不了，比不给更糟）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub get: Option<PendingGet>,
+}
+
+/// `@pending[].get` ——「按什么去取」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingGet {
+    /// 取哪个类。
+    pub class: String,
+    /// 过滤条件（`{}` = 平台不知道实例标识，按类取）。
+    pub filter: PendingFilter,
+    /// 能直接下推给 API 的过滤字段。
+    pub pushdown: Vec<String>,
+    /// `access#<条目>@v<映射版本>` —— 可追溯到**签过的那一条**契约（规则 3）。
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+/// `get.filter`（目前只有 `ids`；`{}` 是合法形状 —— 契约规则 7）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingFilter {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
 }
 
 /// `meta` = 行回执**去掉** `columns` / `rows` 的全部字段（顺序 = [`SparqlReceipt`] 的声明顺序）。
@@ -108,6 +161,19 @@ pub struct Meta<'a> {
     pub join_states_scope: &'a str,
     pub join_states_scope_note: &'a str,
     pub limits: &'a LimitInfo,
+    /// ⭐ REQ-145 · 结果**完整吗**（契约规则 1：有 `@pending` ⇒ 必为 `false`）。
+    ///
+    /// ⚠️ 不变式（AC-007）：`complete == pending.is_empty()` —— 两个值都从
+    /// **同一个** `pending` 算出来（见 [`render`] / [`render_pending`]），⛔ 不各算一遍。
+    /// `None` = 这个部署没加载 access 映射 ⇒ 字段不出现（R1：与基线逐字节相同）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub complete: Option<bool>,
+    /// 本次没算进去的类（本地名，升序去重）。与 `@pending` 的一致性由构造点保证。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_classes: Option<Vec<String>>,
+    /// ⭐ REQ-145 · 加载的 access 映射版本（`get.ref` 的 `@v<n>` 与它同源）。无映射 ⇒ 不出现。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapping_version: Option<u64>,
 }
 
 impl<'a> JsonLd<'a> {
@@ -156,10 +222,29 @@ pub fn render<'a>(
     projection: &[ProjectedColumn],
     ontology_iri: &str,
 ) -> JsonLd<'a> {
+    render_with_mapping(receipt, projection, ontology_iri, None)
+}
+
+/// ⭐ REQ-145 · 同 [`render`]，另外告诉它**加载的映射版本**（`meta.mapping_version`）。
+///
+/// 两个入口而不是给 [`render`] 多一个必填参数：`None` 那条是**没加载映射**的老路径，
+/// 它的字节已经被一堆判据钉住（R1）——多一个参数只会让每个老调用点都要回答一个
+/// 它根本不关心的问题。
+pub fn render_with_mapping<'a>(
+    receipt: &'a SparqlReceipt,
+    projection: &[ProjectedColumn],
+    ontology_iri: &str,
+    mapping_version: Option<u64>,
+) -> JsonLd<'a> {
     let base = format!("{ontology_iri}#");
     let mut context: BTreeMap<&'static str, String> = BTreeMap::new();
     context.insert(ONTOK_PREFIX, base.clone());
     context.insert("xsd", XSD_NS.to_string());
+
+    // ⭐ REQ-145 · `@pending` 与 `meta.complete` **同源**：库源路径的 pending 恒空，
+    // 所以 `complete` 只能是 `true`（有 pending 的那条路走 [`render_pending`]）。
+    // `None` = 没加载映射 ⇒ 三个字段都不出现（R1）。
+    let pending: Option<Vec<PendingNode>> = receipt.complete.map(|_| Vec::new());
 
     let meta = Meta {
         row_count: receipt.row_count,
@@ -174,6 +259,9 @@ pub fn render<'a>(
         join_states_scope: receipt.join_states_scope,
         join_states_scope_note: receipt.join_states_scope_note,
         limits: &receipt.limits,
+        complete: receipt.complete,
+        unresolved_classes: receipt.unresolved_classes.clone(),
+        mapping_version,
     };
 
     // 有聚合 ⇒ 没有任何实体可挂（R4）：全部进 summary，`@graph` 恒为 []。
@@ -181,6 +269,7 @@ pub fn render<'a>(
         return JsonLd {
             context,
             graph: Vec::new(),
+            pending,
             summary: aggregate_summary(receipt, projection),
             meta,
         };
@@ -257,8 +346,91 @@ pub fn render<'a>(
     JsonLd {
         context,
         graph,
+        pending,
         summary: plain_summary(nodes.len(), receipt.row_count, detached),
         meta,
+    }
+}
+
+/// ⭐ REQ-145 · **只碰 api 源**的那份产物：`@graph: []` + `@pending[]` + `complete:false`。
+///
+/// 为什么 `@graph` **恒空**且**不是报错**（契约规则 7）：Agent 一条链走得完 ——
+/// 拿到 `complete:false` + `get` 就去取数，不需要「先失败一次、再猜着换写法」。
+///
+/// 三条不变式都在这里**一处**成立：
+/// - `@graph` 里没有一个节点（`graph: Vec::new()`；pending 是另一个字段，规则 2）；
+/// - `meta.complete == @pending.is_empty()`（`false == false`，AC-007）；
+/// - `meta.unresolved_classes` 与 `@pending[].@type` 是**同一批类**（都从 `pending` 取）。
+pub fn render_pending<'a>(
+    receipt: &'a SparqlReceipt,
+    pending: &[super::access::ApiPending],
+    ontology_iri: &str,
+    mapping_version: u64,
+) -> JsonLd<'a> {
+    let base = format!("{ontology_iri}#");
+    let mut context: BTreeMap<&'static str, String> = BTreeMap::new();
+    context.insert(ONTOK_PREFIX, base.clone());
+    context.insert("xsd", XSD_NS.to_string());
+
+    let nodes: Vec<PendingNode> = pending.iter().map(pending_node).collect();
+    // 不变式 `complete == @pending.is_empty()`：**从同一个切片**算，⛔ 不写常量 `false`
+    // （写常量就会在「pending 正好为空」时自相矛盾）。
+    let complete = nodes.is_empty();
+    let mut unresolved: Vec<String> = pending.iter().map(|p| p.class_local.clone()).collect();
+    unresolved.sort();
+    unresolved.dedup();
+
+    let meta = Meta {
+        row_count: receipt.row_count,
+        truncated: receipt.truncated,
+        sql_echo: &receipt.sql_echo,
+        tenant_applied: &receipt.tenant_applied,
+        tables: &receipt.tables,
+        public_dimensions: &receipt.public_dimensions,
+        warnings: &receipt.warnings,
+        coverage: &receipt.coverage,
+        join_states: &receipt.join_states,
+        join_states_scope: receipt.join_states_scope,
+        join_states_scope_note: receipt.join_states_scope_note,
+        limits: &receipt.limits,
+        complete: Some(complete),
+        unresolved_classes: Some(unresolved),
+        mapping_version: Some(mapping_version),
+    };
+
+    let mut summary = Map::new();
+    summary.insert("nodes".to_string(), json!(0));
+    summary.insert("row_count".to_string(), json!(0));
+    summary.insert("pending".to_string(), json!(nodes.len()));
+
+    JsonLd {
+        context,
+        // ⛔ 规则 2：`@pending` **不进** `@graph`（这里连一个节点都没有）。
+        graph: Vec::new(),
+        pending: Some(nodes),
+        summary: Value::Object(summary),
+        meta,
+    }
+}
+
+/// 服务端的 [`super::access::ApiPending`] → 对外的 `@pending[]` 条目。
+fn pending_node(p: &super::access::ApiPending) -> PendingNode {
+    PendingNode {
+        id: p
+            .id
+            .as_deref()
+            .map(|id| format!("{ONTOK_PREFIX}:{}/{}", p.class_local, id)),
+        class_iri: format!("{ONTOK_PREFIX}:{}", p.class_local),
+        source_kind: crate::domain::ttl::API_SOURCE_KIND,
+        reason: p.reason,
+        get: p.get.as_ref().map(|g| PendingGet {
+            class: g.class.clone(),
+            filter: PendingFilter {
+                ids: g.ids.clone(),
+            },
+            pushdown: g.pushdown.clone(),
+            reference: g.reference.clone(),
+        }),
     }
 }
 
@@ -436,6 +608,9 @@ mod tests {
                 token_max_rows: 200,
                 timeout_ms: 5000,
             },
+            // ⭐ REQ-145 · 夹具 = **没加载映射**的部署（三个字段都不出现，R1）。
+            complete: None,
+            unresolved_classes: None,
         }
     }
 

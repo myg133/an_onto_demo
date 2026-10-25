@@ -995,6 +995,49 @@ pub enum QueryCmd {
         /// 只在普通模式生效；`--ontology-only` 下不做对账，本开关被忽略（启动会提示）。
         #[arg(long)]
         include_inherit: bool,
+        /// ⭐ REQ-145 · **access 映射**（API 源声明）：哪些类来自云 API、按什么取。
+        ///
+        /// 省略 ⇒ 与不带本参数时**逐字节相同**（零回归）：TTL 无 `ontok:sourceKind`、
+        /// `catalog`/`describe` 无 `access`、SPARQL 无 `@pending` / `complete` / `mapping_version`。
+        ///
+        /// 给了 `--access-mapping <file>` 之后（四个产物各自的变化）：
+        ///
+        /// - `GET /api/ontology.ttl`（**两视图**）：api 类多一行 `ontok:sourceKind "api"`；
+        ///   库源类**不写**（默认 db）；⛔ 不写端点 / 参数 / 凭据
+        /// - `GET /api/catalog` / `GET /api/describe`：每个类多一个 `access`
+        ///   （api ⇒ `{kind:"api", queryable_by:["fetch"], pushdown_fields:[…], freshness:…}`；
+        ///   库源 ⇒ `{kind:"db", queryable_by:["sparql"]}`）
+        /// - `POST /api/sparql`（默认 JSON-LD）：只碰 api 类 ⇒ `@graph: []` +
+        ///   `@pending[]`（带 `get`）+ `meta.complete:false` + `meta.unresolved_classes`
+        /// - `POST /api/sparql?format=rows`：只碰 api 类 ⇒ **400 `NOT_DB_SOURCE`**
+        ///   （⛔ 不返回空表 —— 空表会被读成「查了没有」）
+        /// - 跨源边（一端库、一端 api）：**不下发** `get`；要遍历它 ⇒
+        ///   **400 `CROSS_SOURCE_UNSUPPORTED`**（拆成两段查，别重试）
+        ///
+        /// 文件形状（**只认这几个字段**；契约里其余字段读进来就丢，⛔ 不转发、不执行）：
+        ///
+        /// ```json
+        /// { "contract_version": 1, "mapping_version": 2,
+        ///   "entities": [
+        ///     { "id": "Customer", "class": "customers",
+        ///       "capability": { "pushdown": ["ids"] }, "freshness": "realtime" } ] }
+        /// ```
+        ///
+        /// - `mapping_version` **必填** ⇒ `meta.mapping_version` 与 `@pending[].get.ref`
+        ///   的 `@v<n>`（契约规则 3：映射是人签的，要能追到版本）；
+        /// - `entities[].class` 是**本体里的类 key**（`catalog` 里 class 项的 `table`）；
+        ///   必须在这一版里真实存在，否则**拒绝启动**（点名 + 给相近项）；
+        /// - `entities[].id` 是 access 契约里的条目名（`get.ref` = `access#<id>@v<n>`）；
+        /// - `capability.pushdown` ⇒ `access.pushdown_fields` / `get.pushdown`（省略 = `[]`，
+        ///   ⛔ 不替你猜一个能力）；`freshness` 可选（省略 ⇒ `access` 里不出现）。
+        ///
+        /// ⛔ 平台**不调用**任何 API（凭据不出客户边界）、**不跨源 join**、**不回填**；
+        /// `@pending[].get` 只是**取数指引**。⛔ 客户侧部署不要加载映射：不加载就天然没有 `get`。
+        ///
+        /// ⚠️ 跨源边**不在**映射文件里声明：它由「本体里的边 + 映射里的源」交叉推出
+        /// （两端一库一 API ⇒ 跨源），免得同一件事写两份、改一处不会报错。
+        #[arg(long)]
+        access_mapping: Option<PathBuf>,
     },
 }
 
@@ -4771,6 +4814,9 @@ pub async fn prepare_ttl_export(
         snapshot: snap,
         tenancy,
         schema,
+        // ⭐ REQ-145 · access 映射只有查询服务加载 ⇒ 这里是 `None`（CLI / 控制面
+        // 产出的字节因此完全不变；查询服务用 `with_api_classes` 后挂）。
+        api_classes: None,
         model,
         customer,
     })
@@ -5170,6 +5216,8 @@ pub async fn r2rml_core(
         action_type_count: snap.action_types.len(),
         tenancy: tenancy_decl.as_ref(),
         schema: Some(&schema_types),
+        // ⭐ REQ-145 · `ontology export` 不加载 access 映射 ⇒ 两视图逐字节不变（R1）。
+        api_classes: None,
     };
     let model = crate::domain::model_view::project_model_track(&snap);
 
@@ -5465,6 +5513,8 @@ async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema_types),
+        // ⭐ REQ-145 · R2RML 是**库源**的映射，与 access 映射无关 ⇒ 字节不变。
+        api_classes: None,
     };
     let model = crate::domain::model_view::project_model_track(&snap);
     let mapping = crate::domain::r2rml::build_mapping(
@@ -5583,6 +5633,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         audit_out,
         base,
         include_inherit,
+        access_mapping,
     } = cmd;
 
     let args = crate::query::serve::ServeArgs {
@@ -5602,6 +5653,7 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         audit_out,
         base,
         include_inherit,
+        access_mapping,
     };
     crate::query::serve::serve(pool, args).await
 }

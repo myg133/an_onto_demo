@@ -188,6 +188,8 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
             base: "https://ontok.local/",
             schema: Some(schema_file.as_path()),
             tenancy: tenancy.as_deref(),
+            // REQ-145：本条判据不加载 access 映射（两视图字节与 REQ-127 基线对齐）。
+            api_classes: None,
         },
     )
     .await
@@ -214,6 +216,7 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema),
+        api_classes: None,
     };
     let model = ontok::domain::model_view::project_model_track(&snap);
     let mapping = ontok::domain::r2rml::build_mapping(
@@ -257,6 +260,7 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
         tokens,
         audit,
         ttl,
+        access: None,
     }));
     Some((svc, dir))
 }
