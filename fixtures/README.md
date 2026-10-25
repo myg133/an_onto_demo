@@ -1,20 +1,56 @@
 # REQ-144 · access mapping 的离线夹具
 
-> 本目录的 fixture **全部是合成数据**（⛔ 不含任何真实实例 ID / 账号 / 凭据）。
-> 形状照官方文档的响应结构；值是造的，但**字段名、嵌套、类型**按文档写。
+> ⚠️ **本目录现在有两类夹具**（2026-10-25 起）：
+> ① **合成**（`tencent-cvm-describe.json` 等）：机制测试用，⛔ 不含真实 ID；
+> ② **真实响应脱敏**（`tencent-cvm-describe-real.json`）：**字段路径校准用**，来自一次真调用。
+> 两者**用途不同，不可互相替代** —— 见 §「两份 CVM 夹具的分工」。
 
 ## 文件清单
 
 | 文件 | 是什么 | 谁用它 |
 | --- | --- | --- |
 | `access-cvm.json` | ⭐ 作者格式的 access mapping（1 源 / 2 entity / 1 关系） | `ontok access validate` / `fetch` / `publish` |
+| **`access-cvm-real.json`** | 由上一份派生，`fixture` 指向**真实脱敏响应** | validate 的**字段路径校准** |
 | `access-ontology.ttl` | 这份示例要用的**最小本体**（两个类的 `ontok:instanceIri`） | 上面三条命令的 `--ontology` |
-| `tencent-cvm-describe.json` | 腾讯云 `DescribeInstances` 形状的响应，**250 行** | `entities[cvm_instance].fixture` |
+| `tencent-cvm-describe.json` | 腾讯云 `DescribeInstances` 形状的响应，**250 行（合成）** | `entities[cvm_instance].fixture` |
+| **`tencent-cvm-describe-real.json`** | **真实响应脱敏**（3 台 / 每台 **52 个字段**） | `access-cvm-real.json` 的 fixture |
 | `tencent-monitor-alarm-histories.json` | 腾讯云 `DescribeAlarmHistories` 形状的响应，**3 行** | `entities[alarm].fixture` |
 | `access-queries.rq` | 发布态 `access.jsonld` 的 SPARQL 查询示例 | 证明映射可查（**额外自证**，⛔ 不是 AC-009） |
-| `gen_access_fixtures.py` | 生成上面两份响应的脚本（**幂等**：连跑两次 sha 相同；库里的两份文件就是它的产物） | 想改行数 / 分布时 |
+| `gen_access_fixtures.py` | 生成**合成**响应的脚本（**幂等**） | 想改行数 / 分布时 |
 
-## 两份响应夹具的口径（对应设计稿 §六 的三条纪律）
+## ⭐ 两份 CVM 夹具的分工（**不要混用**）
+
+| | `tencent-cvm-describe.json` | `tencent-cvm-describe-real.json` |
+| --- | --- | --- |
+| 来源 | **合成**（按文档结构手写，脚本生成） | **真实响应脱敏**（2026-10-25 真调用） |
+| 规模 | 250 行 / 3 页 | **3 台 / 1 页 / 52 字段** |
+| 用来测什么 | 分页、本地过滤、扫描预算等**机制** | **字段路径是否真的存在**（契约形状校准） |
+| 为什么不能换 | 真实账号只有 3 台，造不出 3 页 | 合成夹具会漏字段 ⇒ 自己出题自己答 |
+
+### 真实夹具的来历（**必须随文件一起维护**）
+
+| 项 | 值 |
+| --- | --- |
+| 采集方式 | `ontok access fetch --allow-network --dump-raw <path>`（只读子账号，**真调用**） |
+| 采集时间 | 2026-10-25 |
+| API | `cvm:DescribeInstances` / `2017-03-12` / `ap-guangzhou` |
+| 原始大小 | **5,759 B** · `TotalCount=3` · 每实例 **52 字段** |
+| 脱敏脚本 | `.local/req144-stage1/scripts/desensitize.py`（**确定性**：同输入两次逐字节相同） |
+| 脱敏范围 | `InstanceId / InstanceName / Uuid / IP / VpcId / SubnetId / SecurityGroupIds / ImageId / OperatorUin / ProjectId / Tags[].Value / RequestId` |
+| **保留（语义）** | `Placement.Zone` / `InstanceState` / `InstanceType` / `CPU` / `Memory` / `OsName` / 时间字段格式 |
+| 校验 | 字段集合与顺序与原文**完全一致**；真实 `ins-` ID 残留 **0**；5 个映射字段覆盖率 **3/3** |
+
+⚠️ **重新采集时必须**：① 重新 `--dump-raw` ② 跑 `desensitize.py` ③ **更新本节的时间与字节数**（⛔ 不许只换文件不改登记）。
+
+### 真调用的结论（2026-10-25）
+
+| 项 | 结果 |
+| --- | --- |
+| 签名 / 传输 | ✅ 真实接口接受 |
+| `zone` 过滤 | ✅ **`Filters[].Name=zone` 生效**：`ap-guangzhou-5` → 3 台（`rows_scanned=3`）；`ap-guangzhou-2` → **0 条、exit=0** |
+| ⛔ 顶层 `Zone` | **被拒**：`UnknownParameter: The parameter 'Zone' is not recognized` |
+
+## 以下为**合成夹具**的口径（对应设计稿 §六 的三条纪律）
 
 | 项 | `tencent-cvm-describe.json` | `tencent-monitor-alarm-histories.json` |
 | --- | --- | --- |
