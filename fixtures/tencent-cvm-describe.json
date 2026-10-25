@@ -1,10 +1,11 @@
 {
   "_comment": [
     "REQ-144 离线夹具（合成数据，⛔ 不含任何真实 ID / 凭据）。",
+    "本字段不是 API 的返回：它是 fixtures/gen_access_fixtures.py 写的溯源说明（真实调用不会出现它）。",
     "形状照腾讯云 DescribeInstances 的 Response：TotalCount / InstanceSet / RequestId。",
-    "250 行、max_limit=100 ⇒ 3 页（100/100/50）；InstanceState=STOPPED 共 83 行（i%3==0）。",
-    "InstanceState=STOPPED 的 83 行：i = 3,6,...,249。",
-    "Zone 交替：奇数行 ap-guangzhou-3（125 行）、偶数行 ap-guangzhou-2（125 行）。"
+    "250 行 / paging.max_limit=100 ⇒ 3 页（100/100/50）。",
+    "InstanceState=STOPPED 83 行（i%3==0 ⇒ i = 3,6,…,249），其余 167 行 RUNNING。",
+    "Zone 交替：奇数行 ap-guangzhou-2（125 行）、偶数行 ap-guangzhou-3（125 行）。"
   ],
   "Response": {
     "TotalCount": 250,
@@ -21,7 +22,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -42,7 +42,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -63,7 +62,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -84,7 +82,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -105,7 +102,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -126,7 +122,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -147,7 +142,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -168,7 +162,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -189,7 +182,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -210,7 +202,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -231,7 +222,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -252,7 +242,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -273,7 +262,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -294,7 +282,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -315,7 +302,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -336,7 +322,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -357,7 +342,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -378,7 +362,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -399,7 +382,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -420,7 +402,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -441,7 +422,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -462,7 +442,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -483,7 +462,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -504,7 +482,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -525,7 +502,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -546,7 +522,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -567,7 +542,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -588,7 +562,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -609,7 +582,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -630,7 +602,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -651,7 +622,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -672,7 +642,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -693,7 +662,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -714,7 +682,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -735,7 +702,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -756,7 +722,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -777,7 +742,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -798,7 +762,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -819,7 +782,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -840,7 +802,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -861,7 +822,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -882,7 +842,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -903,7 +862,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -924,7 +882,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -945,7 +902,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -966,7 +922,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -987,7 +942,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1008,7 +962,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1029,7 +982,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1050,7 +1002,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1071,7 +1022,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1092,7 +1042,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1113,7 +1062,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1134,7 +1082,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1155,7 +1102,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1176,7 +1122,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1197,7 +1142,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1218,7 +1162,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1239,7 +1182,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1260,7 +1202,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1281,7 +1222,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1302,7 +1242,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1323,7 +1262,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1344,7 +1282,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1365,7 +1302,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1386,7 +1322,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1407,7 +1342,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1428,7 +1362,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1449,7 +1382,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1470,7 +1402,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1491,7 +1422,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1512,7 +1442,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1533,7 +1462,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1554,7 +1482,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1575,7 +1502,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1596,7 +1522,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1617,7 +1542,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1638,7 +1562,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1659,7 +1582,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1680,7 +1602,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1701,7 +1622,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1722,7 +1642,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1743,7 +1662,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1764,7 +1682,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1785,7 +1702,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1806,7 +1722,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1827,7 +1742,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1848,7 +1762,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1869,7 +1782,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1890,7 +1802,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1911,7 +1822,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1932,7 +1842,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -1953,7 +1862,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1974,7 +1882,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -1995,7 +1902,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2016,7 +1922,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2037,7 +1942,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2058,7 +1962,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2079,7 +1982,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2100,7 +2002,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2121,7 +2022,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2142,7 +2042,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2163,7 +2062,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2184,7 +2082,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2205,7 +2102,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2226,7 +2122,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2247,7 +2142,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2268,7 +2162,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2289,7 +2182,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2310,7 +2202,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2331,7 +2222,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2352,7 +2242,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2373,7 +2262,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2394,7 +2282,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2415,7 +2302,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2436,7 +2322,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2457,7 +2342,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2478,7 +2362,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2499,7 +2382,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2520,7 +2402,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2541,7 +2422,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2562,7 +2442,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2583,7 +2462,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2604,7 +2482,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2625,7 +2502,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2646,7 +2522,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2667,7 +2542,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2688,7 +2562,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2709,7 +2582,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2730,7 +2602,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2751,7 +2622,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2772,7 +2642,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2793,7 +2662,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2814,7 +2682,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2835,7 +2702,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2856,7 +2722,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2877,7 +2742,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2898,7 +2762,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2919,7 +2782,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2940,7 +2802,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -2961,7 +2822,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -2982,7 +2842,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3003,7 +2862,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3024,7 +2882,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3045,7 +2902,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3066,7 +2922,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3087,7 +2942,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3108,7 +2962,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3129,7 +2982,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3150,7 +3002,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3171,7 +3022,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3192,7 +3042,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3213,7 +3062,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3234,7 +3082,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3255,7 +3102,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3276,7 +3122,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3297,7 +3142,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3318,7 +3162,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3339,7 +3182,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3360,7 +3202,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3381,7 +3222,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3402,7 +3242,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3423,7 +3262,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3444,7 +3282,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3465,7 +3302,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3486,7 +3322,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3507,7 +3342,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3528,7 +3362,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3549,7 +3382,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3570,7 +3402,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3591,7 +3422,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3612,7 +3442,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3633,7 +3462,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3654,7 +3482,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3675,7 +3502,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3696,7 +3522,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3717,7 +3542,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3738,7 +3562,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3759,7 +3582,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3780,7 +3602,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3801,7 +3622,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3822,7 +3642,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3843,7 +3662,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3864,7 +3682,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3885,7 +3702,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3906,7 +3722,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3927,7 +3742,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3948,7 +3762,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -3969,7 +3782,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -3990,7 +3802,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4011,7 +3822,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4032,7 +3842,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4053,7 +3862,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4074,7 +3882,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4095,7 +3902,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4116,7 +3922,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4137,7 +3942,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4158,7 +3962,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4179,7 +3982,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4200,7 +4002,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4221,7 +4022,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4242,7 +4042,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4263,7 +4062,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4284,7 +4082,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4305,7 +4102,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4326,7 +4122,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4347,7 +4142,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4368,7 +4162,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4389,7 +4182,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4410,7 +4202,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4431,7 +4222,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4452,7 +4242,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4473,7 +4262,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4494,7 +4282,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4515,7 +4302,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4536,7 +4322,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4557,7 +4342,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4578,7 +4362,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4599,7 +4382,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4620,7 +4402,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4641,7 +4422,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4662,7 +4442,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4683,7 +4462,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4704,7 +4482,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-09T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4725,7 +4502,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-10T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4746,7 +4522,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-11T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4767,7 +4542,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-12T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4788,7 +4562,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-13T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4809,7 +4582,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-14T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4830,7 +4602,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-15T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4851,7 +4622,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-16T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4872,7 +4642,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-17T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4893,7 +4662,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-18T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4914,7 +4682,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-19T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4935,7 +4702,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-20T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4956,7 +4722,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-21T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -4977,7 +4742,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-22T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -4998,7 +4762,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-23T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5019,7 +4782,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-24T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5040,7 +4802,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-25T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -5061,7 +4822,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-26T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5082,7 +4842,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-09-27T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5103,7 +4862,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-01-01T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5124,7 +4882,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-02-02T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -5145,7 +4902,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-03-03T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5166,7 +4922,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-04-04T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5187,7 +4942,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-05-05T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5208,7 +4962,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-06-06T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "PREPAID",
         "Tags": [
           {
@@ -5229,7 +4982,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-07-07T08:00:00Z",
-        "InstanceStateRaw": "stopped",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {
@@ -5250,7 +5002,6 @@
           "ProjectId": 0
         },
         "CreatedTime": "2026-08-08T08:00:00Z",
-        "InstanceStateRaw": "running",
         "InstanceChargeType": "POSTPAID_BY_HOUR",
         "Tags": [
           {

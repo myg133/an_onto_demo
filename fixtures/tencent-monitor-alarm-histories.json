@@ -1,7 +1,10 @@
 {
   "_comment": [
-    "REQ-144 离线夹具（合成数据）。形状照腾讯云 DescribeAlarmHistories 的 Response。",
-    "AlarmObject = 实例 ID（CVM 的告警对象就是实例）⇒ 关系 alarm__cvm_instance 的 join 列。"
+    "REQ-144 离线夹具（合成数据，⛔ 不含任何真实 ID / 凭据）。",
+    "本字段不是 API 的返回：它是 fixtures/gen_access_fixtures.py 写的溯源说明（真实调用不会出现它）。",
+    "形状照腾讯云 DescribeAlarmHistories 的 Response：TotalCount / AlarmHistorySet / RequestId。",
+    "3 行；AlarmObject = 实例 ID（CVM 的告警对象就是实例）⇒ 关系 alarm__cvm_instance 的 join 列。",
+    "AlarmStatus：ALARM 2 行（alarm-0001/0003）、OK 1 行（alarm-0002）。"
   ],
   "Response": {
     "TotalCount": 3,

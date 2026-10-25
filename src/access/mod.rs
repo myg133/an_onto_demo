@@ -20,7 +20,7 @@
 //!
 //! # 双形态（demand §三 R-1）
 //!
-//! ```
+//! ```text
 //! access.json      ← 作者格式：人写、人审、好 diff（本模块的**唯一输入**）
 //! access.jsonld    ← 发布格式：RML 风格，给执行器与 Agent（`publish` 产出）
 //! ```

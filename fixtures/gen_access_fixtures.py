@@ -3,9 +3,12 @@
 
 形状照腾讯云官方文档（DescribeInstances / DescribeAlarmHistories 的 Response 结构），
 值是造的：ins-0001..ins-0250、web-0001..、两个可用区、两种状态。
-来源与口径写在 `fixtures/README.md`（夹具本身保持纯响应形状，⛔ 不夹注释字段）。
 
-跑法： python fixtures/gen_access_fixtures.py
+每份产物顶层带一个 `_comment` 数组 —— 它**不是** API 的返回字段，而是本脚本写的溯源说明
+（真实调用不会出现它，所以任何 mapping 都⛔ 不许引用 `_comment`）。
+它同时是「这件夹具是脚本产物、不是手改的」的凭据：手改过 ⇒ 重跑本脚本后与库里的版本 sha 不同。
+
+跑法（**幂等**：连跑两次 sha 相同）： python fixtures/gen_access_fixtures.py
 """
 import json
 import os
@@ -35,6 +38,14 @@ def describe_instances(n=250):
             "Tags": [{"Key": "env", "Value": "prod" if i % 5 else "dev"}],
         })
     return {
+        "_comment": [
+            "REQ-144 离线夹具（合成数据，⛔ 不含任何真实 ID / 凭据）。",
+            "本字段不是 API 的返回：它是 fixtures/gen_access_fixtures.py 写的溯源说明（真实调用不会出现它）。",
+            "形状照腾讯云 DescribeInstances 的 Response：TotalCount / InstanceSet / RequestId。",
+            "%d 行 / paging.max_limit=100 ⇒ 3 页（100/100/50）。" % n,
+            "InstanceState=STOPPED 83 行（i%%3==0 ⇒ i = 3,6,…,249），其余 %d 行 RUNNING。" % (n - 83),
+            "Zone 交替：奇数行 ap-guangzhou-2（125 行）、偶数行 ap-guangzhou-3（125 行）。",
+        ],
         "Response": {
             "TotalCount": n,
             "InstanceSet": rows,
@@ -80,6 +91,13 @@ def alarm_histories():
         },
     ]
     return {
+        "_comment": [
+            "REQ-144 离线夹具（合成数据，⛔ 不含任何真实 ID / 凭据）。",
+            "本字段不是 API 的返回：它是 fixtures/gen_access_fixtures.py 写的溯源说明（真实调用不会出现它）。",
+            "形状照腾讯云 DescribeAlarmHistories 的 Response：TotalCount / AlarmHistorySet / RequestId。",
+            "3 行；AlarmObject = 实例 ID（CVM 的告警对象就是实例）⇒ 关系 alarm__cvm_instance 的 join 列。",
+            "AlarmStatus：ALARM 2 行（alarm-0001/0003）、OK 1 行（alarm-0002）。",
+        ],
         "Response": {
             "TotalCount": len(rows),
             "AlarmHistorySet": rows,

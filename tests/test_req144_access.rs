@@ -1,4 +1,4 @@
-//! REQ-144 · **access mapping 阶段 0** 的端到端判据（AC-001 ~ AC-009）。
+//! REQ-144 · **access mapping 阶段 0** 的端到端判据（AC-001 ~ AC-008 + 一条**额外自证**）。
 //!
 //! # 这份文件治的是什么
 //!
@@ -15,7 +15,14 @@
 //! | [`ac006_unreviewed_entity_is_refused`] | AC-006 | `reviewed_by: null` ⇒ `UNREVIEWED_MAPPING` |
 //! | [`ac007_iri_template_matches_the_ontology`] | AC-007 | `@id` 与本体的 `ontok:instanceIri` 逐字同形 |
 //! | [`ac008_meta_carries_the_five_fields`] | AC-008 | 五个字段一个都不能少 |
-//! | [`ac009_published_jsonld_is_queryable`] | AC-009 | 发布物里 RML 核心 + `ontok:` 扩展都在，能按 pushdown 查 |
+//! | [`extra_published_jsonld_is_queryable`] | **额外自证**（⛔ 不是 AC-009） | 发布物里 RML 核心 + `ontok:` 扩展都在，能按 pushdown 查 |
+//!
+//! ⚠️ **AC-009 是「不退化 / 零依赖」，不是「可查性」**（`acceptance.md` 原文）。
+//! 那一条由**既有判据**覆盖，不在本文件里重复实现：
+//!
+//! - 四红线 / `tools.rs` / `guard()` / `property_filter.rs` 逐字节未变 ⇒ `tests/test_req107_red_lines.rs`；
+//! - 新出口必须登记（I29/I30/I31）⇒ `tests/test_req107_source_enumeration.rs` + `test_req107_outlet_pipeline.rs`；
+//! - 零新增依赖 ⇒ `git diff develop -- Cargo.toml` 为空（`Cargo.lock` 同理）。
 //!
 //! # 为什么这些判据**不连库**
 //!
@@ -384,11 +391,15 @@ fn ac008_meta_carries_the_five_fields() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// AC-009 · `publish` 的 JSON-LD 可被 SPARQL 查
+// 额外自证 · `publish` 的 JSON-LD 可被 SPARQL 查
+//
+// ⚠️ ⛔ **不是 AC-009**：`acceptance.md` 的 AC-009 是「不退化 / 零依赖」。
+// 这一条是任务书「输出的 JSON-LD 能被 SPARQL 查」那半句的自证，
+// 真 SPARQL 引擎跑过的查询在 `fixtures/access-queries.rq`。
 // ══════════════════════════════════════════════════════════════
 
 #[test]
-fn ac009_published_jsonld_is_queryable() {
+fn extra_published_jsonld_is_queryable() {
     let (m, o) = setup();
     let doc = ontok::access::publish::to_jsonld(&m, &o.iri);
     let text = serde_json::to_string(&doc).unwrap();

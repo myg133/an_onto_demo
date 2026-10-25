@@ -195,7 +195,16 @@ pub fn to_jsonld(mapping: &Mapping, ontology_iri: &str) -> Value {
         if let Some(note) = &e.freshness.note {
             n.insert("ontok:freshnessNote".to_string(), json!(note));
         }
-        // 未签 ⇒ `null`（⛔ 不省略：省略与「签了空串」在查询里分不开）。
+        // 未签 ⇒ 写 `null`。⚠️ **行为上等于「不写」**：标准 JSON-LD 会丢弃 `null`
+        // ⇒ RDF 里**没有** `ontok:reviewedBy` 这个三元组（rdflib 实测：2 条映射、1 条未签，
+        //   图里只有 1 条 `ontok:reviewedBy`）。所以「查谁没签」必须用
+        //   `FILTER NOT EXISTS { ?m ontok:reviewedBy ?who }` 或 `OPTIONAL` + `FILTER(!BOUND(?who))`，
+        //   ⛔ 不能查「值等于 null」—— RDF 里没有「null 字面量」这种东西。
+        //
+        // 那为什么作者格式里仍写 `null` 而不是省略键：`parse` 把「键缺失」判成
+        // **契约缺字段**（ACCESS_SCHEMA_INVALID，见 `access::parse` 的 reviewed_by 那一支），
+        // 而 `null` 是**合法的「还没人签」状态** —— 两者在作者格式里必须能分开，
+        // 在发布态里则不分开（都没有那个三元组）。
         n.insert("ontok:reviewedBy".to_string(), json!(e.reviewed_by));
         n.insert("ontok:fixture".to_string(), json!(e.fixture));
         if let Some(p) = &e.paging {
