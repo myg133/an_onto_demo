@@ -1,152 +1,206 @@
-# 功能清单（`develop` `5163cfb`，2026-10-24）
+# 能力与架构全景（`develop` `6f4987d`，2026-10-25）
 
-> 一份**按能力**而不是按需求的清单：做什么、入口在哪、边界是什么。
-> 需求编号只是溯源，不是重点。
+> 按**能力**组织，不按需求编号。需求号只作溯源。
+> ⚠️ 本文件是"当前能力"的**唯一出处**；协议形状见 `BA/design/`，使用步骤见对应 skill。
 
 ---
 
-## 一 · 全景
+## 一 · 一句话架构
+
+> **本体说"世界由什么构成"；两条路径分别回答"数据在哪、怎么取"。**
+> 关系库由**平台执行**（R2RML）；云 API 由**客户侧执行**（access mapping）。
+> 平台永远只读、无状态、不碰客户凭据。
 
 ```
-输入            加工                      产物                  消费
-─────────────────────────────────────────────────────────────────────
-关系库（只读）→ 勘查 → 提案 → 人签 → 冻结 → TTL / R2RML  → 查询服务 → 数字员工
-业务文档      → 摄取 → 合并 → 签字  ↗                    → 工作台   → FDE
-                                                          → 门户     → 客户
+                 ┌────────────── 本体（TTL）──────────────┐
+                 │  类 / 属性 / 关系 / 口径               │
+                 │  ontok:sourceKind "api" ⇒ 数据不在这   │
+                 └───────────────┬───────────────────────┘
+                                 │
+        ┌────────────────────────┴─────────────────────────┐
+        │                                                  │
+   路径 A：关系库                                       路径 B：云 API
+   R2RML 映射                                          access mapping 契约
+   ↓                                                   ↓
+   **平台执行**（query serve 翻 SQL + 注入租户）          **客户侧执行**（Agent 自己调）
+   ↓                                                   ↓
+   直接返回数据                                         返回 @pending + get/ref + local_hint
+        │                                                  │
+        └──────────────┬───────────────────────────────────┘
+                       ▼
+              Agent 拼装最终答案
+        （`meta.complete` 说明是否还缺一块）
 ```
 
 ---
 
-## 二 · 摄取与建模
+## 二 · 两条取数通路（**这是今天最大的变化**）
 
-| 能力 | 入口 | 说明 | 边界 |
-| --- | --- | --- | --- |
-| **源库勘查** | `ontok-introspect --out schema.json` | 只读 pg_catalog：表/列/类型/主键/**唯一列**/注释 | 不搬数据 |
-| **表名提案** | `ontok name suggest` | AI 给表/属性中文名，带证据与置信度 | 提案不权威，需人签 |
-| **排除提案** | `ontok exclude suggest` | AI 判哪些表不进本体 | 同上 |
-| **概念分组** | `ontok concept suggest [--ai]` / `import` / `digest` | 业务概念分组（算法版 `rule` / AI 版 `ai`） | 算法版不许冒充 AI |
-| **关系抽取** | `ontok-propose --fk-out` | 对 `*_id` 列做**值域重叠**实测，产出关系提案 | 阈值：≥95% strong / 50–95% medium / <50% 否决 |
-| **文档摄取** | `ontok doc ingest --input docs/` | `.md`/`.txt` → **带逐字证据**的断言 JSONL | ⛔ 不支持 PDF/Word；指纹缓存，二次 0 token |
-| **文档合并** | `ontok doc merge` | 断言 + 提案 → 合并提案（机械对齐） | ⛔ **不猜语义**；无映射进 `doc_unmapped` |
-| **签字** | `ontok doc sign --by <人>` | 给 doc 条目签 `reviewed_by` + `signed_at` | 不许匿名；幂等；不就地改 |
-| **成本闸** | `--budget-tokens` | 超预算即停并上报 | 不产出半份文件 |
+| | 路径 A · 关系库 | 路径 B · 云 API |
+| --- | --- | --- |
+| 映射 | **R2RML**（标准） | **access mapping**（RML + `ontok:` 扩展） |
+| 谁执行 | **平台**（`query serve`） | **客户侧**（Agent / `ontok access fetch`） |
+| 凭据在哪 | 平台（只读账号） | **客户侧**（AK/SK 不出边界） |
+| 查询语言 | SPARQL v1（翻成 SQL） | **不是 SPARQL**：按类取数 + 声明式能力 |
+| 缺数时 | —— | 返回 `@pending` + 取数指引 |
+| 跨源 | 单源 | 单源；**跨源 join 谁都不做** |
+
+**为什么 API 不给 SPARQL**：给了就等于承诺"能下推"，而多数云 API 只支持很少的过滤参数 ⇒ 只能全表扫。**能力边界必须一眼可见**。
 
 ---
 
-## 三 · 评审与版本
+## 三 · 摄取与建模
 
-| 能力 | 入口 | 说明 |
+| 能力 | 入口 | 边界 |
 | --- | --- | --- |
-| **提案导入** | `ontok propose import --file` | 提案入库，得到别名（最新在前） |
-| **双轨评审** | `ontok review decide --track biz\|data` | 业务/数据两轨各自接受或拒绝 |
-| **批量按建议** | `ontok review decide --accept-all` | 冲突/无建议/拒绝档**永不进批量** |
-| **评审页面** | `ontok review serve` | 浏览器逐条审（回环） |
-| **应用** | `ontok proposal apply` | 写入本体；`applicable:false` 的条目**拒绝并点名** |
-| **版本冻结** | `ontok version freeze` | 不可变快照；冻结后再 apply ⇒ 409 |
-| **置信度校准** | `ontok confidence calibrate` | REQ-108 的分档校准 |
+| 源库勘查 | `ontok-introspect --out schema.json` | 只读 `pg_catalog`；**只支持 PostgreSQL**（多方言见 REQ-146，未排期） |
+| 表名/属性名提案 | `ontok name suggest` | 提案不权威，需人签；`--names` 现为**必填** |
+| 排除表提案 | `ontok exclude suggest` | 同上 |
+| 概念分组 | `ontok concept suggest/import/digest` | 算法版不许冒充 AI 版 |
+| 关系提案 | `ontok-propose --fk-out` | 值域重叠实测；≥95% strong / 50–95% medium / <50% 否决 |
+| 文档摄取 | `ontok doc ingest --input docs/` | 只吃 `.md`/`.txt`；指纹缓存二次 0 token；超预算不产出半份 |
+| 文档合并 | `ontok doc merge` | 机械对齐，⛔ 不猜语义 |
+| **纯文档通路** | `ontok doc merge --allow-doc-only` | 无库项目从零建实体；key 确定性；band ≤ medium |
+| 签字 | `ontok doc sign --by <人>` | 不许匿名；幂等；不就地改 |
+| **API 源映射** | `ontok access validate/fetch/publish` | 四条有牙检查；⛔ 阶段 0 不发网络；未签映射拒绝取数 |
 
 ---
 
-## 四 · 产物
+## 四 · 评审与版本
 
-| 产物 | 入口 | 内容 |
-| --- | --- | --- |
-| **OWL/TTL（客户视图）** | `ontok ontology export` | 类/属性/关系/反向边；⛔ 无列名/无租户列/无主键 |
-| **OWL/TTL（建模视图）** | `ontology export --model-view --schema --tenancy` | 加上主键、枚举值域、租户列、**join 证据等级** |
-| **R2RML 映射** | `ontok r2rml generate` | 类→表、属性→列、**只有 `true` 边生成 join** |
-| **总览** | `ontok ontology overview` | 人读的统计 |
-| **差异** | `ontok ontology diff` | 两版对比 |
-
-**证据等级（TTL 里可查）**：
-
-| 值 | 含义 | 进 R2RML？ |
-| --- | --- | --- |
-| `true` | 值域重叠实测过 | ✅ |
-| `inherit` | 同名列在别处验过 | ❌ 默认不生成 |
-| `false` | 仅名字推断 | ⛔ 永不生成 |
+| 能力 | 入口 |
+| --- | --- |
+| 提案导入 | `ontok propose import --file` |
+| 双轨评审（**唯一权威**） | `ontok review decide --track biz\|data` |
+| 评审页面 | `ontok review serve` |
+| 应用 | `ontok proposal apply` |
+| 版本冻结 | `ontok version freeze` |
+| 置信度校准 | `ontok confidence calibrate` |
 
 ---
 
-## 五 · 服务（三个入口，三套凭证）
+## 五 · 产物
+
+| 产物 | 入口 | 关键约束 |
+| --- | --- | --- |
+| TTL（客户视图） | `ontok ontology export` | 无列名/租户列/主键；**api 类标 `ontok:sourceKind "api"`** |
+| TTL（建模视图） | `--model-view --schema --tenancy` | 加主键、枚举、租户列、证据等级 |
+| R2RML | `ontok r2rml generate` | 只有 `true` 边生成 join |
+| **access mapping（发布态）** | `ontok access publish` | RML 风格 JSON-LD；`reviewedBy` 未签则不写三元组 |
+
+**TTL 是确定性的**：同一份提案在不同库重建 ⇒ 逐字节相同（已验证）。
+
+---
+
+## 六 · 服务（三个入口，三套凭证）
 
 | 服务 | 端口 | 凭证 | 能力 |
 | --- | --- | --- | --- |
-| **query serve** | 8800 | query token（绑租户） | `POST /api/sparql` · `GET /api/catalog` · `/api/describe` · **`/api/ontology.ttl[?view=model]`** · `/mcp`（JSON-RPC + SSE） |
-| **console serve** | 8899 | admin token | 项目/评审/应用/冻结/导出 TTL/生成 R2RML/**声明读写（保存前校验）**/审计/评审页/查询台 |
-| **portal serve** | 8900 | portal token（绑租户） | 只给**预置问题**；无 `/api/sparql`；结果带覆盖警告 |
+| `query serve` | 8800 | query token（绑租户） | SPARQL（**默认 JSON-LD**）/ catalog / describe / TTL 下载 / MCP |
+| `console serve` | 8899 | admin token | 项目/评审/冻结/导出/声明/审计/查询台 |
+| `portal serve` | 8900 | portal token | 只给预置问题；无 SPARQL |
 
-**三套 token 的 `kind` 互斥**：拿 admin token 调 query 服务 ⇒ 401，反之亦然。
+### 两种部署模式（**决定能做什么**）
 
-### 查询服务的硬约束
+| 模式 | 启动参数 | 能 | 不能 |
+| --- | --- | --- | --- |
+| **普通** | `--schema` + `--policy` + 源库 | 查真数据 | —— |
+| **本体模式** | `--ontology-only` | 只有本体（catalog/describe/TTL） | SPARQL 恒 **503 `NO_DATA_SOURCE`** |
 
-| 约束 | 实现 |
+### 新增：API 源支持（`--access-mapping`）
+
+| 行为 | 说明 |
 | --- | --- |
-| 租户**只来自 token** | 请求体/URL 带 tenant ⇒ 403/400 |
-| 注入**可见** | `sql_echo` 就是执行的 SQL（`pg_stat_activity` 对拍过） |
-| 漏数据**要报警** | `coverage: main_only` ⇒ `warnings[]` |
-| 关系可信度**要透明** | 回执带 `join_states[]` + `used` |
-| 不支持就**报错** | 26 条拒绝用例（OPTIONAL/UNION/子查询/路径/REGEX…） |
+| TTL | api 类带 `ontok:sourceKind "api"` |
+| catalog / describe | 带 `access: {kind, queryable_by, pushdown_fields, freshness}` |
+| SPARQL 打 api 类（JSON-LD） | `@graph: []` + `@pending` + `meta.complete:false` |
+| SPARQL 打 api 类（rows） | **400 `NOT_DB_SOURCE`**（⛔ 不返回空表） |
+| 跨源遍历中点名 api 属性 | **400 `CROSS_SOURCE_UNSUPPORTED`** |
+| 不给映射 | **16/16 产物逐字节不变** |
 
 ---
 
-## 六 · 前端
+## 七 · 前端
 
-| 页面 | 地址 | 特点 |
-| --- | --- | --- |
-| **内部工作台** | `console serve` 的 `/`（59,988 B 单文件） | 壳**零数据**、token 只进 `sessionStorage`、查询台显示 warnings/coverage/used=false/truncated |
-| **客户门户** | `portal serve` 的 `/`（13,692 B） | 租户锁死、只点预置问题、结果只给业务名+覆盖警告、⛔ 不露表名/列名/SQL |
-| **本体视图** | `ontok serve`（REQ-093） | 只读看图：拖拽、碰撞、折叠、导出 |
-
-前端**零外部依赖**（无 CDN、无构建链），CSP + nosniff + no-referrer。
-
----
-
-## 七 · MCP
-
-| 形态 | 入口 | 工具/资源 |
-| --- | --- | --- |
-| **stdio** | `ontok mcp-server` | 暴露冻结快照（本体结构） |
-| **HTTP/SSE** | `query serve` 的 `/mcp` | `catalog` / `describe` / **`sparql_query`** / `sample` + **resources**（`ontok://ontology/{customer,model}.ttl`） |
-
----
-
-## 八 · 工程与运维
-
-| 能力 | 位置 |
+| 页面 | 特点 |
 | --- | --- |
-| 镜像 | `code/Dockerfile`（alpine + rust 1.96 + bun + pi/pi-acp）：四个二进制 + 抽取 agent |
-| 单机编排 | `Deploy/compose/`（db + query + console + portal） |
-| K8s | `Deploy/k8s/`（kustomize：base + overlays/dev + prod），非 root / 只读根 / 丢能力 |
-| 加新项目 | `Deploy/PROJECT-ONBOARDING.md`（六步 + 文档挂载） |
-| 构建 | `Deploy/BUILD.md` |
-| 环境坑 | `Deploy/LOCAL-ENV-ISSUES.md`（cgroup、libstdc++、pi shebang） |
-| 操作手册 | `BA/runbook/`：`ontology-e2e.md` / `pipeline-flow.md` / `doc-to-ontology.md` |
-| 红灯台账 | `BA/dispatch/baseline-reds.md` |
+| 内部工作台（59,988 B） | 壳零数据、token 只进 sessionStorage、查询台显示 warnings/coverage/truncated |
+| 客户门户（13,692 B） | 租户锁死、只点预置问题、⛔ 不露表名/列名/SQL |
+| 本体图浏览器（`ontok serve`） | 只读；**只允许绑回环**（要对外需改） |
 
 ---
 
-## 九 · 已知边界（明确不做的）
+## 八 · 三份 skill（**A2A 的交接面**）
 
-| # | 边界 | 原因 |
+| skill | 给谁 | 讲什么 |
 | --- | --- | --- |
-| 1 | 文档只吃 `.md`/`.txt` | PDF/Word 需外部转换 |
-| 2 | 文档↔表的**语义映射**不做自动猜测 | 是业务判断，猜错会"能跑、不报错、结果错" |
-| 3 | SPARQL v1 不支持 OPTIONAL/UNION/子查询/路径/REGEX | 支持集明确，不支持**报错**而非静默 |
-| 4 | 一套服务 = 一个项目 + 一个版本 | 隔离靠部署边界（最硬）；>10 项目应改架构 |
-| 5 | 门户不做自由查询 | 能力/安全/诚实三条 |
-| 6 | 子账号用户需先解析成主账号 | ADR-006 Limitation |
-| 7 | `deductions` 4 行 / `api_call_logs` 0 行 | UAT 数据稀疏，相关边无法验证 |
-| 8 | 检索/向量/图推理 | 未做 |
+| `ontok-build` | **FDE** | 用文档/库造本体；含「失败长相」10 条 |
+| `ontok-query` | **数字员工** | 怎么用本体服务；含 `@pending` / `complete` 处理规则 |
+| `<项目>-ontology` | 数字员工 | 这套部署里有什么、必须拒绝什么 |
+
+**分工原则**：流程（通用）与内容（项目专用）分开 ⇒ 换项目只换后者。
 
 ---
 
-## 十 · 代码里能查到的事实（不是承诺）
+## 九 · MCP
+
+| 形态 | 入口 | 内容 |
+| --- | --- | --- |
+| stdio | `ontok mcp-server` | 冻结快照 |
+| HTTP/SSE | `query serve` 的 `/mcp` | 4 工具（catalog/describe/sparql_query/sample）+ 2 资源（TTL 两视图） |
+
+`sparql_query` 的 `format` **默认 `jsonld`**；要表格传 `"rows"`。
+
+---
+
+## 十 · 部署（当前 UAT 实况）
+
+| 项 | 值 |
+| --- | --- |
+| 集群 | `anspire-k8-admin@anspire-dify` · 命名空间 `anspire-ontok-uat` |
+| 镜像 | `ontok:0.1.6` + `cloudflared:2026.10.1`（2/2 Running） |
+| 内网 | `https://an-onto.local.anspire.cn`（traefik + TLS） |
+| 公网 | `https://an-notol.mic-scfw.cloudns.org`（CF Tunnel，**不过 traefik**） |
+| 模式 | `ontology-only` · 项目 `ops360` v2 |
+| 现状 | 20 类 / 10 关系 / TTL 21,335 B · `AB0530CF…` |
+
+⚠️ **这套没加载 `--access-mapping`**，所以看不到 `@pending`；要演示混合查询需要**普通模式 + api 类 + 映射**。
+
+---
+
+## 十一 · 明确不做（边界）
+
+| # | 不做 | 理由 |
+| --- | --- | --- |
+| 1 | 跨源 join（库 ⇄ API） | 没有任何一层能执行；Agent 分段拼 |
+| 2 | 联邦执行器 | 那是 Trino/DuckDB 的领域 |
+| 3 | 平台调云 API | 凭据不出客户边界 |
+| 4 | 数据回填 | 平台保持无状态 |
+| 5 | 多 SQL 方言（暂） | 只支持 PG；SQLite/MySQL 见 REQ-146（已就绪未排期） |
+| 6 | 产品内置业务表 | **业务表是数据源的，不是产品的**——否则每接一个业务改一次产品 |
+| 7 | 文档↔表的语义自动映射 | 业务判断，猜错会"能跑但不对" |
+
+---
+
+## 十二 · 未完成 / 待排
+
+| 项 | 状态 |
+| --- | --- |
+| access mapping **阶段 1**（真 API + TC3 签名） | 需只读 AK/SK + 一份脱敏真响应 |
+| 跨源边带 `get{ids}` | 阶段 2（需"只读 child 列"路径） |
+| 混合查询**部分求值** | 阶段 2（现为整体 pending） |
+| REQ-146 多方言 | 已就绪未排期 |
+| 本体图浏览器对外 | 需去掉回环限制 |
+| `/metrics` 公网拦截 | **需在 CF 面板加 WAF 规则**（当前公网可访问） |
+
+---
+
+## 十三 · 代码里能查到的事实
 
 ```
-src/                      ~80 个模块
-lib 测试                  689 passed
-集成测试                  ~40 个 target（含真库 live 套件，缺夹具响亮 SKIP）
-OUTLETS 登记              62 条（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）
-TTL                      客户视图 293,814 B / 建模视图 371,356 B（84 类 / 78 关系）
-R2RML                    84 TriplesMap / 70 joinCondition
+lib 测试            756 passed（另有环境依赖红，需 ONTOK_TEST_DATABASE_URL）
+出口登记            63 条
+TTL                客户视图 293,814 B / 建模视图 371,356 B（anspire 项目）
+R2RML              84 TriplesMap / 70 joinCondition
+镜像               ontok 328 MB（含 bun + pi，供抽取）
 ```
