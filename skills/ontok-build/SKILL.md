@@ -139,6 +139,8 @@ ontok ontology export --project <项目> --version 2 --out out/customer.ttl
 | 查询 **500 TENANT_UNRESOLVED** | 表在本体里但没登记进 `query-policy.json` | 补声明，或把表排除后重新冻结 |
 | 审计里 `tenant=00000000-…` | token 里填了假租户 | 本体模式**不许**填 tenant（会被拒启）；普通模式必须用真实租户 |
 | **EXTRA**：实体名全变"对象 001" | 用了脱敏占位翻译表 | 必须用自己 schema 生成的 `table_names.json` |
+| **导出被拒**，报"发布闸"/敏感词 | 概念描述里出现内部术语（如 `evidence`）⇒ **整份拒绝**，不是跳过一条 | 改写该描述；原文仍在 `doc_evidence[]` 里，不丢 |
+| 纯文档路径里**实体名重复** | 某概念的**别名 = 另一概念的名字**（如 `CLI 直采` 与 `CLI`） | 已按「名字优先于别名」解析；若仍冲突，说明断言本身有歧义，回去看原文 |
 
 ---
 
