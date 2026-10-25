@@ -29,12 +29,18 @@
 
 ### 真实夹具的来历（**必须随文件一起维护**）
 
+> ⚠️ **来源账号 = 一个只读「验证账号」，与 Ops360 业务环境无关。**
+> 因此本夹具**只用于印证"真实响应的结构与字段名"**，
+> ⛔ **不代表任何业务数据**，也**不是**演示数据集。
+> 演示用的数据是另一套：`e2e-test/Ops360_Inspector/Data/*/raw/` 里的巡检采集快照（已落 `ops360_demo` 库）。
+
 | 项 | 值 |
 | --- | --- |
-| 采集方式 | `ontok access fetch --allow-network --dump-raw <path>`（只读子账号，**真调用**） |
+| 采集方式 | `ontok access fetch --allow-network --dump-raw <path>`（**验证账号**，只读） |
 | 采集时间 | 2026-10-25 |
 | API | `cvm:DescribeInstances` / `2017-03-12` / `ap-guangzhou` |
 | 原始大小 | **5,759 B** · `TotalCount=3` · 每实例 **52 字段** |
+| **它的用途** | **证明映射的字段路径与真实响应结构一致**（不是业务数据样本） |
 | 脱敏脚本 | `.local/req144-stage1/scripts/desensitize.py`（**确定性**：同输入两次逐字节相同） |
 | 脱敏范围 | `InstanceId / InstanceName / Uuid / IP / VpcId / SubnetId / SecurityGroupIds / ImageId / OperatorUin / ProjectId / Tags[].Value / RequestId` |
 | **保留（语义）** | `Placement.Zone` / `InstanceState` / `InstanceType` / `CPU` / `Memory` / `OsName` / 时间字段格式 |
