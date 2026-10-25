@@ -334,3 +334,27 @@
 - 结果：三服务 `/metrics` 免 token、六指标真库实测、四类安全计数全真造、格式校验器反空转（7 种坏格式全拒）
 - 审计：默认 stdout；给文件时**文件+stdout 各一份且逐行相同**
 - **上线待办**：27 张表未登记进 `query-policy.json`（否则查询 500）；`/metrics` 需 NetworkPolicy 限内网
+
+
+---
+
+## 2026-10-26 · 数据库与实例清理（用户批准）
+
+| # | 动作 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| 1 | 删 `postgres17-wal`（别人的实例）上我们的库：`ops360_demo`、`ontok` | ✅ 已删，该实例只剩 `anspire_hk_open_uat` | 本地 dump：`.local/migration/ops360_demo.dump`(1.46 MB) / `ontok.dump`(73 KB) |
+| 2 | 把元数据库迁到 **`postgres-service`（30432，用户给的实例）** | ✅ 新建 `ontok` 并恢复：2 项目 / 3 版本 / 64 类 / 58 关系 | 跨版本坑：PG17→PG16 需剔掉 `transaction_timeout` |
+| 3 | UAT secret `ontok-db` 改指 30432 | ✅ 滚动重启后 `health` 正常 | `project=ops360 version=2` |
+| 4 | 删 `postgres-service` 上的 `ontol`（66,797 个测试残留项目，3.3 GB） | ✅ 已删 | 删除前存档 `.local/migration/ontol-before-drop.txt`（42 个非 `t_*` 项目清单） |
+| 5 | 项目改名 `extracted` → **`cloud-resource`** | ✅ | 产品**无**改名命令，走 SQL `UPDATE projects` |
+| 6 | 清 `.local` 里过期的 `30433`/`postgres17-wal` 引用 | ✅ 16 个文件 | 全部改成 30432 |
+
+**教训**：
+
+1. **我把元数据库建在了一个"别人的逻辑复制实例"上**（`postgres17-wal`，2 天前创建，
+   `wal_level=logical`，里面跑着 `anspire_hk_open_uat` 的复制）。
+   用户给的实例（`postgres-service`/30432）上**本来就有** `ontol`——我却另起了一个。
+2. **`ontol` 里 66,797 个项目、99.94% 是测试残留**——我们的测试从不清理共享库。
+   这是"共享集群连接治理"（REQ-031/079）同一族的债。
+3. **删除前先做只读统计**救了一次：那 5 条 `SELECT 1` 连接差点被我当成残留强踢，
+   查出是用户本地客户端的连接池健康检查。
