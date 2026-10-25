@@ -39,7 +39,7 @@
 //! | 导出 | `GET /api/export/ttl` · `POST /api/r2rml` |
 //! | 声明编辑 | `GET/PUT /api/config/{exclusions,policy,tenancy}` |
 //! | 审计 | `GET /api/audit` |
-//! | 查询台 | `POST /api/sparql` |
+//! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
 //! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
 //!
 //! 前四组由 `console serve` 自己提供；后两组是 **REQ-123 的查询服务**
@@ -309,7 +309,7 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
   <section id="v-query" class="view" hidden>
     <div class="panel">
       <h2>SPARQL（POST /api/sparql）</h2>
-      <p class="note">查询服务只认 query token（租户由口令决定）。结果区**必须**同时给出 warnings / coverage / join_states / truncated —— 只给表格等于把「可能漏数据」藏起来。</p>
+      <p class="note">查询服务只认 query token（租户由口令决定）。⭐ 服务**默认**回执是 JSON-LD 上下文子图；本页要表格，所以请求里显式带 <code>format:"rows"</code>（字节与旧的默认回执相同）。结果区**必须**同时给出 warnings / coverage / join_states / truncated —— 只给表格等于把「可能漏数据」藏起来。</p>
       <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
       <div class="bar" style="margin-top:8px">
         <label>max_rows <input id="q-max" value="200" size="6"></label>
@@ -1065,7 +1065,10 @@ function runQuery() {
   var q = $("q-text").value;
   if (!q.trim()) { setMsg("写一条 SPARQL 再执行。", "bad"); return; }
   var max = parseInt($("q-max").value, 10);
-  var body = { query: q };
+  // ⭐ REQ-142：查询服务的**默认**回执已翻转为 JSON-LD 上下文子图（@context/@graph/…）；
+  // 工作台的「结果」区渲染的是行回执（columns/rows/row_count + 警告面板），所以这里
+  // **显式**要 rows。⛔ 不写 format 会让页面拿到图、表格空转。
+  var body = { query: q, format: "rows" };
   if (max > 0) body.max_rows = max;
   post("api/sparql", body, true).then(function (r) {
     S.query = r;

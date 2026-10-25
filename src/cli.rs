@@ -712,7 +712,9 @@ pub enum QueryCmd {
     ///
     /// 端点：
     ///
-    /// POST /api/sparql         body {query, max_rows?}（tenant 只能来自 token）
+    /// POST /api/sparql         body {query, max_rows?, format?}（tenant 只能来自 token；
+    ///                          ⭐ REQ-142：**默认回执是 JSON-LD 上下文子图**，要行回执传 `?format=rows`
+    ///                          或 `Accept: application/json`，MCP 传 `format:"rows"`）
     /// GET  /api/catalog?page=1&page_size=50
     /// GET  /api/describe?name=:customers
     /// GET  /api/ontology.ttl   ⭐整份 OWL（Turtle）：默认**客户视图**；`?view=model` 建模视图
