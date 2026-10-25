@@ -67,3 +67,10 @@ pub mod portal;
 // 判据（格式合法性、零泄漏、维度爆炸）可以脱离 socket 与数据库跑。
 pub mod metrics;
 
+// ⭐ REQ-144 · **access mapping**（API 源的映射契约：结构 / `validate` / `fetch` / `publish`）。
+// **不放 domain/**：它要读本地 fixture 与 TTL 文件（domain 的 AC-002 判据是「零 I/O」）。
+// ⛔ 也不放进 `query/`：那是**库源**的取数与查询服务；access 描述的是**API 源**，
+// 执行者是客户侧（设计稿 §七：两者是并列的两条路，不是同一种东西的两种写法）。
+// 网络客户端（`ureq`）在阶段 0 **一行都不调** —— 见 `access::fetch` 模块头。
+pub mod access;
+

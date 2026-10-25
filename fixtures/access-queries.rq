@@ -1,0 +1,37 @@
+# REQ-144 · 发布态 `access.jsonld` 的 SPARQL 查询示例
+#
+# 为什么这几条能跑：`access publish` 产出的 JSON-LD 用的是 **RML** 的谓词
+# （`rml:TriplesMap` / `rml:iterator` / `rr:template` / `rr:class` / `rml:reference`）
+# + `ontok:` 扩展（`ontok:pushdown` / `ontok:localOnly` / `ontok:maxScanRows` /
+# `ontok:freshness` / `ontok:reviewedBy` / `ontok:apiAction`）。
+# 于是「这个类怎么取数、能不能下推、谁签的」全是**可查的三元组**，不是注释里的约定。
+#
+# 跑法（本机 W3C 兼容引擎，rdflib 7.x）：
+#   python -c "import rdflib,sys; g=rdflib.Graph(); \
+#     g.parse('.local/access/access.jsonld', format='json-ld'); \
+#     q=open('fixtures/access-queries.rq',encoding='utf-8').read(); \
+#     [print([str(x) for x in r]) for r in g.query(q)]"
+#
+# ⚠️ 产品内**没有** RDF store：这几条查询是给「把 access.jsonld 装进客户自己的
+# 图库」那一侧用的示例（阶段 0 的判据是「文档能被标准处理器解析 + 查询」，
+# 用 rdflib 实测过，见交付报告的 AC-009 一节）。
+
+PREFIX rml: <http://semweb.mmlab.be/ns/rml#>
+PREFIX rr: <http://www.w3.org/ns/r2rml#>
+PREFIX ontok: <https://ontok.local/schema/>
+
+# ── Q1 ⭐「哪些类支持按 zone 过滤」──────────────────────────────
+# 这一条就是需求里点名的那一问。`ontok:pushdown` 是 JSON 数组 ⇒ 展开成多条三元组，
+# 所以「按某个字段下推」就是一次普通的 `?field` 绑定 + FILTER。
+SELECT ?class ?action ?maxScanRows ?reviewedBy
+WHERE {
+  ?mapping a rml:TriplesMap ;
+           rr:subjectMap ?sm ;
+           ontok:apiAction ?action ;
+           ontok:maxScanRows ?maxScanRows ;
+           ontok:pushdown ?field .
+  ?sm rr:class ?class .
+  OPTIONAL { ?mapping ontok:reviewedBy ?reviewedBy }
+  FILTER (LCASE(STR(?field)) = "zone")
+}
+ORDER BY ?class

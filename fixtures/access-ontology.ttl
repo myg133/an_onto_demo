@@ -1,0 +1,71 @@
+# REQ-144 · 示例本体：API 源要用到的类（**最小声明**）
+#
+# 为什么单独一份：API 源的类还没进客户本体（REQ-145 才把 sourceKind=api 的类接进
+# catalog/describe）。阶段 0 要离线验「iri_template 与 ontok:instanceIri 同形」，
+# 就得有一份声明了这两个类的本体。
+#
+# `ontok:instanceIri` 与 `domain::ttl` 序列化器的输出**逐字同形**：
+#   https://ontok.local/<project>#{class}/{id}
+# 真实导出里它长这样（逐字节摘录自 `ontok ontology export`）：
+#   ontok:instanceIri "https://ontok.local/ops360#{class}/{id}" .
+#   ontok:instanceIri "https://ontok.local/anspire_r2rml_excl#{class}/{id}" .
+#
+# ⚠️ 这份文件**不是**客户本体：它只有示例要用到的两个类，不含属性定义
+# （属性谓词由 mapping 的 `fields` 名字决定，形如 `<class>__<field>`，
+#   与 R2RML 的 `rr:predicate` 同一套约定）。
+
+@prefix : <https://ontok.local/ops360#> .
+@prefix ontok: <https://ontok.local/schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://ontok.local/ops360> a owl:Ontology ;
+    rdfs:label "ops360 本体（REQ-144 示例子集）"@zh ;
+    ontok:sourceProject "ops360" ;
+    ontok:version 2 ;
+    rdfs:comment "只含 API 源示例用到的两个类；⛔ 不是客户本体的完整导出。"@zh .
+
+:cvm_instance a owl:Class ;
+    rdfs:label "云主机实例"@zh ;
+    rdfs:comment "腾讯云 CVM 实例（API 源：DescribeInstances）。"@zh ;
+    ontok:sourceKind "api" ;
+    ontok:instanceIri "https://ontok.local/ops360#{class}/{id}" .
+
+:alarm a owl:Class ;
+    rdfs:label "告警"@zh ;
+    rdfs:comment "云监控告警历史（API 源：DescribeAlarmHistories）。"@zh ;
+    ontok:sourceKind "api" ;
+    ontok:instanceIri "https://ontok.local/ops360#{class}/{id}" .
+
+:cvm_instance__name a owl:DatatypeProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range xsd:string .
+
+:cvm_instance__status a owl:DatatypeProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range xsd:string .
+
+:cvm_instance__zone a owl:DatatypeProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range xsd:string .
+
+:cvm_instance__cpu a owl:DatatypeProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range xsd:integer .
+
+:cvm_instance__memory a owl:DatatypeProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range xsd:integer .
+
+:alarm__status a owl:DatatypeProperty ;
+    rdfs:domain :alarm ;
+    rdfs:range xsd:string .
+
+:alarm__start_time a owl:DatatypeProperty ;
+    rdfs:domain :alarm ;
+    rdfs:range xsd:integer .
+
+:cvm_instance__alarm a owl:ObjectProperty ;
+    rdfs:domain :cvm_instance ;
+    rdfs:range :alarm .

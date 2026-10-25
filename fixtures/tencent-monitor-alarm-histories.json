@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "REQ-144 离线夹具（合成数据，⛔ 不含任何真实 ID / 凭据）。",
+    "本字段不是 API 的返回：它是 fixtures/gen_access_fixtures.py 写的溯源说明（真实调用不会出现它）。",
+    "形状照腾讯云 DescribeAlarmHistories 的 Response：TotalCount / AlarmHistorySet / RequestId。",
+    "3 行；AlarmObject = 实例 ID（CVM 的告警对象就是实例）⇒ 关系 alarm__cvm_instance 的 join 列。",
+    "AlarmStatus：ALARM 2 行（alarm-0001/0003）、OK 1 行（alarm-0002）。"
+  ],
+  "Response": {
+    "TotalCount": 3,
+    "AlarmHistorySet": [
+      {
+        "AlarmId": "alarm-0001",
+        "MonitorType": "MT_QCE",
+        "AlarmObject": "ins-0002",
+        "AlarmStatus": "ALARM",
+        "AlarmType": "metric",
+        "StartTime": 1760000000,
+        "EndTime": null,
+        "ProjectId": 0,
+        "Namespace": "QCE/CVM"
+      },
+      {
+        "AlarmId": "alarm-0002",
+        "MonitorType": "MT_QCE",
+        "AlarmObject": "ins-0004",
+        "AlarmStatus": "OK",
+        "AlarmType": "metric",
+        "StartTime": 1760003600,
+        "EndTime": 1760007200,
+        "ProjectId": 0,
+        "Namespace": "QCE/CVM"
+      },
+      {
+        "AlarmId": "alarm-0003",
+        "MonitorType": "MT_QCE",
+        "AlarmObject": "ins-0006",
+        "AlarmStatus": "ALARM",
+        "AlarmType": "metric",
+        "StartTime": 1760010000,
+        "EndTime": null,
+        "ProjectId": 0,
+        "Namespace": "QCE/CVM"
+      }
+    ],
+    "RequestId": "00000000-0000-4000-8000-000000000001"
+  }
+}

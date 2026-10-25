@@ -1827,7 +1827,38 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "concept_suggest_ai",
         "子命令 handler（`concept suggest --ai`：AI 语义分组；只读快照、只写声明文件）",
     ),
-
+    // ⭐ REQ-144 · `ontok access`（API 源的映射契约）：
+    // 三条子命令**不连产品库、不发网络请求**（阶段 0），写出口登记在 OUTLETS 的 I29/I30/I31。
+    (
+        "src/cli.rs",
+        "access_cmd",
+        "子命令分派（`access validate` / `access fetch` / `access publish`：零库、零网络）",
+    ),
+    (
+        "src/cli.rs",
+        "load_access_inputs",
+        "共用实现（三条 access 子命令的读取/解析段：契约 JSON + 本体 TTL；本函数零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "access_mapping_dir",
+        "运维辅助（REQ-144：fixture 相对路径按**契约文件所在目录**解析，不按 CWD）",
+    ),
+    (
+        "src/cli.rs",
+        "access_validate",
+        "子命令 handler（`access validate`：四条有牙检查 → I29 的 JSON 报告）",
+    ),
+    (
+        "src/cli.rs",
+        "access_fetch",
+        "子命令 handler（`access fetch --dry-run-fixture`：分页/本地过滤/JSON-LD → I30）",
+    ),
+    (
+        "src/cli.rs",
+        "access_publish",
+        "子命令 handler（`access publish`：JSON → JSON-LD，RML 风格 → I31 落盘）",
+    ),
 ];
 
 /// ⭐ **纯函数**：一段源码里**重名**的函数定义（第 4 轮 B5）。
@@ -1951,6 +1982,13 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-135 · 生产可观测性（`/metrics` 的指标登记表 / 渲染 / 格式校验）。
     // 出口 I28 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "metrics"),
+    // ⭐ REQ-144 · access mapping（API 源的映射契约）。
+    // 出口 I29/I30/I31 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "access"),
+    ("src/access/mod.rs", "fetch"),
+    ("src/access/mod.rs", "path"),
+    ("src/access/mod.rs", "publish"),
+    ("src/access/mod.rs", "validate"),
     ("src/agent/mod.rs", "acp"),
     ("src/agent/mod.rs", "assemble"),
     ("src/agent/mod.rs", "factory"),

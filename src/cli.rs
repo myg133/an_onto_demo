@@ -224,6 +224,20 @@ pub enum Cmd {
     /// ⚠️ 版本必须**已冻结**（与 `serve` / `mcp-server` 同一条闸门）。
     #[command(verbatim_doc_comment)]
     Query { #[command(subcommand)] cmd: QueryCmd },
+    /// ⭐ REQ-144 · **access mapping**：API 源的映射契约（体检 / 离线取数 / 发布）
+    ///
+    /// 本体说「世界由什么构成」，access mapping 说「这些东西去哪取、怎么取」。
+    /// 执行者是客户的数字员工；本命令是**参考执行器 + 离线体检器**。
+    ///
+    /// | 子命令 | 做什么 | 连库？ | 发网络请求？ |
+    /// | --- | --- | --- | --- |
+    /// | `access validate` | 四条有牙的自洽检查（AC-002） | 否 | 否 |
+    /// | `access fetch --dry-run-fixture` | 用 fixture 跑完整取数流程，出 JSON-LD + meta | 否 | **否** |
+    /// | `access publish` | JSON → JSON-LD（RML 风格，可被 SPARQL 查） | 否 | 否 |
+    ///
+    /// 三条都在**连库之前**分派：它们连产品库都不碰（与 `doc` / `name` / `exclude` 同一条理由）。
+    #[command(verbatim_doc_comment)]
+    Access { #[command(subcommand)] cmd: AccessCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
     ///
     /// 只服务已冻结的版本 —— 未冻结时**拒绝启动**（fail-closed）。
@@ -743,6 +757,92 @@ pub enum SparqlCmd {
         /// 生成时会带 `ontok:joinState "inherit"` 标（这些 join 本表没实测）。
         #[arg(long)]
         include_inherit: bool,
+    },
+}
+
+/// ⭐ REQ-144 · **access mapping**（API 源的映射契约：体检 / 离线取数 / 发布）。
+///
+/// 三条子命令都不连产品库、都不发网络请求（阶段 0）——
+/// 输入是本地 `access.json` / `ontology.ttl` / fixture，产物是 stdout 或 `--out`。
+#[derive(Subcommand)]
+pub enum AccessCmd {
+    /// 契约自洽体检：`iri_template` 与本体一致 / 能力不重叠 / 关系两端在册 / 字段路径在 fixture 里
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok access validate --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    ///
+    /// **四条有牙的检查**（每条都能红，AC-002）：
+    ///
+    /// 1. `iri_template` 与本体的 `ontok:instanceIri` 同形（R3）
+    /// 2. `capability.pushdown` 与 `local_only` 不重叠（R4）
+    /// 3. relation 的 `from` / `to` 都在 `entities` 里（R7）
+    /// 4. `fields.x.path` 在 fixture 里真的存在
+    ///
+    /// stdout = JSON 报告（`ok` / `entities[]` / `errors[]` / `warnings[]`）；
+    /// stderr = 一条条点名到「哪条 entity / 哪个字段」的人话。
+    /// 有问题 ⇒ **退出码 1**（⛔ 不静默通过）。
+    #[command(verbatim_doc_comment)]
+    Validate {
+        /// 作者格式契约（`access.json`）。`fixture` 的相对路径**先按它的目录**解析
+        #[arg(long)]
+        mapping: PathBuf,
+        /// 本体 TTL（`ontok ontology export` 的产物）。`iri_template` 要跟它对比
+        #[arg(long)]
+        ontology: PathBuf,
+    },
+    /// 用 fixture 跑**完整取数流程**（分页 / 本地过滤 / JSON-LD / meta）—— ⛔ 不发任何网络请求
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    /// --entity cvm_instance --filter '{"status":"STOPPED"}' --limit 50 --dry-run-fixture
+    ///
+    /// 阶段 0 **只**有这一条通路：不给 `--dry-run-fixture` 会被明确拒绝
+    /// （`DRY_RUN_REQUIRED`），⛔ 不静默降级成「读 fixture 冒充真数据」。
+    ///
+    /// 两条硬闸：`reviewed_by` 为空的 entity ⇒ `UNREVIEWED_MAPPING`；
+    /// 继续扫描会超 `max_scan_rows` ⇒ `SCAN_LIMIT_EXCEEDED`（⛔ 不给部分结果）。
+    #[command(verbatim_doc_comment)]
+    Fetch {
+        /// 作者格式契约
+        #[arg(long)]
+        mapping: PathBuf,
+        /// 本体 TTL（决定 `@context` 的 `ontok:` 前缀与 `@id` 的展开）
+        #[arg(long)]
+        ontology: PathBuf,
+        /// 取哪条映射（`entities[].id`，也认 `class`）
+        #[arg(long)]
+        entity: String,
+        /// 过滤条件（JSON 对象）：落在 `pushdown` ⇒ 模拟服务端筛；落在 `local_only` ⇒ 本地筛
+        #[arg(long)]
+        filter: Option<String>,
+        /// 最多返回多少行（超出 ⇒ `meta.truncated: true`）
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// **阶段 0 必填**：用 fixture 跑，⛔ 不发网络请求
+        #[arg(long)]
+        dry_run_fixture: bool,
+    },
+    /// 把作者格式转成**发布态 JSON-LD**（RML 风格：`rml:iterator` / `rr:template` / `rml:reference` / `rr:class`）
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok access publish --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl --out .local/access/access.jsonld
+    ///
+    /// 发布物只有 `@context` + `@graph`，能被 SPARQL 直接查，例如
+    /// 「哪些类支持按 zone 过滤」—— 查询示例见 `fixtures/access-queries.rq`。
+    #[command(verbatim_doc_comment)]
+    Publish {
+        /// 作者格式契约
+        #[arg(long)]
+        mapping: PathBuf,
+        /// 本体 TTL（决定类的完整 IRI）
+        #[arg(long)]
+        ontology: PathBuf,
+        /// 输出路径（JSON-LD）。⛔ 不原地覆盖 `--mapping`
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -1905,6 +2005,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 「没配 LLM 三件套」前面报，而后者才是真原因。
         Cmd::Name { cmd } => return name_cmd(cmd).await,
         Cmd::Exclude { cmd } => return exclude_cmd(cmd).await,
+        // ⭐ REQ-144 · `access` 三条子命令**也不连产品库、不发网络请求**：
+        // 输入是本地 `access.json` / `ontology.ttl` / fixture，产物是 stdout 或 `--out`。
+        // 与 `doc` 同一条理由：没配库的机器上，「契约哪一行写错了」必须先于
+        // 「连不上库」被报出来，否则离线体检这事根本没法在 CI 里跑。
+        Cmd::Access { cmd } => return access_cmd(cmd),
         cmd => cmd,
     };
 
@@ -1943,6 +2048,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 同上：这两条也在连库之前返回。
         Cmd::Name { .. } | Cmd::Exclude { .. } => anyhow::bail!(
             "内部错误：`name` / `exclude` 子命令应当在连库之前处理（它们不写库）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
+        // 同上：`access` 也在连库之前返回（它连产品库都不碰）。
+        Cmd::Access { .. } => anyhow::bail!(
+            "内部错误：`access` 子命令应当在连库之前处理（它连产品库都不碰）。\
              请把 `run()` 开头的提前返回恢复回去。"
         ),
         Cmd::McpServer { project, version } => {
@@ -2635,6 +2745,200 @@ fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
         }
     }
     std::fs::write(path, bytes).with_context(|| format!("写不出去：{}", path.display()))?;
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-144 · **access mapping**（API 源的映射契约）
+//
+// 三条子命令都在 `run()` 的**连库之前**分派：它们连产品库都不碰，
+// 阶段 0 连网络都不发（`fetch` 只有 `--dry-run-fixture` 一条通路）。
+//
+// 出口登记（`domain::pipeline::OUTLETS`）里逐一钉住**这三个写点**：
+//   I29 = `access validate` 的 JSON 报告 → stdout
+//   I30 = `access fetch` 的 JSON-LD → stdout
+//   I31 = `access publish` 的 JSON-LD → `--out` 文件（物理写点仍是 `write_local`）
+//
+// ⚠️ 为什么 stdout 走裸 `println!` 而不是 `emit_domain_*`：
+// 后者的入参是 `OutletRender`（客户发布轨的产物，过词汇闸），
+// 而 access 的产物是**映射 / 校验回执**（FDE 面的内部数据，与 I11/I13/I26 同一口径），
+// 它既不是客户视图、也不该被客户词汇闸改名。故登记为**内部轨**。
+// ══════════════════════════════════════════════════════════════
+
+/// `ontok access <子命令>` 的分派（**零库、零网络**）。
+fn access_cmd(cmd: AccessCmd) -> anyhow::Result<()> {
+    match cmd {
+        AccessCmd::Validate { mapping, ontology } => access_validate(&mapping, &ontology),
+        AccessCmd::Fetch {
+            mapping,
+            ontology,
+            entity,
+            filter,
+            limit,
+            dry_run_fixture,
+        } => access_fetch(&mapping, &ontology, &entity, filter.as_deref(), limit, dry_run_fixture),
+        AccessCmd::Publish { mapping, ontology, out } => access_publish(&mapping, &ontology, &out),
+    }
+}
+
+/// 读契约 + 本体（三条子命令共用的**唯一**入口）。
+///
+/// 解析失败时逐条打 stderr（点名到「哪条 entity / 哪个字段」），再统一 bail ——
+/// ⛔ 不在第一条错误上停（作者的体验是「一次改完」而不是「改一处跑一次」）。
+fn load_access_inputs(
+    mapping: &std::path::Path,
+    ontology: &std::path::Path,
+) -> anyhow::Result<(crate::access::Mapping, crate::access::Ontology)> {
+    let mapping_text = std::fs::read_to_string(mapping)
+        .with_context(|| format!("读不到映射契约：{}", mapping.display()))?;
+    let ontology_text = std::fs::read_to_string(ontology)
+        .with_context(|| format!("读不到本体 TTL：{}（先跑 `ontok ontology export`）", ontology.display()))?;
+
+    let parsed = match crate::access::parse(&mapping_text) {
+        Ok(m) => m,
+        Err(problems) => {
+            for p in &problems {
+                eprintln!("✗ [{}] {}", p.code, p.location);
+                for line in p.message.lines() {
+                    eprintln!("    {line}");
+                }
+            }
+            anyhow::bail!(
+                "{} 有 {} 处必填 / 类型问题（上面逐条点名了是哪条 entity 的哪个字段）",
+                mapping.display(),
+                problems.len()
+            );
+        }
+    };
+    Ok((parsed, crate::access::parse_ontology(&ontology_text)))
+}
+
+/// `fixture` 的相对路径按 **mapping 文件所在目录**解析（不是按 CWD）。
+fn access_mapping_dir(mapping: &std::path::Path) -> PathBuf {
+    mapping.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `ontok access validate` —— 四条有牙检查 + 结构与本体自洽（AC-002）。
+fn access_validate(mapping: &std::path::Path, ontology: &std::path::Path) -> anyhow::Result<()> {
+    let (parsed, onto) = load_access_inputs(mapping, ontology)?;
+    let dir = access_mapping_dir(mapping);
+    let report = crate::access::validate::validate(&parsed, &onto, &dir);
+
+    for w in &report.warnings {
+        eprintln!("· {w}");
+    }
+    for p in &report.errors {
+        eprintln!("✗ [{}] {}", p.code, p.location);
+        for line in p.message.lines() {
+            eprintln!("    {line}");
+        }
+    }
+    eprintln!("{}", report.headline());
+    // 逐条把两边字符串摆出来（R3 的证据就在这两行里）。
+    for e in &report.entities {
+        if let (Some(raw), Some(exp)) = (&e.ttl_instance_iri, &e.ttl_expanded) {
+            eprintln!(
+                "  · {}：iri_template = {:?} ｜ 本体原值 = {:?} ⇒ 展开 = {:?}",
+                e.id, e.expanded_iri_template, raw, exp
+            );
+        }
+    }
+
+    let report_json = serde_json::to_string_pretty(&report)?;
+    println!("{report_json}");
+
+    if !report.ok {
+        anyhow::bail!(
+            "access 契约体检不通过（{} 处问题）—— 上面每处都点名了字段与改法",
+            report.errors.len()
+        );
+    }
+    Ok(())
+}
+
+/// `ontok access fetch --dry-run-fixture` —— 用 fixture 跑完整取数流程（AC-003 ~ AC-008）。
+fn access_fetch(
+    mapping: &std::path::Path,
+    ontology: &std::path::Path,
+    entity: &str,
+    filter: Option<&str>,
+    limit: usize,
+    dry_run_fixture: bool,
+) -> anyhow::Result<()> {
+    // ⛔ 阶段 0 没有真调用：不给开关就拒绝，⛔ 不静默降级成「读 fixture 冒充真数据」。
+    if !dry_run_fixture {
+        anyhow::bail!(
+            "{} · 阶段 0 **不发任何网络请求**：请显式加 `--dry-run-fixture` 用夹具跑。\n\
+             真实调用（TC3 签名 / 凭据 / 限流退避）是阶段 1 的事，本程序里**没有**那条路径。",
+            crate::access::CODE_DRY_RUN_REQUIRED
+        );
+    }
+
+    let (parsed, onto) = load_access_inputs(mapping, ontology)?;
+    let dir = access_mapping_dir(mapping);
+    let filter_map = match filter {
+        Some(f) => crate::access::fetch::parse_filter(f)?,
+        None => std::collections::BTreeMap::new(),
+    };
+    let opts = crate::access::fetch::FetchOptions { filter: filter_map, limit };
+
+    let doc = crate::access::fetch::dry_run(&parsed, &onto.iri, entity, &opts, &dir)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let meta = &doc.meta;
+    eprintln!(
+        "· access fetch（fixture）：{} · 扫 {} 行 / {} 页 · 命中 {} · 返回 {} · 本地过滤 {:?} · 截断 {}",
+        entity,
+        meta.rows_scanned,
+        meta.pages,
+        meta.rows_matched,
+        meta.rows_returned,
+        meta.filtered_locally,
+        meta.truncated
+    );
+    eprintln!(
+        "· 时点：{}（mode={} source={}）",
+        meta.freshness.fetched_at, meta.freshness.mode, meta.freshness.source
+    );
+    for w in &meta.capability_warnings {
+        eprintln!("· 能力提醒：{w}");
+    }
+
+    let jsonld = doc.to_text();
+    println!("{jsonld}");
+    Ok(())
+}
+
+/// `ontok access publish` —— JSON → JSON-LD（RML 风格，可被 SPARQL 查）。
+fn access_publish(
+    mapping: &std::path::Path,
+    ontology: &std::path::Path,
+    out: &std::path::Path,
+) -> anyhow::Result<()> {
+    let (parsed, onto) = load_access_inputs(mapping, ontology)?;
+    // ⛔ 不原地覆盖输入（与 I26/I27 同一条纪律：覆盖后就没法再复核「发布前是什么样」）。
+    if same_path(out, mapping) {
+        anyhow::bail!(
+            "`--out` 与 `--mapping` 是同一个文件（{}）。\
+             ⛔ 不原地覆盖：契约是**作者格式**，发布物是**机器格式**，两者要能对照。",
+            out.display()
+        );
+    }
+    crate::extract::proposal::require_out_is_file(out)
+        .map_err(|e| anyhow::anyhow!("--out：{e}"))?;
+
+    let doc = crate::access::publish::to_text(&parsed, &onto.iri)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    write_local(out, doc.as_bytes())?;
+
+    eprintln!(
+        "✓ 已发布 access.jsonld：{}（{} 条 entity / {} 条关系 · 本体 {}）",
+        out.display(),
+        parsed.entities.len(),
+        parsed.relations.len(),
+        onto.iri
+    );
+    eprintln!("· 查询示例（哪些类支持按 zone 过滤）：fixtures/access-queries.rq");
     Ok(())
 }
 

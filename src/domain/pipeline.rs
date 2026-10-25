@@ -384,6 +384,24 @@ pub enum OutletId {
     /// （`&'static str`）。之所以仍要登记：它是一条**匿名可达**的外送通道
     /// （与 `/api/health` 同口径免 token），「不登记 = 没人管」正是 REQ-107 收口的洞。
     I28,
+    /// ⭐ REQ-144 · `ontok access validate` 的 **JSON 体检报告** → stdout。
+    ///
+    /// 内部轨：正文是**映射契约的自洽体检**（类 / IRI 模板 / 能力面 / fixture 覆盖率），
+    /// 属 FDE 面的数据 —— 客户视图零读取它，也⛔ 不过客户词汇闸
+    /// （与 I11 R2RML / I13 查询回执同一条口径）。
+    I29,
+    /// ⭐ REQ-144 · `ontok access fetch --dry-run-fixture` 的 **JSON-LD** → stdout。
+    ///
+    /// 内部轨：它是**按契约从夹具取回的业务数据**（`@context` / `@graph` / `meta`），
+    /// 与 `query serve` 的 JSON-LD 同形状但**另一条通路**（API 源而非库源）。
+    /// 隔离靠「只读 + 只读夹具 + 扫描预算」，不是词汇闸 —— 与 I13/I14 同一条口径。
+    I30,
+    /// ⭐ REQ-144 · `ontok access publish` 的 **JSON-LD 发布物** → `--out` 文件。
+    ///
+    /// 内部轨：产物是**映射本身**（RML 风格：端点 / 迭代器 / 字段路径 / 能力声明），
+    /// 会随契约分发给客户侧执行器。⛔ 其中不含任何凭据值（只有环境变量名）。
+    /// 物理写点仍是 I10 的 `write_local`，这条钉的是「本命令会往盘上写什么」。
+    I31,
 }
 
 impl OutletId {
@@ -432,6 +450,9 @@ impl OutletId {
             OutletId::I26 => "I26",
             OutletId::I27 => "I27",
             OutletId::I28 => "I28",
+            OutletId::I29 => "I29",
+            OutletId::I30 => "I30",
+            OutletId::I31 => "I31",
         }
     }
 }
@@ -549,6 +570,15 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I27 => OutletSpec::of("I27", Track::Internal, Format::Json, Granularity::Whole),
         // ⭐ REQ-135 · `/metrics`：Prometheus 文本格式（不是 JSON，也不走客户发布闸）。
         OutletId::I28 => OutletSpec::of("I28", Track::Internal, Format::Text, Granularity::Whole),
+        // ⭐ REQ-144 · access mapping：**内部**轨（FDE 面的映射与回执，不是客户视图）。
+        //
+        // 为什么不是 `Modeling`：建模轨在登记表里是「D1–D10 这 10 条」的**精确集合**
+        // （`tests/test_req107_track_manifest.rs` 钉住）。access 是**另一个产物**
+        // （映射层，不是本体视图），把它塞进建模轨会改宽那条既有不变量 ——
+        // 与 REQ-121 的 R2RML（I11/I12）完全同一条裁量。
+        OutletId::I29 => OutletSpec::of("I29", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::I30 => OutletSpec::of("I30", Track::Internal, Format::Json, Granularity::Whole),
+        OutletId::I31 => OutletSpec::of("I31", Track::Internal, Format::Json, Granularity::Whole),
     }
 }
 
@@ -1786,6 +1816,46 @@ pub const OUTLETS: &[Outlet] = &[
          （R4：无维度爆炸）。它按**通道**登记为内部轨：匿名可达（与 `/api/health` 同口径免 token），\
          但只对内网采集器有意义 —— 与 I19 / I25 同一条口径。",
     },
+    // ⭐ REQ-144 · access mapping（I29 / I30 / I31）
+    //
+    // 三条出口都在 `src/cli.rs` 的 `access_cmd` 家族里；⛔ 一个字节都不流向客户视图
+    // （映射契约 / 体检报告 / 按夹具取回的数据，全是 FDE 与 Agent 面的内部产物）。
+    Outlet {
+        id: "I29",
+        path: "src/cli.rs",
+        // 钉**这一处** stdout 写出（`access_validate` 的 JSON 报告）。
+        call_site: "\"{report_json}\"",
+        spec: spec_of(OutletId::I29),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-144）：`ontok access validate` 的 JSON 体检报告 → stdout。\
+         正文是**映射契约的自洽体检**（类 / IRI 模板对账 / 能力面重叠 / fixture 字段覆盖率），\
+         属 FDE 面数据 —— 客户视图零读取它，也不过客户发布闸（与 I11 的 R2RML 同一条口径）。\
+         ⛔ 不含凭据值：契约里只写环境变量名。",
+    },
+    Outlet {
+        id: "I30",
+        path: "src/cli.rs",
+        // 钉**这一处** stdout 写出（`access_fetch` 的 JSON-LD）。
+        call_site: "\"{jsonld}\"",
+        spec: spec_of(OutletId::I30),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-144）：`ontok access fetch --dry-run-fixture` 的 JSON-LD → stdout\
+         （`@context` / `@graph` / `summary` / `meta`，与 `query serve` 同形状但**另一条通路**：\
+         API 源而非库源）。阶段 0 只读**本地夹具**、⛔ 不发网络请求；\
+         隔离靠「只读 + 夹具 + `max_scan_rows` 预算」，不是词汇闸 —— 与 I13/I14 同一条口径。",
+    },
+    Outlet {
+        id: "I31",
+        path: "src/cli.rs",
+        // 同 I26/I27：钉**本命令的写出调用**（物理写点仍是 I10 的 `write_local`）。
+        call_site: "write_local(out, doc.as_bytes())",
+        spec: spec_of(OutletId::I31),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-144）：`ontok access publish` 的 JSON-LD 发布物 → `--out` 文件。\
+         产物是**映射本身**（RML 风格：`rml:iterator` / `rr:template` / `rml:reference` / `rr:class`\
+         + `ontok:` 扩展），会随契约分发给客户侧执行器。⛔ 其中只有凭据的**环境变量名**，没有值；\
+         客户视图零读取它。",
+    },
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
@@ -1863,13 +1933,15 @@ mod tests {
     /// ⇒ **60（内部 30）**；REQ-129 再加 I26（`doc merge` 的合并提案落盘点，**内部轨**）
     /// ⇒ **61（内部 31）**；REQ-129 的签字命令再加 I27（`doc sign` 的签字产物，**内部轨**）
     /// ⇒ **62（内部 32）**；REQ-135 再加 I28（三个服务的 `/metrics`，**内部轨**）
-    /// ⇒ **63（内部 33）**。
+    /// ⇒ **63（内部 33）**；⭐ REQ-144 再加 I29–I31（access mapping 的三条写点：
+    /// `validate` 报告 / `fetch` JSON-LD / `publish` 发布物，**全部内部轨**）
+    /// ⇒ **66（内部 36）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            63,
+            66,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
@@ -1877,16 +1949,17 @@ mod tests {
              + 2（REQ-126 的客户门户：页面壳 + API）\
              + 1（REQ-127 的查询服务 OWL TTL 响应）\
              + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）\
-             + 1（REQ-135 的 /metrics 指标响应）"
+             + 1（REQ-135 的 /metrics 指标响应）\
+             + 3（REQ-144 的 access validate / fetch / publish）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            33,
+            36,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
              + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24 \
-             + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28"
+             + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28 + REQ-144 的 I29–I31"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);
