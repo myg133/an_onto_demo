@@ -167,6 +167,13 @@ pub struct AuditRecord {
     pub bytes: Option<usize>,
     /// 附加事实（**只许是代码里写死的短语**：`idle_timeout` / `client_gone`）。
     pub note: Option<&'static str>,
+    /// ⭐ REQ-145 · 这次调用**只返回了一半**（`@pending` 非空 / 行回执被拒）。
+    ///
+    /// ⚠️ 为什么是**独立字段**而不是第二个错误码：`code` 表达「客户端收到了什么」
+    /// （`OK` / `NOT_DB_SOURCE` / …），`pending` 表达「这份结果完整吗」。
+    /// 用一个 `code=API_PENDING` 混着说两件事，看审计的人就会以为客户端收到了一个
+    /// 叫 `API_PENDING` 的错误 —— 那正是 R-2 要求改掉的东西。
+    pub pending: bool,
 }
 
 impl AuditRecord {
@@ -197,8 +204,10 @@ impl AuditRecord {
             .bytes
             .map(|b| format!(" bytes={b}"))
             .unwrap_or_default();
+        // ⭐ REQ-145 · `pending=true` 只在**真是半个答案**时出现（既有行一个字节都不变）。
+        let pending = if self.pending { " pending=true" } else { "" };
         format!(
-            "audit ts={} event={} proto={} token={} tenant={} q={} rows={} elapsed_ms={} code={}{}{}{}",
+            "audit ts={} event={} proto={} token={} tenant={} q={} rows={} elapsed_ms={} code={}{}{}{}{}",
             self.ts,
             self.event,
             self.proto,
@@ -208,6 +217,7 @@ impl AuditRecord {
             rows,
             self.elapsed_ms,
             self.code,
+            pending,
             view,
             bytes,
             note
@@ -339,6 +349,8 @@ mod tests {
             view: None,
             bytes: None,
             note: None,
+            // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+            pending: false,
         };
         assert_eq!(
             rec.line(),
@@ -366,6 +378,58 @@ mod tests {
         assert!(sse.line().ends_with("code=OK note=idle_timeout"), "{}", sse.line());
     }
 
+    /// ⭐ REQ-145 · R-2：`pending=true` 是**独立字段**，⛔ 不许拿 `code` 表达两件事。
+    ///
+    /// 判据三条：
+    /// ① 不是半个答案时**一个字节都不变**（既有行形状不受影响）；
+    /// ② 是半个答案时多一个 ` pending=true`，且位置固定在 `code=` 之后；
+    /// ③ `code` 仍然是「客户端实际收到的那个」（`OK` / `NOT_DB_SOURCE`），
+    ///   ⛔ 不是内部状态名（变异：写 `code="API_PENDING"` ⇒ ③ 红）。
+    #[test]
+    fn the_pending_marker_is_a_field_not_a_code() {
+        let base = AuditRecord {
+            ts: "2026-10-25T06:00:00.000Z".into(),
+            event: "sparql",
+            proto: "rest",
+            token_digest: Some("sha256:3f2a1b0c9d8e".into()),
+            tenant: Some("C0001".into()),
+            query_digest: Some("sha256:9c1d2e3f4a5b".into()),
+            rows: Some(0),
+            elapsed_ms: 1,
+            code: "OK",
+            view: None,
+            bytes: None,
+            note: None,
+            pending: false,
+        };
+        assert!(!base.line().contains("pending"), "{}", base.line());
+
+        let half = AuditRecord {
+            pending: true,
+            ..base.clone()
+        };
+        assert!(
+            half.line().ends_with("code=OK pending=true"),
+            "半个答案要标 pending=true：{}",
+            half.line()
+        );
+
+        // 客户端收到的是错误 ⇒ `code` 就是那个错误码（不是 `API_PENDING`）。
+        let rejected = AuditRecord {
+            pending: true,
+            code: "NOT_DB_SOURCE",
+            rows: None,
+            ..base
+        };
+        let line = rejected.line();
+        assert!(line.contains("code=NOT_DB_SOURCE"), "{line}");
+        assert!(line.contains("pending=true"), "{line}");
+        assert!(
+            !line.contains("API_PENDING"),
+            "⛔ code 不许是内部状态名（R-2）：{line}"
+        );
+    }
+
     /// ⭐ REQ-127 · TTL 出口的审计行：`view=` / `bytes=` 只在有值时出现，
     /// 且位置固定（`code=` 之后、`note=` 之前）—— 运维 grep 的口径不变。
     #[test]
@@ -383,6 +447,8 @@ mod tests {
             view: Some("model"),
             bytes: Some(432_101),
             note: None,
+            // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+            pending: false,
         };
         let line = rec.line();
         assert!(
@@ -431,6 +497,8 @@ mod tests {
             view: None,
             bytes: None,
             note: None,
+            // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+            pending: false,
         };
         let line = rec.line();
         assert!(!line.contains(token), "⛔ 审计里出现了 token 明文：{line}");
@@ -466,6 +534,8 @@ mod tests {
             view: None,
             bytes: None,
             note: None,
+            // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+            pending: false,
         };
         {
             let sink = AuditSink::open(&path).expect("打开审计文件");

@@ -1011,8 +1011,14 @@ pub enum QueryCmd {
         ///   `@pending[]`（带 `get`）+ `meta.complete:false` + `meta.unresolved_classes`
         /// - `POST /api/sparql?format=rows`：只碰 api 类 ⇒ **400 `NOT_DB_SOURCE`**
         ///   （⛔ 不返回空表 —— 空表会被读成「查了没有」）
-        /// - 跨源边（一端库、一端 api）：**不下发** `get`；要遍历它 ⇒
-        ///   **400 `CROSS_SOURCE_UNSUPPORTED`**（拆成两段查，别重试）
+        /// - 跨源边（一端库、一端 api）：**不下发** `get`；`@pending` 那条改给 `ref` +
+        ///   `local_hint`（库侧哪一列有 FK 值 + 可直接照抄的取数语句）+ 三步 `hint`；
+        ///   要**遍历**它 ⇒ **400 `CROSS_SOURCE_UNSUPPORTED`**（拆成两段查，别重试）
+        ///
+        /// ⚠️ **已知限制（R-3）**：一条查询**同时**涉及库源实体与 API 类时，整个查询
+        /// 返回 pending（`meta.complete:false`）、**一行 SQL 都不执行**、`@graph` 恒空 ——
+        /// ⛔ 不会塞半份库源结果伪装成「算完了」。部分求值（库源那半照算）要拆查询计划，
+        /// **是阶段 2 的事**；本期请拆成两条查询（先库源，再按 `get` / `ref` 取 API 那半）。
         ///
         /// 文件形状（**只认这几个字段**；契约里其余字段读进来就丢，⛔ 不转发、不执行）：
         ///

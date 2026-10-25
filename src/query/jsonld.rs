@@ -117,9 +117,33 @@ pub struct PendingNode {
     pub source_kind: &'static str,
     /// 为什么拿不到：`source_is_api` / `cross_source_edge`（稳定字符串，Agent 按它分支）。
     pub reason: &'static str,
+    /// ⭐ R-1 · 跨源边那一条的 `ref`（`access#<条目>@v<版本>`）。
+    ///
+    /// 跨源边**没有 `get`**（规则 4），映射只能在这里给 —— 否则 Agent 拿不到
+    /// 「照哪一条契约去取」；按类点名时 `ref` 在 `get` 里，这里不重复。
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// ⭐ R-1 · 跨源边那一条的**库侧取数提示**（ID 在哪一列）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_hint: Option<PendingLocalHint>,
+    /// ⭐ R-1 · 三步人话提示（① 取 ID ② 按 `ref` 取 ③ 拼结果）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// 取数指引。**跨源边没有它**（契约规则 4：给了也查不了，比不给更糟）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub get: Option<PendingGet>,
+}
+
+/// ⭐ R-1 · `@pending[].local_hint` ——「去库侧查哪一列」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingLocalHint {
+    /// 库侧存 FK 值的列（`null` = 这条边的 FK 在 API 侧，本库没有可取的列）。
+    pub uses_column: Option<String>,
+    /// 可直接执行的取数语句（**不含租户条件** —— 那是调用方自己的过滤）。
+    pub get_ids_by: Option<String>,
+    /// `uses_column` 为 `null` 时的解释。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
 }
 
 /// `@pending[].get` ——「按什么去取」。
@@ -423,6 +447,14 @@ fn pending_node(p: &super::access::ApiPending) -> PendingNode {
         class_iri: format!("{ONTOK_PREFIX}:{}", p.class_local),
         source_kind: crate::domain::ttl::API_SOURCE_KIND,
         reason: p.reason,
+        // R-1：跨源边那一条才有（按类点名时 `ref` 在 `get` 里）。
+        reference: p.reference.clone(),
+        local_hint: p.local_hint.as_ref().map(|h| PendingLocalHint {
+            uses_column: h.uses_column.clone(),
+            get_ids_by: h.get_ids_by.clone(),
+            note: h.note,
+        }),
+        hint: p.hint.clone(),
         get: p.get.as_ref().map(|g| PendingGet {
             class: g.class.clone(),
             filter: PendingFilter {

@@ -116,6 +116,14 @@ fn access_json(mapping_version: u64) -> String {
 /// ⚠️ 两视图 TTL 走**生产入口** `OntologyTtl::prepare`（与 `serve` 同一段）：判据要验的
 /// 就是「服务真发出去的那份字节」，⛔ 不在测试里另拼一份。
 async fn build_service(access: Option<&str>) -> Option<Arc<QueryService>> {
+    build_service_with(access, None).await
+}
+
+/// 同上，但可把审计落到**文件**（R-2 的判据要读回审计行）。
+async fn build_service_with(
+    access: Option<&str>,
+    audit_path: Option<&std::path::Path>,
+) -> Option<Arc<QueryService>> {
     let meta = meta_url()?;
     let source = env("ONTOK_SOURCE_DATABASE_URL")?;
     let schema_path = schema_path()?;
@@ -215,7 +223,12 @@ async fn build_service(access: Option<&str>) -> Option<Arc<QueryService>> {
         sse_max_connections: 4,
         max_concurrent_queries: 2,
         tokens,
-        audit: ontok::query::audit::AuditSink::stdout_only(),
+        audit: match audit_path {
+            // R-2 的判据要读回审计行 ⇒ 落到文件（stdout 照样也写，与生产同一条 `record`）。
+            Some(path) => ontok::query::audit::AuditSink::open(path)
+                .expect("审计文件可写（判据自己建的临时目录）"),
+            None => ontok::query::audit::AuditSink::stdout_only(),
+        },
         ttl,
         access,
     })))
@@ -522,6 +535,21 @@ async fn ac006_cross_source_edges_carry_no_get_and_traversal_is_unsupported() {
         pending[0].get("get").is_none(),
         "规则 4：跨源边**不下发** get（给了也查不了，比不给更糟）：{v}"
     );
+    // ⭐ R-1 · 没有 `get` ⇒ 必须给 `ref`（否则拿不到映射）…
+    assert_eq!(pending[0]["ref"], "access#Customer@v2", "跨源边那一条必须带 ref：{v}");
+    // …和 `local_hint`（否则 Agent 只能猜「库侧哪一列有 FK 值」）。
+    let hint = &pending[0]["local_hint"];
+    assert_eq!(hint["uses_column"], "customer_id", "{v}");
+    assert_eq!(
+        hint["get_ids_by"], "SELECT DISTINCT \"customer_id\" FROM \"order\"",
+        "取数语句要能直接照抄：{v}"
+    );
+    // 三步提示：取 ID → 按 ref 取 → 拼结果。
+    let text = pending[0]["hint"].as_str().unwrap_or_default();
+    assert!(
+        text.contains('①') && text.contains('②') && text.contains('③'),
+        "跨源边的 hint 要写清三步：{text}"
+    );
     assert_eq!(v["meta"]["complete"], false);
 
     // ② 还要**往外走**（点名 api 类的属性）⇒ 跨源遍历 ⇒ 报错（两种格式一致）。
@@ -625,4 +653,67 @@ async fn ac008_mapping_version_appears_only_with_a_mapping() {
         v0["meta"].get("mapping_version").is_none(),
         "没加载映射却出现 mapping_version：{v0}"
     );
+}
+
+// ══════════════════════════════════════════════════════════════
+// R-2 · 审计的 `code` 必须等于客户端实际收到的
+// ══════════════════════════════════════════════════════════════
+
+/// R-2 的判据：审计**逐行**读回来，比对「客户端拿到什么」与「审计写了什么」。
+///
+/// 变异（必须红）：把 `code` 写成内部状态名（`API_PENDING`）⇒ 第 ① 条红；
+/// 忘了打 `pending=true` ⇒ 两条都红。
+#[tokio::test]
+async fn r2_audit_code_equals_what_the_client_received() {
+    let _g = one_at_a_time();
+    let test = "r2_audit_code_equals_what_the_client_received";
+    if !fixtures_ready(test) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "ontok-req145-audit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let audit_file = dir.join("audit.log");
+    let svc = build_service_with(Some(&access_json(2)), Some(&audit_file))
+        .await
+        .expect("服务可构建");
+
+    // ① rows 打 api 类：客户端拿到 **400 `NOT_DB_SOURCE`** ⇒ 审计必须写同一个码。
+    let (rows_status, rows_body) = sparql(&svc, "rows", &api_class_query()).await;
+    assert_eq!(rows_status, StatusCode::BAD_REQUEST, "{rows_body}");
+    assert_eq!(rows_body["code"], "NOT_DB_SOURCE");
+    // ② jsonld 打 api 类：客户端拿到 **200**（半成品）⇒ 审计写 `OK`。
+    let (jsonld_status, _) = sparql(&svc, "jsonld", &api_class_query()).await;
+    assert_eq!(jsonld_status, StatusCode::OK);
+
+    let text = std::fs::read_to_string(&audit_file).expect("审计文件可读");
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains("event=sparql")).collect();
+    assert_eq!(lines.len(), 2, "一次调用一行审计：{text}");
+
+    // ① 行回执那条：code 与响应一致 + pending=true（「半个答案」用独立字段说）。
+    assert!(
+        lines[0].contains("code=NOT_DB_SOURCE"),
+        "审计的 code 必须是客户端收到的那个（R-2）：{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("pending=true"), "半个答案要标 pending=true：{}", lines[0]);
+    assert!(lines[0].contains("rows=0"), "这一路一行 SQL 都没跑：{}", lines[0]);
+
+    // ② jsonld 那条：200 ⇒ OK + pending=true。
+    assert!(lines[1].contains("code=OK"), "{}", lines[1]);
+    assert!(lines[1].contains("pending=true"), "{}", lines[1]);
+
+    // ⛔ 任何一行都不许出现内部状态名（那是 R-2 要消灭的形状）。
+    assert!(
+        !text.contains("API_PENDING"),
+        "⛔ 审计里出现了内部状态名 API_PENDING（R-2）：{text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

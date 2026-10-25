@@ -54,11 +54,21 @@
 //! | --- | --- | --- |
 //! | 只有库源类 | [`SourceCheck::DbOnly`] | 正常执行（`meta.complete: true`） |
 //! | api 类被**按类点名**（`?c a :customers` / 它的属性） | [`SourceCheck::Api`] | jsonld ⇒ `@graph: []` + `@pending`（**带** `get`）；rows ⇒ **`NOT_DB_SOURCE`** |
-//! | 只走**跨源边**（`?o :order__customers ?c`，没有点名 api 类） | [`SourceCheck::Api`]（`cross_source_edge`） | jsonld ⇒ `@pending`（**不带** `get`）；rows ⇒ `NOT_DB_SOURCE` |
+//! | 只走**跨源边**（`?o :order__customers ?c`，没有点名 api 类） | [`SourceCheck::Api`]（`cross_source_edge`） | jsonld ⇒ `@pending`（**不带** `get`，但带 `ref` + `local_hint` + 三步 `hint`）；rows ⇒ `NOT_DB_SOURCE` |
 //! | 跨源边**还被要求往下走**（点名的 api 类 / 它的属性） | [`SourceCheck::CrossSource`] | 两种格式都 ⇒ **`CROSS_SOURCE_UNSUPPORTED`** |
 //!
 //! 「不带 `get`」的依据是契约规则 4：跨源边给了能力也**查不了**（平台不做跨源 join），
 //! 给了比不给更糟 —— 所以只说明「这里少了一块、要拆两段」，不给一条走不通的指令。
+//!
+//! # ⚠️ 已知限制（写死，别当成 bug）
+//!
+//! | # | 限制 | 为什么现在这样 |
+//! | --- | --- | --- |
+//! | 1 | **跨源边不下发 `get`**（只给 `ref` + `local_hint`） | 一条「带 ids 的 `get`」需要规划器多一条「只读 child 列」的通路；本期由 Agent 自己按 `local_hint.get_ids_by` 去取（阶段 2 再做） |
+//! | 2 | **一条查询同时涉及库源实体与 API 类 ⇒ 整个查询 pending、不执行任何 SQL**，`@graph` 恒空 | 部分求值要拆查询计划（阶段 2）。⛔ 不塞半份库源结果伪装成「算完了」——半个答案必须有 `complete:false` 兜着 |
+//! | 3 | `local_hint.get_ids_by` **不含租户条件** | 租户口径属于调用方自己（也避免把租户 id 写进半个答案）；`hint` 里明说「按你的租户过滤条件收窄」 |
+//! | 4 | 跨源边的 FK 只在「库是 child」时才有 `local_hint.uses_column` | 反过来的形状（api 类是 child）里 FK 值在**对方的数据**里，本库没有可查的列 —— ⛔ 不编一个列名 |
+//! | 5 | 客户侧部署**不加载映射** ⇒ 天然没有 `@pending` / `get` | 契约规则 6：`get` 只给内部调用者；这里不需要额外的身份裁剪 |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,6 +114,28 @@ impl Entity {
     }
 }
 
+/// 一条**跨源边**（本体里的边 + 映射里的源 ⇒ 交叉推出）。
+///
+/// 为什么要有这个结构（而不只是「谓词 → (from, to)」）：`@pending` 那条要给 Agent
+/// **可行动的**取数指引 —— 「库侧哪一列有 FK 值」（[`Self::local_column`]）。
+/// 只给类名等于让它去猜列。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossEdge {
+    /// 本体里的**前向**谓词本地名（`order__customers`）。
+    pub predicate: String,
+    /// 边的两端（本体 key，child → parent）。
+    pub from: String,
+    pub to: String,
+    /// 库侧 / api 侧的类 key（一库一 api，由映射决定）。
+    pub db_key: String,
+    pub api_key: String,
+    /// 库侧的 FK 列 —— **只有「库是 child」时才有**。
+    ///
+    /// 反过来的形状（api 类是 child、库是 parent）里，FK 值在对方的**数据**里，
+    /// 本库没有可查的列 ⇒ `None`（⛔ 不编一个列名）。
+    pub local_column: Option<String>,
+}
+
 /// 映射文件本身（已解析、**还没**与本体对账）。
 #[derive(Debug, Clone)]
 pub struct AccessMapping {
@@ -114,10 +146,10 @@ pub struct AccessMapping {
     by_class: BTreeMap<String, usize>,
     /// TTL 用的 api 类集合（`bind` 之后才有值：人读名要从本体取）。
     api: ApiClasses,
-    /// 跨源边的**前向**谓词本地名 → (from_key, to_key)。由 `bind` 从本体推导。
-    cross_edges: BTreeMap<String, (String, String)>,
-    /// 反查：api 类 key → 与它相邻的跨源边谓词（升序）。
-    cross_by_class: BTreeMap<String, Vec<String>>,
+    /// 跨源边的谓词本地名 → 边。**前向与反向都登记**（`order__customers` 与
+    /// `customers__order` 指的是同一条边）—— 只登记前向的话，用反向谓词写的跨源
+    /// 遍历会**漏判**，然后被当成库源查询真的去跑 SQL。
+    cross_edges: BTreeMap<String, CrossEdge>,
 }
 
 /// 解析失败的形状（`Result<_, String>` 的 `String` 是给运维看的可行动消息）。
@@ -260,7 +292,6 @@ impl AccessMapping {
             by_class,
             api: ApiClasses::default(),
             cross_edges: BTreeMap::new(),
-            cross_by_class: BTreeMap::new(),
         })
     }
 
@@ -314,28 +345,31 @@ impl AccessMapping {
                 .then_with(|| a.from_type.cmp(&b.from_type))
                 .then_with(|| a.to_type.cmp(&b.to_type))
         });
-        let (forward, _inverse) = model_link_locals(&links);
+        let (forward, inverse) = model_link_locals(&links);
         for (i, l) in links.iter().enumerate() {
             let from_api = self.by_class.contains_key(&l.from_type);
             let to_api = self.by_class.contains_key(&l.to_type);
             if from_api == to_api {
                 continue; // 两端同源（都在库 / 都在 api）⇒ 不是跨源边
             }
-            let predicate = forward[i].clone();
-            self.cross_edges
-                .insert(predicate.clone(), (l.from_type.clone(), l.to_type.clone()));
-            for key in [&l.from_type, &l.to_type] {
-                if self.by_class.contains_key(key) {
-                    self.cross_by_class
-                        .entry(key.clone())
-                        .or_default()
-                        .push(predicate.clone());
-                }
-            }
-        }
-        for v in self.cross_by_class.values_mut() {
-            v.sort();
-            v.dedup();
+            let (db_key, api_key) = if from_api {
+                (l.to_type.clone(), l.from_type.clone())
+            } else {
+                (l.from_type.clone(), l.to_type.clone())
+            };
+            let edge = CrossEdge {
+                predicate: forward[i].clone(),
+                from: l.from_type.clone(),
+                to: l.to_type.clone(),
+                db_key,
+                api_key,
+                // FK 列只在本体给的 child 上；**库必须是 child** 才算「本库有这列」。
+                local_column: if from_api { None } else { l.column.clone() },
+            };
+            // 前向与反向都登记同一条边（同一个 `CrossEdge`）——
+            // 否则用 `:customers__order` 写的遍历会漏判成「库源查询」。
+            self.cross_edges.insert(forward[i].clone(), edge.clone());
+            self.cross_edges.insert(inverse[i].clone(), edge);
         }
         Ok(self)
     }
@@ -391,7 +425,7 @@ impl AccessMapping {
         r2rml: Option<&R2rmlMapping>,
     ) -> SourceCheck {
         let mut api_hits: BTreeSet<String> = BTreeSet::new(); // 类 key
-        let mut cross_hits: Vec<(String, String, String)> = Vec::new(); // (谓词, from, to)
+        let mut cross_hits: Vec<CrossEdge> = Vec::new(); // 走过的跨源边
 
         let class_iri_prefix = format!("{ontology_iri}#");
         for p in &q.patterns {
@@ -406,8 +440,11 @@ impl AccessMapping {
                 }
                 continue;
             }
-            if let Some((from, to)) = self.cross_edges.get(pred_local) {
-                cross_hits.push((pred_local.to_string(), from.clone(), to.clone()));
+            if let Some(edge) = self.cross_edges.get(pred_local) {
+                // 同一条边可能同时被前向与反向谓词写到 —— 只记一次。
+                if !cross_hits.iter().any(|e| e.predicate == edge.predicate) {
+                    cross_hits.push(edge.clone());
+                }
                 // 这条边的一端是 api —— 但它是否「被要求往下走」要看有没有点名（下面判）。
                 continue;
             }
@@ -420,23 +457,23 @@ impl AccessMapping {
         }
 
         // 「跨源边还要求往下走」= 跨源边涉及的那个 api 类**还被点名**（类 / 属性）。
-        for (predicate, from, to) in &cross_hits {
-            let api_side = if self.is_api(from) { from } else { to };
-            if api_hits.contains(api_side) {
+        for edge in &cross_hits {
+            if api_hits.contains(&edge.api_key) {
                 return SourceCheck::CrossSource {
-                    predicate: predicate.clone(),
-                    from: from.clone(),
-                    to: to.clone(),
+                    predicate: edge.predicate.clone(),
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
                 };
             }
         }
 
         if !api_hits.is_empty() || !cross_hits.is_empty() {
             let mut pendings: Vec<ApiPending> = Vec::new();
-            // 走跨源边看到的 api 类：**不给** `get`（规则 4：给了也查不了）。
-            for (_predicate, from, to) in &cross_hits {
-                let api_side = if self.is_api(from) { from } else { to };
-                if let Some(p) = self.pending_for(api_side, None, REASON_CROSS_SOURCE_EDGE, r2rml) {
+            // 走跨源边看到的 api 类：**不给** `get`（规则 4：给了也查不了），
+            // 但**要给** `ref` + `local_hint`（R-1：否则 Agent 拿不到映射、也不知道
+            // 库侧哪一列有 FK 值）。
+            for edge in &cross_hits {
+                if let Some(p) = self.cross_pending(edge) {
                     pendings.push(p);
                 }
             }
@@ -444,14 +481,12 @@ impl AccessMapping {
             for key in &api_hits {
                 let ids = ids_of(q, key, r2rml);
                 if ids.is_empty() {
-                    if let Some(p) = self.pending_for(key, None, REASON_SOURCE_IS_API, r2rml) {
+                    if let Some(p) = self.pending_for(key, None, r2rml) {
                         pendings.push(p);
                     }
                 } else {
                     for id in ids {
-                        if let Some(p) =
-                            self.pending_for(key, Some(id), REASON_SOURCE_IS_API, r2rml)
-                        {
+                        if let Some(p) = self.pending_for(key, Some(id), r2rml) {
                             pendings.push(p);
                         }
                     }
@@ -482,33 +517,76 @@ impl AccessMapping {
             .map(|e| e.class.as_str())
     }
 
+    /// **按类点名**的那一条：带 `get`（含 `ids` / `pushdown` / `ref`）。
     fn pending_for(
         &self,
         class_key: &str,
         id: Option<String>,
-        reason: &'static str,
         r2rml: Option<&R2rmlMapping>,
     ) -> Option<ApiPending> {
         let entity = self.entity(class_key)?;
         let class_local = self.class_local(class_key);
-        // 跨源边**不下发 get**（规则 4）；按类点名时才给取数指引。
-        let get = if reason == REASON_SOURCE_IS_API {
-            Some(GetInstruction {
-                class: class_local.clone(),
-                ids: id.clone().into_iter().collect(),
-                pushdown: entity.pushdown.clone(),
-                reference: entity.reference(self.mapping_version),
-            })
-        } else {
-            None
-        };
         let _ = r2rml;
         Some(ApiPending {
             class_key: class_key.to_string(),
             class_local,
-            id,
-            reason,
-            get,
+            id: id.clone(),
+            reason: REASON_SOURCE_IS_API,
+            reference: None, // 按类点名时 `ref` 在 `get` 里（不重复）
+            local_hint: None,
+            hint: None,
+            get: Some(GetInstruction {
+                class: self.class_local(class_key),
+                ids: id.into_iter().collect(),
+                pushdown: entity.pushdown.clone(),
+                reference: entity.reference(self.mapping_version),
+            }),
+        })
+    }
+
+    /// **跨源边**的那一条：⛔ 无 `get`（规则 4），但 `ref` + `local_hint` + 三步 `hint` 都要有。
+    fn cross_pending(&self, edge: &CrossEdge) -> Option<ApiPending> {
+        let entity = self.entity(&edge.api_key)?;
+        let class_local = self.class_local(&edge.api_key);
+        let reference = entity.reference(self.mapping_version);
+        // 库侧的 FK 列与可执行的取数语句（R-1 的硬要求：Agent 得知道查哪一列）。
+        let local_hint = Some(LocalHint {
+            uses_column: edge.local_column.clone(),
+            get_ids_by: edge.local_column.as_ref().map(|col| {
+                format!(
+                    "SELECT DISTINCT {col:?} FROM {:?}",
+                    edge.from // 本体里 child 侧的 key 就是表名
+                )
+            }),
+            note: if edge.local_column.is_some() {
+                None
+            } else {
+                Some("这条边的 FK 在 API 侧：本库没有可取的列，只能按 api 类自己取")
+            },
+        });
+        let hint = Some(match (&edge.local_column, &reference) {
+            (Some(col), r) => format!(
+                "① 先在库侧取 ID：`SELECT DISTINCT {col:?} FROM {:?}`（按你的租户过滤条件收窄）；\
+                 ② 再按这些 ID 调 {r} 指向的映射取数据；\
+                 ③ 把两段结果拼起来 —— 平台不做跨源 join。",
+                edge.from
+            ),
+            (None, r) => format!(
+                "① 这条边的 FK 在 API 侧，本库没有可取的列；\
+                 ② 按 {r} 指向的映射取该类数据（先按类级 pending 的口径取）；\
+                 ③ 把两段结果拼起来 —— 平台不做跨源 join。"
+            ),
+        });
+        Some(ApiPending {
+            class_key: edge.api_key.clone(),
+            class_local,
+            id: None,
+            reason: REASON_CROSS_SOURCE_EDGE,
+            reference: Some(reference),
+            local_hint,
+            hint,
+            // ⛔ 规则 4：跨源边不下发 `get`。
+            get: None,
         })
     }
 }
@@ -524,8 +602,36 @@ pub struct ApiPending {
     pub id: Option<String>,
     /// [`REASON_SOURCE_IS_API`] / [`REASON_CROSS_SOURCE_EDGE`]。
     pub reason: &'static str,
+    /// ⭐ R-1 · **跨源边那一条才有的 `ref`**（`access#<条目>@v<版本>`）。
+    ///
+    /// 按类点名时 `ref` 在 `get` 里（同一个值，不重复给）；跨源边**没有 `get`**，
+    /// 所以必须在这里给 —— 否则 Agent 拿不到映射。
+    pub reference: Option<String>,
+    /// ⭐ R-1 · 跨源边那一条才有的**库侧取数提示**（哪一列有 FK 值）。
+    pub local_hint: Option<LocalHint>,
+    /// ⭐ R-1 · 跨源边那一条才有的**三步**人话提示。
+    pub hint: Option<String>,
     /// 取数指引；跨源边为 `None`（规则 4）。
     pub get: Option<GetInstruction>,
+}
+
+/// ⭐ R-1 · `@pending[].local_hint` ——「ID 在库侧哪儿」。
+///
+/// 为什么必须有：`@pending` 说「这一块没算」，Agent 要自己去把 ID 捞出来；
+/// 不给列名，它就只能猜一个列，然后拿猜的列去查 —— 那正是本需求要消灭的形态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalHint {
+    /// 库侧哪一列存着 FK 值（例：`customer_id`）。
+    ///
+    /// `None` = 这条边的 FK 在 **API 侧**（api 类是 child）：本库没有可取的列。
+    pub uses_column: Option<String>,
+    /// 可直接执行的取数语句（`SELECT DISTINCT <列> FROM <子表>`）。
+    ///
+    /// ⚠️ 不含 `WHERE`：租户过滤条件属于调用方自己的口径（且不该把租户 id 写进
+    /// 半个答案里）。`hint` 里明说「按你的租户过滤条件收窄」。
+    pub get_ids_by: Option<String>,
+    /// `uses_column = None` 时的解释（⛔ 不编一个列名）。
+    pub note: Option<&'static str>,
 }
 
 /// `@pending[].get` ——「这一块怎么自己取」。
@@ -821,6 +927,40 @@ mod tests {
         assert_eq!(pending.len(), 1, "{pending:?}");
         assert_eq!(pending[0].reason, REASON_CROSS_SOURCE_EDGE);
         assert!(pending[0].get.is_none(), "规则 4：跨源边不下发 get");
+        // ⭐ R-1 · 没有 `get` 就必须有 `ref`（否则拿不到映射）…
+        assert_eq!(
+            pending[0].reference.as_deref(),
+            Some("access#Customer@v2"),
+            "跨源边那一条必须带 ref"
+        );
+        // …和 `local_hint`（否则 Agent 只能猜「哪一列有 FK 值」）。
+        let hint = pending[0].local_hint.as_ref().expect("跨源边必须带 local_hint");
+        assert_eq!(hint.uses_column.as_deref(), Some("customer_id"), "{hint:?}");
+        assert_eq!(
+            hint.get_ids_by.as_deref(),
+            Some("SELECT DISTINCT \"customer_id\" FROM \"order\""),
+            "取数语句要能直接照着写"
+        );
+        // 三步提示：取 ID → 按 ref 取 → 拼结果。
+        let text = pending[0].hint.as_deref().expect("跨源边必须带三步 hint");
+        assert!(text.contains("①") && text.contains("②") && text.contains("③"), "{text}");
+        assert!(text.contains("cross_source") || text.contains("不做跨源 join"), "{text}");
+    }
+
+    /// 反向谓词写出来的跨源边也要被认出来（`customers__order` 是同一条边）。
+    ///
+    /// 变异：`bind` 只登记前向谓词 ⇒ 本测试红（那条遍历会被当成库源查询真的去跑 SQL）。
+    #[test]
+    fn the_inverse_predicate_of_a_cross_source_edge_is_recognised_too() {
+        let m = mapping();
+        let c = check_of(&m, "SELECT ?o ?c WHERE { ?c :customers__order ?o }");
+        assert_eq!(c.pending().len(), 1, "{c:?}");
+        assert_eq!(c.pending()[0].reason, REASON_CROSS_SOURCE_EDGE);
+        let walk = check_of(
+            &m,
+            "SELECT ?n ?o WHERE { ?c :customers__order ?o . ?c :customers__customer_name ?n }",
+        );
+        assert!(walk.cross_source().is_some(), "反向谓词也要能判出跨源遍历：{walk:?}");
     }
 
     #[test]

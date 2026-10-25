@@ -1032,13 +1032,18 @@ pub async fn run_sparql(
     caller: &Caller,
     req: SparqlRequest,
 ) -> Result<SparqlReceipt, ApiError> {
+    // ⭐ REQ-145 · R-2：审计的 `code` 必须是**客户端实际收到的那个** —— 行回执这条路
+    // 收到的是 `NOT_DB_SOURCE`，所以这里记 `NOT_DB_SOURCE`（⛔ 不是内部状态名）。
+    // 「这是半个答案」由独立的 `pending=true` 表达；一次调用仍然只有**一行**审计。
+    let started = Instant::now();
+    // 审计要的是**查询哈希**（⛔ 不是原文）；借一份出来，事件函数会把 `req` 吃掉。
+    let query = req.query.clone();
     match run_sparql_event(svc, caller, "sparql", req).await? {
         SparqlAnswer::Rows(out) => Ok(out.receipt),
-        // 审计已经在事件函数里留过了（`code=API_PENDING`）；这里只把「表挂不住 pending」
-        // 这件事翻译成一个**可行动**的错误。⛔ 不再写第二行审计（一次调用一行）。
         SparqlAnswer::Pending(p) => {
             let e = ApiError::not_db_source(&p.unresolved_classes());
             svc.metrics.note_denial_code(e.code);
+            audit_pending(svc, "sparql", caller, Some(&query), started, e.code);
             Err(e)
         }
     }
@@ -1049,14 +1054,22 @@ pub async fn run_sparql(
 /// 与 [`run_sparql`] **同一个实现**（前者就是它的 `.receipt`）—— 两个函数名只是
 /// 「要不要 projection」的区别，⛔ 不存在第二条查询链路。
 ///
-/// ⭐ REQ-145 · 区别还有一条：**这里能拿到 [`SparqlAnswer::Pending`]**（JSON-LD 挂得住
-/// `@pending`），而行回执那条路必须报错。
+/// ⭐ REQ-145 · 区别还有两条：**这里能拿到 [`SparqlAnswer::Pending`]**（JSON-LD 挂得住
+/// `@pending`），而行回执那条路必须报错；并且 pending 的审计记 `code=OK`
+/// （客户端拿到的是 **200**）`+ pending=true`。
 pub async fn run_sparql_ex(
     svc: &QueryService,
     caller: &Caller,
     req: SparqlRequest,
 ) -> Result<SparqlAnswer, ApiError> {
-    run_sparql_event(svc, caller, "sparql", req).await
+    let started = Instant::now();
+    let query = req.query.clone();
+    let answer = run_sparql_event(svc, caller, "sparql", req).await?;
+    if let SparqlAnswer::Pending(_) = &answer {
+        // 客户端收到 200（半成品 + 说明书）⇒ 审计必须写 `code=OK`。
+        audit_pending(svc, "sparql", caller, Some(&query), started, "OK");
+    }
+    Ok(answer)
 }
 
 async fn run_sparql_event(
@@ -1141,18 +1154,10 @@ async fn run_sparql_event(
                     return Err(e);
                 }
                 access::SourceCheck::Api { pending } => {
-                    // 「半成品 + 说明书」不是失败：审计按**事实**记（`API_PENDING`），
-                    // 行数 0（这一路一行 SQL 都没跑）。
-                    audit_call(
-                        svc,
-                        event,
-                        caller,
-                        Some(&req.query),
-                        Some(0),
-                        started,
-                        "API_PENDING",
-                        None,
-                    );
+                    // ⚠️ R-2：**这里不写审计**。审计的 `code` 必须是客户端实际收到的那个，
+                    // 而「客户端收到什么」只有调用方知道（rows ⇒ 400 `NOT_DB_SOURCE`，
+                    // jsonld ⇒ 200 `OK`）—— 于是 `run_sparql` / `run_sparql_ex` 各自记一行
+                    // （都带 `pending=true`）。一次调用仍然只有**一行**审计。
                     let mut classes: Vec<String> =
                         pending.iter().map(|p| p.class_local.clone()).collect();
                     classes.sort();
@@ -1423,6 +1428,10 @@ pub async fn run_sample(
     // ⭐ REQ-145 · `sample` 也是**行回执**（表），所以对「只碰 api 源」的回答与
     // `format=rows` 一致：`NOT_DB_SOURCE`。取样取自库里的那份副本恰恰是最容易骗人的
     // （副本可能一周没更新）—— ⛔ 不给它开一条旁路。
+    // ⚠️ R-2：`sample` 也是行回执 ⇒ 客户端收到 `NOT_DB_SOURCE`，审计就记 `NOT_DB_SOURCE`
+    // （+ `pending=true`），与主查询那条路同一个口径。
+    let started = Instant::now();
+    let query_for_audit = query.clone();
     match run_sparql_event(
         svc,
         caller,
@@ -1442,6 +1451,7 @@ pub async fn run_sample(
         SparqlAnswer::Pending(p) => {
             let e = ApiError::not_db_source(&p.unresolved_classes());
             svc.metrics.note_denial_code(e.code);
+            audit_pending(svc, "sample", caller, Some(&query_for_audit), started, e.code);
             Err(e)
         }
     }
@@ -1531,6 +1541,48 @@ pub fn audit_call(
         view: None,
         bytes: None,
         note,
+        // ⭐ REQ-145 · 走这条函数的一定不是「半个答案」；那种调用走 `audit_pending`。
+        pending: false,
+    };
+    svc.audit.record(&rec);
+}
+
+/// ⭐ REQ-145 · **「半个答案」那一条**（`@pending` 非空 / 行回执被拒）。
+///
+/// 与 [`audit_call`] 只差一个字段：`pending=true`。为什么单独一个函数而不是加一个
+/// `bool` 参数：`audit_call` 有 8 个参数且全是位置参数，再塞一个布尔值等于让每个调用点
+/// 都要记住「第 9 个是什么」；而「这次只返回一半」是**少数派**，给它一个名字更省事。
+///
+/// `rows` 恒 `Some(0)`：这一路**一行 SQL 都没执行**，0 是事实（不是「失败所以未知」）。
+pub fn audit_pending(
+    svc: &QueryService,
+    event: &'static str,
+    caller: &Caller,
+    query: Option<&str>,
+    started: Instant,
+    code: &'static str,
+) {
+    let rec = AuditRecord {
+        ts: AuditRecord::now_ts(),
+        event,
+        proto: caller.protocol.as_str(),
+        token_digest: Some(caller.token.audit_digest()),
+        tenant: caller.token.tenant.clone(),
+        query_digest: query.map(|q| {
+            format!(
+                "sha256:{}",
+                digest_prefix(&sha256_hex(q.as_bytes()), 16)
+            )
+        }),
+        rows: Some(0),
+        elapsed_ms: started.elapsed().as_millis(),
+        // ⚠️ R-2：`code` 必须是**客户端实际收到的那个**（`OK` 或 `NOT_DB_SOURCE`），
+        // ⛔ 不许在这里写 `API_PENDING` —— 「这是半个答案」由 `pending=true` 表达。
+        code,
+        view: None,
+        bytes: None,
+        note: None,
+        pending: true,
     };
     svc.audit.record(&rec);
 }
@@ -1561,6 +1613,8 @@ pub fn audit_ttl(
         view: Some(view.as_str()),
         bytes,
         note: None,
+        // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+        pending: false,
     };
     svc.audit.record(&rec);
 }
@@ -1592,6 +1646,8 @@ pub fn audit_anonymous(
         view,
         bytes: None,
         note: None,
+        // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+        pending: false,
     };
     svc.audit.record(&rec);
 }
