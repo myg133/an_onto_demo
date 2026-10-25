@@ -1,0 +1,114 @@
+{
+  "contract_version": 1,
+  "mapping_version": 2,
+  "project": "ops360",
+  "ontology_version": 2,
+  "sources": [
+    {
+      "id": "tencent-cvm",
+      "kind": "http-json",
+      "base_url": "https://cvm.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"]
+      },
+      "defaults": { "Region": "ap-guangzhou" }
+    },
+    {
+      "id": "tencent-monitor",
+      "kind": "http-json",
+      "base_url": "https://monitor.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"]
+      },
+      "defaults": { "Region": "ap-guangzhou" }
+    }
+  ],
+  "entities": [
+    {
+      "id": "cvm_instance",
+      "class": "cvm_instance",
+      "source": "tencent-cvm",
+      "reviewed_by": "fde@ops360 (2026-10-25)",
+      "operation": {
+        "action": "DescribeInstances",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json"
+      },
+      "iterator": "$.Response.InstanceSet[*]",
+      "identity": { "key_path": "InstanceId" },
+      "iri_template": "ontok:cvm_instance/{id}",
+      "fields": {
+        "name": { "path": "InstanceName" },
+        "status": { "path": "InstanceState" },
+        "zone": { "path": "Placement.Zone" },
+        "cpu": { "path": "CPU", "type": "xsd:integer" },
+        "memory": { "path": "Memory", "type": "xsd:integer" }
+      },
+      "request": {
+        "required": ["Region"],
+        "from_filter": { "zone": "Zone", "ids": "InstanceIds" }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": ["region", "zone", "ids"],
+        "local_only": ["status", "cpu"],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": { "mode": "realtime", "note": "实例状态可能有数秒延迟" },
+      "fixture": "tencent-cvm-describe.json"
+    },
+    {
+      "id": "alarm",
+      "class": "alarm",
+      "source": "tencent-monitor",
+      "reviewed_by": "fde@ops360 (2026-10-25)",
+      "operation": {
+        "action": "DescribeAlarmHistories",
+        "version": "2018-07-24",
+        "method": "POST",
+        "content_type": "application/json"
+      },
+      "iterator": "$.Response.AlarmHistorySet[*]",
+      "identity": { "key_path": "AlarmId" },
+      "iri_template": "ontok:alarm/{id}",
+      "fields": {
+        "status": { "path": "AlarmStatus" },
+        "instance_id": { "path": "AlarmObject" },
+        "start_time": { "path": "StartTime", "type": "xsd:integer" }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": ["ids"],
+        "local_only": ["status"],
+        "max_scan_rows": 2000,
+        "cost_hint": "free"
+      },
+      "freshness": { "mode": "realtime", "note": "告警状态由云监控推送，可能有延迟" },
+      "fixture": "tencent-monitor-alarm-histories.json"
+    }
+  ],
+  "relations": [
+    {
+      "predicate": "alarm__cvm_instance",
+      "from": "alarm",
+      "to": "cvm_instance",
+      "via": { "kind": "field", "field": "instance_id" },
+      "cross_source": true,
+      "traversable": false
+    }
+  ]
+}

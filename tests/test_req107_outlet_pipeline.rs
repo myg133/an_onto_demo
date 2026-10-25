@@ -706,15 +706,18 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        + 1（REQ-127 的查询服务 OWL TTL 出口 I25）
     //        + 2（REQ-129 的 `doc merge` 合并提案 I26 / `doc sign` 签字产物 I27）
     //        + 1（REQ-135 的 `/metrics` 指标响应 I28）
+    //        + 3（REQ-144 的 access mapping：`validate` 报告 I29 / `fetch` JSON-LD I30 /
+    //             `publish` 发布物 I31）
     assert_eq!(
         OUTLETS.len(),
-        63,
+        66,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
          + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）\
          + 1（REQ-125 工作台页面壳）+ 2（REQ-126 客户门户）+ 1（REQ-127 OWL TTL 响应）\
          + 2（REQ-129 doc merge 合并提案 / doc sign 签字产物）\
-         + 1（REQ-135 /metrics 指标响应）"
+         + 1（REQ-135 /metrics 指标响应）\
+         + 3（REQ-144 access validate / fetch / publish）"
     );
 
     // ② 分组：客户 17 / 建模 10 / 内部 17 / 静态 2 / 错误路径 1。
@@ -743,9 +746,12 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // 这两条钉的是**新命令的写出调用**）。
     // REQ-135 内部 32→33（I28）：三个服务共用的 `/metrics` Prometheus 文本响应
     // （匿名可达但零业务数据；标签值类型层固定为 `&'static str`）。
+    // REQ-144 内部 33→36（I29–I31）：access mapping 的三条写点
+    // （`validate` 报告 / `fetch` JSON-LD / `publish` 发布物）—— 全是 FDE 与 Agent 面的
+    // 内部产物，客户视图零读取；⛔ 阶段 0 不发网络请求，产物也⛔ 不含凭据值。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 33);
+    assert_eq!(outlet_count(Track::Internal), 36);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -768,7 +774,8 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-127 · I25（查询服务的整份 OWL TTL 响应）
     // REQ-129 · I26/I27（`doc merge` 的合并提案 / `doc sign` 的签字产物）
     // REQ-135 · I28（三个服务共用的 `/metrics` Prometheus 文本响应）
-    want.extend((1..=28).map(|i| format!("I{i}")));
+    // REQ-144 · I29–I31（access mapping：`validate` 报告 / `fetch` JSON-LD / `publish` 发布物）
+    want.extend((1..=31).map(|i| format!("I{i}")));
     // REQ-111 · 本地审核界面（内部轨）：读 / 写回执 / 批量预览 / 页面壳 / 错误通道。
     want.extend((1..=5).map(|i| format!("R{i}")));
     want.push("Z1".into());
