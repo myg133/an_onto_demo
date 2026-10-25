@@ -80,6 +80,7 @@ Agent                       本体平台                     云 API
       "@type": "ontok:customer",
       "ontok:sourceKind": "api",
       "reason": "source_is_api（平台不执行 API 源）",
+      "_note": "本节示例是【阶段 2 目标形态】。本期（REQ-145 裁定 R-A）跨源边不下发 get，改为 ref + local_hint；见 REQ-145 acceptance §三",
       "get": {
         "class": "customer",
         "filter": { "ids": ["7d49…"] },
