@@ -627,3 +627,30 @@ fn strict_deterministic_flag_is_documented() {
     );
 }
 
+/// **回答不可用的比例必须在屏幕上说出来**（实测同一条命令两轮能是 2/95 与 29/95）。
+///
+/// 这类块**不进** `failed_calls` ⇒ 既不触发 §R-2 的提示、也不触发 `--strict-deterministic`
+/// （它们的回答进了缓存，重跑逐字节相同）。但它们的断言**全丢了**，
+/// 所以要有一条专门的告警，否则「这一轮抽得少」会被当成模型的问题、而不是传输的问题。
+#[test]
+fn unusable_answers_are_announced_with_their_rate() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("parse_rate");
+    let corpus = write_two_doc_corpus(&o.join("docs"));
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let r = run_fake(acp_args(&corpus, &out, &stats, &cache), "halfgarbage", &log);
+    assert_eq!(r.code, 0, "还有别的块成功 ⇒ 不该整体失败：{}", r.all());
+
+    let s = read_json(&stats);
+    assert!(s["rejected"]["parse"].as_u64().unwrap_or(0) >= 1, "构造前提：至少一块回答不可用：{s}");
+    assert_eq!(s["failed_calls"], 0, "「回答不可用」不是传输失败 —— 两者必须分得开：{s}");
+    let all = r.all();
+    assert!(all.contains("回答不可用"), "必须报出来：{all}");
+    assert!(all.contains("%"), "必须给比例：{all}");
+    assert!(all.contains("全部丢失"), "必须说清后果：{all}");
+}
+

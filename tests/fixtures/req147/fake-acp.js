@@ -71,6 +71,8 @@ function answerFor(text) {
           },
         ],
       });
+    case 'garbage':
+      return '好的，我来抽取：';
     case 'valid':
     default:
       return JSON.stringify({
@@ -125,7 +127,10 @@ process.stdin.on('data', (d) => {
       // 不预热的话第一块会拿到「## Skills … {json}」这种不可解析的正文。
       if (prompts === 1) chunk('## Skills\n- 假的技能清单\n- 这一段不是回答\n');
       const text = chunkTextOf(m.params.prompt.map((p) => p.text || '').join(''));
-      const answer = answerFor(text);
+      // `halfgarbage`：**只让第 2 条 prompt（= 第 1 块）**回一段不是 JSON 的话
+      // ⇒ 「1 块回答不可用、其余正常」：断言还有、`rejected.parse` = 1、`failed_calls` = 0。
+      const answer =
+        MODE === 'halfgarbage' && prompts === 2 ? '好的，我来抽取这一段：' : answerFor(text);
       const mid = Math.floor(answer.length / 2);
       // 分两片发：正文必须靠**累积**才完整（F-1）
       chunk(answer.slice(0, mid));
