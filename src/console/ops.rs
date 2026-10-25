@@ -391,6 +391,12 @@ pub struct TtlPrepared {
     pub snapshot: crate::domain::snapshot::Snapshot,
     pub(crate) tenancy: Option<crate::domain::ttl::TenancyDecl>,
     pub(crate) schema: Option<crate::domain::ttl::SchemaTypes>,
+    /// ⭐ REQ-145 · api 源类（`query serve --access-mapping` 才有）。
+    ///
+    /// ⛔ 默认 `None`：`ontology export` / 控制面的 `GET /api/export/ttl` **不加载**
+    /// access 映射 ⇒ 两视图逐字节不变（R1）。只有查询服务在 `prepare` 之后
+    /// 用 [`TtlPrepared::with_api_classes`] 挂上去。
+    pub(crate) api_classes: Option<crate::domain::ttl::ApiClasses>,
     pub(crate) model: Option<crate::domain::model_view::ModelTrackView>,
     pub(crate) customer: Option<crate::domain::view::CustomerView>,
 }
@@ -405,7 +411,18 @@ impl TtlPrepared {
             action_type_count: self.snapshot.action_types.len(),
             tenancy: self.tenancy.as_ref(),
             schema: self.schema.as_ref(),
+            api_classes: self.api_classes.as_ref(),
         }
+    }
+
+    /// ⭐ REQ-145 · 挂上 api 源类（查询服务专用；`prepare` 产出的默认是 `None`）。
+    ///
+    /// 为什么是**后挂**而不是 `TtlExportParams` 多一个字段：那会让 `ontology export`、
+    /// 控制面导出、查询服务三处都多一个必须回答的参数，而只有第三处有映射。
+    /// 后挂把「谁加载了映射」这件事留在**那一个调用点**上。
+    pub fn with_api_classes(mut self, api: crate::domain::ttl::ApiClasses) -> Self {
+        self.api_classes = Some(api);
+        self
     }
 
     pub fn model(&self) -> &crate::domain::model_view::ModelTrackView {

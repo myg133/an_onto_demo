@@ -193,6 +193,7 @@ fn opts() -> TtlOptions<'static> {
         action_type_count: 0,
         tenancy: None,
         schema: None,
+        api_classes: None,
     }
 }
 
@@ -204,6 +205,7 @@ fn opts_with<'a>(decl: &'a TenancyDecl) -> TtlOptions<'a> {
         action_type_count: 0,
         tenancy: Some(decl),
         schema: None,
+        api_classes: None,
     }
 }
 
@@ -462,6 +464,7 @@ fn schema_opts<'a>(schema: &'a SchemaTypes) -> TtlOptions<'a> {
         action_type_count: 0,
         tenancy: None,
         schema: Some(schema),
+        api_classes: None,
     }
 }
 
@@ -759,6 +762,7 @@ async fn live_grouped_v3_counts_and_volume_are_within_the_contract() {
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: None,
+        api_classes: None,
     };
     let m = serialize_model(&model, &o).into_doc();
     let c = serialize_customer(&cv, &o).into_doc();
@@ -852,6 +856,7 @@ async fn live_schema_makes_all_ranges_match_real_data_types() {
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema),
+        api_classes: None,
     };
     let m = serialize_model(&model, &o).into_doc();
     let stats = range_stats(&m);

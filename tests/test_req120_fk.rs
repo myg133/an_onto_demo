@@ -98,6 +98,7 @@ fn opts() -> TtlOptions<'static> {
         action_type_count: 0,
         tenancy: None,
         schema: None,
+        api_classes: None,
     }
 }
 

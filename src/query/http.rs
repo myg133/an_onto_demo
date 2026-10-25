@@ -352,12 +352,23 @@ async fn post_sparql(
     };
     // ⭐ REQ-140 · 默认（rows）**就是原来那一行**：`run_sparql` → `Json(receipt)`。
     // JSON-LD 是另一条渲染分支，但**同一次查询**（`run_sparql_ex` 只是多交出列的 RDF 身份）。
+    //
+    // ⭐ REQ-145 · 两条分支对「只碰 api 源」的表达**不同**（同一个判定，见
+    // `query::SparqlAnswer`）：jsonld 挂得住 `@pending` ⇒ 返回「半成品 + 说明书」；
+    // rows 挂不住 ⇒ `run_sparql` 直接给 `NOT_DB_SOURCE`（R5：⛔ 不返回空表）。
     if format.is_jsonld() {
         return match run_sparql_ex(&svc, &caller, req).await {
-            Ok(out) => respond_jsonld(super::jsonld::render(
+            Ok(super::SparqlAnswer::Rows(out)) => respond_jsonld(super::jsonld::render_with_mapping(
                 &out.receipt,
                 &out.projection,
                 &svc.ontology_iri,
+                svc.access.as_ref().map(|a| a.mapping_version()),
+            )),
+            Ok(super::SparqlAnswer::Pending(p)) => respond_jsonld(super::jsonld::render_pending(
+                &p.receipt,
+                &p.pending,
+                &svc.ontology_iri,
+                p.mapping_version,
             )),
             Err(e) => respond(e.status, e.body()),
         };
@@ -796,9 +807,25 @@ async fn tools_call(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) 
                     };
                 }
                 match run_sparql_ex(svc, caller, r).await {
-                    Ok(out) => {
-                        let graph =
-                            super::jsonld::render(&out.receipt, &out.projection, &svc.ontology_iri);
+                    // ⭐ REQ-145 · MCP 与 REST **同一个**判定与同一份渲染：
+                    // `rows` ⇒ `NOT_DB_SOURCE`（`tools_call` 的 rows 分支走 `run_sparql`）；
+                    // `jsonld` ⇒ `@graph: []` + `@pending` + `complete:false`。
+                    Ok(super::SparqlAnswer::Rows(out)) => {
+                        let graph = super::jsonld::render_with_mapping(
+                            &out.receipt,
+                            &out.projection,
+                            &svc.ontology_iri,
+                            svc.access.as_ref().map(|a| a.mapping_version()),
+                        );
+                        tool_ok(id, &graph.to_text(), graph.to_value())
+                    }
+                    Ok(super::SparqlAnswer::Pending(p)) => {
+                        let graph = super::jsonld::render_pending(
+                            &p.receipt,
+                            &p.pending,
+                            &svc.ontology_iri,
+                            p.mapping_version,
+                        );
                         tool_ok(id, &graph.to_text(), graph.to_value())
                     }
                     Err(e) => tool_err(id, &e),
@@ -1180,6 +1207,7 @@ mod tests {
             audit,
             // ⭐ REQ-127 · 夹具两视图：走同一个 `pipeline::render`（不连库）。
             ttl: crate::query::ttl::fixture(),
+            access: None,
         }));
         svc
     }
@@ -1235,6 +1263,7 @@ mod tests {
             tokens,
             audit,
             ttl: crate::query::ttl::fixture(),
+            access: None,
         }))
     }
 

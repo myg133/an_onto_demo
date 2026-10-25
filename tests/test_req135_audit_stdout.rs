@@ -71,6 +71,8 @@ fn child_writes_twenty_audit_lines() {
             view: None,
             bytes: None,
             note: None,
+            // REQ-145：本判据不涉及「半个答案」。
+            pending: false,
         });
     }
 }

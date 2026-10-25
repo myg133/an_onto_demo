@@ -69,6 +69,13 @@ pub struct ServeArgs {
     pub base: String,
     /// 把 `joinVerified "inherit"` 的边也生成 join（默认不生成，与 CLI 一致）。
     pub include_inherit: bool,
+    /// ⭐ REQ-145 · **access 映射**（`--access-mapping <file>`）。
+    ///
+    /// 省略 ⇒ 与基线**逐字节相同**（R1）：没有 `ontok:sourceKind` / `access` / `@pending` /
+    /// `complete` / `mapping_version`，api 类照常按库源处理。
+    /// 给了 ⇒ api 类进 TTL（两视图）、进 `catalog`/`describe` 的 `access`，
+    /// 查询碰到它们时给 `@pending`（jsonld）或 `NOT_DB_SOURCE`（rows）。
+    pub access_mapping: Option<PathBuf>,
 }
 
 impl ServeArgs {
@@ -398,6 +405,58 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("项目 {:?} 第 {} 版没有快照", args.project, args.version))?;
 
+    // ── ⑥.4 ⭐ REQ-145 · access 映射（`--access-mapping`）──
+    //
+    // 位置在 TTL 之前：两视图都要写 `ontok:sourceKind "api"`，而「哪些类是 api」只在
+    // 这份映射里。**加载即对账**（fail-closed）：类必须在这一版本体里存在，否则拒绝启动 ——
+    // 一份「一半对不上」的映射最坏的后果是平台以为某类在库、其实在 API。
+    //
+    // ⚠️ 本段**不读任何凭据 / 端点**，也不执行任何调用：文件里那些字段读进来就丢
+    // （见 `query::source_gate` 模块头）。
+    let model = crate::domain::model_view::project_model_track(&snap);
+    let access = match &args.access_mapping {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path).map_err(|e| {
+                anyhow::anyhow!(
+                    "读不出 access 映射 {path:?}：{e}\n  \
+                     形状见 `ontok query serve --help` 的 `--access-mapping`；\
+                     ⛔ 读不出来就**当作没给**会静默退回「全是库源」，那不是你要的。"
+                )
+            })?;
+            let parsed = crate::query::source_gate::AccessMapping::parse(&raw)
+                .map_err(|e| anyhow::anyhow!("access 映射 {path:?} 不合法：{e}"))?;
+            Some(parsed.bind(&model).map_err(|e| {
+                anyhow::anyhow!("access 映射 {path:?} 与本体 v{} 对不上：{e}", args.version)
+            })?)
+        }
+        None => None,
+    };
+    match &access {
+        Some(a) if a.api_classes().is_empty() => eprintln!(
+            "⚠ access 映射 {} 里一条 api 类都没有 ⇒ 全部类按库源处理（这多半不是你要的）",
+            args.access_mapping
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ),
+        Some(a) => {
+            let mut keys: Vec<&String> = a.api_classes().keys().collect();
+            keys.sort();
+            // ⚠️ 两个数都报：**边数**（本体里的边）+ **方向数**（前向 + 反向，判定遍历时两个
+            // 谓词都要认）。⛔ 只报一个的话，40 条边会被报成 80 —— 排查的人拿它对不上。
+            eprintln!(
+                "· access 映射：mapping_version={} · api 类 {} 个（{}）· \
+                 跨源边 {} 条（{} 个方向）",
+                a.mapping_version(),
+                keys.len(),
+                keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("、"),
+                a.cross_source_edge_count(),
+                a.cross_source_direction_count()
+            );
+        }
+        None => {}
+    }
+
     // ── ⑥.5 ⭐ REQ-127 · 两视图 TTL（启动时算一次；版本冻结 ⇒ 内容不变）──
     //
     // 读/投影走 `cli::prepare_ttl_export`（与 `ontology export` **同一段**），
@@ -407,6 +466,8 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     //
     // ⭐ REQ-136 · 本体模式把 `schema` 传 `None`（= CLI 的 `ontology export` 不带 `--schema`）
     // ⇒ 客户视图与 `ontok ontology export --project <p> --version <v>` 逐字节相同（AC-005）。
+    //
+    // ⭐ REQ-145 · `api_classes` 只有在加载了映射时才是 `Some` —— 没加载 ⇒ 两视图逐字节不变（R1）。
     let tenancy_path = resolve_tenancy(args.policy.as_deref(), args.tenancy.as_deref());
     let ttl = crate::query::ttl::OntologyTtl::prepare(
         pool,
@@ -417,6 +478,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             // 客户视图在 `prepare` 里固定用 None（结构上不含列名）；这里只影响建模视图。
             schema: args.schema.as_deref(),
             tenancy: tenancy_path.as_deref(),
+            api_classes: access.as_ref().map(|a| a.api_classes()),
         },
     )
     .await
@@ -454,7 +516,6 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     //
     // ⭐ REQ-136 · 本体模式**不建映射**：`build_mapping` 要求 schema（主键 / 列存在性都只能
     // 来自它），而本模式结构上没有 schema。`None` 也正是「不许自动造 schema」的形状。
-    let model = crate::domain::model_view::project_model_track(&snap);
     let ontology_iri = crate::domain::ttl::TtlOptions {
         project: args.project.as_str(),
         version: args.version,
@@ -462,6 +523,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: None,
+        api_classes: None,
     }
     .ontology_iri();
     let mapping = if mode.is_ontology_only() {
@@ -474,6 +536,9 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             action_type_count: snap.action_types.len(),
             tenancy: None,
             schema: Some(&schema),
+            // ⚠️ R2RML 是**库源**的映射：它的生成与 access 映射无关（⛔ api 类不生成
+            // TriplesMap）。这里给 `None`，让 R2RML 的字节与没加载 access 时完全一致。
+            api_classes: None,
         };
         Some(
             crate::domain::r2rml::build_mapping(
@@ -534,6 +599,8 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         tokens,
         audit,
         ttl,
+        // ⭐ REQ-145 · `None` = 没加载映射 ⇒ 运行期一切照旧（R1）。
+        access,
     }));
 
     let tenants = svc.tokens.tenants();

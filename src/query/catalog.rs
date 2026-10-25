@@ -88,6 +88,58 @@ pub struct ClassItem {
     /// `:云资源` 是同一个事实。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// ⭐ REQ-145 · 这个类的**数据源**（该走哪个入口取数）。
+    ///
+    /// `None`（⇒ 字段不出现）= 这个部署没加载 `--access-mapping`：既有响应逐字节不变（R1）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<ClassAccess>,
+}
+
+/// ⭐ REQ-145 · 一个类「数据在哪、怎么取」—— `catalog` / `describe` 的 `access` 字段。
+///
+/// 两个形状（契约 §八 第 3 点）：
+///
+/// ```json
+/// { "kind": "api", "queryable_by": ["fetch"], "pushdown_fields": ["ids"], "freshness": "realtime" }
+/// { "kind": "db",  "queryable_by": ["sparql"] }
+/// ```
+///
+/// `queryable_by` 是**许可清单**，不是建议：`["sparql"]` 的类可以写进 SPARQL；
+/// `["fetch"]` 的类写进 SPARQL 只会拿到 `@pending`（jsonld）或 `NOT_DB_SOURCE`（rows）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ClassAccess {
+    /// `api` / `db`。
+    pub kind: &'static str,
+    /// `["fetch"]`（api）/ `["sparql"]`（db）。
+    pub queryable_by: Vec<&'static str>,
+    /// 能直接下推给 API 的过滤字段（只有 api 有；映射没说就**不出现**，⛔ 不编）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pushdown_fields: Option<Vec<String>>,
+    /// 数据新鲜度（只有 api 可能有；映射没写就不出现）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<String>,
+}
+
+impl ClassAccess {
+    /// 库源：`sparql` 可查，没有「下推字段」这回事。
+    pub fn db() -> Self {
+        Self {
+            kind: "db",
+            queryable_by: vec!["sparql"],
+            pushdown_fields: None,
+            freshness: None,
+        }
+    }
+
+    /// api 源：只能 `fetch`（平台不代取 —— 凭据不出客户边界）。
+    pub fn api(entity: &super::source_gate::Entity) -> Self {
+        Self {
+            kind: "api",
+            queryable_by: vec!["fetch"],
+            pushdown_fields: Some(entity.pushdown.clone()),
+            freshness: entity.freshness.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +236,9 @@ pub struct ClassDetail {
     ///
     /// 本体服务模式下 `mode = "not_applicable"`：没有数据源 ⇒ 没有「按哪一列过滤」这回事。
     pub tenant: TenantInfo,
+    /// ⭐ REQ-145 · 这个类的**数据源**（`None` = 没加载映射 ⇒ 字段不出现）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<ClassAccess>,
     pub properties: Vec<PropertyDetail>,
     pub relations: Vec<RelationDetail>,
 }
@@ -309,12 +364,29 @@ impl SnapshotIndex<'_> {
 ///
 /// 为什么不是两份实现：两份遍历一旦漂移，就是「同一份快照，两个模式给出两套本体」，
 /// 而且**不会报错**（本需求存在的理由正是这种静默丢失）。
-pub fn build_items(model: &ModelTrackView, mapping: Option<&R2rmlMapping>) -> Vec<CatalogItem> {
+pub fn build_items(
+    model: &ModelTrackView,
+    mapping: Option<&R2rmlMapping>,
+    access: Option<&super::source_gate::AccessMapping>,
+) -> Vec<CatalogItem> {
     let idx = snapshot_index(model);
     let mut items: Vec<CatalogItem> = Vec::new();
 
+    // ⭐ REQ-145 · 一个类的 `access`（`None` = 没加载映射 ⇒ 字段不出现，R1）。
+    let class_access = |key: &str| -> Option<ClassAccess> {
+        let a = access?;
+        Some(match a.entity(key) {
+            Some(e) => ClassAccess::api(e),
+            None => ClassAccess::db(),
+        })
+    };
+
     // ── ① 类：同一份快照列表，只在「留不留 / 用谁的数字」处分叉 ──
     for e in &idx.classes {
+        // ⭐ REQ-145 · api 类**也要列出来**（需求 §3）：即便它在映射里没有 TriplesMap
+        // （复合主键 / 无主键会被跳过），只要 access 说它来自 API，Agent 就该知道它存在
+        // ——「查了也没有数」与「这个类不存在」是两件完全不同的事。
+        let is_api = access.is_some_and(|a| a.is_api(&e.key));
         let item = match mapping {
             // 普通模式：没有 TriplesMap 的类**不可查** ⇒ 不列（既有行为）。
             Some(m) => match m.class(&e.key) {
@@ -326,6 +398,18 @@ pub fn build_items(model: &ModelTrackView, mapping: Option<&R2rmlMapping>) -> Ve
                     relation_count: c.joins.len(),
                     description: e.description.clone(),
                     display_name: None,
+                    access: class_access(&e.key),
+                },
+                None if is_api => ClassItem {
+                    // 映射里没有它（比如主键不唯一）⇒ 主键**不报**（⛔ 不猜一列）。
+                    name: local_model(&e.key),
+                    table: e.key.clone(),
+                    primary_key: String::new(),
+                    property_count: e.properties.len(),
+                    relation_count: idx.forward_degree(&e.key),
+                    description: e.description.clone(),
+                    display_name: None,
+                    access: class_access(&e.key),
                 },
                 None => continue,
             },
@@ -339,6 +423,7 @@ pub fn build_items(model: &ModelTrackView, mapping: Option<&R2rmlMapping>) -> Ve
                 relation_count: idx.forward_degree(&e.key),
                 description: e.description.clone(),
                 display_name: Some(e.display_name.clone()),
+                access: class_access(&e.key),
             },
         };
         items.push(CatalogItem::Class(item));
@@ -561,6 +646,17 @@ pub fn describe(svc: &QueryService, raw: &str) -> Result<Description, ApiError> 
         return Ok(Description::Property(property_detail(svc, p.0, &p.1)));
     }
 
+    // ⭐ REQ-145 · **api 类**即便在映射里没有 TriplesMap，也要能 describe：
+    // catalog 里已经把它列出来了（`access.kind: "api"`），这里 404 会让调用方以为
+    // 那条目录是假的。走快照那条路（名字口径与本体模式相同）。
+    if svc
+        .access
+        .as_ref()
+        .is_some_and(|a| a.api_classes().keys().any(|k| k == local || local_model(k) == local))
+    {
+        return describe_from_snapshot(svc, name, local);
+    }
+
     let mut suggestions = nearest(svc, local, 5);
     suggestions.sort();
     suggestions.dedup();
@@ -613,9 +709,20 @@ fn class_detail(svc: &QueryService, c: &crate::domain::r2rml::MappedClass) -> Cl
         display_name: None,
         key: None,
         tenant,
+        // ⭐ REQ-145 · api 类 / 库源类的数据源（`None` = 没加载映射 ⇒ 字段不出现）。
+        access: access_of(svc, &c.key),
         properties,
         relations,
     }
+}
+
+/// ⭐ REQ-145 · 类的 `access`（`None` = 没加载 `--access-mapping`）。
+fn access_of(svc: &QueryService, class_key: &str) -> Option<ClassAccess> {
+    let a = svc.access.as_ref()?;
+    Some(match a.entity(class_key) {
+        Some(e) => ClassAccess::api(e),
+        None => ClassAccess::db(),
+    })
 }
 
 fn property_detail(
@@ -652,7 +759,7 @@ fn describe_from_snapshot(svc: &QueryService, name: &str, local: &str) -> Result
         .iter()
         .find(|e| local_model(&e.key) == local || e.key == local || e.display_name == local)
     {
-        return Ok(Description::Class(class_detail_snapshot(&idx, e)));
+        return Ok(Description::Class(class_detail_snapshot(svc, &idx, e)));
     }
 
     // ② 属性：`类__列` 或 `类.列`（与普通模式同一套写法）
@@ -667,6 +774,7 @@ fn describe_from_snapshot(svc: &QueryService, name: &str, local: &str) -> Result
 }
 
 fn class_detail_snapshot(
+    svc: &QueryService,
     idx: &SnapshotIndex<'_>,
     e: &ModelEntityView,
 ) -> ClassDetail {
@@ -690,6 +798,9 @@ fn class_detail_snapshot(
                     .into(),
             ),
         },
+        // ⭐ REQ-145 · 本体服务模式也可能加载了映射（`--access-mapping` 与
+        // `--ontology-only` 不互斥）⇒ 这里同样报 `access`（没加载就是 `None`）。
+        access: access_of(svc, &e.key),
         properties: props
             .into_iter()
             .map(|p| property_detail_snapshot(e, p))
@@ -951,8 +1062,8 @@ mod tests {
     #[test]
     fn the_item_sequence_is_stable_and_sorted_by_kind() {
         let (_, mapping, model) = crate::query::test_fixture();
-        let a = build_items(&model, Some(&mapping));
-        let b = build_items(&model, Some(&mapping));
+        let a = build_items(&model, Some(&mapping), None);
+        let b = build_items(&model, Some(&mapping), None);
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
@@ -1056,7 +1167,7 @@ mod tests {
     #[test]
     fn ontology_mode_lists_relations_that_have_no_join_column() {
         let model = documentary_fixture();
-        let items = build_items(&model, None);
+        let items = build_items(&model, None, None);
         let counts = counts(None, &items);
         assert_eq!(counts.classes, 2, "{items:#?}");
         assert_eq!(counts.relations, 1, "关系不许被「对账不上」吃掉：{items:#?}");
@@ -1093,7 +1204,7 @@ mod tests {
     #[test]
     fn ontology_mode_does_not_fabricate_a_primary_key_column() {
         let model = documentary_fixture();
-        let items = build_items(&model, None);
+        let items = build_items(&model, None, None);
         let classes: Vec<&ClassItem> = items
             .iter()
             .filter_map(|i| match i {
@@ -1129,7 +1240,7 @@ mod tests {
     #[test]
     fn query_mode_items_have_no_ontology_only_fields() {
         let (_, mapping, model) = crate::query::test_fixture();
-        let items = build_items(&model, Some(&mapping));
+        let items = build_items(&model, Some(&mapping), None);
         for item in &items {
             let v = serde_json::to_value(item).unwrap();
             assert!(

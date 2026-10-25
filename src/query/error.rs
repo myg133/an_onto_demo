@@ -244,6 +244,60 @@ impl ApiError {
         )
     }
 
+    /// ⭐ REQ-145 · **查询打了 API 源的类**，而 `format=rows` 挂不住 `@pending`（R5）。
+    ///
+    /// 为什么是 **400 + 明确报错**，而不是 200 空表：表挂不住「少了一块」这件事，
+    /// 空表会被调用方读成「查了，这个类没有数据」—— 那正是本需求要消灭的静默错误
+    /// （契约 §六 的 `NOT_DB_SOURCE`：Agent 的动作是**改查 catalog 看 `access.kind`**）。
+    ///
+    /// hint 必须给出**两条**可走的路：① 换 `format=jsonld` 拿 `@pending` + `get`；
+    /// ② 按 `get.class` / `get.filter` 去取，或绕开这些类重写查询。
+    pub fn not_db_source(classes: &[String]) -> Self {
+        let named = if classes.is_empty() {
+            "这次查询点名的类".to_string()
+        } else {
+            classes.join("、")
+        };
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "NOT_DB_SOURCE",
+            format!(
+                "查询落在 **API 源**上（{named}）：这些类的数据不在本库，平台**不执行** API 调用，\
+                 行回执（`format=rows`）无法表达「少了一块」。"
+            ),
+            "① 改要 **JSON-LD**：`?format=jsonld` —— 会拿到 `@graph: []` + `@pending[]`\
+             （每条带 `get.class` / `get.filter` / `get.pushdown` / `get.ref`），\n  \
+             ② 再按 `get` 去取（凭据由你管）：`filter.ids` 里就是平台从查询里认出来的实例标识，\n  \
+             ③ 平台**不做**跨源 join：需要库源 + API 源一起答时，拆成两段查（先库源、再按 `get` 取），\n  \
+             ④ 想知道哪些类要这么走：`GET /api/catalog` / `GET /api/describe` 看 `access.kind`\
+             （`db` ⇒ `queryable_by:[\"sparql\"]`；`api` ⇒ `queryable_by:[\"fetch\"]`）。\n  \
+             ⛔ 重试无效：这不是瞬时故障，也不是你的查询写法问题。",
+        )
+    }
+
+    /// ⭐ REQ-145 · **查询需要跨源遍历**（一条边两端一条在库、一条在 API）。
+    ///
+    /// 契约规则 4 的落地：跨源边**不下发 `get`**、也**不执行**（平台不做跨源 join，
+    /// 契约 §七「谁都不做」）。Agent 的动作是**拆成两段**（契约 §八 第 5 条：别重试）。
+    pub fn cross_source_unsupported(predicate: &str, from: &str, to: &str) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "CROSS_SOURCE_UNSUPPORTED",
+            format!(
+                "查询需要**跨源遍历**：边 `{predicate}` 一端在库源（`{from}`）、另一端在 API 源\
+                 （`{to}`），平台不执行跨源 join。"
+            ),
+            format!(
+                "拆成两段：① 先只查库源那一段（只写 `:{from}` 的类 / 属性，不写 `:{predicate}`），\
+                 拿到本地的实例标识；\n  \
+                 ② 再对 `{to}` 单独查（`?format=jsonld` 会给你 `@pending[].get`，按 `filter.ids` 去取），\
+                 由你在答案里拼起来。\n  \
+                 ⛔ 别重试同一条查询：这条边平台**永远不会**执行（需求「不做跨源 join / 联邦」）。\n  \
+                 想确认哪些类来自 API：`GET /api/catalog` 看 `access.kind`。"
+            ),
+        )
+    }
+
     /// 把 planner 的错误归到有限个 code（见模块头的已知边界）。
     ///
     /// 归不出来的一律 `SPARQL_UNSUPPORTED`（语法/子集问题最多），并给出支持清单 ——

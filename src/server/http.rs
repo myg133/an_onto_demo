@@ -428,6 +428,8 @@ async fn get_ttl(State(state): State<AppState>) -> Result<impl IntoResponse, Res
         tenancy: None,
         // REQ-119 A-1：HTTP 出口没有 schema 入参 ⇒ 只能启发式（文件头会明说）。
         schema: None,
+        // ⭐ REQ-145 · 只读图服务不加载 access 映射 ⇒ 字节不变（R1）。
+        api_classes: None,
     };
     let rendered = match crate::domain::pipeline::render(
         crate::domain::pipeline::OutletId::H4,
@@ -1611,6 +1613,7 @@ mod tests {
             action_type_count: 0,
             tenancy: None,
             schema: None,
+            api_classes: None,
         };
         let cli_bytes = crate::domain::pipeline::render(
             crate::domain::pipeline::OutletId::C6,

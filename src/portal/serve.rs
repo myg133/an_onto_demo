@@ -154,6 +154,8 @@ pub async fn load(pool: &PgPool, args: &ServeArgs) -> anyhow::Result<PortalServi
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: Some(&schema),
+        // ⭐ REQ-145 · 客户门户不加载 access 映射（也就拿不到 `get`，R6）⇒ 字节不变。
+        api_classes: None,
     };
     let model = crate::domain::model_view::project_model_track(&snap);
     let mapping = crate::domain::r2rml::build_mapping(
