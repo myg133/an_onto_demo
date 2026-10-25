@@ -58,3 +58,82 @@
 3. `fetch --dry-run-fixture`：分页、本地过滤、JSON-LD 组装、`meta` 三项
 4. 一个 fixture（可用腾讯云官方文档示例，注明来源）
 5. 已知限制
+
+
+---
+
+## 三 · 设计修订（2026-10-25 与用户讨论后）
+
+### R-1 · 契约以 **RML 风格** 表达，发布为 **JSON-LD**
+
+原来的草案是自定义 JSON。改成：
+
+| 项 | 用什么 |
+| --- | --- |
+| 「JSON 响应 → RDF」的主体 | **RML**（`rml:logicalSource` / `rml:iterator` / `rml:reference` / `rr:template`） |
+| RML 没有的部分（auth / capability / paging / freshness） | **`ontok:` 扩展谓词** |
+
+**双形态**：
+
+```
+access.json        ← 作者格式（人写、人审、好 diff）
+access.jsonld      ← 发布格式（RML 风格，给执行器与 Agent）
+```
+
+**为什么双形态**：JSON 适合人看和 review，JSON-LD 适合机器查（能用 SPARQL 问"哪些类支持按 zone 过滤"）。
+
+### R-2 · `catalog` / `describe` 必须报出「这个类走哪个入口」
+
+新字段：
+
+```json
+{ "kind": "class", "name": "cvm_instance",
+  "access": {
+    "kind": "api",
+    "queryable_by": ["fetch"],
+    "pushdown_fields": ["zone", "ids"],
+    "freshness": "realtime"
+  } }
+```
+
+| `access.kind` | Agent 该用 |
+| --- | --- |
+| `db` | `sparql_query` |
+| `api` | `access fetch`（且只能用 `pushdown_fields` 过滤） |
+
+**不加这条，Agent 会拿 SPARQL 反复试 API 类**，然后收到空结果却不知道为什么。
+
+**实现方式**：`query serve` 增加可选参数 `--access-mapping access.jsonld`；
+- 给了：catalog/describe 把 API 类也列出来（带 `access` 字段）
+- SPARQL 打到 API 类 ⇒ **明确报错** `NOT_DB_SOURCE`（不是空结果）
+
+### R-3 · 明确不做（写死边界）
+
+| 不做 | 理由 |
+| --- | --- |
+| 跨源 join（R2RML 源 ⇄ API 源） | 没有一层能执行它；只能在 Agent 侧拼 |
+| SPARQL 查 API 源 | 给了就等于承诺能下推，实际只能全表扫 |
+| 联邦执行器 | 那是另一个产品（Trino/DuckDB 的领域） |
+
+### R-4 · 跨源关系要能被标记
+
+```json
+{ "predicate": "order__customer", "from": "order", "to": "customer",
+  "cross_source": true, "traversable": false }
+```
+
+查询器看到 `traversable:false` 的边 ⇒ **拒绝遍历**并说明，⛔ 不静默给半个答案。
+
+---
+
+## 四 · 五个产物（阶段 0 的全部）
+
+| # | 产物 | 人在哪用它 |
+| --- | --- | --- |
+| 1 | `access.json` 的 Rust 结构 + 解析 | FDE 写/审 |
+| 2 | `ontok access validate` | FDE 自查（4 条有牙的检查） |
+| 3 | `ontok access fetch --dry-run-fixture` | 离线验证取数逻辑（分页/本地过滤/JSON-LD） |
+| 4 | JSON → JSON-LD 转换（发布态） | 发布时生成 `access.jsonld` |
+| 5 | `query serve --access-mapping`（catalog/describe 报 `access` 字段；SPARQL 打 API 类报 `NOT_DB_SOURCE`） | 数字员工侧 |
+
+外加一份**示例**：腾讯云 CVM 的 `access.json` + 一份 fixture（官方文档示例，注明来源）。
