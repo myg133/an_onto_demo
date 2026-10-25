@@ -89,7 +89,7 @@ curl -X POST "$ONTOK_BASE_URL/mcp" \
 | --- | --- | --- |
 | `catalog` | `page`、`page_size` | 浏览类/属性/关系 |
 | `describe` | `name` | 单个概念详情 |
-| `sparql_query` | `query`、`max_rows` | 查数据（**本体模式下恒 503**） |
+| `sparql_query` | `query`、`max_rows`、**`format`**（`jsonld` **默认** / `rows`） | 查数据（**本体模式下恒 503**）；**默认返回 JSON-LD 图，要表传 `format:"rows"`** |
 | `sample` | `name`、`limit` | 取样（同上） |
 
 资源：`ontok://ontology/customer.ttl`、`ontok://ontology/model.ttl`

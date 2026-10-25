@@ -118,6 +118,11 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 | --- | --- |
 | `SELECT` + `WHERE` 三元组、`FILTER`（比较/逻辑）、`LIMIT`、`ORDER BY`、`DISTINCT`、聚合（`COUNT`/`SUM`/`AVG`/`MIN`/`MAX` + `GROUP BY`） | `OPTIONAL`、`UNION`、子查询、属性路径（`/`、`*`、`+`）、`REGEX`、`SERVICE`、构造类（`CONSTRUCT`/`INSERT`） |
 
+
+> ⭐ **默认回执是 JSON-LD 上下文子图**（`@context` / `@graph` / `summary` / `meta`），**没有** `columns` / `rows`。
+> 要**表格**（旧的行回执）必须显式传：MCP `arguments.format = "rows"`；REST `?format=rows` 或 `Accept: application/json`。
+> ⛔ **不传 `format` 拿到的是图**——别按表解析。
+
 **不支持的写法不要绕**：报错里会给出 `code` 与 `hint`，照它改，或者诚实说这个接口做不到。
 
 ⛔ **不要在查询里写"哪个客户"**——租户由 token 绑定、服务端注入。带上别人的租户标识会被拒（这是正确行为）。
@@ -132,7 +137,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 
 ## 五 · 第 4 步：读回执（**这一段决定你会不会误导用户**）
 
-普通模式的回执里除了 `rows`，还有四样东西——**它们不是装饰**：
+普通模式里，**行回执**（`format="rows"`）的 `rows` 之外有四个字段；**图回执（默认）**把它们放在 `meta` 里、用 `summary` 给 `nodes`/`row_count`（`@graph` 里没有 `rows`）——**它们不是装饰**：
 
 | 字段 | 含义 | 你必须做什么 |
 | --- | --- | --- |
@@ -181,6 +186,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 5. ⛔ **在查询里写租户** —— 服务端注入；写了会被拒
 6. ⛔ **把 `excluded_relations` 当"不存在"** —— 先看证据等级再下结论
 7. ⛔ **猜地址** —— 连到别的环境比连不上更糟
+8. ⛔ **以为默认会回表格** —— 默认是 JSON-LD 图；要表必须显式传 `format="rows"`
 
 ---
 
@@ -193,6 +199,6 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 ④ 用户问「X 的情况」
    ├─ 本体模式 → 用 TTL 里的定义回答，并说明没有数值
    └─ 普通模式 → SELECT ?x ?v WHERE { ?x a :X . ?x :p1 ?v } LIMIT 20
-⑤ 读回执：warnings / coverage / truncated / evidence_level
+⑤ 读回执（默认是图：看 `summary` + `meta`；要表先传 `format="rows"`）：warnings / coverage / truncated / evidence_level
 ⑥ 回答里带上限制；不确定的地方说「不确定」，不要补全
 ```
