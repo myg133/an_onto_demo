@@ -71,3 +71,28 @@
 1. 三个能力 + 各自判据（含变异红）
 2. 用 `am-tencent.json` 的 VPC / monitor / SSL 三个 entity 做**形状验证**（假端点收到的 body）
 3. 旧 mapping 零变化证明
+
+
+### D · `fixture` 不应**必填**（设计稿规则 9 是"有 fixture 才要能跑"，实现做成了"必须没有就报错"）
+
+**实测**：生成 14 个 entity 时，`validate` 对无 fixture 的实体直接判 `FIXTURE_UNREADABLE`。
+
+**后果（**比 A/B/C 更坏**）**：为了让 `validate` 通过，只能**倒着从映射生成夹具**——
+本次 14 个 entity 里 **13 个的夹具就是这样造出来的**（由映射里的键反向生成）。
+⇒ 它们 **`1/1` 覆盖、零证据力**，却让 `validate` 显示"字段路径全过"。
+
+> **这是判据在逼人生产假证据。** 和"SKIP 记成 passed"是同一类病：
+> **机制的默认值让"没证据"看起来像"有证据"。**
+
+**要**：
+
+| 场景 | 期望 |
+| --- | --- |
+| 契约里有 `fixture` | 走原来的字段路径校验（不变） |
+| **没有 `fixture`** | `validate` **不报错**，改为 `warning: FIELD_PATH_NOT_CHECKED`，并在输出里明说"该实体未做字段校准" |
+| `fetch --dry-run-fixture` 但无 fixture | **明确拒绝**并点名（这条本来就该拒） |
+| `fetch --allow-network` | 不受影响（真调用不需要夹具） |
+
+**判据**：
+1. 删掉某实体的 `fixture` ⇒ `validate` **exit 0** + 一条 `FIELD_PATH_NOT_CHECKED` 警告 + **该实体的 `field_coverage` 不出现**（⛔ 不许显示成 `1/1`）
+2. 若有人拿"自己造的夹具"过校验，输出里要能看出来（如 `fixture_source: "declared"`，并提示"夹具若由映射反向生成则无证据力"）
