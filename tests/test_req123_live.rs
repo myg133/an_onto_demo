@@ -245,12 +245,14 @@ async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
         ),
     ];
     for (label, q, must_warn) in queries {
-        let body = serde_json::json!({ "query": q }).to_string();
+        // ⭐ REQ-142：默认已翻转为 JSON-LD，本用例断言的是**行回执**的字节
+        // ⇒ 必须显式要 rows（断言一条都没改）。
+        let body = serde_json::json!({ "query": q, "format": "rows" }).to_string();
         let (status, rest_body) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "[{label}] REST 失败：{rest_body}");
         let line = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": "sparql_query", "arguments": { "query": q } }
+            "params": { "name": "sparql_query", "arguments": { "query": q, "format": "rows" } }
         })
         .to_string();
         let v = mcp(&svc, TOK_A, &line).await;
@@ -297,6 +299,100 @@ async fn ac004_rest_and_mcp_receipts_are_byte_identical() {
     }
 }
 
+/// ⭐ REQ-142 · AC-001 / AC-004 / AC-006 的真库判据：
+///
+/// - REST 不带任何线索（body 无 `format`、无 `?format=`、无 `Accept`）⇒ **JSON-LD**：
+///   顶层 `@context` / `@graph` / `summary` / `meta`，⛔ 没有 `rows` / `columns`；
+/// - 同一查询的显式 `?format=jsonld` 与默认**逐字节相同**（AC-006：JSON-LD 内容不变）；
+/// - MCP 省略 `format` ⇒ `structuredContent` 是图，`content[0].text` 与 REST 正文逐字节相同；
+/// - MCP `format:"rows"` ⇒ 行回执（`columns` / `rows`，⛔ 没有 `@graph`）——退回路径仍在。
+#[tokio::test]
+async fn req142_default_is_jsonld_on_rest_and_mcp() {
+    let _live = one_at_a_time();
+    let test = "req142_default_is_jsonld_on_rest_and_mcp";
+    let missing_required = require(
+        test,
+        &["ONTOK_REQ123_SCHEMA", "ONTOK_REQ123_TENANT", "ONTOK_SOURCE_DATABASE_URL"],
+    )
+    .is_none();
+    let missing_db = meta_url().is_none();
+    if !missing_required && missing_db {
+        common::skip::missing("ONTOK_DATABASE_URL", test);
+    }
+    if missing_required || missing_db {
+        return;
+    }
+    let tenant_a = env("ONTOK_REQ123_TENANT").unwrap();
+    let svc = build_service(10_000, &tenant_a, &tenant_a).await.expect("服务可构建");
+
+    let q = "SELECT ?b ?amt WHERE { ?b :balances__recharge_balance ?amt }";
+    let body = serde_json::json!({ "query": q }).to_string();
+
+    // ① REST 默认 ⇒ 图
+    let (status, default_body) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
+    assert_eq!(status, StatusCode::OK, "{default_body}");
+    let v: Value = serde_json::from_str(&default_body).expect("默认回执是 JSON");
+    for k in ["@context", "@graph", "summary", "meta"] {
+        assert!(
+            v.get(k).is_some(),
+            "默认回执缺 {k}（不是 JSON-LD？）：{default_body}"
+        );
+    }
+    assert!(v["@graph"].is_array(), "{default_body}");
+    assert!(v.get("rows").is_none(), "默认回执不该有 rows：{default_body}");
+    assert!(
+        v.get("columns").is_none(),
+        "默认回执不该有 columns：{default_body}"
+    );
+
+    // ② 显式 ?format=jsonld 与默认**逐字节相同**（AC-006）
+    let (status, explicit) = rest(
+        &svc,
+        "POST",
+        "/api/sparql?format=jsonld",
+        Some(TOK_A),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{explicit}");
+    assert_eq!(explicit, default_body, "默认图与 ?format=jsonld 必须逐字节相同");
+
+    // ③ MCP 省略 format ⇒ 图；content[0].text 与 REST 正文逐字节相同
+    let line = serde_json::json!({
+        "jsonrpc": "2.0", "id": 142, "method": "tools/call",
+        "params": { "name": "sparql_query", "arguments": { "query": q } }
+    })
+    .to_string();
+    let m = mcp(&svc, TOK_A, &line).await;
+    assert_eq!(m["result"]["isError"], false, "{m}");
+    assert!(
+        m["result"]["structuredContent"]["@graph"].is_array(),
+        "MCP 默认不是图：{m}"
+    );
+    assert!(
+        m["result"]["structuredContent"].get("rows").is_none(),
+        "MCP 默认不该回 rows：{m}"
+    );
+    assert_eq!(
+        m["result"]["content"][0]["text"].as_str().unwrap(),
+        default_body,
+        "两协议的默认回执必须逐字节相同"
+    );
+
+    // ④ MCP format:"rows" ⇒ 表（退回路径仍在，且不是图）
+    let line = serde_json::json!({
+        "jsonrpc": "2.0", "id": 143, "method": "tools/call",
+        "params": { "name": "sparql_query", "arguments": { "query": q, "format": "rows" } }
+    })
+    .to_string();
+    let m = mcp(&svc, TOK_A, &line).await;
+    assert_eq!(m["result"]["isError"], false, "{m}");
+    let sc = &m["result"]["structuredContent"];
+    assert!(sc.get("columns").is_some(), "format:rows 必须是行回执：{m}");
+    assert!(sc.get("rows").is_some(), "format:rows 必须是行回执：{m}");
+    assert!(sc.get("@graph").is_none(), "format:rows 不该有图：{m}");
+}
+
 /// B1 · **QA 实测的误读场景**（真库）：三表查询的回执里，「涉及但本次未用」的边
 /// 必须能认出来 —— 这是 `join_states_scope` + `used` 的存在理由。
 ///
@@ -327,7 +423,8 @@ async fn b1_the_scope_and_the_unused_edge_are_visible_in_the_receipt() {
 
     let q = "SELECT ?l ?c ?b WHERE { ?l :licenses__customers ?c . \
              ?b :balances__customers__customer_id ?c }";
-    let body = serde_json::json!({ "query": q }).to_string();
+    // ⭐ REQ-142：本用例读的是行回执的 tables/join_states（默认已是图）⇒ 显式 rows。
+    let body = serde_json::json!({ "query": q, "format": "rows" }).to_string();
     let (status, text) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     let v: Value = serde_json::from_str(&text).expect("回执是 JSON");
@@ -440,7 +537,7 @@ async fn ac003_a_never_sees_another_tenants_rows() {
         "SELECT ?b WHERE {{ ?b :balances__customers__customer_id ?c . \
          FILTER(?c = <{ont}#customers/{tenant_b}>) }}"
     );
-    let body = serde_json::json!({ "query": leak_q }).to_string();
+    let body = serde_json::json!({ "query": leak_q, "format": "rows" }).to_string();
     let (status, text) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     let v: Value = serde_json::from_str(&text).unwrap();
@@ -494,7 +591,8 @@ async fn ac010_five_real_queries_return_receipts() {
         ("GROUP BY", "SELECT ?c (COUNT(?b) AS ?n) WHERE { ?b :balances__customers__customer_id ?c } GROUP BY ?c".to_string()),
         ("ORDER BY+LIMIT", "SELECT ?b ?amt WHERE { ?b :balances__recharge_balance ?amt } ORDER BY DESC(?amt) LIMIT 5".to_string()),
     ] {
-        let body = serde_json::json!({ "query": q }).to_string();
+        // ⭐ REQ-142：断言的是行回执字段（row_count / sql_echo / …）⇒ 显式 rows。
+        let body = serde_json::json!({ "query": q, "format": "rows" }).to_string();
         let (status, text) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "[{label}] {text}");
         let v: Value = serde_json::from_str(&text).unwrap();
@@ -687,7 +785,9 @@ async fn ac005_the_token_row_cap_cannot_be_raised() {
     let svc = build_service(10_000, &tenant_a, &tenant_a).await.expect("服务可构建");
     let body = serde_json::json!({
         "query": "SELECT ?b ?amt WHERE { ?b :balances__recharge_balance ?amt }",
-        "max_rows": 999_999u64
+        "max_rows": 999_999u64,
+        // ⭐ REQ-142：断言的是行回执的 limits / warnings（默认已是图）⇒ 显式 rows。
+        "format": "rows"
     })
     .to_string();
     let (status, text) = rest(&svc, "POST", "/api/sparql", Some(TOK_A), Some(&body)).await;

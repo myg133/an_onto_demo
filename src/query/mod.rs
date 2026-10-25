@@ -201,20 +201,26 @@ pub struct SparqlRequest {
     pub max_rows: Option<u64>,
     #[serde(default)]
     pub tenant: Option<String>,
-    /// ⭐ REQ-140 · 回执格式（`rows`(默认) / `jsonld`）。⚠️ 它**只**决定渲染，
+    /// ⭐ REQ-140 / REQ-142 · 回执格式（`jsonld`(默认) / `rows`）。⚠️ 它**只**决定渲染，
     /// ⛔ 不参与规划 / 注入 / 限额 / 审计的任何判断。
     ///
-    /// REST 侧还有两个入口（`?format=` 与 `Accept: application/ld+json`），
-    /// 三者的优先级见 [`crate::query::http`] 的 `sparql_format`：
-    /// **显式 `?format=` > 本字段 > `Accept` 头**。
+    /// REST 侧还有两个入口（`?format=` 与 `Accept`），三者的优先级见
+    /// [`crate::query::http`] 的 `sparql_format`：**显式 `?format=` > 本字段 > `Accept` 头**；
+    /// 三处都没给线索时用 [`QueryFormat::default`]（REQ-142 起 = `jsonld`，即
+    /// [`crate::query::DEFAULT_FORMAT`]）。要行回执：`?format=rows` /
+    /// `Accept: application/json` / 本字段 `"rows"`（三选一）。
     #[serde(default)]
     pub format: Option<QueryFormat>,
 }
 
-/// ⭐ REQ-140 · 回执格式：`rows`（默认，REQ-122 的行回执）/ `jsonld`（上下文子图）。
+/// ⭐ REQ-140 / REQ-142 · 回执格式：`jsonld`（**默认**，上下文子图）/ `rows`（REQ-122 的行回执）。
 ///
-/// 默认 [`QueryFormat::Rows`]，且默认路径**零字节变化**（AC-009）：这个类型只决定
-/// 「取到行之后怎么渲染」，不进规划器、不进限额、不进审计。
+/// ⭐ REQ-142 · **默认翻转**：三处都没写线索时返回 JSON-LD（[`DEFAULT_FORMAT`]），
+/// 因为数字员工要的是图。`rows` 这条路**没有删**：显式写 `format`（REST 的 body 或
+/// `?format=rows`、MCP 的 `format:"rows"`）或 `Accept: application/json` 即可，字节与
+/// REQ-122/123 的行回执**逐字节相同**（R2）。
+///
+/// 这个类型只决定「取到行之后怎么渲染」，不进规划器、不进限额、不进审计。
 ///
 /// REST 与 MCP **共用这一个类型与这一条解析**（[`QueryFormat::parse`]）：两个协议
 /// 各写一份「认哪些字符串」就会出现「REST 认、MCP 不认」这种静默分歧。
@@ -222,11 +228,19 @@ pub struct SparqlRequest {
 #[serde(rename_all = "lowercase")]
 pub enum QueryFormat {
     /// 行回执（`columns` / `rows` / …）。REQ-122 起的行为，⛔ 一个字节都不改。
-    #[default]
     Rows,
     /// JSON-LD 上下文子图（`@context` / `@graph` / `summary` / `meta`）。
+    /// ⭐ REQ-142 · 协议的**默认**输出（R1：REST 与 MCP 都是）。
+    #[default]
     JsonLd,
 }
+
+/// ⭐ REQ-142 · 三个入口（body / `?format=` / `Accept`）**都没给线索**时的默认格式。
+///
+/// 它就是 [`QueryFormat::default`] 的具名别名：默认值**只有一处**（枚举上的
+/// `#[default]`），MCP 的 `format` 省略路径与 REST 的 `Accept` 兜底读的是同一个值
+/// —— 于是「REST 默认图、MCP 默认表」这种分歧在结构上没有发生的位置（R1）。
+pub const DEFAULT_FORMAT: QueryFormat = QueryFormat::JsonLd;
 
 impl QueryFormat {
     /// 字符串 → 格式（REST 的 `?format=` 用它；MCP 走 serde）。
@@ -268,7 +282,8 @@ impl SparqlRequest {
                     format!("请求体不合法：{e}"),
                     "可用字段只有 `query`（必填，字符串）、`max_rows`（可选，正整数）、\
                      `tenant`（可选，**只用于核对**，必须等于凭证绑定的租户）、\
-                     `format`（可选，`rows`(默认) / `jsonld`：后者返回 JSON-LD 上下文子图）。\
+                     `format`（可选，`jsonld`(默认) / `rows`：前者返回 JSON-LD 上下文子图，\
+                     后者返回行回执表）。\
                      租户由凭证决定，正常调用不需要写 tenant。",
                 )
             })?;
@@ -1592,7 +1607,8 @@ mod tests {
         assert_eq!(e.code, "BAD_REQUEST");
     }
 
-    /// ⭐ REQ-140 · `format` 字段：默认（不写）= rows；`jsonld` 认；拼错 **400**（⛔ 不回退）。
+    /// ⭐ REQ-140 / REQ-142 · `format` 字段：省略 = **jsonld**（REQ-142 翻转）；
+    /// `rows` 显式要行回执；拼错 **400**（⛔ 不回退）。
     ///
     /// MCP 的 `sparql_query` 与 REST 的 body 走**同一个** `from_value`，所以这一条
     /// 同时钉住「MCP 入口认哪些值」。
@@ -1601,8 +1617,15 @@ mod tests {
         let base = serde_json::json!({"query": "SELECT ?s WHERE { ?s a :customers }"});
 
         let none = SparqlRequest::from_value(&base).expect("不写 format");
-        assert_eq!(none.format, None, "不写就是 None（下游 unwrap_or_default ⇒ rows）");
-        assert_eq!(QueryFormat::default(), QueryFormat::Rows);
+        assert_eq!(
+            none.format, None,
+            "不写就是 None（下游 unwrap_or_default ⇒ jsonld，REQ-142）"
+        );
+        // ⭐ REQ-142 · 默认值只有一处：枚举上的 `#[default]`。它就是 MCP 省略 format 时
+        // 的实际取值（`unwrap_or_default`），也是 REST `Accept` 兜底的取值。
+        assert_eq!(QueryFormat::default(), QueryFormat::JsonLd);
+        assert_eq!(DEFAULT_FORMAT, QueryFormat::JsonLd);
+        assert!(none.format.unwrap_or_default().is_jsonld());
 
         let rows = SparqlRequest::from_value(
             &serde_json::json!({"query": "SELECT ?s WHERE { ?s a :customers }", "format": "rows"}),
