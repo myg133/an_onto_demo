@@ -310,14 +310,14 @@ mod tests {
   "project": "ops360",
   "ontology_version": 2,
   "sources": [
-    { "id": "tencent-cvm", "kind": "http-json", "base_url": "https://cvm.tencentcloudapi.com",
+    { "id": "svc-example", "kind": "http-json", "base_url": "https://api.example.com",
       "auth": { "mode": "tc3-hmac-sha256", "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"] },
       "defaults": { "Region": "ap-guangzhou" } }
   ],
   "entities": [
-    { "id": "cvm_instance", "class": "云资源", "source": "tencent-cvm",
+    { "id": "cvm_instance", "class": "云资源", "source": "svc-example",
       "reviewed_by": "张三@2026-10-25",
-      "operation": { "action": "DescribeInstances", "version": "2017-03-12" },
+      "operation": { "action": "SomeAction", "version": "2017-03-12" },
       "iterator": "$.Response.InstanceSet[*]",
       "identity": { "key_path": "InstanceId" },
       "iri_template": "ontok:云资源/{id}",

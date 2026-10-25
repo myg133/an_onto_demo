@@ -112,7 +112,7 @@ impl FilterValue {
     }
 
     /// 命中吗（`null` / 缺失 ⇒ 不命中）。
-    fn matches(&self, actual: Option<&Value>) -> bool {
+    pub(crate) fn matches(&self, actual: Option<&Value>) -> bool {
         match actual {
             None | Some(Value::Null) => false,
             Some(v) => {
@@ -129,7 +129,7 @@ impl FilterValue {
 }
 
 /// 标量 → 文本（对象 / 数组返回 `None`：它们没法当过滤值）。
-fn scalar_text(v: &Value) -> Option<String> {
+pub(crate) fn scalar_text(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
@@ -187,6 +187,12 @@ pub struct Meta {
     /// 本次取的映射条目 id 与它映射到本体里的类。
     pub entity: String,
     pub class: String,
+    /// ⭐ 阶段 1：**真调用**才出现这一栏（`--allow-network`）。
+    ///
+    /// `None` ⇒ 这一栏**整个不出现**（`skip_serializing_if`）—— 这就是
+    /// 「阶段 0 的输出逐字节不变」的落点：fixture 通路的 JSON 里没有多出来的键。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<super::net::NetworkReceipt>,
 }
 
 /// 一份取数结果（`@context` / `@graph` / `summary` / `meta` —— 与 `query serve` 同形状）。
@@ -265,55 +271,13 @@ pub fn dry_run(
         ));
     }
 
-    // ── 3 · 过滤条件分类 ────────────────────────────────────
-    let mut local_keys: Vec<String> = Vec::new();
-    let mut local_filter: Vec<(String, FilterValue)> = Vec::new();
-    let mut pushdown_filters: Vec<(String, FilterValue)> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
+    // ── 3 · 过滤条件分类（与真调用通路**共用**同一个分类器）──────────
+    let plan = classify_filters(entity, &opts.filter)?;
+    let local_keys = plan.local_keys;
+    let local_filter = plan.local_filters;
+    let pushdown_filters = plan.pushdown_filters;
+    let mut warnings = plan.warnings;
     let mut unsimulated: Vec<String> = Vec::new();
-
-    for (key, want) in &opts.filter {
-        let in_pushdown = entity.capability.pushdown.iter().any(|f| f == key);
-        let in_local = entity.capability.local_only.iter().any(|f| f == key);
-        if in_pushdown && in_local {
-            // R4 该拦住的形态（validate 已经报错）；执行器按**更保守**的一侧处理。
-            warnings.push(format!(
-                "字段 `{key}` 同时写在 `pushdown` 与 `local_only`（R4 不许）：\
-                 本次按**本地过滤**处理，⛔ 不假设服务端筛过。"
-            ));
-            local_keys.push(key.clone());
-            local_filter.push((key.clone(), want.clone()));
-        } else if in_local {
-            local_keys.push(key.clone());
-            local_filter.push((key.clone(), want.clone()));
-            // 设计稿 §四 的示例回执里就有这一条：Agent 必须知道**是我们筛的**。
-            warnings.push(format!(
-                "字段 `{key}` 不在 `pushdown` 里（服务端不支持按它筛）⇒ 已在本地过滤"
-            ));
-        } else if in_pushdown {
-            pushdown_filters.push((key.clone(), want.clone()));
-        } else if entity.fields.contains_key(key) {
-            // 是已声明的字段、却没声明能力面 ⇒ 按本地过滤（保守），并明确告知。
-            warnings.push(format!(
-                "字段 `{key}` 既不在 `pushdown` 也不在 `local_only` —— 本次按**本地过滤**处理。\
-                 建议在契约里显式声明它属于哪一侧（R4：不写等于暗示「都能下推」）。"
-            ));
-            local_keys.push(key.clone());
-            local_filter.push((key.clone(), want.clone()));
-        } else {
-            return Err(AccessError::new(
-                CODE_UNKNOWN_FILTER,
-                format!(
-                    "过滤条件 `{key}` 不认识：它既不在 `capability.pushdown`、也不在 \
-                     `capability.local_only`，还不是 `fields` 里声明的字段。\
-                     可用的过滤名：pushdown={:?} local_only={:?} fields={:?}。",
-                    entity.capability.pushdown,
-                    entity.capability.local_only,
-                    entity.fields.keys().collect::<Vec<_>>()
-                ),
-            ));
-        }
-    }
 
     // ── 4 · 模拟服务端下推 ──────────────────────────────────
     let server_rows: Vec<&Value> = {
@@ -466,6 +430,8 @@ pub fn dry_run(
         mapping_ref: format!("access#{}@v{}", entity.id, mapping.mapping_version),
         entity: entity.id.clone(),
         class: entity.class.clone(),
+        // 阶段 0 通路没有网络回执 ⇒ 输出里不出现 `network` 键（逐字节不变）。
+        network: None,
     };
 
     Ok(JsonLdDoc {
@@ -476,8 +442,75 @@ pub fn dry_run(
     })
 }
 
+/// 过滤条件的分类结果（fixture 通路与真调用通路**共用**这一份判据）。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FilterPlan {
+    /// 落在本地过滤一侧的过滤名（回执的 `meta.filtered_locally`）。
+    pub local_keys: Vec<String>,
+    /// 本地过滤条件本身。
+    pub local_filters: Vec<(String, FilterValue)>,
+    /// 落在服务端下推一侧的过滤条件（真调用 → 请求参数；fixture → 模拟筛行）。
+    pub pushdown_filters: Vec<(String, FilterValue)>,
+    /// 分类时产生的能力提醒（顺序即输出顺序）。
+    pub warnings: Vec<String>,
+}
+
+/// 把 `--filter` 的每个条件分到「服务端下推 / 本地过滤」两侧，并给出提醒。
+///
+/// ⚠️ 两条通路必须用**同一个**分类器：否则「fixture 跑得通、真调用语义不同」
+/// 就成了最难查的那类偏差（本函数就是把这段逻辑从 `dry_run` 里提出来的原因）。
+pub(crate) fn classify_filters(
+    entity: &Entity,
+    filter: &BTreeMap<String, FilterValue>,
+) -> Result<FilterPlan, AccessError> {
+    let mut plan = FilterPlan::default();
+    for (key, want) in filter {
+        let in_pushdown = entity.capability.pushdown.iter().any(|f| f == key);
+        let in_local = entity.capability.local_only.iter().any(|f| f == key);
+        if in_pushdown && in_local {
+            // R4 该拦住的形态（validate 已经报错）；执行器按**更保守**的一侧处理。
+            plan.warnings.push(format!(
+                "字段 `{key}` 同时写在 `pushdown` 与 `local_only`（R4 不许）：\
+                 本次按**本地过滤**处理，⛔ 不假设服务端筛过。"
+            ));
+            plan.local_keys.push(key.clone());
+            plan.local_filters.push((key.clone(), want.clone()));
+        } else if in_local {
+            plan.local_keys.push(key.clone());
+            plan.local_filters.push((key.clone(), want.clone()));
+            // 设计稿 §四 的示例回执里就有这一条：Agent 必须知道**是我们筛的**。
+            plan.warnings.push(format!(
+                "字段 `{key}` 不在 `pushdown` 里（服务端不支持按它筛）⇒ 已在本地过滤"
+            ));
+        } else if in_pushdown {
+            plan.pushdown_filters.push((key.clone(), want.clone()));
+        } else if entity.fields.contains_key(key) {
+            // 是已声明的字段、却没声明能力面 ⇒ 按本地过滤（保守），并明确告知。
+            plan.warnings.push(format!(
+                "字段 `{key}` 既不在 `pushdown` 也不在 `local_only` —— 本次按**本地过滤**处理。\
+                 建议在契约里显式声明它属于哪一侧（R4：不写等于暗示「都能下推」）。"
+            ));
+            plan.local_keys.push(key.clone());
+            plan.local_filters.push((key.clone(), want.clone()));
+        } else {
+            return Err(AccessError::new(
+                CODE_UNKNOWN_FILTER,
+                format!(
+                    "过滤条件 `{key}` 不认识：它既不在 `capability.pushdown`、也不在 \
+                     `capability.local_only`，还不是 `fields` 里声明的字段。\
+                     可用的过滤名：pushdown={:?} local_only={:?} fields={:?}。",
+                    entity.capability.pushdown,
+                    entity.capability.local_only,
+                    entity.fields.keys().collect::<Vec<_>>()
+                ),
+            ));
+        }
+    }
+    Ok(plan)
+}
+
 /// 过滤名 → 用来筛 fixture 的路径（下推一侧）。
-fn filter_path(entity: &Entity, key: &str) -> Option<String> {
+pub(crate) fn filter_path(entity: &Entity, key: &str) -> Option<String> {
     if key == "ids" || key == entity.key_path {
         return Some(entity.key_path.clone());
     }
@@ -485,7 +518,7 @@ fn filter_path(entity: &Entity, key: &str) -> Option<String> {
 }
 
 /// 过滤名 → 本地过滤用的路径（与 [`filter_path`] 同口径，刻意不另立第二套规则）。
-fn local_path(entity: &Entity, key: &str) -> Option<String> {
+pub(crate) fn local_path(entity: &Entity, key: &str) -> Option<String> {
     filter_path(entity, key)
 }
 
@@ -506,7 +539,7 @@ fn read_fixture(mapping_dir: &Path, entity: &Entity) -> Result<Value, AccessErro
 }
 
 /// 行 → 节点（同 `@id` 合并属性；键序 / 节点序都按字典序 ⇒ 输出确定性）。
-fn assemble_graph(
+pub(crate) fn assemble_graph(
     rows: &[&Value],
     entity: &Entity,
     class_local: &str,
@@ -689,13 +722,13 @@ mod tests {
   "contract_version": 1,
   "mapping_version": 2,
   "project": "ops360",
-  "sources": [{{ "id": "s1", "base_url": "https://cvm.tencentcloudapi.com" }}],
+  "sources": [{{ "id": "s1", "base_url": "https://api.example.com" }}],
   "entities": [{{
     "id": "cvm_instance",
     "class": "云资源",
     "source": "s1",
     "reviewed_by": {reviewed},
-    "operation": {{ "action": "DescribeInstances" }},
+    "operation": {{ "action": "SomeAction" }},
     "iterator": "$.Response.InstanceSet[*]",
     "identity": {{ "key_path": "InstanceId" }},
     "iri_template": "ontok:云资源/{{id}}",

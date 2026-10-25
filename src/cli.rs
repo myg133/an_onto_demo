@@ -233,9 +233,11 @@ pub enum Cmd {
     /// | --- | --- | --- | --- |
     /// | `access validate` | 四条有牙的自洽检查（AC-002） | 否 | 否 |
     /// | `access fetch --dry-run-fixture` | 用 fixture 跑完整取数流程，出 JSON-LD + meta | 否 | **否** |
+    /// | `access fetch --allow-network` | ⭐ 真调用：TC3 签名 + 分页取数 + 错误分类 | 否 | **是（必须显式开启）** |
     /// | `access publish` | JSON → JSON-LD（RML 风格，可被 SPARQL 查） | 否 | 否 |
     ///
-    /// 三条都在**连库之前**分派：它们连产品库都不碰（与 `doc` / `name` / `exclude` 同一条理由）。
+    /// 三条都在**连库之前**分派：它们连产品库都不碰（与 `doc` / `name` / `exclude` 同一条理由）
+    /// —— 包括真调用那条：它只碰**云 API**，⛔ 不碰产品库。
     #[command(verbatim_doc_comment)]
     Access { #[command(subcommand)] cmd: AccessCmd },
     /// REQ-027 · 以**标准 MCP**（stdio）把**冻结快照**暴露给客户端
@@ -791,18 +793,69 @@ pub enum AccessCmd {
         #[arg(long)]
         ontology: PathBuf,
     },
-    /// 用 fixture 跑**完整取数流程**（分页 / 本地过滤 / JSON-LD / meta）—— ⛔ 不发任何网络请求
+    /// 用 fixture 或**真调用**跑完整取数流程（分页 / 本地过滤 / JSON-LD / meta）
     ///
-    /// 【可以照抄的一整条】
+    /// 【可以照抄的一整条（离线，⛔ 不发网络请求）】
     ///
     /// ontok access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
     /// --entity cvm_instance --filter '{"status":"STOPPED"}' --limit 50 --dry-run-fixture
     ///
-    /// 阶段 0 **只**有这一条通路：不给 `--dry-run-fixture` 会被明确拒绝
-    /// （`DRY_RUN_REQUIRED`），⛔ 不静默降级成「读 fixture 冒充真数据」。
+    /// 【可以照抄的一整条（真调用，必须显式加 --allow-network）】
     ///
-    /// 两条硬闸：`reviewed_by` 为空的 entity ⇒ `UNREVIEWED_MAPPING`；
+    /// ontok access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    /// --entity cvm_instance --filter '{"zone":"ap-guangzhou-2"}' --limit 50 --allow-network
+    ///
+    /// 两条通路**互斥**，且都**必须显式选一条**：两个都不给 ⇒ `DRY_RUN_REQUIRED`，
+    /// ⛔ 不静默降级成「读 fixture 冒充真数据」，也⛔ 不偷偷联网。
+    ///
+    /// 两条硬闸（两条通路都守）：`reviewed_by` 为空的 entity ⇒ `UNREVIEWED_MAPPING`；
     /// 继续扫描会超 `max_scan_rows` ⇒ `SCAN_LIMIT_EXCEEDED`（⛔ 不给部分结果）。
+    ///
+    /// ⭐ `--allow-network` 的凭据只从**环境变量**读（顺序：契约
+    /// `sources[].auth.credential_env` 声明的变量名 → 官方标准名
+    /// `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY`）。
+    /// ⛔ 凭据不进契约、不进命令行、不进日志、不进错误信息。
+    ///
+    /// ⭐ 真调用的失败**按类报码**（每个码都带改法，⛔ 没有一律 "request failed"）：
+    ///
+    /// | code | 什么时候 | 重试？ |
+    /// | --- | --- | --- |
+    /// | `AUTH_MISSING` | 环境变量没设 / 为空（**发请求之前**就判） | ⛔ |
+    /// | `AUTH_REJECTED` | HTTP 401 / 403 或 `AuthFailure.*` | ⛔ |
+    /// | `RATE_LIMITED` | HTTP 429 或 `RequestLimitExceeded` | ✅ 退避（有上限） |
+    /// | `FIELD_PATH_MISSING` | 响应里没有 `iterator` 指到的节点（契约错了） | ⛔ |
+    /// | `SCAN_LIMIT_EXCEEDED` | 继续取页会超 `max_scan_rows` | ⛔ |
+    /// | `UPSTREAM_TIMEOUT` | 连上了但**等太久**（Global / 收发超时） | ✅ 有上限 |
+    /// | `UPSTREAM_UNREACHABLE` | **连接没建立**（connect/resolve 超时、被拒、DNS 失败） | ✅ 有上限 |
+    /// | `API_ERROR` | 服务端业务错误（带它的 `Code` / `Message`；4xx 不重试，5xx 有上限） | ⛔/✅ |
+    ///
+    /// 真调用回执多一栏 `meta.network`（`host` / `service` / `attempts` / `retries` /
+    /// `http_status` / `signed_headers`）。**不给 `--allow-network` 时这一栏不出现**
+    /// ⇒ 阶段 0 的输出逐字节不变。
+    ///
+    /// ⭐ **过滤条件放到请求的哪里**，由契约的 `request.from_filter` 决定（三种写法）：
+    ///
+    /// ```json
+    /// // ① 旧写法（保留兼容）：顶层标量参数
+    /// "zone": "Zone"
+    /// // ② 顶层标量参数（显式写法）
+    /// "ids": { "scalar": "InstanceIds" }
+    /// // ③ 数组对象参数（腾讯云 Filters.N.Name / Filters.N.Values.N）
+    /// "zone": { "array": "Filters",
+    ///           "item": { "Name":   { "const": "zone" },
+    ///                     "Values": { "from": "value" } } }
+    /// //   ⇒ 请求体：{"Filters":[{"Name":"zone","Values":["ap-guangzhou-5"]}]}
+    /// ```
+    ///
+    /// ⚠️ 为什么必须有 ③（真调用买来的教训）：`DescribeInstances` **不接受**顶层 `Zone`
+    /// （会返回 `UnknownParameter`），只认 `Filters[].Name=zone`。
+    /// **签名对 ≠ 接口通** —— 参数位置错了，签名再完美也照样失败。
+    ///
+    /// `{"from":"value"}` 恒为数组（单值也包成 `[v]`）；`{"from":"text"}` 恒为标量
+    /// （多值 ⇒ 契约错，⛔ 不静默取第一个）。
+    ///
+    /// ⭐ `--dump-raw <PATH>`：把**第一页原始响应体**原样落盘（完整结构、未裁剪），
+    /// 用于把合成 fixture 换成真实响应。⛔ 默认不写；⛔ 不含凭据。
     #[command(verbatim_doc_comment)]
     Fetch {
         /// 作者格式契约
@@ -814,15 +867,41 @@ pub enum AccessCmd {
         /// 取哪条映射（`entities[].id`，也认 `class`）
         #[arg(long)]
         entity: String,
-        /// 过滤条件（JSON 对象）：落在 `pushdown` ⇒ 模拟服务端筛；落在 `local_only` ⇒ 本地筛
+        /// 过滤条件（JSON 对象）：落在 `pushdown` ⇒ 服务端筛；落在 `local_only` ⇒ 本地筛
         #[arg(long)]
         filter: Option<String>,
         /// 最多返回多少行（超出 ⇒ `meta.truncated: true`）
         #[arg(long, default_value_t = 100)]
         limit: usize,
-        /// **阶段 0 必填**：用 fixture 跑，⛔ 不发网络请求
-        #[arg(long)]
+        /// **离线通路**：用 fixture 跑，⛔ 不发网络请求
+        #[arg(long, conflicts_with = "allow_network")]
         dry_run_fixture: bool,
+        /// ⭐ **真调用通路**：TC3 签名 + HTTP 分页取数（凭据只从环境变量读）
+        ///
+        /// 不给它 ⇒ 绝不联网。给了它 ⇒ 会真的打 `sources[].base_url`（产生配额与费用），
+        /// 失败按 `AUTH_MISSING` / `AUTH_REJECTED` / `RATE_LIMITED` / `FIELD_PATH_MISSING` /
+        /// `SCAN_LIMIT_EXCEEDED` / `UPSTREAM_TIMEOUT` / `UPSTREAM_UNREACHABLE` / `API_ERROR` 分类。
+        ///
+        /// 重试只发生在**可重试**的两类上（`RATE_LIMITED` / 传输层超时与 5xx），
+        /// 上限是 **3 次尝试**（1 次首发 + 2 次退避重试，退避 200ms → 400ms，封顶 2s）。
+        #[arg(long, conflicts_with = "dry_run_fixture")]
+        allow_network: bool,
+        /// 连接超时（秒）—— **只对 `--allow-network` 生效**
+        #[arg(long, default_value_t = 5, value_name = "SECS")]
+        connect_timeout_secs: u64,
+        /// 单次请求的整体超时（秒，含连接 + 收发）—— **只对 `--allow-network` 生效**
+        #[arg(long, default_value_t = 30, value_name = "SECS")]
+        timeout_secs: u64,
+        /// ⭐ 真调用时把**第一页的原始响应体**原样落盘（用于把合成 fixture 换成真实响应）
+        ///
+        /// ⛔ 默认不写；只有显式给这个参数才写。⛔ 不含任何凭据（响应体里只有数据）。
+        /// 落盘的是**服务端原文**：完整结构、未裁剪字段、未重新序列化
+        /// （`\uXXXX` 转义等原样保留）⇒ 可直接拿去脱敏后替换 `entities[].fixture`。
+        ///
+        /// ⚠️ 只落**第一页**：同一响应各页结构相同，第一页就是结构样本；
+        /// 要多几行就调大 `--limit` 后重跑。
+        #[arg(long, value_name = "PATH")]
+        dump_raw: Option<PathBuf>,
     },
     /// 把作者格式转成**发布态 JSON-LD**（RML 风格：`rml:iterator` / `rr:template` / `rml:reference` / `rr:class`）
     ///
@@ -2806,12 +2885,13 @@ fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
 // ══════════════════════════════════════════════════════════════
 // ⭐ REQ-144 · **access mapping**（API 源的映射契约）
 //
-// 三条子命令都在 `run()` 的**连库之前**分派：它们连产品库都不碰，
-// 阶段 0 连网络都不发（`fetch` 只有 `--dry-run-fixture` 一条通路）。
+// 三条子命令都在 `run()` 的**连库之前**分派：它们连产品库都不碰。
+// 只有 `fetch --allow-network` 会出网（阶段 1）；默认通路是读本地夹具，⛔ 不联网。
 //
 // 出口登记（`domain::pipeline::OUTLETS`）里逐一钉住**这三个写点**：
 //   I29 = `access validate` 的 JSON 报告 → stdout
-//   I30 = `access fetch` 的 JSON-LD → stdout
+//   I30 = `access fetch` 的 JSON-LD → stdout（离线与真调用**共用**这一个出口：
+//         两条通路的产物同形状，差别只在 `meta.network` 这一栏出不出）
 //   I31 = `access publish` 的 JSON-LD → `--out` 文件（物理写点仍是 `write_local`）
 //
 // ⚠️ 为什么 stdout 走裸 `println!` 而不是 `emit_domain_*`：
@@ -2820,7 +2900,7 @@ fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
 // 它既不是客户视图、也不该被客户词汇闸改名。故登记为**内部轨**。
 // ══════════════════════════════════════════════════════════════
 
-/// `ontok access <子命令>` 的分派（**零库、零网络**）。
+/// `ontok access <子命令>` 的分派（**零库**；只有 `fetch --allow-network` 会出网）。
 fn access_cmd(cmd: AccessCmd) -> anyhow::Result<()> {
     match cmd {
         AccessCmd::Validate { mapping, ontology } => access_validate(&mapping, &ontology),
@@ -2831,7 +2911,22 @@ fn access_cmd(cmd: AccessCmd) -> anyhow::Result<()> {
             filter,
             limit,
             dry_run_fixture,
-        } => access_fetch(&mapping, &ontology, &entity, filter.as_deref(), limit, dry_run_fixture),
+            allow_network,
+            connect_timeout_secs,
+            timeout_secs,
+            dump_raw,
+        } => access_fetch(
+            &mapping,
+            &ontology,
+            &entity,
+            filter.as_deref(),
+            limit,
+            dry_run_fixture,
+            allow_network,
+            connect_timeout_secs,
+            timeout_secs,
+            dump_raw.as_deref(),
+        ),
         AccessCmd::Publish { mapping, ontology, out } => access_publish(&mapping, &ontology, &out),
     }
 }
@@ -2911,7 +3006,11 @@ fn access_validate(mapping: &std::path::Path, ontology: &std::path::Path) -> any
     Ok(())
 }
 
-/// `ontok access fetch --dry-run-fixture` —— 用 fixture 跑完整取数流程（AC-003 ~ AC-008）。
+/// `ontok access fetch` —— 两条互斥通路：
+/// `--dry-run-fixture`（读夹具，⛔ 不出网，阶段 0 行为逐字节不变）
+/// 与 `--allow-network`（真调用：TC3 签名 + 凭据 + 限流退避）。
+///
+/// `dump_raw` 只在真调用通路上有意义（离线通路本来就在读文件，没有「服务端原文」可落）。
 fn access_fetch(
     mapping: &std::path::Path,
     ontology: &std::path::Path,
@@ -2919,13 +3018,25 @@ fn access_fetch(
     filter: Option<&str>,
     limit: usize,
     dry_run_fixture: bool,
+    allow_network: bool,
+    connect_timeout_secs: u64,
+    timeout_secs: u64,
+    dump_raw: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    // ⛔ 阶段 0 没有真调用：不给开关就拒绝，⛔ 不静默降级成「读 fixture 冒充真数据」。
-    if !dry_run_fixture {
+    // ⛔ 必须**显式选一条**通路：两个都不给时不联网、也不假装联网。
+    if !dry_run_fixture && !allow_network {
         anyhow::bail!(
-            "{} · 阶段 0 **不发任何网络请求**：请显式加 `--dry-run-fixture` 用夹具跑。\n\
-             真实调用（TC3 签名 / 凭据 / 限流退避）是阶段 1 的事，本程序里**没有**那条路径。",
+            "{} · 请显式选一条通路：`--dry-run-fixture`（读本地夹具，⛔ 不发网络请求）\
+             或 `--allow-network`（真调用：TC3 签名 / 凭据 / 限流退避）。\n\
+             ⛔ 两个都不给时本程序既不联网，也不静默降级成「读 fixture 冒充真数据」。",
             crate::access::CODE_DRY_RUN_REQUIRED
+        );
+    }
+    // `--dump-raw` 没有离线含义：⛔ 不静默忽略（忽略会让人以为落盘了）
+    if dump_raw.is_some() && !allow_network {
+        anyhow::bail!(
+            "`--dump-raw` 只对真调用（`--allow-network`）有意义：离线通路本来就在读本地文件，\
+             没有「服务端原文」可落。⛔ 不同时给两个开关时本参数不生效，所以直接拒绝。"
         );
     }
 
@@ -2935,14 +3046,137 @@ fn access_fetch(
         Some(f) => crate::access::fetch::parse_filter(f)?,
         None => std::collections::BTreeMap::new(),
     };
-    let opts = crate::access::fetch::FetchOptions { filter: filter_map, limit };
 
-    let doc = crate::access::fetch::dry_run(&parsed, &onto.iri, entity, &opts, &dir)
+    // ── 通路 A · 离线夹具（阶段 0 原样，⛔ 一字不改）────────────────
+    if dry_run_fixture {
+        let opts = crate::access::fetch::FetchOptions { filter: filter_map, limit };
+
+        let doc = crate::access::fetch::dry_run(&parsed, &onto.iri, entity, &opts, &dir)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let meta = &doc.meta;
+        eprintln!(
+            "· access fetch（fixture）：{} · 扫 {} 行 / {} 页 · 命中 {} · 返回 {} · 本地过滤 {:?} · 截断 {}",
+            entity,
+            meta.rows_scanned,
+            meta.pages,
+            meta.rows_matched,
+            meta.rows_returned,
+            meta.filtered_locally,
+            meta.truncated
+        );
+        eprintln!(
+            "· 时点：{}（mode={} source={}）",
+            meta.freshness.fetched_at, meta.freshness.mode, meta.freshness.source
+        );
+        for w in &meta.capability_warnings {
+            eprintln!("· 能力提醒：{w}");
+        }
+
+        let jsonld = doc.to_text();
+        println!("{jsonld}");
+        return Ok(());
+    }
+
+    // ── 通路 B · 真调用（`--allow-network`）─────────────────────────
+    // 1) 先定位 entity / source：**凭据的变量名**来自契约（⛔ 不写死在代码里）。
+    let ent = parsed.entity(entity).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} · `{entity}` 不在这份契约里（有：{}）。",
+            crate::access::CODE_ENTITY_UNKNOWN,
+            parsed
+                .entities
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )
+    })?;
+    // 2) R6 在**环境检查之前**：未签的映射连「该读哪个变量名」都不该被当真。
+    if !ent.reviewed() {
+        anyhow::bail!(
+            "{} · entity `{}` 的 `reviewed_by` 为空 —— 未签的映射不许取数（R6 / ADR-005）。\n\
+             先让人把 `reviewed_by` 签上（`\"张三@2026-10-25\"`），再跑真调用。",
+            crate::access::CODE_UNREVIEWED,
+            ent.id
+        );
+    }
+    let source = parsed.source(&ent.source).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} · entity `{}` 引用的 source `{}` 不存在（`sources[].id` 里没有它）。",
+            crate::access::CODE_SCHEMA,
+            ent.id,
+            ent.source
+        )
+    })?;
+    // 3) 凭据：**只**从环境变量读，且在**发请求之前**判（`AUTH_MISSING`）。
+    let creds = crate::access::net::Credentials::from_env(source)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    // 4) `--dump-raw` 的形状检查：⛔ 不往目录里写（也不替人建目录的错觉）
+    if let Some(p) = dump_raw {
+        if p.is_dir() {
+            anyhow::bail!(
+                "--dump-raw 指向的是一个**目录**（{}）。它要的是一个文件路径，\
+                 例如 .local/req144/real-describe.json。",
+                p.display()
+            );
+        }
+    }
+
+    // 超时是**两个**（连接 / 整体）：连不上要快点报，整体要给够（多页 + 大响应）。
+    //
+    // ⚠️ 必须 `connect < global`（默认 5 < 30）。否则连接阶段挂住时，
+    // 两个超时会**同时**到期，而抢到的是「整体超时」⇒ 报成 `UPSTREAM_TIMEOUT`，
+    // 运维就会去查链路 / 调 timeout —— 而真正该查的是端口 / 安全组 / DNS。
+    // 这不是口味问题：**码名错了，改法就错了**（复审点名的那条）。
+    if connect_timeout_secs >= timeout_secs {
+        anyhow::bail!(
+            "`--connect-timeout-secs`（{connect_timeout_secs}）必须**小于** `--timeout-secs`（{timeout_secs}）。\n\
+             原因：连接阶段挂住时两个超时会同时到期，抢到的「整体超时」会把\
+             `UPSTREAM_UNREACHABLE` 误报成 `UPSTREAM_TIMEOUT` —— 运维就会去查链路质量、\
+             调大超时，而真正该查的是端口 / 安全组 / DNS。\n\
+             建议：`--connect-timeout-secs 5 --timeout-secs 30`（默认值）。"
+        );
+    }
+    let opts = crate::access::net::NetworkOptions {
+        filter: filter_map,
+        limit,
+        timeouts: crate::access::net::HttpTimeouts {
+            connect: std::time::Duration::from_secs(connect_timeout_secs.max(1)),
+            global: std::time::Duration::from_secs(timeout_secs.max(1)),
+        },
+        ..Default::default()
+    };
+    // ⭐ `--dump-raw`：**交出**第一页原文，落盘走下面那一个登记过的写点（出口纪律）。
+    let mut raw_first_page: Option<String> = None;
+    let doc = crate::access::net::fetch_network_capturing(
+        &parsed,
+        &onto.iri,
+        entity,
+        &opts,
+        &creds,
+        &mut raw_first_page,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if let Some(path) = dump_raw {
+        let body = raw_first_page.ok_or_else(|| {
+            anyhow::anyhow!("内部错误：真调用成功但没有捕获到原始响应体（这不应当发生）")
+        })?;
+        write_local(path, body.as_bytes())?;
+        eprintln!(
+            "· 原始响应体已落盘：{}（{} 字节 · 第一页 · 未裁剪 · 不含凭据）—— \
+             脱敏后可替换 `entities[].fixture`",
+            path.display(),
+            body.len()
+        );
+    }
+
     let meta = &doc.meta;
+    let net = meta.network.as_ref();
     eprintln!(
-        "· access fetch（fixture）：{} · 扫 {} 行 / {} 页 · 命中 {} · 返回 {} · 本地过滤 {:?} · 截断 {}",
+        "· access fetch（真调用）：{} · 扫 {} 行 / {} 页 · 命中 {} · 返回 {} · 本地过滤 {:?} · 截断 {}",
         entity,
         meta.rows_scanned,
         meta.pages,
@@ -2951,6 +3185,12 @@ fn access_fetch(
         meta.filtered_locally,
         meta.truncated
     );
+    if let Some(n) = net {
+        eprintln!(
+            "· 传输：endpoint {}（service={}）· HTTP 尝试 {} 次（重试 {} 次）· 最后状态码 {} · 签名头 {}",
+            n.host, n.service, n.attempts, n.retries, n.http_status, n.signed_headers
+        );
+    }
     eprintln!(
         "· 时点：{}（mode={} source={}）",
         meta.freshness.fetched_at, meta.freshness.mode, meta.freshness.source
