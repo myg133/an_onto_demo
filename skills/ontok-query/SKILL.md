@@ -73,6 +73,21 @@ MCP 用户也可以读资源：`ontok://ontology/customer.ttl`、`ontok://ontolo
 | **客户视图**（默认） | 类 / 属性 / 关系 / 口径；**不含**内部结构（表列名、租户列、主键） | 一般问答 |
 | **建模视图**（`?view=model`） | 多了主键、枚举值域、租户列、**关系证据等级** | 需要判断"这条关系可不可信" |
 
+### ⭐ TTL 里怎么认出「平台不会给我数据」的类
+
+```turtle
+:cvm_instance a owl:Class ;
+    rdfs:label "CVM 实例"@zh ;
+    ontok:sourceKind "api" .        # ← 这个类的数据不在这套本体里，在外部接口
+```
+
+| 标记 | 含义 | 你该怎么做 |
+| --- | --- | --- |
+| 有 `ontok:sourceKind "api"` | 平台**不执行**这类数据源 | 查它只会拿到 `@pending`；要**按指引自己调接口** |
+| **没有**这个谓词 | 库源（平台能查） | 正常写 SPARQL |
+
+**写查询之前先扫一遍**——不然你会拿 SPARQL 去查 api 类，然后拿到空图还以为是"没数据"。
+
 ### 大本体怎么读
 
 TTL 可能只有几十 KB，也可能几百 KB：
@@ -145,6 +160,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 | `coverage[]` | 逐表覆盖等级 | 若不足全量，说明范围 |
 | `truncated` | 是否被行数上限截断 | 截断就说"结果不完整" |
 | `join_states[]` / `evidence_level` | 关系可信度（实测 / 继承 / 未验证） | 低可信度时说"这条关系未经验证" |
+| **`meta.complete`** | 这份结果**是不是完整的** | `false` ⇒ 还有 `@pending` 没取；⛔ **不许当完整答案用** |
 
 > **最危险的失败不是查不到，而是"数字对但范围不对"**。
 > 用户拿着漏了子账号的金额去做决策，比报错严重得多。
@@ -173,6 +189,8 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 | `404` / `400` | 类名/属性名写错 | 回 `catalog` / `describe` 核对**准确名字**（大小写敏感） |
 | `503 NO_DATA_SOURCE` | 这套部署没有数据源 | **别重试**；转成本体回答 |
 | `SPARQL_UNSUPPORTED` | 用了 v1 不支持的语法 | 按 `hint` 改写成支持集内的查询 |
+| `NOT_DB_SOURCE` | 查了 API 源的类（rows 模式） | 改走 `@pending` 的 `get`；或先看 `catalog` 的 `access.kind` |
+| `CROSS_SOURCE_UNSUPPORTED` | 查询需要跨源遍历 | **拆成两段**：先查库拿 ID，再按 ID 调接口；⛔ 别重试 |
 | `429` | 并发/行数超限 | 降并发或加 `LIMIT` |
 
 ---
@@ -186,6 +204,8 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 5. ⛔ **在查询里写租户** —— 服务端注入；写了会被拒
 6. ⛔ **把 `excluded_relations` 当"不存在"** —— 先看证据等级再下结论
 7. ⛔ **猜地址** —— 连到别的环境比连不上更糟
+8. ⛔ **把 `complete: false` 当答案** —— 那是半成品；`@pending` 必须处理完
+9. ⛔ **拿 SPARQL 反复试 api 源** —— TTL 里 `sourceKind "api"` 已经告诉你平台不执行它
 8. ⛔ **以为默认会回表格** —— 默认是 JSON-LD 图；要表必须显式传 `format="rows"`
 
 ---
@@ -198,7 +218,9 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 ③ GET /api/catalog?page=1              → 确认 X 与 Y 的确切名字
 ④ 用户问「X 的情况」
    ├─ 本体模式 → 用 TTL 里的定义回答，并说明没有数值
-   └─ 普通模式 → SELECT ?x ?v WHERE { ?x a :X . ?x :p1 ?v } LIMIT 20
+   ├─ X 是 db 源 → SELECT ?x ?v WHERE { ?x a :X . ?x :p1 ?v } LIMIT 20
+   └─ X 是 api 源 → 平台给 @pending，按 get 调接口自己取
 ⑤ 读回执（默认是图：看 `summary` + `meta`；要表先传 `format="rows"`）：warnings / coverage / truncated / evidence_level
-⑥ 回答里带上限制；不确定的地方说「不确定」，不要补全
+⑥ 若 `meta.complete: false` ⇒ 先处理完 `@pending` 再答；答案里标出哪部分来自外部接口
+⑦ 回答里带上限制；不确定的地方说「不确定」，不要补全
 ```
