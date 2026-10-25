@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**进行中**（2026-10-25 开单 · P0）
+**已完成**（2026-10-25 · 合并 `develop` `6f4987d` · QA PASS）
 
 ## 依据
 
@@ -32,3 +32,36 @@ R1 无映射零变化 · R2 complete 与 pending 一致 · R3 pending 不进 gra
 - [ ] Dev
 - [ ] QA
 - [ ] 与 REQ-144（映射侧）会合后做一次端到端（映射 → pending → Agent 补数）
+
+
+## 结果
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **`6f4987d`**（4 个提交，rebase 后 0 冲突） |
+| 零回归 | ✅ **16/16 逐字节相同**（不给 `--access-mapping` 时） |
+| TTL | ✅ 只有 api 类带 `ontok:sourceKind "api"`；两视图各 +1 行 |
+| `@pending` | ✅ 顶层字段（不进 `@graph`）+ `meta.complete` + `unresolved_classes` + `mapping_version` |
+| 跨源边 | ✅ 无 `get`，但带 `ref` + `local_hint`（库侧 FK 列 + 可抄的取数语句）+ 三步 hint；反向谓词同样识别 |
+| 审计 | ✅ `code` = 客户端收到的（`OK`/`NOT_DB_SOURCE`）+ 独立 `pending=true`；`API_PENDING` 0 命中 |
+| 错误码 | ✅ `NOT_DB_SOURCE`（rows 打 api 类）/ `CROSS_SOURCE_UNSUPPORTED`（跨源遍历中点名 api 属性） |
+| 改名 | `query::access` → `query::source_gate`（避免与 `ontok::access` 混淆），`grep` 0 命中 |
+| 测试 | `test_req145_live` 9；全量 1824 passed / 5 failed（4 个既有红，基线同红） |
+
+## 关键裁定
+
+| # | 裁定 |
+| --- | --- |
+| R-A | 跨源边**不下发 `get`**（AC-006 为准）；但必须有 `ref` + `local_hint` + 三步 hint |
+| R-B | 审计 `code` 必须等于客户端收到的；"API 源"用独立字段 |
+| R-C | 混合查询整体 pending、不跑 SQL（本期接受，写进 `--help`） |
+| R-E | "点名 api 属性 ⇒ 400" 的措辞收紧为"**跨源遍历中**"（只点名属性应给 200 + pending） |
+| R-G | `display_name` 为空的 api 类会在**客户视图**漏标 `sourceKind`（漏标非错标）——已登记 |
+
+## 遗留（阶段 2）
+
+| 项 | 内容 |
+| --- | --- |
+| 跨源边带 `get{ids}` | 需"只读 child 列"的查询路径 |
+| 混合查询部分求值 | 需拆查询计划 |
+| `get_ids_by` 不含租户条件 | 租户口径属调用方（hint 已说明） |
