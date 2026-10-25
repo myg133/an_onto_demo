@@ -186,3 +186,71 @@ QA 做的是**真正独立的复验**（这比它自己的单测有价值得多�
 
 Dev 明确声明「本轮没有做过任何真实 API 调用」，QA 又用裸监听器**独立证明**了没联网。
 ⇒ 「签名对」与「接口通」在这份交付里**没有被混为一谈**。这是正确的状态。
+
+
+---
+
+## 六 · 真调用结果（2026-10-25 · 用只读子账号实测）
+
+### R-K · ✅ 签名与传输**端到端成立**
+
+不带过滤的 `DescribeInstances` 真调用成功，返回真实实例：
+
+```json
+{ "@id": "…/cvm_instance/ins-70n4ge4i", "@type": "ontok:cvm_instance",
+  "ontok:cvm_instance__name": "test03",
+  "ontok:cvm_instance__status": "RUNNING",
+  "ontok:cvm_instance__zone": "ap-guangzhou-5" }
+```
+
+⇒ 手写 TC3 签名 + HTTP 传输 + 迭代器 + 字段路径**全部经真实接口验证**（不再是"逻辑上应该对"）。
+
+### R-L · ⛔ R-E 的风险**被真调用证实**（这是本轮最重要的发现）
+
+带过滤时：
+
+```
+✗ API_ERROR · 服务端返回码 `UnknownParameter`：The parameter `Zone` is not recognized.（HTTP 200）
+这是业务错误，不是签名问题：按这个码改请求…
+```
+
+**结论**：
+- 腾讯云 `DescribeInstances` **不接受**顶层 `Zone` 参数
+- 必须用 `Filters[].Name = zone`（`Filters` 是数组，元素 `{Name, Values}`）
+- ⇒ 现有 access mapping 的 `from_filter: { "zone": "Zone" }` **是错的**
+
+**这是"签名对 ≠ 接口通"的教科书案例**：
+签名与传输都完美，**但参数位置错**，真调用直接失败。
+如果没做真调用，这个东西会带着"已验证"的标签上线，然后在客户现场 100% 失败。
+
+**⇒ R-E 那条裁定（"真调用第一件事就是验它"）是对的，而且它验出了失败。**
+
+### R-M · 错误分类**经受住了真实错误**
+
+`UnknownParameter` 被归到 `API_ERROR`，并给出"这是业务错误、⛔ 重试无效"的可行动提示
+——**不是**一律 `request failed`，也没有误判成可重试。这一条在真实错误上验证通过。
+
+### R-N · 阻塞项：mapping 需要**数组对象参数**的表达能力
+
+现有 `from_filter` 只能表达"过滤键 → 顶层标量参数"。
+腾讯云多数查询接口用 `Filters.N.Name` / `Filters.N.Values.N`，**这是结构性缺口**，不是 cvm 一个特例。
+
+**必须扩展**（否则所有带过滤的 API 映射都写不出来）：
+
+```json
+"request": {
+  "required": ["Region"],
+  "from_filter": {
+    "zone": { "array": "Filters", "item": { "Name": { "const": "zone" },
+                                            "Values": { "from": "value" } } },
+    "ids":  { "scalar": "InstanceIds" }
+  }
+}
+```
+
+⇒ 判据：**用真账号跑通"按 zone 过滤"并返回正确子集**（不是返回 0 条、也不是静默忽略）。
+
+### R-O · 安全（对用户）
+
+凭据只在本机环境变量里使用，**没有写入任何文件、没有进日志、没有进仓库**。
+⚠️ **但它已经出现在对话里** ⇒ 演示结束后**务必轮换** `SecretId/SecretKey`（或直接删除该子用户）。
