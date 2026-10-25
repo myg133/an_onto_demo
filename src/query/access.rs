@@ -69,6 +69,7 @@
 //! | 3 | `local_hint.get_ids_by` **不含租户条件** | 租户口径属于调用方自己（也避免把租户 id 写进半个答案）；`hint` 里明说「按你的租户过滤条件收窄」 |
 //! | 4 | 跨源边的 FK 只在「库是 child」时才有 `local_hint.uses_column` | 反过来的形状（api 类是 child）里 FK 值在**对方的数据**里，本库没有可查的列 —— ⛔ 不编一个列名 |
 //! | 5 | 客户侧部署**不加载映射** ⇒ 天然没有 `@pending` / `get` | 契约规则 6：`get` 只给内部调用者；这里不需要额外的身份裁剪 |
+//! | 6 | **客户视图按 `display_name` 匹配 api 类** ⇒ `display_name` 为空的 api 类**漏标** `ontok:sourceKind "api"` | 客户视图的类身份就是人读名（它结构上没有 key）；没有名字就没有可匹配的东西。⚠️ 这是**漏标不是错标**：下游会把那个类当库源去查，然后收到 `NOT_DB_SOURCE`（jsonld ⇒ `@pending`），但它在 TTL 里看起来像库源 —— 建模视图（按 key 匹配）**不受影响** |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -397,8 +398,21 @@ impl AccessMapping {
         &self.entities
     }
 
-    /// 跨源边的条数（启动横幅用；边本身由 [`Self::bind`] 从本体派生）。
+    /// **跨源边的条数**（启动横幅用；边本身由 [`Self::bind`] 从本体派生）。
+    ///
+    /// ⚠️ 数的是**本体里的边**（前向谓词去重），⛔ 不是 `cross_edges` 的条目数 ——
+    /// 那里面前向 + 反向各登记了一条（判定遍历要用），直接 `len()` 会得到**方向数**
+    /// （本部署 40 条边 = 80 个方向）。把方向数当边数报出去，排查的人会对不上。
     pub fn cross_source_edge_count(&self) -> usize {
+        self.cross_edges
+            .values()
+            .map(|e| e.predicate.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    /// 跨源边的**方向数**（前向 + 反向；横幅里跟在边数后面，两个数都写得清）。
+    pub fn cross_source_direction_count(&self) -> usize {
         self.cross_edges.len()
     }
 

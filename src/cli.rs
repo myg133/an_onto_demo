@@ -1042,6 +1042,12 @@ pub enum QueryCmd {
         ///
         /// ⚠️ 跨源边**不在**映射文件里声明：它由「本体里的边 + 映射里的源」交叉推出
         /// （两端一库一 API ⇒ 跨源），免得同一件事写两份、改一处不会报错。
+        ///
+        /// ⚠️ **已知限制（R-G）**：客户视图按 **`display_name`** 匹配 api 类（客户视图的类
+        /// 身份就是人读名，结构上没有 key）⇒ **`display_name` 为空的 api 类会在客户视图里
+        /// 漏标** `ontok:sourceKind "api"`（建模视图按 key 匹配，不受影响）。
+        /// 这是**漏标不是错标**：那个类在客户视图里看起来像库源，查下去会收到
+        /// `NOT_DB_SOURCE`（jsonld 是 `@pending`）。给那个类补一个人读名即可消除。
         #[arg(long)]
         access_mapping: Option<PathBuf>,
     },

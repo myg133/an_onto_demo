@@ -442,12 +442,16 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         Some(a) => {
             let mut keys: Vec<&String> = a.api_classes().keys().collect();
             keys.sort();
+            // ⚠️ 两个数都报：**边数**（本体里的边）+ **方向数**（前向 + 反向，判定遍历时两个
+            // 谓词都要认）。⛔ 只报一个的话，40 条边会被报成 80 —— 排查的人拿它对不上。
             eprintln!(
-                "· access 映射：mapping_version={} · api 类 {} 个（{}）· 跨源边 {} 条",
+                "· access 映射：mapping_version={} · api 类 {} 个（{}）· \
+                 跨源边 {} 条（{} 个方向）",
                 a.mapping_version(),
                 keys.len(),
                 keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("、"),
-                a.cross_source_edge_count()
+                a.cross_source_edge_count(),
+                a.cross_source_direction_count()
             );
         }
         None => {}
