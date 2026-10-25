@@ -134,6 +134,23 @@ access.jsonld      ← 发布格式（RML 风格，给执行器与 Agent）
 | 2 | `ontok access validate` | FDE 自查（4 条有牙的检查） |
 | 3 | `ontok access fetch --dry-run-fixture` | 离线验证取数逻辑（分页/本地过滤/JSON-LD） |
 | 4 | JSON → JSON-LD 转换（发布态） | 发布时生成 `access.jsonld` |
-| 5 | `query serve --access-mapping`（catalog/describe 报 `access` 字段；SPARQL 打 API 类报 `NOT_DB_SOURCE`） | 数字员工侧 |
+| ~~5~~ | ~~`query serve --access-mapping`~~ | **⛔ 已移交 REQ-145**（见下） |
 
 外加一份**示例**：腾讯云 CVM 的 `access.json` + 一份 fixture（官方文档示例，注明来源）。
+
+
+---
+
+## 五 · 与 REQ-145 的边界（2026-10-25 补齐，避免重复实现）
+
+我最初把「`query serve --access-mapping`」也写进了本需求，**这是错的**——它与 REQ-145 撞车。
+
+| 归属 | 负责 |
+| --- | --- |
+| **REQ-144（本单）** | 契约的**读写两端**：结构 / `validate` / `fetch --dry-run-fixture` / JSON→JSON-LD 转换 |
+| **REQ-145** | **平台侧消费**：TTL `sourceKind` / `@pending` + `complete` / `--access-mapping` 加载 / catalog 的 `access` 字段 / 两个错误码 |
+
+**判断依据**：`access` 契约是**资产**（谁定义、谁校验）⇒ 144；
+**把资产装进服务、影响查询响应**（谁消费、怎么注入）⇒ 145。
+
+⇒ 本需求**不再包含任何 `query serve` 的改动**。
