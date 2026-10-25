@@ -417,6 +417,37 @@ pub enum DocCmd {
     /// ⚠️ 重跑合并会让**之前的签字失效**（`reviewed_by` / `signed_at` 一并清掉，
     /// `stats.reviewed_by_reset` 会记数）—— 内容变了签名就该作废，这是刻意的。
     /// ⚠️ 本命令**不连产品库、不调模型**：输入两份本地文件、产物也是本地文件。
+    ///
+    /// # ⭐ REQ-143 · 纯文档通路（`--allow-doc-only`）
+    ///
+    /// 【没有关系库的项目，从零生成本体】
+    ///
+    /// ontok doc merge --assertions out/assertions.jsonl --proposal out/empty-proposal.json --out out/merged.json --allow-doc-only
+    ///
+    /// | 情形 | 开关打开后的行为 |
+    /// | --- | --- |
+    /// | 概念命中已有实体 | 照旧（`origin: both`，合并证据）；**名字/别名的先后见下方「⭐ 名字优先」** |
+    /// | 概念**没命中** | **新建** `add_entity_type`：key 由名字确定性派生（`doc_<slug>_<sha256前12位>`）、`display_name` = 概念名、`band: low`、`reviewed_by: null`、`origin: doc` |
+    /// | 关系两端都能解析（命中或新建） | 新建 `add_link_type`：`from_type`/`to_type` = 实体 key、**没有 join 列**（`evidence[0].column` 为空串） |
+    /// | 关系任一端解析不到 | 仍进 `doc_unmapped`（`endpoint_not_resolved`）—— ⛔ 不凭空造端点 |
+    /// | 自环关系（`subject == object`） | 排除并计数（`stats.skipped_self_link`，码 `self_link`）—— 与老路径同一条纪律 |
+    /// | 冲突 / `alignable: false` | 双保留 + `applicable:false`（doc-vs-db 写 `doc_says`/`db_says`；**doc-vs-doc 写 `doc_says`/`doc_says_2`**，⛔ 不先到者赢）；排除规则与不开开关相同 |
+    ///
+    /// ⚠️ ⭐ **名字优先于别名**（**只在开关打开时**）：先看名字，名字唯一命中就认它；
+    /// 名字不中才用别名兜底。不开开关时仍是 REQ-129 的「名字 ∪ 别名」口径。
+    /// 为什么：真实样本里「`CLI 直采` 的别名 = `CLI`」，而 `CLI` 自己也是概念 ——
+    /// 按并集看两条都会变成 `ambiguous_name`，刚新建的实体就成了没有证据的空类。
+    /// ⛔ 这不是模糊匹配：名字/别名仍是**全等**，歧义仍然不猜。
+    ///
+    /// ⚠️ 开关**默认关闭**：不传时行为与 REQ-129/130 **逐字节相同**（R5 的回归判据）。
+    /// ⚠️ key **只由名字决定**（无序号/时间/随机/输入顺序）⇒ 同一输入两次运行 `merged.json` 逐字节相同。
+    /// ⚠️ 新建条目 `band: low`（≤ medium）、`reviewed_by: null` ⇒ 仍需 `ontok doc sign` 才进本体；
+    /// 实体的 `properties` 为空、关系没有实现列 —— 文档只给了「有这个概念/这条边」，
+    /// ⛔ 不编造字段与 join。要落属性/join 仍然得回到有库的 `maps_to` 那条路。
+    /// ⚠️ 有 `maps_to` 的断言**一律走老路**（包括形状错/指向提案外表的）：开关不把它改写成按名字猜。
+    /// ⚠️ 与 `--schema` 同时用时，`--schema` 的严格面**只作用于既有实体的 `maps_to`**：
+    /// 纯文档通路新建的实体/关系本来就不在任何库里，没有「在不在 schema 里」这回事
+    /// （它们的 `band: low` + `reviewed_by: null` 就是给复核人的提醒）。
     #[command(verbatim_doc_comment)]
     Merge {
         /// 断言 JSONL（`ontok doc ingest` 的产物）
@@ -439,6 +470,16 @@ pub enum DocCmd {
         /// 并在 stats 里记 `parent_key_id_convention` + stderr 警告 —— **可数、可见**。
         #[arg(long)]
         schema: Option<PathBuf>,
+        /// ⭐ REQ-143 · **纯文档通路**：没有关系库也能从文档生成本体（默认**关闭**）。
+        ///
+        /// 打开后：概念没命中 ⇒ 新建 `add_entity_type`（key 由名字确定性派生，`origin: doc`）；
+        /// 关系两端都能解析（命中或本轮新建）⇒ 新建 `add_link_type`（**没有 join 列**）；
+        /// 任一端解析不到 ⇒ 仍进 `doc_unmapped`（⛔ 不凭空造端点）。
+        /// 冲突 / `alignable: false` 的规则**一字不改**。
+        ///
+        /// ⛔ 不开这个开关时，本命令的行为与 REQ-129/130 **逐字节相同**。
+        #[arg(long)]
+        allow_doc_only: bool,
     },
     /// ⭐ REQ-129 · 给一条 `doc` / `both` 条目**签字**（写 `reviewed_by` + `signed_at`）
     ///
@@ -1977,6 +2018,7 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
             out,
             stats,
             schema,
+            allow_doc_only,
         } => {
             return doc_merge_cmd(
                 &assertions,
@@ -1984,6 +2026,7 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
                 &out,
                 stats.as_deref(),
                 schema.as_deref(),
+                allow_doc_only,
             )
             .await
         }
@@ -2284,6 +2327,7 @@ async fn doc_merge_cmd(
     out: &std::path::Path,
     stats_path: Option<&std::path::Path>,
     schema: Option<&std::path::Path>,
+    allow_doc_only: bool,
 ) -> anyhow::Result<()> {
     use crate::extract::doc_merge as dm;
 
@@ -2344,14 +2388,21 @@ async fn doc_merge_cmd(
     }
 
     // ⭐ `--schema`（可选）：给了就走**严格**校验面（AC-004 订正后：给了就 0 例外）。
+    //
+    // ⭐ REQ-143 · `--allow-doc-only` 是**显式开关**（默认 false）：不开时
+    // `MergeOptions` 里那个分支一行都不执行，产物与旧版逐字节相同（R5）。
     let opts = match schema {
         Some(p) => {
             let report = load_schema_report(p)?;
             dm::MergeOptions {
                 schema: Some(dm::SchemaIndex::from_report(&report)),
+                allow_doc_only,
             }
         }
-        None => dm::MergeOptions::default(),
+        None => dm::MergeOptions {
+            allow_doc_only,
+            ..Default::default()
+        },
     };
 
     // 纯合并：失败 ⇒ 一个字节都不写（不产半份提案）。
@@ -2402,6 +2453,18 @@ async fn doc_merge_cmd(
         "  合并为 both : {} · doc-only 条目 {}（新增 {} 条）",
         s.merged_both, s.merged_doc_only, s.items_added
     );
+    if s.doc_only {
+        // ⭐ REQ-143：只在开了开关时报这几行（不开时输出与旧版逐字相同）。
+        eprintln!(
+            "  纯文档通路  : 开（新建实体 {} · 新建关系 {}（无 join 列）· 档位 {}）",
+            s.doc_only_entities, s.doc_only_links, dm::DOC_ONLY_BAND
+        );
+        if let Some(n) = s.unmapped_reasons.get("endpoint_not_resolved") {
+            eprintln!(
+                "  ⚠ 端点未解析: {n} 条关系只解析到一端 ⇒ 仍进 doc_unmapped（⛔ 不凭空造端点）"
+            );
+        }
+    }
     if s.duplicate_claims > 0 {
         eprintln!("  重复断言    : {} 条（同实体/同一条边逐条去重后只留一条证据）", s.duplicate_claims);
     }
