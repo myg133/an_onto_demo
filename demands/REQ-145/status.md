@@ -65,3 +65,28 @@ R1 无映射零变化 · R2 complete 与 pending 一致 · R3 pending 不进 gra
 | 跨源边带 `get{ids}` | 需"只读 child 列"的查询路径 |
 | 混合查询部分求值 | 需拆查询计划 |
 | `get_ids_by` 不含租户条件 | 租户口径属调用方（hint 已说明） |
+
+
+---
+
+## ⚠️ 更正（2026-10-25 深夜）：`test_req145_live` 的 9 条**从未真正执行**
+
+当初交付与 QA 报告都引用了「`test_req145_live` **9/9**」。
+
+**实际是 9 条 `*** SKIP: … 这条判据没有执行，不是通过 ***`**（缺 `ONTOK_REQ123_TENANT` / schema / policy）。
+带 `ONTOK_REQUIRE_FIXTURES=1`（严格模式）重跑 ⇒ **9 条全部 FAIL**。
+
+| 项 | 真实情况 |
+| --- | --- |
+| 9 条 live 判据 | **未执行**（缺环境），不是通过 |
+| 汇总显示 | `test result: ok. 9 passed` ← **框架默认把 skip 算 passed** |
+| 谁的责任 | ① 框架默认值（`skip::missing` 默认只打标记不失败）② **我在交付里引用了这个数字** |
+
+**但 REQ-145 的实质结论不受影响**：QA 当时**独立**做了 16/16 零回归、`@pending`/`complete` 形状、
+审计码一致性等检查（那些用的是它自己起的服务与假端点，**是真跑了的**）。
+**受影响的只有"9 条 live 判据"这一项**——它现在记为 **未执行**。
+
+### 遗留（P2）
+
+- [ ] 配齐 `ONTOK_REQ123_TENANT` + schema + policy 后，用 `ONTOK_REQUIRE_FIXTURES=1` 真跑一遍这 9 条
+- [ ] 跑通后补记真实结果（pass/fail 都要记）
