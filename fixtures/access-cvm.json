@@ -48,8 +48,19 @@
         "memory": { "path": "Memory", "type": "xsd:integer" }
       },
       "request": {
-        "required": ["Region"],
-        "from_filter": { "zone": "Zone", "ids": "InstanceIds" }
+        "template": {
+          "InstanceIds": "{ids}",
+          "Filters": [
+            {
+              "Name": "zone",
+              "Values": ["{zone}"]
+            }
+          ]
+        },
+        "bindings": {
+          "ids": { "source": "filter" },
+          "zone": { "source": "filter" }
+        }
       },
       "paging": {
         "offset_param": "Offset",

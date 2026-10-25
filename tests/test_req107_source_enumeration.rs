@@ -1986,8 +1986,13 @@ const MODULES: &[(&str, &str)] = &[
     // 出口 I29/I30/I31 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "access"),
     ("src/access/mod.rs", "fetch"),
+    // ⭐ REQ-144 阶段 1 · 真调用通路：`net`（HTTP 传输 + 错误分类）+ `tc3`（TC3 签名）。
+    // ⚠️ **不新增出口**：两条通路共用 I30（`access fetch` 的 JSON-LD → stdout），
+    // 差别只在 `meta.network` 这一栏出不出 —— 所以 OUTLETS 不必加行，T6 只补模块登记。
+    ("src/access/mod.rs", "net"),
     ("src/access/mod.rs", "path"),
     ("src/access/mod.rs", "publish"),
+    ("src/access/mod.rs", "tc3"),
     ("src/access/mod.rs", "validate"),
     ("src/agent/mod.rs", "acp"),
     ("src/agent/mod.rs", "assemble"),

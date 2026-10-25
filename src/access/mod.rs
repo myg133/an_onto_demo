@@ -9,14 +9,15 @@
 //! 依据：`BA/design/2026-10-25-access-mapping-contract.md`（草案 v1）+
 //! `BA/demands/REQ-144/demand.md` §三 设计修订（双形态 JSON / JSON-LD）。
 //!
-//! # 本模块的边界（阶段 0）
+//! # 本模块的边界（阶段 0 只读文件；阶段 1 增加**显式开启**的真调用）
 //!
 //! | 做 | 不做 |
 //! | --- | --- |
-//! | 契约结构 + 解析（作者格式 JSON） | ⛔ 真实 HTTP 调用（阶段 1） |
-//! | `validate` 的四条有牙检查（+ 结构与本体自洽） | ⛔ TC3 签名（阶段 1） |
-//! | `fetch --dry-run-fixture`（分页 / 本地过滤 / JSON-LD / meta） | ⛔ 跨源 join（v1 边界） |
-//! | `publish`：JSON → JSON-LD（RML 风格，供 SPARQL 查） | ⛔ 任何 `query serve` 改动（REQ-145） |
+//! | 契约结构 + 解析（作者格式 JSON） | ⛔ 跨源 join（v1 边界） |
+//! | `validate` 的四条有牙检查（+ 结构与本体自洽） | ⛔ 任何 `query serve` 改动（REQ-145） |
+//! | `fetch --dry-run-fixture`（分页 / 本地过滤 / JSON-LD / meta） | ⛔ **默认**发网络请求（要 `--allow-network`） |
+//! | `publish`：JSON → JSON-LD（RML 风格，供 SPARQL 查） | ⛔ GET 签名 / 非 JSON 请求体 |
+//! | `fetch --allow-network`（[`net`] + [`tc3`]）：TC3 签名 → HTTP → 错误分类 | |
 //!
 //! # 双形态（demand §三 R-1）
 //!
@@ -30,8 +31,25 @@
 //! | 层 | 字段 | 为什么必须显式 |
 //! | --- | --- | --- |
 //! | `sources[]` | `id` / `kind` / `base_url` / `auth.mode` / `auth.credential_env` | 契约会随本体分发 ⇒ **⛔ 不含任何真凭据**，只写环境变量名 |
-//! | `entities[]` | `id` / `class` / `source` / `operation` / `iterator` / `identity` / `iri_template` / `fields` / `paging` / `capability` / `freshness` / `reviewed_by` / `fixture` | 缺一样，执行器就得**猜**；猜出来的东西没法审 |
+//! | `entities[]` | `id` / `class` / `source` / `operation` / `iterator` / `identity` / `iri_template` / `fields` / `request` / `paging` / `capability` / `freshness` / `reviewed_by` / `fixture` | 缺一样，执行器就得**猜**；猜出来的东西没法审 |
 //! | `relations[]` | `predicate` / `from` / `to` / `via` / `cross_source` / `traversable` | 跨源边要能被标记（demand §三 R-4） |
+//!
+//! # `request` 是**模板**，不是「参数表」（阶段 1 复审后的裁定）
+//!
+//! ```json
+//! "request": {
+//!   "template": { "Region": "{region}",
+//!                 "Clauses": [ { "Field": "zone", "Values": ["{zone}"] } ] },
+//!   "bindings": { "region": { "source": "default" },
+//!                 "zone":   { "source": "filter" } },
+//!   "paging":   { "offset": "Offset", "limit": "Limit" }
+//! }
+//! ```
+//!
+//! 三种真实存在的请求体形状（顶层标量 / 数组里放对象 / 深层嵌套）**一种代码路径**全覆盖；
+//! 执行器只替换字符串值里的 `{name}`，⛔ 不改键名、⛔ 不按厂商或接口名分支。
+//! 缺值（`--filter` 没给）按「剪枝」处理（见 [`RequestSpec`] 的文档），⛔ 不发空值。
+//! 旧写法 `request.from_filter: {"zone":"Zone"}` 保留兼容，解析时**内部转成模板**。
 //!
 //! # 十条硬规则落在哪（设计稿 §三，逐条给出代码位置）
 //!
@@ -71,8 +89,12 @@
 //!   （不认空白节点集合 / `a, b` 对象列表 / 嵌套 `[]`）。
 //! - `capability` 只能查**自洽**（重叠 / 显式 / 预算），查不了「腾讯云是不是真支持这个参数」
 //!   —— 那需要人签（R6 就是为此存在的）。
-//! - 阶段 0 **不发任何网络请求**：`fetch` 只有 `--dry-run-fixture` 一条通路，
-//!   省略它会被明确拒绝（`DRY_RUN_REQUIRED`），⛔ 不静默降级成「读 fixture 冒充真数据」。
+//! - 默认路径**不发任何网络请求**：`fetch` 要么 `--dry-run-fixture`（读夹具），
+//!   要么 `--allow-network`（真调用）。两个都不给 ⇒ 明确拒绝（`DRY_RUN_REQUIRED`），
+//!   ⛔ 不静默降级成「读 fixture 冒充真数据」。
+//! - 阶段 1 的**真调用通路没有做过任何真实 API 调用**：判据来自「腾讯云官方签名向量 +
+//!   本地假端点」。已经能证明的是「签名对、分页对、错误分类对」，
+//!   **不能**证明「某个 customer 的真接口接受这份映射」（那需要只读凭据 + 真响应）。
 
 use std::collections::BTreeMap;
 
@@ -80,8 +102,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub mod fetch;
+pub mod net;
 pub mod path;
 pub mod publish;
+pub mod tc3;
 pub mod validate;
 
 /// 契约版本。破坏性变更 ⇒ +1（设计稿规则 10）。
@@ -115,10 +139,33 @@ pub const CODE_SCAN_LIMIT: &str = "SCAN_LIMIT_EXCEEDED";
 pub const CODE_UNREVIEWED: &str = "UNREVIEWED_MAPPING";
 /// 过滤条件既不在 `pushdown` 也不在 `local_only`、也不是已声明的字段。
 pub const CODE_UNKNOWN_FILTER: &str = "UNKNOWN_FILTER_FIELD";
-/// 阶段 0：`fetch` 必须显式 `--dry-run-fixture`（⛔ 不发网络请求）。
+/// 阶段 0：`fetch` 必须显式选一条通路（`--dry-run-fixture` 或 `--allow-network`）。
 pub const CODE_DRY_RUN_REQUIRED: &str = "DRY_RUN_REQUIRED";
 /// `--entity` 指的那条映射不存在。
 pub const CODE_ENTITY_UNKNOWN: &str = "ENTITY_NOT_IN_MAPPING";
+
+// ══════════════════════════════════════════════════════════════
+// 阶段 1 的网络通路错误码（R4：五种失败各报各的，⛔ 不许一律 failed）
+// ══════════════════════════════════════════════════════════════
+
+/// 凭据环境变量没设 / 为空。**在发请求之前**就判（⛔ 不拿 401 当答案）。
+pub const CODE_AUTH_MISSING: &str = "AUTH_MISSING";
+/// 凭据被拒绝：HTTP 401 / 403 或响应码 `AuthFailure.*`。⛔ 不重试。
+pub const CODE_AUTH_REJECTED: &str = "AUTH_REJECTED";
+/// 被限流：HTTP 429 或响应码 `RequestLimitExceeded`。✅ 退避重试（有上限）。
+pub const CODE_RATE_LIMITED: &str = "RATE_LIMITED";
+/// 请求超时（连接 / 整体）。⛔ 不静默成「没数据」。
+pub const CODE_UPSTREAM_TIMEOUT: &str = "UPSTREAM_TIMEOUT";
+/// 连不上 endpoint（DNS / 代理 / 出网策略）。⛔ 不静默成「没数据」。
+pub const CODE_UPSTREAM_UNREACHABLE: &str = "UPSTREAM_UNREACHABLE";
+/// 服务端返回业务错误（不是签名问题；带它自己的 `Code` / `Message`）。
+pub const CODE_API_ERROR: &str = "API_ERROR";
+/// 契约声明的 `auth.mode` 不是 `tc3-hmac-sha256`（阶段 1 只实现这一种）。
+pub const CODE_AUTH_MODE_UNSUPPORTED: &str = "AUTH_MODE_UNSUPPORTED";
+/// 请求模板里的绑定取不到值（`required` 点名了它）。
+pub const CODE_REQUEST_BINDING_MISSING: &str = "REQUEST_BINDING_MISSING";
+/// 请求体形状不支持（非 POST / 非 JSON body）；⛔ 不偷偷适配、也不静默降级。
+pub const CODE_REQUEST_SHAPE: &str = "REQUEST_SHAPE_UNSUPPORTED";
 
 // ══════════════════════════════════════════════════════════════
 // 一处问题 / 一个可行动的错误
@@ -222,12 +269,93 @@ pub struct Entity {
     pub iri_template: String,
     pub fields: BTreeMap<String, Field>,
     pub paging: Option<Paging>,
-    /// 过滤名 → 请求参数名（`{"zone":"Zone"}`）。缺省 ⇒ 过滤名即参数名。
-    pub pushdown_requests: BTreeMap<String, String>,
+    /// **请求体模板 + 绑定**（`request` 段）—— 见 [`RequestSpec`]。
+    ///
+    /// ⚠️ REQ-144 阶段 1 复审（用户裁定）：⛔ **不做厂商特例适配**。
+    /// 请求体形状千差万别（顶层标量 / 数组对象 / 深层嵌套 / 自定义分页位置），
+    /// 用「过滤名 → 参数名」那种映射表只能表达第一种 ⇒ 改成**模板 + 占位符**。
+    pub request: RequestSpec,
     pub capability: Capability,
     pub freshness: Freshness,
     /// 离线 fixture（阶段 0 **必填**：没有它这条映射无法被验）。
     pub fixture: String,
+}
+
+/// **请求体模板 + 绑定**：请求体长什么样由作者逐字写，执行器只做占位符替换。
+///
+/// ```json
+/// "request": {
+///   "required": ["zone"],
+///   "template": { "Region": "{region}",
+///                 "Clauses": [ { "Field": "zone", "Values": ["{zone}"] } ] },
+///   "bindings": { "region": { "source": "default" },
+///                 "zone":   { "source": "filter" } },
+///   "paging":   { "offset": "Offset", "limit": "Limit" }
+/// }
+/// ```
+///
+/// # 语义（三句话）
+///
+/// 1. `template` 是**请求体原样**：任意深度嵌套、任意数组，键名一个都不改；
+/// 2. 字符串值里的 `{name}` 按 `bindings[name]` 取值替换（⛔ 不替换键名）；
+/// 3. `paging.offset` / `.limit` 是**路径**（`Offset` 或 `Page.Number`），由分页器写进去。
+///
+/// # 为什么要「模板」而不是「参数表」
+///
+/// 真调用（只读账号，2026-10-25）暴露：某接口**不接受**顶层过滤参数，只认
+/// 「数组里放对象、对象里放值和字段名」的形态。这不是某一个接口的特例：
+/// 顶层标量、数组对象、深层嵌套三种形状**都是真实存在的**。
+/// 参数表天生表达不了后两种 ⇒ 改成模板后，形状由作者写、代码里**零厂商/接口名词**。
+///
+/// # 缺值怎么剪枝（`--filter` 没给时）
+///
+/// 授权一个整值占位符（`"{zone}"` 整个字符串就是占位符）没拿到值 ⇒：
+///
+/// | 位置 | 行为 |
+/// | --- | --- |
+/// | 对象的成员 | 丢掉这个键 |
+/// | **数组的元素**（该元素子树里只要有一处被剪） | 丢掉整个元素（→ 空数组再丢掉这个键） |
+/// | 字符串里**嵌着**占位符（`"a-{x}"`）却没值 | **报错**（⛔ 不写半截字符串） |
+///
+/// 这条规则让「可选过滤」不必在契约里写条件：没给 `zone` 就整段不出现，
+/// 而不是发出一个空值让服务端去猜。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RequestSpec {
+    /// 请求体模板（JSON 对象）。`None` ⇒ 走「无模板」的旧口径（顶层参数 + 分页参数）。
+    pub template: Option<Value>,
+    pub bindings: BTreeMap<String, Binding>,
+    /// 必须能取到值的绑定名（缺 ⇒ `REQUEST_BINDING_MISSING`）。
+    pub required: Vec<String>,
+    /// 分页器把 offset 写到模板里的**哪个路径**（`Offset` / `Page.Number`）。
+    ///
+    /// `None` ⇒ 用实体级 `paging.offset_param`，再退化为 `Offset`。
+    pub paging_offset: Option<String>,
+    /// 同上，limit。
+    pub paging_limit: Option<String>,
+}
+
+/// 一个占位符的取值来源。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Binding {
+    pub source: BindingSource,
+}
+
+/// 值从哪来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BindingSource {
+    /// 取 `sources[].defaults[占位符名]`（先精确匹配，再大小写不敏感兜底）。
+    Default,
+    /// 取调用方 `--filter[占位符名]`。
+    Filter,
+    /// 由分页器提供：`offset` 或 `limit`。
+    Paging(PagingValue),
+}
+
+/// 分页器提供的两个值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PagingValue {
+    Offset,
+    Limit,
 }
 
 /// API 动作（`ontok:apiAction` + 三个 HTTP 细节）。
@@ -543,7 +671,7 @@ fn parse_entity(
         problems.push(Problem::new(
             CODE_SCHEMA,
             format!("{loc} 字段 operation"),
-            "缺必填对象（至少要 `{\"action\":\"DescribeInstances\"}`）。",
+            "缺必填对象（至少要 `{\"action\":\"SomeAction\"}`）。",
         ));
     }
 
@@ -618,15 +746,17 @@ fn parse_entity(
     }
 
     // paging：顶层规范写法，回退设计稿 v1 的 `request.paging`。
-    let paging_obj = obj
-        .get("paging")
-        .and_then(|p| p.as_object())
-        .or_else(|| {
-            obj.get("request")
-                .and_then(|r| r.as_object())
-                .and_then(|r| r.get("paging"))
-                .and_then(|p| p.as_object())
-        });
+    //
+    // ⚠️ 两种 `request.paging` 同名不同义，靠**键名**区分（⛔ 不靠猜测）：
+    //   - `{offset_param, limit_param, …}` ⇒ 设计稿 v1 的**实体级分页**（本回退）
+    //   - `{offset, limit}`                 ⇒ 阶段 1 的**模板分页路径**（见 [`RequestSpec`]）
+    let paging_obj = obj.get("paging").and_then(|p| p.as_object()).or_else(|| {
+        obj.get("request")
+            .and_then(|r| r.as_object())
+            .and_then(|r| r.get("paging"))
+            .and_then(|p| p.as_object())
+            .filter(|p| p.contains_key("offset_param") || p.contains_key("limit_param"))
+    });
     let paging = paging_obj.map(|p| {
         let loc2 = format!("{loc} 字段 paging");
         Paging {
@@ -648,18 +778,8 @@ fn parse_entity(
         }
     }
 
-    // 过滤名 → 请求参数名（`request.from_filter`）。
-    let pushdown_requests = obj
-        .get("request")
-        .and_then(|r| r.as_object())
-        .and_then(|r| r.get("from_filter"))
-        .and_then(|f| f.as_object())
-        .map(|f| {
-            f.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
+    // `request` 段：请求体模板 + 绑定（见 [`RequestSpec`]）；旧写法 `from_filter` 内部转成模板。
+    let request = parse_request_spec(obj.get("request"), &loc, problems);
 
     // capability：三个字段**都必须显式**（设计稿规则 3）。
     let capability = obj
@@ -756,7 +876,7 @@ fn parse_entity(
         iri_template: iri_template?,
         fields,
         paging,
-        pushdown_requests,
+        request,
         capability,
         freshness,
         fixture: fixture?,
@@ -790,6 +910,260 @@ fn parse_relation(item: &Value, idx: usize, problems: &mut Vec<Problem>) -> Opti
         // 缺省 = 可遍历（同源边）。跨源边必须显式声明不可遍历（validate 会查）。
         traversable: obj.get("traversable").and_then(|b| b.as_bool()).unwrap_or(true),
     })
+}
+
+// ── `request` 段：模板 + 绑定（见 [`RequestSpec`]）──────────────────
+
+/// 解析 `request` 段。**一次报全**：模板形状、绑定、必填、占位符对账分别报。
+fn parse_request_spec(
+    spec: Option<&Value>,
+    loc: &str,
+    problems: &mut Vec<Problem>,
+) -> RequestSpec {
+    let mut out = RequestSpec::default();
+    let obj = match spec {
+        None => return out,
+        Some(v) => match v.as_object() {
+            Some(o) => o,
+            None => {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc} 字段 request"),
+                    "必须是对象（`{\"template\":{…},\"bindings\":{…}}`）。",
+                ));
+                return out;
+            }
+        },
+    };
+
+    // ① 模板：必须是 JSON 对象（非 JSON 形态**报不支持**，⛔ 不偷偷适配）
+    if let Some(t) = obj.get("template") {
+        match t.as_object() {
+            Some(_) => out.template = Some(t.clone()),
+            None => problems.push(Problem::new(
+                CODE_REQUEST_SHAPE,
+                format!("{loc} 字段 request.template"),
+                "模板必须是 **JSON 对象**。本实现只签/只发 **POST + JSON** 请求体；\
+                 XML body、multipart、application/x-www-form-urlencoded、GET query 签名\
+                 都**不支持** —— ⛔ 不偷偷适配，也不静默降级成别的形状。\
+                 请把接口的 JSON 请求体原样写成模板。",
+            )),
+        }
+    }
+
+    // ② 绑定
+    if let Some(bs) = obj.get("bindings") {
+        match bs.as_object() {
+            Some(map) => {
+                for (name, b) in map {
+                    let bloc = format!("{loc} 字段 request.bindings.{name}");
+                    if let Some(binding) = parse_binding(b, &bloc, problems) {
+                        out.bindings.insert(name.clone(), binding);
+                    }
+                }
+            }
+            None => problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 request.bindings"),
+                "必须是对象：`{\"zone\":{\"source\":\"filter\"}}`。",
+            )),
+        }
+    }
+
+    // ③ 必填绑定
+    if let Some(req) = obj.get("required") {
+        match req.as_array() {
+            Some(items) => {
+                for it in items {
+                    match it.as_str() {
+                        Some(s) if !s.trim().is_empty() => out.required.push(s.to_string()),
+                        _ => problems.push(Problem::new(
+                            CODE_SCHEMA,
+                            format!("{loc} 字段 request.required"),
+                            "必须是**非空字符串**数组（写占位符名，如 [\"zone\"]）。",
+                        )),
+                    }
+                }
+            }
+            None => problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 request.required"),
+                "必须是数组（写占位符名，如 [\"zone\"]）。",
+            )),
+        }
+    }
+
+    // ④ 分页路径（`request.paging.{offset,limit}`，覆盖实体级 `paging.offset_param`）
+    if let Some(p) = obj.get("paging") {
+        match p.as_object() {
+            Some(p) => {
+                out.paging_offset = opt_str(p, "offset");
+                out.paging_limit = opt_str(p, "limit");
+            }
+            None => problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 request.paging"),
+                "必须是对象：`{\"offset\":\"Offset\",\"limit\":\"Limit\"}`（值是**路径**）。",
+            )),
+        }
+    }
+
+    // ⑤ 旧写法兼容：`from_filter: {"zone": "Zone"}` ⇒ 内部转成模板 + 绑定
+    if let Some(ff) = obj.get("from_filter") {
+        match ff.as_object() {
+            Some(map) => {
+                if out.template.is_some() {
+                    problems.push(Problem::new(
+                        CODE_SCHEMA,
+                        format!("{loc} 字段 request"),
+                        "`template` 与 `from_filter` 不能同时写 —— 前者是通用写法，后者只是它的\
+                         兼容简写（`{\"zone\":\"Zone\"}` ⇒ `{\"Zone\":\"{zone}\"}`）。",
+                    ));
+                } else {
+                    let mut template = Map::new();
+                    for (name, v) in map {
+                        let Some(param) = v.as_str() else {
+                            problems.push(Problem::new(
+                                CODE_SCHEMA,
+                                format!("{loc} 字段 request.from_filter.{name}"),
+                                "兼容写法只接受字符串（顶层参数名，如 `\"Zone\"`）。\
+                                 要拼数组对象 / 深层嵌套请用 `template` + `bindings`。",
+                            ));
+                            continue;
+                        };
+                        template
+                            .insert(param.to_string(), Value::String(format!("{{{name}}}")));
+                        out.bindings
+                            .insert(name.clone(), Binding { source: BindingSource::Filter });
+                    }
+                    out.template = Some(Value::Object(template));
+                }
+            }
+            None => problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 request.from_filter"),
+                "必须是对象（`{\"zone\":\"Zone\"}`）。",
+            )),
+        }
+    }
+
+    // ⑥ 占位符 ↔ 绑定 对账：笔误在这里抓，别等到真调用时才炸
+    if let Some(t) = &out.template {
+        for name in template_placeholders(t) {
+            if name == "offset" || name == "limit" {
+                // 分页器的两个值是**内建**的，不必显式绑定
+                out.bindings.entry(name.clone()).or_insert(Binding {
+                    source: BindingSource::Paging(if name == "offset" {
+                        PagingValue::Offset
+                    } else {
+                        PagingValue::Limit
+                    }),
+                });
+                continue;
+            }
+            if !out.bindings.contains_key(&name) {
+                problems.push(Problem::new(
+                    CODE_SCHEMA,
+                    format!("{loc} 字段 request.template"),
+                    format!(
+                        "模板里的占位符 `{{{name}}}` 没有对应绑定 —— \
+                         加 `request.bindings.{name}`（`source` 取 `default` / `filter` / `paging`），\
+                         或把它改成常量字符串。"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ⑦ `required` 必须在 bindings 里，否则永远满足不了
+    for name in &out.required {
+        if !out.bindings.contains_key(name) {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 request.required"),
+                format!("`{name}` 不在 `request.bindings` 里 —— 必填项却没有任何取值来源。"),
+            ));
+        }
+    }
+
+    out
+}
+
+/// 解析一个绑定（`{"source":"default"|"filter"|"paging", "from":"offset"|"limit"}`）。
+fn parse_binding(spec: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<Binding> {
+    let obj = match spec.as_object() {
+        Some(o) => o,
+        None => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                loc,
+                "必须是对象：`{\"source\":\"default\"|\"filter\"|\"paging\"}`\
+                 （`paging` 还要 `\"from\":\"offset\"|\"limit\"`）。",
+            ));
+            return None;
+        }
+    };
+
+    let source = opt_str(obj, "source").unwrap_or_default();
+    let src = match source.as_str() {
+        "default" => BindingSource::Default,
+        "filter" => BindingSource::Filter,
+        "paging" => {
+            let which = opt_str(obj, "from").unwrap_or_else(|| "offset".to_string());
+            match which.as_str() {
+                "offset" => BindingSource::Paging(PagingValue::Offset),
+                "limit" => BindingSource::Paging(PagingValue::Limit),
+                other => {
+                    problems.push(Problem::new(
+                        CODE_SCHEMA,
+                        loc,
+                        format!(
+                            "`source: paging` 的 `from` 只能是 `offset` 或 `limit`，不认识 `{other}`。"
+                        ),
+                    ));
+                    return None;
+                }
+            }
+        }
+        "" => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                loc,
+                "缺必填字段 `source`（`default` / `filter` / `paging`）—— \
+                 不写就不知道这个值从哪来。",
+            ));
+            return None;
+        }
+        other => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                loc,
+                format!(
+                    "`source` 只能是 `default`（取 sources[].defaults）/ `filter`（取调用方 --filter）\
+                     / `paging`（由分页器给），不认识 `{other}`。"
+                ),
+            ));
+            return None;
+        }
+    };
+    Some(Binding { source: src })
+}
+
+/// 模板里出现的全部占位符（**只认字符串值**，键名不算）。
+fn template_placeholders(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) => out.extend(placeholders(s)),
+            Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    walk(v, &mut out);
+    out.sort();
+    out.dedup();
+    out
 }
 
 // ── 取值助手（每个都自己记一条**点名**的问题）──────────────────
@@ -1326,7 +1700,7 @@ mod tests {
                 "class": "cvm_instance",
                 "source": "s1",
                 "reviewed_by": "张三@2026-10-25",
-                "operation": { "action": "DescribeInstances" },
+                "operation": { "action": "SomeAction" },
                 "iterator": "$.Response.InstanceSet[*]",
                 "identity": { "key_path": "InstanceId" },
                 "iri_template": "ontok:cvm_instance/{id}",
@@ -1346,6 +1720,124 @@ mod tests {
         assert_eq!(m.mapping_version, 1, "缺省映射版本 = 1");
         assert_eq!(m.entities[0].key_path, "InstanceId");
         assert!(m.entities[0].reviewed());
+    }
+
+    // ── `request` 段：模板 + 绑定（F4）────────────────────────────
+
+    /// 往最小契约里塞一个 `request` 段。
+    fn with_request(request: serde_json::Value) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(&minimal()).unwrap();
+        v["entities"][0]["request"] = request;
+        serde_json::to_string(&v).unwrap()
+    }
+
+    #[test]
+    fn request_template_and_bindings_parse() {
+        let m = parse(&with_request(serde_json::json!({
+            "required": ["zone"],
+            "template": {
+                "Region": "{region}",
+                "Clauses": [ { "Field": "zone", "Values": ["{zone}"] } ]
+            },
+            "bindings": {
+                "region": { "source": "default" },
+                "zone":   { "source": "filter" },
+                "page":   { "source": "paging", "from": "offset" }
+            },
+            "paging": { "offset": "Page.Number", "limit": "Page.Size" }
+        })))
+        .expect("模板契约应当解析成功");
+
+        let spec = &m.entities[0].request;
+        let t = spec.template.as_ref().expect("模板必须在");
+        assert_eq!(t["Region"], serde_json::json!("{region}"));
+        assert_eq!(t["Clauses"][0]["Values"][0], serde_json::json!("{zone}"));
+        assert_eq!(spec.bindings["region"].source, BindingSource::Default);
+        assert_eq!(spec.bindings["zone"].source, BindingSource::Filter);
+        assert_eq!(
+            spec.bindings["page"].source,
+            BindingSource::Paging(PagingValue::Offset)
+        );
+        assert_eq!(spec.required, vec!["zone".to_string()]);
+        assert_eq!(spec.paging_offset.as_deref(), Some("Page.Number"));
+        assert_eq!(spec.paging_limit.as_deref(), Some("Page.Size"));
+    }
+
+    /// 旧写法 `from_filter` **内部转成模板**（⛔ 不是另一条运行时代码路径）。
+    #[test]
+    fn request_from_filter_legacy_converts_to_template() {
+        let m = parse(&with_request(serde_json::json!({
+            "from_filter": { "zone": "Zone", "ids": "InstanceIds" }
+        })))
+        .expect("旧写法必须仍然能解析");
+
+        let spec = &m.entities[0].request;
+        let t = spec.template.as_ref().expect("旧写法应当被转成模板");
+        assert_eq!(t["Zone"], serde_json::json!("{zone}"));
+        assert_eq!(t["InstanceIds"], serde_json::json!("{ids}"));
+        assert_eq!(spec.bindings["zone"].source, BindingSource::Filter);
+        assert_eq!(spec.bindings["ids"].source, BindingSource::Filter);
+    }
+
+    #[test]
+    fn request_rejects_unsupported_shapes_and_typos_by_name() {
+        // ① 非 JSON 模板 ⇒ REQUEST_SHAPE_UNSUPPORTED（⛔ 不偷偷适配）
+        let errs = parse(&with_request(serde_json::json!({
+            "template": "<Request><Zone>x</Zone></Request>"
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|p| p.code == CODE_REQUEST_SHAPE
+                    && p.location.contains("request.template")),
+            "非对象模板必须报 REQUEST_SHAPE_UNSUPPORTED：{errs:?}"
+        );
+
+        // ② 占位符没有绑定 ⇒ 解析期就点名（别等真调用）
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Zone": "{zone}" }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|p| p.message.contains("占位符 `{zone}` 没有对应绑定")),
+            "要点名是哪个占位符没绑定：{errs:?}"
+        );
+
+        // ③ source 认不出来 ⇒ 点名三个合法值
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Zone": "{zone}" },
+            "bindings": { "zone": { "source": "magic" } }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.message.contains("`source` 只能是")),
+            "要点名合法来源：{errs:?}"
+        );
+
+        // ④ required 里写了没有绑定的名字
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Zone": "fixed" },
+            "required": ["zone"]
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|p| p.message.contains("`zone` 不在 `request.bindings` 里")),
+            "{errs:?}"
+        );
+
+        // ⑤ template 与 from_filter 同时写 ⇒ 歧义，拒绝
+        let errs = parse(&with_request(serde_json::json!({
+            "template": { "Zone": "{zone}" },
+            "bindings": { "zone": { "source": "filter" } },
+            "from_filter": { "zone": "Zone" }
+        })))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| p.message.contains("不能同时写")),
+            "{errs:?}"
+        );
     }
 
     #[test]

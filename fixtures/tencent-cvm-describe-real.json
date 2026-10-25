@@ -1,0 +1,262 @@
+{
+  "Response": {
+    "TotalCount": 3,
+    "InstanceSet": [
+      {
+        "Placement": {
+          "Zone": "ap-guangzhou-5",
+          "HostId": null,
+          "ProjectId": 0
+        },
+        "InstanceId": "ins-0000001",
+        "Uuid": "00000000-0000-4000-8000-000000000001",
+        "OperatorUin": 100000000000,
+        "InstanceState": "RUNNING",
+        "ApplicationRole": "",
+        "RestrictState": "NORMAL",
+        "InstanceType": "SA9.MEDIUM2",
+        "CPU": 2,
+        "Memory": 2,
+        "InstanceName": "demo-cvm-01",
+        "InstanceChargeType": "POSTPAID_BY_HOUR",
+        "SystemDisk": {
+          "DiskType": "CLOUD_BSSD",
+          "DiskId": "disk-0000001",
+          "DiskSize": 50,
+          "Encrypt": false,
+          "KmsKeyId": null,
+          "ThroughputPerformance": 0,
+          "CdcId": null
+        },
+        "DataDisks": [],
+        "PrivateIpAddresses": [
+          "10.0.1.0"
+        ],
+        "PublicIpAddresses": [
+          "10.0.2.0"
+        ],
+        "IPv6Addresses": null,
+        "InternetAccessible": {
+          "InternetMaxBandwidthOut": 5,
+          "InternetChargeType": "TRAFFIC_POSTPAID_BY_HOUR"
+        },
+        "VirtualPrivateCloud": {
+          "VpcId": "vpc-0000001",
+          "SubnetId": "subnet-0000001",
+          "AsVpcGateway": false
+        },
+        "SecurityGroupIds": [
+          "sg-0000001"
+        ],
+        "LoginSettings": {
+          "KeyIds": [
+            "skey-0000001"
+          ]
+        },
+        "ImageId": "img-0000001",
+        "DefaultLoginUser": "root",
+        "DefaultLoginPort": 22,
+        "RenewFlag": null,
+        "CreatedTime": "2026-10-04T06:28:11Z",
+        "ExpiredTime": null,
+        "UnderwriteExpiredTime": null,
+        "Tags": [],
+        "PlatformProjectId": null,
+        "DisasterRecoverGroupId": "",
+        "DedicatedClusterId": "",
+        "CamRoleName": "demo-cam-role",
+        "LatestOperation": "StartInstances",
+        "LatestOperationState": "SUCCESS",
+        "LatestOperationRequestId": "opreq-0000001",
+        "IsolatedSource": "NOTISOLATED",
+        "ChcInstanceType": "",
+        "HpcClusterId": "",
+        "DisableApiTermination": false,
+        "DisasterRecoveryStatus": "",
+        "RdmaIpAddresses": null,
+        "VmEniTrunking": "off",
+        "OsName": "TencentOS Server 4 for x86_64",
+        "EnableJumboFrame": false,
+        "LicenseType": "TencentCloud",
+        "StopChargingMode": "NOT_APPLICABLE",
+        "CpuTopology": {
+          "ThreadPerCore": 2,
+          "CoreCount": 1
+        },
+        "ImageType": "PUBLIC_IMAGE",
+        "InstanceFamily": "SA9",
+        "LatestOperationErrorMsg": null,
+        "BootMode": "Legacy BIOS"
+      },
+      {
+        "Placement": {
+          "Zone": "ap-guangzhou-5",
+          "HostId": null,
+          "ProjectId": 0
+        },
+        "InstanceId": "ins-0000002",
+        "Uuid": "00000000-0000-4000-8000-000000000002",
+        "OperatorUin": 100000000000,
+        "InstanceState": "RUNNING",
+        "ApplicationRole": "",
+        "RestrictState": "NORMAL",
+        "InstanceType": "SA9.MEDIUM2",
+        "CPU": 2,
+        "Memory": 2,
+        "InstanceName": "demo-cvm-02",
+        "InstanceChargeType": "POSTPAID_BY_HOUR",
+        "SystemDisk": {
+          "DiskType": "CLOUD_BSSD",
+          "DiskId": "disk-0000002",
+          "DiskSize": 50,
+          "Encrypt": false,
+          "KmsKeyId": null,
+          "ThroughputPerformance": 0,
+          "CdcId": null
+        },
+        "DataDisks": [],
+        "PrivateIpAddresses": [
+          "10.0.3.0"
+        ],
+        "PublicIpAddresses": [
+          "10.0.4.0"
+        ],
+        "IPv6Addresses": null,
+        "InternetAccessible": {
+          "InternetMaxBandwidthOut": 5,
+          "InternetChargeType": "TRAFFIC_POSTPAID_BY_HOUR"
+        },
+        "VirtualPrivateCloud": {
+          "VpcId": "vpc-0000002",
+          "SubnetId": "subnet-0000002",
+          "AsVpcGateway": false
+        },
+        "SecurityGroupIds": [
+          "sg-0000002"
+        ],
+        "LoginSettings": {
+          "KeyIds": null
+        },
+        "ImageId": "img-0000002",
+        "DefaultLoginUser": "root",
+        "DefaultLoginPort": 22,
+        "RenewFlag": null,
+        "CreatedTime": "2026-09-29T02:45:41Z",
+        "ExpiredTime": null,
+        "UnderwriteExpiredTime": null,
+        "Tags": [],
+        "PlatformProjectId": null,
+        "DisasterRecoverGroupId": "",
+        "DedicatedClusterId": "",
+        "CamRoleName": "demo-cam-role",
+        "LatestOperation": "StartInstances",
+        "LatestOperationState": "SUCCESS",
+        "LatestOperationRequestId": "opreq-0000002",
+        "IsolatedSource": "NOTISOLATED",
+        "ChcInstanceType": "",
+        "HpcClusterId": "",
+        "DisableApiTermination": false,
+        "DisasterRecoveryStatus": "",
+        "RdmaIpAddresses": null,
+        "VmEniTrunking": "off",
+        "OsName": "TencentOS Server 4 for x86_64",
+        "EnableJumboFrame": false,
+        "LicenseType": "TencentCloud",
+        "StopChargingMode": "NOT_APPLICABLE",
+        "CpuTopology": {
+          "ThreadPerCore": 2,
+          "CoreCount": 1
+        },
+        "ImageType": "PUBLIC_IMAGE",
+        "InstanceFamily": "SA9",
+        "LatestOperationErrorMsg": null,
+        "BootMode": "Legacy BIOS"
+      },
+      {
+        "Placement": {
+          "Zone": "ap-guangzhou-5",
+          "HostId": null,
+          "ProjectId": 0
+        },
+        "InstanceId": "ins-0000003",
+        "Uuid": "00000000-0000-4000-8000-000000000003",
+        "OperatorUin": 100000000000,
+        "InstanceState": "RUNNING",
+        "ApplicationRole": "",
+        "RestrictState": "NORMAL",
+        "InstanceType": "SA9.MEDIUM2",
+        "CPU": 2,
+        "Memory": 2,
+        "InstanceName": "demo-cvm-03",
+        "InstanceChargeType": "POSTPAID_BY_HOUR",
+        "SystemDisk": {
+          "DiskType": "CLOUD_BSSD",
+          "DiskId": "disk-0000003",
+          "DiskSize": 50,
+          "Encrypt": false,
+          "KmsKeyId": null,
+          "ThroughputPerformance": 0,
+          "CdcId": null
+        },
+        "DataDisks": [],
+        "PrivateIpAddresses": [
+          "10.0.5.0"
+        ],
+        "PublicIpAddresses": [
+          "10.0.6.0"
+        ],
+        "IPv6Addresses": null,
+        "InternetAccessible": {
+          "InternetMaxBandwidthOut": 5,
+          "InternetChargeType": "TRAFFIC_POSTPAID_BY_HOUR"
+        },
+        "VirtualPrivateCloud": {
+          "VpcId": "vpc-0000003",
+          "SubnetId": "subnet-0000003",
+          "AsVpcGateway": false
+        },
+        "SecurityGroupIds": [
+          "sg-0000003"
+        ],
+        "LoginSettings": {
+          "KeyIds": null
+        },
+        "ImageId": "img-0000003",
+        "DefaultLoginUser": "root",
+        "DefaultLoginPort": 22,
+        "RenewFlag": null,
+        "CreatedTime": "2026-09-20T14:57:18Z",
+        "ExpiredTime": null,
+        "UnderwriteExpiredTime": null,
+        "Tags": [],
+        "PlatformProjectId": null,
+        "DisasterRecoverGroupId": "",
+        "DedicatedClusterId": "",
+        "CamRoleName": "demo-cam-role",
+        "LatestOperation": "StartInstances",
+        "LatestOperationState": "SUCCESS",
+        "LatestOperationRequestId": "opreq-0000003",
+        "IsolatedSource": "NOTISOLATED",
+        "ChcInstanceType": "",
+        "HpcClusterId": "",
+        "DisableApiTermination": false,
+        "DisasterRecoveryStatus": "",
+        "RdmaIpAddresses": null,
+        "VmEniTrunking": "off",
+        "OsName": "TencentOS Server 4 for x86_64",
+        "EnableJumboFrame": false,
+        "LicenseType": "TencentCloud",
+        "StopChargingMode": "NOT_APPLICABLE",
+        "CpuTopology": {
+          "ThreadPerCore": 2,
+          "CoreCount": 1
+        },
+        "ImageType": "PUBLIC_IMAGE",
+        "InstanceFamily": "SA9",
+        "LatestOperationErrorMsg": null,
+        "BootMode": "Legacy BIOS"
+      }
+    ],
+    "RequestId": "req-0000001"
+  }
+}

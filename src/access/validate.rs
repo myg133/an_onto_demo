@@ -537,13 +537,13 @@ mod tests {
             r#"{{
   "contract_version": 1,
   "project": "ops360",
-  "sources": [{{ "id": "s1", "base_url": "https://cvm.tencentcloudapi.com" }}],
+  "sources": [{{ "id": "s1", "base_url": "https://api.example.com" }}],
   "entities": [{{
     "id": "cvm_instance",
     "class": "云资源",
     "source": "s1",
     "reviewed_by": "张三@2026-10-25",
-    "operation": {{ "action": "DescribeInstances" }},
+    "operation": {{ "action": "SomeAction" }},
     "iterator": "$.Response.InstanceSet[*]",
     "identity": {{ "key_path": "InstanceId" }},
     "iri_template": "{tpl}",
