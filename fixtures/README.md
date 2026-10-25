@@ -41,10 +41,15 @@
 | API | `cvm:DescribeInstances` / `2017-03-12` / `ap-guangzhou` |
 | 原始大小 | **5,759 B** · `TotalCount=3` · 每实例 **52 字段** |
 | **它的用途** | **证明映射的字段路径与真实响应结构一致**（不是业务数据样本） |
-| 脱敏脚本 | `.local/req144-stage1/scripts/desensitize.py`（**确定性**：同输入两次逐字节相同） |
-| 脱敏范围 | `InstanceId / InstanceName / Uuid / IP / VpcId / SubnetId / SecurityGroupIds / ImageId / OperatorUin / ProjectId / Tags[].Value / RequestId` |
-| **保留（语义）** | `Placement.Zone` / `InstanceState` / `InstanceType` / `CPU` / `Memory` / `OsName` / 时间字段格式 |
-| 校验 | 字段集合与顺序与原文**完全一致**；真实 `ins-` ID 残留 **0**；5 个映射字段覆盖率 **3/3** |
+| 脱敏脚本 | **`fixtures/desensitize.py`**（在仓库里，确定性：同输入两次逐字节相同） |
+| 脱敏范围 | `InstanceId / InstanceName / Uuid / IP(v4+v6) / VpcId / SubnetId / SecurityGroupIds / ImageId / DiskId / **LoginSettings.KeyIds** / OperatorUin / ProjectId / PlatformProjectId / Tags[].Value / RequestId / LatestOperationRequestId / CamRoleName` |
+| **保留（语义）** | `Placement.Zone` / `InstanceState` / `InstanceType` / `CPU` / `Memory` / `OsName` / `ImageFormat` / 时间字段格式 |
+| 校验 | ① 字段集合与顺序与原文**完全一致**；② **脚本自带的独立校验**：逐字段比对 raw 与 masked，**32 个"疑似标识"值零残留**（不是只查 `ins-` 一种前缀）；③ 5 个映射字段覆盖率 **3/3** |
+
+> ⚠️ **第一版脱敏漏了 `skey-`（密钥对 ID）**，QA 在 `LoginSettings.KeyIds[0]` 抓到它与 raw 逐字节相同。
+> 根因：脚本按"六种前缀白名单"替换，**没覆盖到的就原样留下**。
+> 现在改成**通用形状匹配**（任何 `<小写字母>-<字母数字>` 形状一律替换）+ **逐值比对校验**。
+> 教训：**脱敏要按"什么算标识"来判断，不能按"我记得哪些前缀"来枚举。**
 
 ⚠️ **重新采集时必须**：① 重新 `--dump-raw` ② 跑 `desensitize.py` ③ **更新本节的时间与字节数**（⛔ 不许只换文件不改登记）。
 

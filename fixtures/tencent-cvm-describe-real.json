@@ -33,7 +33,7 @@
           "10.0.1.0"
         ],
         "PublicIpAddresses": [
-          "10.0.3.0"
+          "10.0.2.0"
         ],
         "IPv6Addresses": null,
         "InternetAccessible": {
@@ -50,7 +50,7 @@
         ],
         "LoginSettings": {
           "KeyIds": [
-            "skey-q6r85k71"
+            "skey-0000001"
           ]
         },
         "ImageId": "img-0000001",
@@ -67,7 +67,7 @@
         "CamRoleName": "demo-cam-role",
         "LatestOperation": "StartInstances",
         "LatestOperationState": "SUCCESS",
-        "LatestOperationRequestId": "opreq-00000001",
+        "LatestOperationRequestId": "opreq-0000001",
         "IsolatedSource": "NOTISOLATED",
         "ChcInstanceType": "",
         "HpcClusterId": "",
@@ -116,10 +116,10 @@
         },
         "DataDisks": [],
         "PrivateIpAddresses": [
-          "10.0.5.0"
+          "10.0.3.0"
         ],
         "PublicIpAddresses": [
-          "10.0.7.0"
+          "10.0.4.0"
         ],
         "IPv6Addresses": null,
         "InternetAccessible": {
@@ -151,7 +151,7 @@
         "CamRoleName": "demo-cam-role",
         "LatestOperation": "StartInstances",
         "LatestOperationState": "SUCCESS",
-        "LatestOperationRequestId": "opreq-00000002",
+        "LatestOperationRequestId": "opreq-0000002",
         "IsolatedSource": "NOTISOLATED",
         "ChcInstanceType": "",
         "HpcClusterId": "",
@@ -200,10 +200,10 @@
         },
         "DataDisks": [],
         "PrivateIpAddresses": [
-          "10.0.9.0"
+          "10.0.5.0"
         ],
         "PublicIpAddresses": [
-          "10.0.11.0"
+          "10.0.6.0"
         ],
         "IPv6Addresses": null,
         "InternetAccessible": {
@@ -235,7 +235,7 @@
         "CamRoleName": "demo-cam-role",
         "LatestOperation": "StartInstances",
         "LatestOperationState": "SUCCESS",
-        "LatestOperationRequestId": "opreq-00000003",
+        "LatestOperationRequestId": "opreq-0000003",
         "IsolatedSource": "NOTISOLATED",
         "ChcInstanceType": "",
         "HpcClusterId": "",
@@ -257,6 +257,6 @@
         "BootMode": "Legacy BIOS"
       }
     ],
-    "RequestId": "req-000000000001"
+    "RequestId": "req-0000001"
   }
 }
