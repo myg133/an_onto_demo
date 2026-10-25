@@ -1,4 +1,12 @@
-//! REQ-145 · **access 映射（`query serve --access-mapping <file>`）** —— API 源声明的加载与判定。
+//! REQ-145 · **源闸（`query serve --access-mapping <file>`）** —— API 源声明的加载与判定。
+//!
+//! # 为什么这个模块叫 `source_gate` 而不是 `access`
+//!
+//! 仓里已经有一个 `ontok::access`（REQ-144：**API 源的映射契约** —— 那是资产/格式）；
+//! 本模块干的是另一件事：**判定「这条查询该走哪个源」**，走不通就拦下来
+//! （`NOT_DB_SOURCE` / `CROSS_SOURCE_UNSUPPORTED`）。两个都叫 `access` 编译不冲突，
+//! 但两个都叫 `access` 的模块并排出现时（契约 vs 判定），人会愣 ——
+//! 所以这里按**职责**命名；契约那个名字不动（它贴切）。
 //!
 //! # 一句话
 //!

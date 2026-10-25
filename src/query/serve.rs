@@ -412,7 +412,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // 一份「一半对不上」的映射最坏的后果是平台以为某类在库、其实在 API。
     //
     // ⚠️ 本段**不读任何凭据 / 端点**，也不执行任何调用：文件里那些字段读进来就丢
-    // （见 `query::access` 模块头）。
+    // （见 `query::source_gate` 模块头）。
     let model = crate::domain::model_view::project_model_track(&snap);
     let access = match &args.access_mapping {
         Some(path) => {
@@ -423,7 +423,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
                      ⛔ 读不出来就**当作没给**会静默退回「全是库源」，那不是你要的。"
                 )
             })?;
-            let parsed = crate::query::access::AccessMapping::parse(&raw)
+            let parsed = crate::query::source_gate::AccessMapping::parse(&raw)
                 .map_err(|e| anyhow::anyhow!("access 映射 {path:?} 不合法：{e}"))?;
             Some(parsed.bind(&model).map_err(|e| {
                 anyhow::anyhow!("access 映射 {path:?} 与本体 v{} 对不上：{e}", args.version)

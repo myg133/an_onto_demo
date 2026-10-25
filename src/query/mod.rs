@@ -85,7 +85,7 @@
 
 pub mod audit;
 // ⭐ REQ-145 · access 映射（`--access-mapping`）：哪些类来自 API、跨源边在哪、查询落到哪一类。
-pub mod access;
+pub mod source_gate;
 pub mod catalog;
 pub mod error;
 pub mod http;
@@ -650,7 +650,7 @@ pub struct QueryService {
     /// `None` = 这个部署没加载映射 ⇒ **与基线逐字节相同**（R1）：没有 `access` 字段、
     /// 没有 `@pending`、没有 `complete`、没有 `mapping_version`；api 类照常按库源处理。
     /// 客户侧部署天然不加载它 ⇒ 也就拿不到 `get`（R6，不做额外身份裁剪）。
-    pub access: Option<access::AccessMapping>,
+    pub access: Option<source_gate::AccessMapping>,
     limiter: Arc<Limiter>,
 }
 
@@ -675,7 +675,7 @@ pub struct ServiceParts {
     /// ⭐ REQ-127 · 两视图的 TTL（`query::ttl::OntologyTtl::prepare` 的产物）。
     pub ttl: crate::query::ttl::OntologyTtl,
     /// ⭐ REQ-145 · access 映射（可选；`None` = 没加载 `--access-mapping`）。
-    pub access: Option<access::AccessMapping>,
+    pub access: Option<source_gate::AccessMapping>,
 }
 
 impl QueryService {
@@ -998,7 +998,7 @@ pub struct PendingAnswer {
     /// 它带 `complete: Some(false)` + `unresolved_classes: Some([...])`。
     pub receipt: SparqlReceipt,
     /// 一条一条待取（**不进 `@graph`**，契约规则 2）。
-    pub pending: Vec<access::ApiPending>,
+    pub pending: Vec<source_gate::ApiPending>,
     /// 加载的映射版本（`meta.mapping_version`）。
     pub mapping_version: u64,
 }
@@ -1141,19 +1141,19 @@ async fn run_sparql_event(
     //
     // 位置在「拿名额之后、规划之前」：规划器会真的去解析类名 / 建 SQL，而一条只碰 api 源
     // 的查询**一行 SQL 都不该执行**（库里的那份副本不是事实源）。判据只读 AST + 映射
-    // （⛔ 不做字符串匹配），见 `access::AccessMapping::check`。
+    // （⛔ 不做字符串匹配），见 `source_gate::AccessMapping::check`。
     if let Some(access) = svc.access.as_ref() {
         if let Some(check) = source_check(svc, access, &req.query) {
             match check {
-                access::SourceCheck::DbOnly => {}
-                access::SourceCheck::CrossSource { predicate, from, to } => {
+                source_gate::SourceCheck::DbOnly => {}
+                source_gate::SourceCheck::CrossSource { predicate, from, to } => {
                     let e = ApiError::cross_source_unsupported(&predicate, &from, &to);
                     svc.metrics.note_denial_code(e.code);
                     audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
                     drop(slot);
                     return Err(e);
                 }
-                access::SourceCheck::Api { pending } => {
+                source_gate::SourceCheck::Api { pending } => {
                     // ⚠️ R-2：**这里不写审计**。审计的 `code` 必须是客户端实际收到的那个，
                     // 而「客户端收到什么」只有调用方知道（rows ⇒ 400 `NOT_DB_SOURCE`，
                     // jsonld ⇒ 200 `OK`）—— 于是 `run_sparql` / `run_sparql_ex` 各自记一行
@@ -1264,9 +1264,9 @@ async fn run_sparql_event(
 /// 那样错误码与 hint 只有一处来源（`SPARQL_UNSUPPORTED` 的支持清单）。
 fn source_check(
     svc: &QueryService,
-    access: &access::AccessMapping,
+    access: &source_gate::AccessMapping,
     sparql: &str,
-) -> Option<access::SourceCheck> {
+) -> Option<source_gate::SourceCheck> {
     let q = crate::sparql::query::parse(sparql, &svc.ontology_iri).ok()?;
     Some(access.check(&q, &svc.ontology_iri, svc.mapping.as_ref()))
 }

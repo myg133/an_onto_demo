@@ -229,7 +229,7 @@ pub struct ApiClasses {
 }
 
 impl ApiClasses {
-    /// 由「api 类 key」+「这些人读名」构造。两个集合都由调用方（`query::access`）
+    /// 由「api 类 key」+「这些人读名」构造。两个集合都由调用方（`query::source_gate`）
     /// 从**同一份映射**解析出来，⛔ 不在这里再解析一次 JSON。
     pub fn new(
         keys: impl IntoIterator<Item = String>,

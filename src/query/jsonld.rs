@@ -387,7 +387,7 @@ pub fn render_with_mapping<'a>(
 /// - `meta.unresolved_classes` 与 `@pending[].@type` 是**同一批类**（都从 `pending` 取）。
 pub fn render_pending<'a>(
     receipt: &'a SparqlReceipt,
-    pending: &[super::access::ApiPending],
+    pending: &[super::source_gate::ApiPending],
     ontology_iri: &str,
     mapping_version: u64,
 ) -> JsonLd<'a> {
@@ -437,8 +437,8 @@ pub fn render_pending<'a>(
     }
 }
 
-/// 服务端的 [`super::access::ApiPending`] → 对外的 `@pending[]` 条目。
-fn pending_node(p: &super::access::ApiPending) -> PendingNode {
+/// 服务端的 [`super::source_gate::ApiPending`] → 对外的 `@pending[]` 条目。
+fn pending_node(p: &super::source_gate::ApiPending) -> PendingNode {
     PendingNode {
         id: p
             .id

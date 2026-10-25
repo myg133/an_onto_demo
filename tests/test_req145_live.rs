@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use ontok::query::access::AccessMapping;
+use ontok::query::source_gate::AccessMapping;
 use ontok::query::tokens::TokenTable;
 use ontok::query::ttl::{OntologyTtl, TtlSource};
 use ontok::query::{http, QueryService, ServiceParts};

@@ -2095,7 +2095,7 @@ const MODULES: &[(&str, &str)] = &[
     ("src/query/mod.rs", "jsonld"),
     // ⭐ REQ-145 · access 映射（`--access-mapping`）：只做**判定**（哪些类来自 API、
     // 查询落到哪一类），⛔ 不写任何出口 —— 它的产物经既有 I14/I25 与 TTL 两视图送出。
-    ("src/query/mod.rs", "access"),
+    ("src/query/mod.rs", "source_gate"),
     // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),

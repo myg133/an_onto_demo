@@ -132,7 +132,7 @@ impl ClassAccess {
     }
 
     /// api 源：只能 `fetch`（平台不代取 —— 凭据不出客户边界）。
-    pub fn api(entity: &super::access::Entity) -> Self {
+    pub fn api(entity: &super::source_gate::Entity) -> Self {
         Self {
             kind: "api",
             queryable_by: vec!["fetch"],
@@ -367,7 +367,7 @@ impl SnapshotIndex<'_> {
 pub fn build_items(
     model: &ModelTrackView,
     mapping: Option<&R2rmlMapping>,
-    access: Option<&super::access::AccessMapping>,
+    access: Option<&super::source_gate::AccessMapping>,
 ) -> Vec<CatalogItem> {
     let idx = snapshot_index(model);
     let mut items: Vec<CatalogItem> = Vec::new();
