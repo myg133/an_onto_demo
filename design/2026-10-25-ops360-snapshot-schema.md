@@ -1,9 +1,22 @@
-# Ops360 运维快照 · schema 草案
+# Ops360 演示数据源 · 样例 schema（**不是产品的表**）
 
 > 状态：**草案，待评审**。2026-10-25。
-> 目标：一套表，**两种写入口**——① 快照（稳定、可造）② 现场采集（腾讯云 API）。
+> ⚠️ **定位**：这是一份**演示用的样例数据源**（synthetic source DB），**不在产品里、不进产品迁移**。
+> 产品对业务表只做 `introspect`（只读）；接入真实客户时，这些表是**客户自己的**，我们一行都不建。
 
 ---
+
+## 〇 · 边界：这些表**不是产品的表**
+
+| | 归属 | 产品是否随业务改变 |
+| --- | --- | --- |
+| `projects` / `versions` / `object_types` / `link_types` / `proposals` / 审计 / token | **我们**（产品元数据） | 只在**功能**演进时变 |
+| `cloud_resource` / `alarm` / `backup_policy` / `cost_daily` / `risk_item` | **数据源**（客户库 / 演示库） | ⛔ **永不变** |
+
+**产品对业务表只做一件事**：`ontok-introspect` 只读勘查。
+
+> ⛔ 若「支持一个新业务」需要改动产品的表结构，那就是**设计错误**。
+> 本文件里的 DDL 只用于**造一个演示源库**（`ops360_demo`），接真客户时直接丢弃。
 
 ## 一 · 先看一个反推结果（它改变了设计）
 
@@ -294,3 +307,23 @@ WHERE app_code = 'order-svc' AND app_source = 'tag';
 ```
 
 **要负责人/等级**，才需要一张 10–20 行的应用字典（`app` 表）。demo 可以先不做。
+
+
+---
+
+## 九 · 演示源库怎么用（三步，产品零改动）
+
+```bash
+# ① 建一个**独立的**演示库（不是产品的元数据库）
+createdb ops360_demo
+psql -d ops360_demo -f samples/ops360-demo-schema.sql
+psql -d ops360_demo -f samples/ops360-demo-seed.sql      # 合成数据
+
+# ② 当成"客户的库"来对待 —— 产品流程一步不变
+ONTOK_SOURCE_DATABASE_URL=postgresql://…/ops360_demo   ontok-introspect --out work/schema.json
+# → propose → 人签 → 冻结 → r2rml → query serve（普通模式）
+
+# ③ 接真客户时：把 ①② 换掉，③ 完全不变
+```
+
+**这条正好验证了一件事**：产品与业务解耦。**换一个业务 = 换数据源，不换产品。**
