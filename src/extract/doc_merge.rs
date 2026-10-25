@@ -34,6 +34,28 @@
 //! ⛔ 没有第三条。本模块**没有任何**模糊匹配 / 编辑距离 / 词干 / 向量相似度 ——
 //! 「『套餐』这词像 `package_templates` 就自动映射」正是 demand 点名不许做的事。
 //!
+//! # ⭐ REQ-143 · 纯文档通路（`--allow-doc-only`）
+//!
+//! 上面那套纪律的前提是「**库里已经有这张表**」。没有关系库的项目（Ops360）里
+//! 概念永远命中不了、关系永远没有 `maps_to` ⇒ 并入 0、全量未映射。
+//!
+//! 打开 `--allow-doc-only` 之后**只多一条出口**，其余规则一字不改：
+//!
+//! | 情形 | 行为 |
+//! | --- | --- |
+//! | 概念命中实体（名字/别名/`maps_to`） | 与不开开关时**相同**（`origin: both`，合并证据） |
+//! | 概念**没命中** | 新建 `add_entity_type`：key = [`doc_entity_key`]、`display_name` = 概念名、`band` = [`DOC_ONLY_BAND`]、`reviewed_by: null`、`origin: "doc"` |
+//! | 关系两端都能解析（命中或本轮新建） | 新建 `add_link_type`：`from_type`/`to_type` = 实体 key、**没有 join 列**（`evidence[0].column` 为空串）、key = [`doc_link_key`] |
+//! | 关系任一端解析不到 | 仍进 `doc_unmapped`（码 `endpoint_not_resolved`）—— ⛔ 不许凭空造端点 |
+//! | 冲突 / 不可对齐 | 与不开开关时完全相同（双保留 + `applicable:false`；`alignable:false` 排除并计数） |
+//!
+//! 开关**默认关闭**：不开时这条通路**一行都不执行**，产物与旧版逐字节相同（R5）。
+//!
+//! ⛔ 开关**不**放松的事：不猜语义（「套餐」不会因为像 `package_templates` 就被并进去）、
+//! 不给新条目 `strong`、不给关系编造 join 列、不在歧义时挑一个「最像的」。
+//! 新建实体的 key **只由名字决定**（无序号 / 时间 / 随机 / 输入顺序，见
+//! [`doc_entity_key`]）⇒ 同一份输入两次运行，`merged.json` 逐字节相同。
+//!
 //! # 校验面：提案是**必答项**，`schema.json` 是**严格档**（`--schema`）
 //!
 //! `proposal apply` 判定一条关系能不能建的判据就是**提案里的实体集合**
@@ -54,9 +76,13 @@
 //!   **查不到**，只接受「列在 properties 里」或「列名恰好是 `id`」（后者记
 //!   [`MergeStats::parent_key_id_convention`] + stderr 警告）。要 0 例外请给
 //!   `--schema <schema.json>` —— 那条路才真的查主键列。
-//! - **不许新增实体**：doc 概念映射不到提案里的实体 ⇒ `doc_unmapped`。
-//!   理由与上一条同源：凭空造一张表，apply 就会写进一个没有任何列的本体类。
-//!   所以 `origin: "doc"` 的**条目只可能是关系**（`add_link_type`）。
+//! - **默认不许新增实体**（`--allow-doc-only` 是唯一例外）：doc 概念映射不到提案里的
+//!   实体 ⇒ `doc_unmapped`。理由：凭空造一张表，apply 就会写进一个没有任何列的本体类。
+//!   所以不开开关时 `origin: "doc"` 的**条目只可能是关系**（`add_link_type`）。
+//! - **纯文档通路建出来的实体没有任何属性列**：文档只给了「有这个类」，
+//!   没给字段 ⇒ `properties: []`、关系没有 join 列（`evidence[0].column` 为空串，
+//!   apply 读证据时按「空列」丢弃 ⇒ 快照里这条边没有实现列）。这是**如实记录**，
+//!   ⛔ 不拿列名去编。要让属性/join 落地，仍然得回到有库的那条路（`maps_to` + `--schema`）。
 //! - **名字命中是精确匹配**：`客户` 命中 `customers` 只因它的 `display_name` 恰好是「客户」；
 //!   文档写「顾客」而 DB 名是「客户」、且 DB 侧没登记这个别名 ⇒ 不算命中
 //!   （那需要人签，见 demand §「关键裁定」）。
@@ -122,6 +148,29 @@ pub const MAX_SAMPLES: usize = 8;
 ///
 /// ⚠️ 收它是因为**提案里根本没有主键列**（见模块头的已知限制），不是因为它「像主键」。
 pub const PK_CONVENTION: &str = "id";
+
+/// ⭐ **REQ-143 的唯一档位**：纯文档通路新建条目的 `band`。
+///
+/// 比 [`DOC_BAND_CAP`] 低一档是有意的：这些条目**没有任何库侧证据**
+/// （名字命中至少还有「库里有这张表」这一层，而这里连表都是文档说的）。
+/// 它仍然 ≤ `medium`（规则 2 / R3），并且**永远不是 `strong`**。
+///
+/// 变异自证（REQ-143 纪律 G③）：把它改成 `"strong"`，
+/// [`tests::doc_only_items_never_carry_a_band_stronger_than_medium`] 立刻变红。
+pub const DOC_ONLY_BAND: &str = "low";
+
+/// ⭐ REQ-143 · 纯文档通路新建实体的 key 前缀（`doc_…`，一眼可辨「这条来自文档」）。
+pub const DOC_ONLY_ENTITY_KEY_PREFIX: &str = "doc_";
+
+/// ⭐ REQ-143 · 纯文档通路新建关系的 key 前缀（`rel_…`）。
+///
+/// 与 DB 侧的 `{child}_{column}__{parent}` **不同**：doc-only 边没有列，
+/// 拿列名拼 key 就是编造。这里用「两端实体 key + 谓词」的 sha256 —— 见 [`doc_link_key`]。
+pub const DOC_ONLY_LINK_KEY_PREFIX: &str = "rel_";
+
+/// hash 前缀长度（实体 key / 关系 key 都用 12 个 hex：48 bit，506 个名字的碰撞概率 ~1e-9）。
+const DOC_KEY_HASH_LEN: usize = 12;
+
 
 // ──────────────────────────────────────────────────────────
 // 断言的**对齐键**（REQ-116 的产出方不产它，由人对齐步骤补）
@@ -241,7 +290,7 @@ impl DocClaim {
         }
     }
 
-    fn relation(r: &RelationAssertion, maps: &MapsTo) -> Self {
+    fn relation(r: &RelationAssertion, maps: Option<&MapsTo>) -> Self {
         Self {
             kind: "relation".into(),
             name: None,
@@ -252,7 +301,8 @@ impl DocClaim {
             object: Some(r.object.clone()),
             cardinality: r.cardinality.clone(),
             modality: r.modality.as_str().to_string(),
-            maps_to: Some(maps.clone()),
+            // ⭐ REQ-143：纯文档通路的关系**没有 maps_to**（端点按精确名字解析）⇒ `None`。
+            maps_to: maps.cloned(),
             file: r.evidence.file.clone(),
             chunk_id: r.evidence.chunk_id.clone(),
             quote: r.evidence.quote.clone(),
@@ -345,6 +395,16 @@ pub struct MergeStats {
     pub parent_column_schema_only: usize,
     /// 关系断言没写基数、用了 `N:1` 默认值的条数。
     pub cardinality_defaulted: usize,
+    // ── ⭐ REQ-143 · 纯文档通路的计数（**开关关闭时全部省略**，保证旧产物字节不变）──
+    /// 本次是否开了 `--allow-doc-only`（`false` 时这个字段不出现在 stats.json 里）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub doc_only: bool,
+    /// 由文档**新建**的实体条目数（既有实体的命中不算）。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub doc_only_entities: usize,
+    /// 由文档**新建**的关系条目数（没有 join 列）。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub doc_only_links: usize,
     /// 未映射按原因分档（键是稳定码，`BTreeMap` ⇒ 输出顺序确定）。
     pub unmapped_reasons: BTreeMap<String, usize>,
     pub unmapped_samples: Vec<String>,
@@ -369,8 +429,10 @@ impl MergeStats {
     }
 
     /// 进 `merged.json` 顶层 `doc_merge` 块的那一部分（**只含内容属性**，无时间戳）。
+    ///
+    /// REQ-143 的三栏**只在开关打开时**出现：不开开关时这份 JSON 与旧版逐字节相同（R5）。
     pub fn summary_json(&self) -> Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "merge_version": MERGE_VERSION,
             "assertions_sha256": self.assertions_sha256,
             "proposal_sha256": self.proposal_sha256,
@@ -386,8 +448,24 @@ impl MergeStats {
             "schema_tables": self.schema_tables,
             "parent_key_id_convention": self.parent_key_id_convention,
             "unsigned_doc_items_are_ignored_on_apply": true,
-        })
+        });
+        if self.doc_only {
+            v["allow_doc_only"] = Value::Bool(true);
+            v["doc_only_entities"] = Value::from(self.doc_only_entities);
+            v["doc_only_links"] = Value::from(self.doc_only_links);
+            v["doc_only_band"] = Value::from(DOC_ONLY_BAND);
+        }
+        v
     }
+}
+
+/// `#[serde(skip_serializing_if)]` 的两个小谓词（REQ-143：开关关闭时 stats 字节不变）。
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// 合并的产物。
@@ -453,11 +531,17 @@ impl SchemaIndex {
     }
 }
 
-/// 合并的选项（今天是 `--schema`；留结构体是为了不生出第二个 `merge_*` 变体）。
+/// 合并的选项（今天有 `--schema` 与 `--allow-doc-only`；留结构体是为了不生出第二个
+/// `merge_*` 变体）。
 #[derive(Debug, Clone, Default)]
 pub struct MergeOptions {
     /// `Some` ⇒ **严格**校验 `maps_to` 的每个表/列（含父端主键列）。
     pub schema: Option<SchemaIndex>,
+    /// ⭐ REQ-143 · **纯文档通路**：概念没命中就新建实体、关系两端能解析就新建无 join 列的边。
+    ///
+    /// **默认 `false`**（R1：开关必须显式）。`false` 时下面的代码里所有
+    /// `allow_doc_only` 分支都不会执行 ⇒ 产物与 REQ-129/130 逐字节相同（R5）。
+    pub allow_doc_only: bool,
 }
 
 // ──────────────────────────────────────────────────────────
@@ -501,12 +585,25 @@ impl LinkTarget {
 struct Index {
     entities: BTreeMap<String, Entity>,
     entity_items: BTreeMap<String, Slot>,
-    /// 归一化名字 → 实体 key（**可能多个** ⇒ 歧义 ⇒ 未映射）。
+    /// 归一化**名字**（key / display_name）→ 实体 key（**可能多个** ⇒ 歧义 ⇒ 未映射）。
     by_name: BTreeMap<String, BTreeSet<String>>,
+    /// 归一化**别名** → 实体 key。
+    ///
+    /// 与 [`Index::by_name`] 分开是 REQ-143 的需要：纯文档通路先按**名字**解析
+    /// （一个概念的**名字**比它的别名更强），名字不中才看别名。
+    /// 老路径（不开开关）把两张表**并起来**看，与 REQ-129 完全一致（见 [`Index::name_hits`]）。
+    by_alias: BTreeMap<String, BTreeSet<String>>,
+    /// ⭐ REQ-143 · 本轮由文档**新建**的实体 key（只在这个集合里的实体享受「名字优先」）。
+    doc_keys: BTreeSet<String>,
     /// `(child 表, child 列, parent 表)` → 槽位。
     links: BTreeMap<(String, String, String), Slot>,
     /// 已占用的 `payload.key`（新条目撞键 ⇒ 未映射，⛔ 不自动改名）。
     keys: BTreeSet<String>,
+    /// ⭐ REQ-143 · `payload.key` → 槽位（**按 key 找回条目**的唯一索引）。
+    ///
+    /// 纯文档通路的边没有 join 列，`links`（按 child 列索引）找不到它们；
+    /// 重跑合并要吃自己的产物 ⇒ 必须能按 key 认回「上一轮建的那条边」（幂等，不重复建）。
+    key_slots: BTreeMap<String, Slot>,
 }
 
 /// 名字归一化：**只**去首尾空白 + 折 ASCII 大小写。
@@ -565,25 +662,14 @@ impl Index {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    for n in std::iter::once(key.as_str())
-                        .chain(std::iter::once(display_name.as_str()))
-                        .chain(aliases.iter().map(String::as_str))
-                    {
-                        let n = norm_name(n);
-                        if !n.is_empty() {
-                            ix.by_name.entry(n).or_default().insert(key.clone());
-                        }
-                    }
-                    ix.entity_items.insert(key.clone(), Slot::Existing(i));
-                    ix.entities.insert(
-                        key,
-                        Entity {
-                            display_name,
-                            columns,
-                        },
-                    );
+                    ix.insert_entity(key, display_name, &aliases, columns, Slot::Existing(i));
                 }
                 "add_link_type" => {
+                    // ⭐ REQ-143 · 只有**关系**条目进 `key_slots`：纯文档通路靠它认回
+                    // 「上一轮建的那条边」（幂等），⛔ 不该让实体 key 参与这个查找。
+                    if let Some(k) = payload.get("key").and_then(Value::as_str) {
+                        ix.key_slots.insert(k.to_string(), Slot::Existing(i));
+                    }
                     let from = payload.get("from_type").and_then(Value::as_str);
                     let to = payload.get("to_type").and_then(Value::as_str);
                     let col = payload
@@ -592,16 +678,156 @@ impl Index {
                         .and_then(|a| a.first())
                         .and_then(|e| e.get("column"))
                         .and_then(Value::as_str);
+                    // ⭐ REQ-143：空列（纯文档通路的边）**不进** `links` ——
+                    // 否则两条不同谓词、同一对端点的 doc 边会挤在同一个 ("", ...) 槽上。
+                    // （`maps_to` 里的空列本来就会被 `resolve_relation` 判成 `bad_maps_to`。）
                     if let (Some(f), Some(t), Some(c)) = (from, to, col) {
-                        ix.links
-                            .entry((f.to_string(), c.to_string(), t.to_string()))
-                            .or_insert(Slot::Existing(i));
+                        if !c.is_empty() {
+                            ix.links
+                                .entry((f.to_string(), c.to_string(), t.to_string()))
+                                .or_insert(Slot::Existing(i));
+                        }
                     }
                 }
                 _ => {}
             }
         }
         Ok(ix)
+    }
+
+    /// 把一个实体登记进索引（`build` 与 REQ-143 的新建实体走**同一条**登记路径）。
+    fn insert_entity(
+        &mut self,
+        key: String,
+        display_name: String,
+        aliases: &[String],
+        columns: BTreeSet<String>,
+        slot: Slot,
+    ) {
+        for n in std::iter::once(key.as_str()).chain(std::iter::once(display_name.as_str())) {
+            let n = norm_name(n);
+            if !n.is_empty() {
+                self.by_name.entry(n).or_default().insert(key.clone());
+            }
+        }
+        for a in aliases {
+            let n = norm_name(a);
+            if !n.is_empty() {
+                self.by_alias.entry(n).or_default().insert(key.clone());
+            }
+        }
+        self.entity_items.insert(key.clone(), slot.clone());
+        self.key_slots.insert(key.clone(), slot);
+        self.entities.insert(
+            key,
+            Entity {
+                display_name,
+                columns,
+            },
+        );
+    }
+
+    /// ⭐ REQ-143 · 把一条**纯文档**新建的实体登记进索引（无属性列）。
+    ///
+    /// 只在 `--allow-doc-only` 下调用；登记后主循环按名字/别名解析就能命中它，
+    /// 关系断言（可能出现在概念之前）也才拿得到端点。
+    fn add_doc_entity(
+        &mut self,
+        key: &str,
+        display_name: &str,
+        aliases: &[String],
+        slot: Slot,
+    ) {
+        self.keys.insert(key.to_string());
+        self.doc_keys.insert(key.to_string());
+        self.insert_entity(
+            key.to_string(),
+            display_name.to_string(),
+            aliases,
+            BTreeSet::new(),
+            slot,
+        );
+    }
+
+    /// 一条概念断言的名字/别名**精确命中**了哪些实体（0 / 1 / 多个）。
+    ///
+    /// ⚠️ 这是**老路径**的口味（名字与别名**不分优先级**，并起来看），
+    /// REQ-129 的 `ambiguous_name` 判据就是它 —— ⛔ 不要为了 REQ-143 改这里（R5）。
+    fn name_hits(&self, c: &ConceptAssertion) -> BTreeSet<String> {
+        let mut hits: BTreeSet<String> = BTreeSet::new();
+        for n in std::iter::once(c.name.as_str()).chain(c.aliases.iter().map(String::as_str)) {
+            let n = norm_name(n);
+            if let Some(ks) = self.by_name.get(&n) {
+                hits.extend(ks.iter().cloned());
+            }
+            if let Some(ks) = self.by_alias.get(&n) {
+                hits.extend(ks.iter().cloned());
+            }
+        }
+        hits
+    }
+
+    /// ⭐ REQ-143 · **名字优先**解析一个「说法」（概念名 / 关系端点）。
+    ///
+    /// | 顺序 | 判据 | 为什么 |
+    /// | --- | --- | --- |
+    /// | 1 | **名字**命中唯一实体 | 名字比别名强：本轮新建的「CLI」不该被另一个概念的别名「CLI」拖成歧义 |
+    /// | 2 | 名字 0 命中、**别名**命中唯一实体 | 别名命中照旧有效（REQ-129 的老能力） |
+    /// | 3 | 其余（名字歧义 / 别名歧义 / 都没中） | `None` —— ⛔ 不挑一个「最像的」 |
+    fn resolve_mention(&self, raw: &str, aliases: &[String]) -> Option<String> {
+        let n = norm_name(raw);
+        if let Some(hs) = self.by_name.get(&n) {
+            return if hs.len() == 1 {
+                hs.iter().next().cloned()
+            } else if hs.is_empty() {
+                None
+            } else {
+                // 名字本身就歧义 ⇒ 不再退到别名（那只会更不确定）。
+                return None;
+            };
+        }
+        let mut hits: BTreeSet<String> = BTreeSet::new();
+        // 「这个说法本身」也可能是别名（关系端点没有单独的别名列表）。
+        if let Some(ks) = self.by_alias.get(&n) {
+            hits.extend(ks.iter().cloned());
+        }
+        for a in aliases {
+            if let Some(ks) = self.by_alias.get(&norm_name(a)) {
+                hits.extend(ks.iter().cloned());
+            }
+        }
+        if hits.len() == 1 {
+            hits.iter().next().cloned()
+        } else {
+            None
+        }
+    }
+
+    /// 名字**唯一**命中的实体 key（0 个或多个 ⇒ `None`）。
+    fn unique_by_name(&self, raw: &str) -> Option<String> {
+        let hits = self.by_name.get(&norm_name(raw))?;
+        if hits.len() == 1 {
+            hits.iter().next().cloned()
+        } else {
+            None
+        }
+    }
+
+    /// 端点解析失败的人话（点名是哪一端、为什么：没命中 / 歧义）。
+    fn endpoint_detail(&self, raw: &str) -> String {
+        let n = norm_name(raw);
+        if let Some(hs) = self.by_name.get(&n).filter(|hs| !hs.is_empty()) {
+            return if hs.len() > 1 {
+                format!("{raw:?} 按名字命中 {} 个实体（歧义）", hs.len())
+            } else {
+                format!("{raw:?} 按名字命中 1 个实体")
+            };
+        }
+        match self.by_alias.get(&n) {
+            Some(hs) if hs.len() > 1 => format!("{raw:?} 按别名命中 {} 个实体（歧义）", hs.len()),
+            Some(hs) if hs.len() == 1 => format!("{raw:?} 按别名命中 1 个实体"),
+            _ => format!("{raw:?} 没有精确命中的实体"),
+        }
     }
 
     /// 概念 → 一张表（`Ok(key)`）或未映射原因（`Err`）。
@@ -654,13 +880,21 @@ impl Index {
                 }
             }
         }
-        // 名字 / 别名命中（精确）
-        let mut hits: BTreeSet<String> = BTreeSet::new();
-        for n in std::iter::once(c.name.as_str()).chain(c.aliases.iter().map(String::as_str)) {
-            if let Some(ks) = self.by_name.get(&norm_name(n)) {
-                hits.extend(ks.iter().cloned());
+        // ⭐ REQ-143 · 纯文档通路：名字**唯一**命中的是本轮新建的实体 ⇒ 认它。
+        //
+        // 为什么要这条：新建实体之间可能出现「某概念的别名 = 另一概念的名字」
+        // （真实样本里 `CLI 直采` 的别名是 `CLI`，而 `CLI` 自己也是一个概念）。
+        // 按名字优先解析，两条断言各归各的实体，不会互相把对方挤成 `ambiguous_name`。
+        // ⚠️ 只对**本轮新建**的实体生效：既有实体的匹配语义与不开开关时逐字相同（R5）。
+        if opts.allow_doc_only {
+            if let Some(k) = self.unique_by_name(&c.name) {
+                if self.doc_keys.contains(&k) {
+                    return Ok(k);
+                }
             }
         }
+        // 名字 / 别名命中（精确）
+        let hits = self.name_hits(c);
         match hits.len() {
             0 => Err(Unmapped::new(
                 "no_maps_to_and_no_name_match",
@@ -907,6 +1141,187 @@ fn is_stronger_than_cap(raw: &str) -> bool {
 }
 
 // ──────────────────────────────────────────────────────────
+// ⭐ REQ-143 · 纯文档通路：确定性 key + 新建实体的计划
+// ──────────────────────────────────────────────────────────
+
+/// 概念名 → **新建实体**的 key（`doc_{slug}_{sha256前12位}`）。
+///
+/// # 为什么是这个形状（R2 / AC-003）
+///
+/// | 成分 | 来源 | 换输入顺序会变吗 | 换一次运行会变吗 |
+/// | --- | --- | --- | --- |
+/// | `doc_` 前缀 | 常量 [`DOC_ONLY_ENTITY_KEY_PREFIX`] | 否 | 否 |
+/// | `slug` | 名字里的 ASCII 字母/数字（小写、非 ASCII 压成 `_`） | 否 | 否 |
+/// | 12 位 hex | `sha256(名字的 UTF-8)` 的前 12 位 | 否 | 否 |
+///
+/// ⛔ **没有**序号（老脚本的 `doc_01_…` 依赖枚举顺序，换个抽取轮次 key 就漂）、
+/// **没有**时间戳、**没有**随机数。所以同一份断言跑两次，key 逐字相同（AC-003）。
+/// 中文名 slug 为空 ⇒ key 是 `doc_<hash>`（TTL 的建模视图把非 ASCII 压成 `_`，
+/// 把汉字留在 key 里会让「订单」「客户」都变成 `:doc____` —— 那是撞车）。
+///
+/// `taken` 只用来处理**哈希前缀撞车**（48 bit，506 个名字约 1e-9）：
+/// 撞了就加长到 24 / 64 位。调用方按**名字字典序**分配 ⇒ 结果与输入顺序无关。
+pub fn doc_entity_key(name: &str, taken: &BTreeSet<String>) -> String {
+    derive_doc_key(DOC_ONLY_ENTITY_KEY_PREFIX, name.trim(), taken)
+}
+
+/// 关系的定位材料 → **新建 doc-only 边**的 key（`rel_{sha256前12位}`）。
+///
+/// # 为什么不用 `{child}_{column}__{parent}`
+///
+/// DB 侧的键法里 `column` 是**实现列**；纯文档通路**没有列**（R4 的另一面：
+/// 不编造 join）。拿谓词冒充列名会让下游（`model_link_locals` 的歧义命名、
+/// R2RML 的 `rr:predicate`）把「文档关系」当成「有实现列的关系」。
+///
+/// 所以键 = `sha256("{from}\x1f{predicate}\x1f{to}")` 的前 12 位：
+/// 两端是实体 key（本身只由名字决定）+ 谓词，**只由输入内容决定**，无序号/时间/随机。
+pub fn doc_link_key(from_type: &str, predicate: &str, to_type: &str) -> String {
+    let material = format!(
+        "{}\u{1f}{}\u{1f}{to_type}",
+        from_type.trim(),
+        predicate.trim()
+    );
+    format!(
+        "{}{}",
+        DOC_ONLY_LINK_KEY_PREFIX,
+        &sha256_hex(material.as_bytes())[..DOC_KEY_HASH_LEN]
+    )
+}
+
+fn derive_doc_key(prefix: &str, name: &str, taken: &BTreeSet<String>) -> String {
+    let digest = sha256_hex(name.as_bytes());
+    let slug = ascii_slug(name);
+    for len in [DOC_KEY_HASH_LEN, 24, 64] {
+        let h = &digest[..len.min(digest.len())];
+        let cand = if slug.is_empty() {
+            format!("{prefix}{h}")
+        } else {
+            format!("{prefix}{slug}_{h}")
+        };
+        if !taken.contains(&cand) {
+            return cand;
+        }
+    }
+    // 完整 sha256 也撞：只可能是同一个名字（key 天然相同），交给调用方去重。
+    if slug.is_empty() {
+        format!("{prefix}{digest}")
+    } else {
+        format!("{prefix}{slug}_{digest}")
+    }
+}
+
+/// 名字 → ASCII slug：`[a-z0-9]` 保留，其余压成单个 `_`（首尾不留）。
+///
+/// 纯中文名 ⇒ 空串（见 [`doc_entity_key`] 的说明）。
+fn ascii_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut pending_us = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_us && !out.is_empty() {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            pending_us = false;
+        } else {
+            pending_us = true;
+        }
+    }
+    out
+}
+
+/// 一条**待新建**的实体（计划阶段的中间形状）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedEntity {
+    /// 概念名（已去首尾空白）—— `display_name` 与 key 的来源。
+    name: String,
+    /// 断言里出现过的别名（已去重 / 排序 / 去掉会与**其他**新实体撞名的那些）。
+    aliases: Vec<String>,
+}
+
+/// ⭐ REQ-143 · 计划出「纯文档通路要新建哪些实体」。
+///
+/// 判据**只看**三件事（不做任何语义猜测）：
+///
+/// 1. 这条概念断言是 `alignable` 的（`future` / `example` / `alignable:false` ⇒ 跳过，
+///    与被排除的断言一致：不因为开关就把「设想/举例」造成类）；
+/// 2. 它**没有显式 `maps_to`**（形状错 / 指向提案外的表也跳过 —— 人已经说了它属于哪张表，
+///    ⛔ 不替他改口去造一个新类）；
+/// 3. 名字/别名在原提案里**精确命中 0 个实体**（命中 1 个 ⇒ 照旧 `both`；
+///    命中多个 ⇒ `ambiguous_name`，⛔ 不挑一个「最像的」，也不新建第三个）。
+///
+/// 同名断言只造一个实体（别名取集合口径：排序去重），于是「同一份输入换行序」不影响产物。
+///
+/// ⚠️ **不把 `description` 搬进 payload**：概念描述是整句原文，客户视图的发布闸会把
+/// 「evidence / column」这类建模术语当泄露并**拒绝整份导出**（真实样本里就有一句
+/// 「…包含 title、description、evidence…」）。描述仍完整留在 `payload.doc_evidence[]`
+/// （审计面），只是不升级成 `rdfs:comment`。
+fn plan_doc_entities(assertions_jsonl: &str, index: &Index) -> Result<Vec<PlannedEntity>> {
+    let mut planned: BTreeMap<String, PlannedEntity> = BTreeMap::new();
+    for (ln, raw) in assertions_jsonl.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(line)
+            .with_context(|| format!("assertions JSONL 第 {} 行不是合法 JSON", ln + 1))?;
+        let assertion: Assertion = serde_json::from_value(v.clone()).with_context(|| {
+            format!(
+                "assertions JSONL 第 {} 行的断言形状不对\
+                 （REQ-116 的契约：kind/name|subject…/evidence）",
+                ln + 1
+            )
+        })?;
+        if exclusion(&assertion).is_some() {
+            continue;
+        }
+        let Assertion::Concept(c) = assertion else {
+            continue;
+        };
+        if matches!(v.get("maps_to"), Some(m) if !m.is_null()) {
+            continue;
+        }
+        if !index.name_hits(&c).is_empty() {
+            continue;
+        }
+        let name = c.name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let e = planned.entry(name.clone()).or_insert_with(|| PlannedEntity {
+            name,
+            aliases: Vec::new(),
+        });
+        for a in &c.aliases {
+            let a = a.trim();
+            if !a.is_empty() && !e.aliases.iter().any(|x| x == a) {
+                e.aliases.push(a.to_string());
+            }
+        }
+    }
+
+    // 别名去冲突：新造实体之间「名字 / 别名」必须互不相同 ——
+    // 否则主循环按精确名字解析会变成歧义（`ambiguous_name`），
+    // 一条本来能对齐的断言会被**我们自己刚造的实体**挤掉。只保留全局唯一的名字串。
+    let mut used: BTreeMap<String, usize> = BTreeMap::new();
+    for e in planned.values() {
+        *used.entry(norm_name(&e.name)).or_insert(0) += 1;
+        for a in &e.aliases {
+            *used.entry(norm_name(a)).or_insert(0) += 1;
+        }
+    }
+    Ok(planned
+        .into_values()
+        .map(|mut e| {
+            e.aliases.retain(|a| used.get(&norm_name(a)).copied().unwrap_or(0) == 1);
+            e.aliases.sort();
+            e.aliases.dedup();
+            e
+        })
+        .collect())
+}
+
+// ──────────────────────────────────────────────────────────
 // 规则 1（不可对齐）
 // ──────────────────────────────────────────────────────────
 
@@ -1001,7 +1416,7 @@ pub fn merge_with(
             .context("提案序列化失败")?
             .as_bytes(),
     );
-    let index = Index::build(&items_in)?;
+    let mut index = Index::build(&items_in)?;
 
     let mut items: Vec<Value> = items_in.clone();
     let mut stats = MergeStats {
@@ -1010,6 +1425,7 @@ pub fn merge_with(
         proposal_sha256,
         schema_checked: opts.schema.is_some(),
         schema_tables: opts.schema.as_ref().map(|s| s.table_count()).unwrap_or(0),
+        doc_only: opts.allow_doc_only,
         ..Default::default()
     };
 
@@ -1023,6 +1439,27 @@ pub fn merge_with(
     // 被 doc 触碰过 / 由 doc 新建的槽位（origin = both / doc）。
     let mut touched: BTreeSet<Slot> = BTreeSet::new();
     let mut doc_slots: BTreeSet<Slot> = BTreeSet::new();
+
+    // ⭐ REQ-143 · 纯文档通路（开关**默认关闭**：这一段整块跳过）。
+    //
+    // 为什么在**主循环之前**：关系断言可能出现在它的概念之前 —— 真实样本
+    // （Ops360 728 条）就是这样，最后一个概念在第 728 行。端点解析要看到的是一份
+    // **完整的实体集合**，否则「概念在后面」的关系会被误判成「端点解析不到」。
+    if opts.allow_doc_only {
+        let planned = plan_doc_entities(assertions_jsonl, &index)?;
+        let mut taken = index.keys.clone();
+        for p in planned {
+            let key = doc_entity_key(&p.name, &taken);
+            taken.insert(key.clone());
+            let idx = items.len();
+            items.push(build_doc_entity(&key, &p));
+            index.add_doc_entity(&key, &p.name, &p.aliases, Slot::Existing(idx));
+            // 标成 doc 槽位 ⇒ 写回阶段 origin = doc（不是 both）。
+            doc_slots.insert(Slot::Existing(idx));
+            stats.items_added += 1;
+            stats.doc_only_entities += 1;
+        }
+    }
 
     for (ln, raw) in assertions_jsonl.lines().enumerate() {
         let line = raw.trim();
@@ -1289,6 +1726,24 @@ fn merge_relation(
     pending: &mut BTreeMap<String, Value>,
     opts: &MergeOptions,
 ) -> Result<()> {
+    // ⭐ REQ-143 · 纯文档通路：**没有 `maps_to`** 的关系不再一律未映射 ——
+    // 两端都能按精确名字/别名命中（含本轮新建的实体）就建一条**没有 join 列**的边。
+    //
+    // ⛔ 有 `maps_to` 的关系**一律走老路**（包括形状错 / 指向提案外表的那些）：
+    // 人已经给出了对齐键，开关不该把它改写成「按名字猜」。
+    if opts.allow_doc_only && maps.is_none() {
+        return merge_doc_only_relation(
+            index,
+            items,
+            r,
+            stats,
+            claims,
+            band_of_slot,
+            touched,
+            doc_slots,
+            pending,
+        );
+    }
     let target = match index.resolve_relation(r, maps, stats, opts) {
         Ok(t) => t,
         Err(u) => {
@@ -1355,7 +1810,7 @@ fn merge_relation(
                 claims
                     .entry(slot.clone())
                     .or_default()
-                    .push(DocClaim::relation(r, maps));
+                    .push(DocClaim::relation(r, Some(maps)));
                 touched.insert(slot);
                 stats.merged += 1;
             }
@@ -1388,12 +1843,211 @@ fn merge_relation(
     claims
         .entry(slot.clone())
         .or_default()
-        .push(DocClaim::relation(r, maps));
+        .push(DocClaim::relation(r, Some(maps)));
     band_of_slot.insert(slot.clone(), DOC_BAND_CAP);
     touched.insert(slot.clone());
     doc_slots.insert(slot);
     stats.merged += 1;
     Ok(())
+}
+
+/// ⭐ REQ-143 · 没有 `maps_to` 的关系：两端按**精确名字/别名**解析，能解析就建无 join 列的边。
+///
+/// # 三条边界（AC-005 / R4）
+///
+/// | 情形 | 行为 |
+/// | --- | --- |
+/// | 两端都解析到**唯一**实体 | 建 `add_link_type`（`from_type`/`to_type` = 实体 key，`evidence[0].column` = `""`） |
+/// | 任一端解析不到 / 命中多个 | `doc_unmapped`（码 `endpoint_not_resolved`）—— ⛔ **不凭空造端点** |
+/// | 同键的边已经存在（本轮或上一轮） | 并证据，**不重复建**（重跑合并幂等） |
+///
+/// 已有边只可能是 doc 边（key 是 [`doc_link_key`] 的产物，DB 侧的键法不同）；
+/// 万一真有同键的 DB 边，`origin` 会按老规矩变成 `both`，⛔ 不覆盖 DB 侧证据。
+#[allow(clippy::too_many_arguments)]
+fn merge_doc_only_relation(
+    index: &Index,
+    items: &[Value],
+    r: &RelationAssertion,
+    stats: &mut MergeStats,
+    claims: &mut BTreeMap<Slot, Vec<DocClaim>>,
+    band_of_slot: &mut BTreeMap<Slot, &'static str>,
+    touched: &mut BTreeSet<Slot>,
+    doc_slots: &mut BTreeSet<Slot>,
+    pending: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    let (Some(from), Some(to)) = (
+        index.resolve_mention(&r.subject, &[]),
+        index.resolve_mention(&r.object, &[]),
+    ) else {
+        stats.note_unmapped(
+            "endpoint_not_resolved",
+            format!(
+                "{} -[{}]-> {}：doc-only 只按**精确名字/别名**解析端点\
+                 （subject {}；object {}）—— ⛔ 不凭空造端点",
+                r.subject,
+                r.predicate,
+                r.object,
+                index.endpoint_detail(&r.subject),
+                index.endpoint_detail(&r.object)
+            ),
+        );
+        return Ok(());
+    };
+    let key = doc_link_key(&from, &r.predicate, &to);
+
+    // 同一条边已经存在？（本轮刚建 / 上一轮合并的产物）
+    let existing: Option<Slot> = if pending.contains_key(&key) {
+        Some(Slot::Pending(key.clone()))
+    } else {
+        index.key_slots.get(&key).cloned()
+    };
+    if let Some(slot) = existing {
+        let prior = item_of_slot(&slot, items, pending);
+        let prior_card = prior
+            .and_then(payload)
+            .and_then(|p| p.get("cardinality"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // doc-vs-doc 的基数分歧**不是**「与 DB 冲突」（`db_says` 必须真的是 DB 的）。
+        if prior.and_then(origin_of_value) == Some(ORIGIN_DOC) {
+            if let (Some(doc), Some(prev)) = (r.cardinality.as_deref(), prior_card.as_deref()) {
+                if doc != prev {
+                    stats.note_unmapped(
+                        "doc_cardinality_conflict",
+                        format!(
+                            "{} -[{}]-> {}：两条 doc 断言对同一条边的基数不一致（{} vs {}）",
+                            r.subject, r.predicate, r.object, doc, prev
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        claims
+            .entry(slot.clone())
+            .or_default()
+            .push(DocClaim::relation(r, None));
+        band_of_slot
+            .entry(slot.clone())
+            .and_modify(|b| *b = band_max(*b, DOC_ONLY_BAND))
+            .or_insert(DOC_ONLY_BAND);
+        touched.insert(slot);
+        stats.merged += 1;
+        return Ok(());
+    }
+
+    let cardinality = match r.cardinality.clone() {
+        Some(c) => c,
+        None => {
+            stats.cardinality_defaulted += 1;
+            "N:1".to_string()
+        }
+    };
+    let item = build_doc_only_link(&from, &to, &key, r, &cardinality, index);
+    pending.insert(key.clone(), item);
+    let slot = Slot::Pending(key);
+    claims
+        .entry(slot.clone())
+        .or_default()
+        .push(DocClaim::relation(r, None));
+    band_of_slot.insert(slot.clone(), DOC_ONLY_BAND);
+    touched.insert(slot.clone());
+    doc_slots.insert(slot);
+    stats.merged += 1;
+    stats.doc_only_links += 1;
+    Ok(())
+}
+
+/// 槽位 → 条目（本轮待建的也算）。
+fn item_of_slot<'a>(
+    slot: &Slot,
+    items: &'a [Value],
+    pending: &'a BTreeMap<String, Value>,
+) -> Option<&'a Value> {
+    match slot {
+        Slot::Existing(i) => items.get(*i),
+        Slot::Pending(k) => pending.get(k),
+    }
+}
+
+/// ⭐ REQ-143 · 造一条 `origin: "doc"` 的**实体**条目（纯文档通路新建的概念）。
+///
+/// - `key` 由 [`doc_entity_key`] 从名字确定性派生；
+/// - `display_name` = 概念名（客户视图的 `rdfs:label` 用它，客户看不到 key）；
+/// - `band` = [`DOC_ONLY_BAND`]（≤ medium，永远不是 strong）、`reviewed_by: null`（R3）；
+/// - `properties: []` —— 文档只说了「有这个类」，没给字段，⛔ 不编列；
+/// - **不搬 `description`**（整句原文留在 `doc_evidence[]`；搬成 `rdfs:comment` 会让
+///   客户视图的发布闸因为文里的「evidence / column」拒绝整份导出，见
+///   [`plan_doc_entities`] 的说明）。
+fn build_doc_entity(key: &str, p: &PlannedEntity) -> Value {
+    let mut payload = serde_json::json!({
+        "key": key,
+        "display_name": p.name,
+        "properties": [],
+    });
+    if !p.aliases.is_empty() {
+        payload["aliases"] = serde_json::json!(p.aliases);
+    }
+    serde_json::json!({
+        "kind": "add_entity_type",
+        "target": p.name,
+        "origin": ORIGIN_DOC,
+        "band": DOC_ONLY_BAND,
+        "reviewed_by": Value::Null,
+        "applicable": true,
+        "payload": payload,
+    })
+}
+
+/// ⭐ REQ-143 · 造一条**没有 join 列**的 `origin: "doc"` 关系条目。
+///
+/// `payload.evidence[0].column` 是**空串**：`domain::apply::evidence_from_json` 会按
+/// 「空列」整条丢弃 ⇒ 快照里这条边没有实现列（`ModelLinkView.column = None`）。
+/// ⛔ 不拿谓词冒充列名：那会让下游把「文档关系」当成「有实现列的关系」，
+/// 还会污染 `r2rml generate` 的 join 判定。
+fn build_doc_only_link(
+    from: &str,
+    to: &str,
+    key: &str,
+    r: &RelationAssertion,
+    cardinality: &str,
+    index: &Index,
+) -> Value {
+    let from_label = index
+        .entities
+        .get(from)
+        .map(|e| e.display_name.as_str())
+        .unwrap_or(from);
+    let to_label = index
+        .entities
+        .get(to)
+        .map(|e| e.display_name.as_str())
+        .unwrap_or(to);
+    let claim = format!(
+        "文档断言（REQ-143 doc-only）：{} -[{}]-> {} · 两端按精确名字解析到实体 key（{} → {}）；\
+         没有关系库 ⇒ 没有实现列（⛔ 不编造 join）",
+        r.subject, r.predicate, r.object, from, to
+    );
+    serde_json::json!({
+        "kind": "add_link_type",
+        "target": format!("{from_label}→{to_label}"),
+        "origin": ORIGIN_DOC,
+        "band": DOC_ONLY_BAND,
+        "reviewed_by": Value::Null,
+        "applicable": true,
+        "payload": {
+            "key": key,
+            "from_type": from,
+            "to_type": to,
+            "cardinality": cardinality,
+            "semantic": r.predicate,
+            "evidence": [{
+                "table": "",
+                "column": "",
+                "claim": claim,
+            }],
+        }
+    })
 }
 
 /// 造一条 `origin: "doc"` 的关系条目。
@@ -2528,6 +3182,7 @@ mod tests {
             &proposal(),
             &MergeOptions {
                 schema: Some(schema),
+                ..Default::default()
             },
         )
         .expect("合并应当成功");
@@ -2557,6 +3212,7 @@ mod tests {
             &proposal(),
             &MergeOptions {
                 schema: Some(schema),
+                ..Default::default()
             },
         )
         .expect("合并应当成功");
@@ -2583,6 +3239,7 @@ mod tests {
             &proposal(),
             &MergeOptions {
                 schema: Some(schema),
+                ..Default::default()
             },
         )
         .expect("合并应当成功");
@@ -2612,6 +3269,300 @@ mod tests {
             out.document["doc_merge"]["schema_checked"],
             serde_json::json!(false)
         );
+    }
+
+    // ══════════════════════════════════════════════════════
+    // ⭐ REQ-143 · 纯文档通路（`--allow-doc-only`）
+    // ══════════════════════════════════════════════════════
+
+    /// 没有关系库的项目：提案只有骨架、`items` 为空。
+    fn empty_proposal() -> Value {
+        serde_json::json!({
+            "project": "req143_doconly",
+            "base_version": null,
+            "round": 1,
+            "items": []
+        })
+    }
+
+    fn doc_only_opts() -> MergeOptions {
+        MergeOptions {
+            allow_doc_only: true,
+            ..Default::default()
+        }
+    }
+
+    /// AC-001 的三条断言：两个概念（订单 / 客户）+ 一条关系，**没有任何 `maps_to`**。
+    fn three_assertions() -> String {
+        [
+            concept_jsonl("订单", &[], "fact", true),
+            concept_jsonl("客户", &[], "fact", true),
+            relation_jsonl(Some("N:1"), None, false),
+        ]
+        .join("\n")
+    }
+
+    /// AC-001 / R1 / R5 · 开关**默认关闭**：三条断言全未映射、不新建任何条目。
+    ///
+    /// 变异自证（纪律 G①）：把 `MergeOptions::default()` 改成 `allow_doc_only: true`
+    /// （或让 CLI 无条件传 true），本测试立刻变红。
+    #[test]
+    fn doc_only_is_off_by_default_and_leaves_every_assertion_unmapped() {
+        assert!(
+            !MergeOptions::default().allow_doc_only,
+            "R1：开关必须显式，默认关闭"
+        );
+        let out = merge(&three_assertions(), &empty_proposal()).expect("合并应当成功");
+        assert_eq!(out.stats.merged, 0);
+        assert_eq!(out.stats.merged_doc_only, 0, "不开开关 ⇒ doc-only 条目必须是 0");
+        assert_eq!(out.stats.doc_unmapped, 3);
+        assert_eq!(out.stats.doc_only_entities, 0);
+        assert_eq!(items(&out.document).len(), 0, "不开开关 ⇒ 一条新条目都不许有");
+        // 不开开关时，产物里连这个开关的名字都不该出现（R5 的字节判据的根）
+        assert!(
+            !out.rendered.contains("allow_doc_only"),
+            "不开开关时 merged.json 不许出现 REQ-143 的新键"
+        );
+        assert!(out.document["doc_merge"].get("doc_only_entities").is_none());
+    }
+
+    /// AC-002 / AC-005 的正向：概念没命中 ⇒ 每个概念一个实体；关系两端能解析 ⇒ 一条无 join 列的边。
+    #[test]
+    fn doc_only_creates_an_entity_per_unmatched_concept_and_a_link_without_a_join_column() {
+        let out = merge_with(&three_assertions(), &empty_proposal(), &doc_only_opts())
+            .expect("合并应当成功");
+        assert_eq!(out.stats.merged, 3);
+        assert_eq!(out.stats.doc_unmapped, 0);
+        assert_eq!(out.stats.doc_only_entities, 2);
+        assert_eq!(out.stats.doc_only_links, 1);
+        assert_eq!(out.stats.items_added, 3);
+        assert_eq!(out.stats.merged_doc_only, 3);
+        assert!(out.stats.close(), "每条断言必须恰好落进一档");
+
+        let order_key = doc_entity_key("订单", &BTreeSet::new());
+        let customer_key = doc_entity_key("客户", &BTreeSet::new());
+        let order = entity_item(&out.document, &order_key);
+        assert_eq!(order["origin"], serde_json::json!("doc"));
+        assert_eq!(order["band"], serde_json::json!("low"));
+        assert!(order["reviewed_by"].is_null(), "R3：doc 条目必须未签");
+        assert_eq!(order["payload"]["display_name"], serde_json::json!("订单"));
+        assert_eq!(order["payload"]["properties"], serde_json::json!([]));
+        assert_eq!(doc_claims(&out.document, &order_key).len(), 1);
+
+        let link = out
+            .document
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|it| it["kind"] == serde_json::json!("add_link_type"))
+            .expect("必须新建一条关系");
+        assert_eq!(link["origin"], serde_json::json!("doc"));
+        assert_eq!(link["band"], serde_json::json!("low"));
+        assert!(link["reviewed_by"].is_null());
+        assert_eq!(link["payload"]["from_type"], serde_json::json!(order_key));
+        assert_eq!(link["payload"]["to_type"], serde_json::json!(customer_key));
+        // R4 的另一面：**没有 join 列**（不是编出来的列名，是空串）
+        assert_eq!(link["payload"]["evidence"][0]["column"], serde_json::json!(""));
+        assert_eq!(link["payload"]["evidence"][0]["table"], serde_json::json!(""));
+        assert_eq!(doc_claims(&out.document, link["payload"]["key"].as_str().unwrap()).len(), 1);
+    }
+
+    /// AC-003 / R2 · key **只由名字决定**：两次运行逐字节相同；换行序 key 不变。
+    ///
+    /// 变异自证（纪律 G②）：给 key 拼一个随机数/时间戳/行号，本测试立刻变红。
+    #[test]
+    fn doc_only_keys_depend_only_on_the_names() {
+        let a = merge_with(&three_assertions(), &empty_proposal(), &doc_only_opts()).expect("第一次");
+        let b = merge_with(&three_assertions(), &empty_proposal(), &doc_only_opts()).expect("第二次");
+        assert_eq!(a.rendered, b.rendered, "同一输入两次 ⇒ merged.json 逐字节相同");
+
+        // 换行序（关系在前、概念在后）⇒ 同一批 key（没有行号/序号成分）
+        let reordered = [
+            relation_jsonl(Some("N:1"), None, false),
+            concept_jsonl("客户", &[], "fact", true),
+            concept_jsonl("订单", &[], "fact", true),
+        ]
+        .join("\n");
+        let c =
+            merge_with(&reordered, &empty_proposal(), &doc_only_opts()).expect("换序也应当成功");
+        for name in ["订单", "客户"] {
+            let key = doc_entity_key(name, &BTreeSet::new());
+            assert!(entity_item(&a.document, &key)["payload"]["display_name"].is_string());
+            assert_eq!(
+                entity_item(&c.document, &key)["payload"]["display_name"],
+                serde_json::json!(name),
+                "换行序不该改 key"
+            );
+        }
+
+        // 金值：sha256(名字)[:12] —— 派生规则被钉住（改随机成分 ⇒ 红）
+        assert_eq!(doc_entity_key("订单", &BTreeSet::new()), "doc_3d5436ea23d2");
+        assert_eq!(doc_entity_key("客户", &BTreeSet::new()), "doc_ad4af312dbc2");
+        // 纯 ASCII 名字带 slug（可读），中文名字 slug 为空 ⇒ 只有 hash（TTL 建模视图不撞车）
+        assert_eq!(doc_entity_key("CLI", &BTreeSet::new()), "doc_cli_e759793341ff");
+        assert_eq!(
+            doc_link_key("a", "下单", "b"),
+            doc_link_key("a", "下单", "b"),
+            "关系 key 也必须只由内容决定"
+        );
+        assert_ne!(doc_link_key("a", "下单", "b"), doc_link_key("a", "退款", "b"));
+    }
+
+    /// AC-005 / R4 · 关系任一端解析不到 ⇒ 仍进 `doc_unmapped`，**不造端点、不造边**。
+    #[test]
+    fn doc_only_never_invents_a_missing_endpoint() {
+        // 只给「客户」概念；关系的 subject 是「订单」（没有任何实体叫这个名字）
+        let jsonl = [
+            concept_jsonl("客户", &[], "fact", true),
+            relation_jsonl(Some("N:1"), None, false),
+        ]
+        .join("\n");
+        let out =
+            merge_with(&jsonl, &empty_proposal(), &doc_only_opts()).expect("合并应当成功");
+        assert_eq!(out.stats.doc_only_entities, 1);
+        assert_eq!(out.stats.doc_only_links, 0, "⛔ 不许凭空造端点");
+        assert_eq!(
+            out.stats.unmapped_reasons.get("endpoint_not_resolved").copied(),
+            Some(1)
+        );
+        let all = items(&out.document);
+        assert!(
+            all.iter().all(|it| it["kind"] != serde_json::json!("add_link_type")),
+            "解析不到端点的关系，条目里一条边都不许出现"
+        );
+        assert_eq!(all.len(), 1);
+        assert!(out.stats.close());
+    }
+
+    /// AC-002 的另一半：命中的概念照旧 `both`，只有**没命中**的才新建。
+    #[test]
+    fn doc_only_keeps_matched_concepts_as_both_and_only_adds_unmatched_ones() {
+        let jsonl = [
+            concept_jsonl("客户", &[], "fact", true),
+            concept_jsonl("新概念", &[], "fact", true),
+        ]
+        .join("\n");
+        let out = merge_with(&jsonl, &proposal(), &doc_only_opts()).expect("合并应当成功");
+        let matched = entity_item(&out.document, "customers");
+        assert_eq!(matched["origin"], serde_json::json!("both"));
+        assert!(matched["payload"]["doc_evidence"].is_array());
+        // DB 侧证据原样保留（`both` 条目不许被 doc 侧盖掉）
+        assert!(out.rendered.contains("customer_name"));
+
+        let new_key = doc_entity_key("新概念", &BTreeSet::new());
+        let created = entity_item(&out.document, &new_key);
+        assert_eq!(created["origin"], serde_json::json!("doc"));
+        assert_eq!(created["payload"]["display_name"], serde_json::json!("新概念"));
+        assert_eq!(out.stats.doc_only_entities, 1);
+        assert_eq!(out.stats.merged_both, 1);
+        assert!(out.stats.close());
+    }
+
+    /// AC-004 / R3 · **所有**新建条目 `band ∈ {low, medium}` 且 `reviewed_by: null`。
+    ///
+    /// 变异自证（纪律 G③）：把 [`DOC_ONLY_BAND`] 改成 `"strong"`，本测试立刻变红。
+    #[test]
+    fn doc_only_items_never_carry_a_band_stronger_than_medium() {
+        let out = merge_with(&three_assertions(), &empty_proposal(), &doc_only_opts())
+            .expect("合并应当成功");
+        let mut seen = 0;
+        let mut bands: BTreeSet<String> = BTreeSet::new();
+        for it in items(&out.document) {
+            if it.get("origin").and_then(Value::as_str).is_some() {
+                seen += 1;
+                let band = it
+                    .get("band")
+                    .and_then(Value::as_str)
+                    .expect("doc 条目必须有 band")
+                    .to_string();
+                assert!(
+                    matches!(band.as_str(), "low" | "medium"),
+                    "doc-only 条目的 band = {band:?} —— 只许 low / medium（⛔ strong）"
+                );
+                assert!(
+                    it.get("reviewed_by").is_some(),
+                    "doc 条目必须显式写 reviewed_by（null）"
+                );
+                assert!(it["reviewed_by"].is_null(), "doc 条目必须未签");
+                bands.insert(band);
+            }
+        }
+        assert_eq!(seen, 3, "夹具必须造出 2 实体 + 1 关系，否则这条判据会空转");
+        assert_eq!(bands, ["low".to_string()].into_iter().collect());
+        // 摘要块也要能自证（文件读者不看 stderr 也知道档位上限）
+        assert_eq!(
+            out.document["doc_merge"]["doc_only_band"],
+            serde_json::json!(DOC_ONLY_BAND)
+        );
+    }
+
+    /// 排除 / 显式映射的纪律在开关下**不变**：`future`、`alignable:false` 不造实体，
+    /// 有 `maps_to`（哪怕指向提案外的表）也不造 —— 人已经说了它属于哪张表。
+    #[test]
+    fn doc_only_does_not_create_entities_for_excluded_or_explicitly_mapped_concepts() {
+        let mut mapped: Value =
+            serde_json::from_str(&concept_jsonl("孤儿概念", &[], "fact", true)).unwrap();
+        mapped["maps_to"] = serde_json::json!({"table": "no_such_table"});
+        let jsonl = [
+            concept_jsonl("想象概念", &[], "future", false),
+            concept_jsonl("不该并的概念", &[], "fact", false),
+            mapped.to_string(),
+        ]
+        .join("\n");
+        let out =
+            merge_with(&jsonl, &empty_proposal(), &doc_only_opts()).expect("合并应当成功");
+        assert_eq!(out.stats.doc_only_entities, 0);
+        assert_eq!(items(&out.document).len(), 0);
+        assert_eq!(out.stats.excluded_not_alignable, 2);
+        assert_eq!(out.stats.doc_unmapped, 1);
+        assert_eq!(
+            out.stats.unmapped_reasons.get("table_not_in_proposal").copied(),
+            Some(1)
+        );
+        assert!(out.stats.close());
+    }
+
+    /// REQ-143 的解析裁定：**名字优先于别名**。
+    ///
+    /// 夹具来自真实样本的形态：概念 `CLI 直采` 的别名是 `CLI`，而 `CLI` 自己也是概念。
+    /// 名字优先 ⇒ 两条断言各归各的实体；若按「名字 ∪ 别名」并起来看，两条都会变成
+    /// `ambiguous_name`（这就是真实样本里 13 条概念被自己新建的实体挤掉的那个坑）。
+    #[test]
+    fn doc_only_resolves_each_concept_by_its_own_name_even_when_an_alias_collides() {
+        let jsonl = [
+            concept_jsonl("CLI", &[], "fact", true),
+            concept_jsonl("CLI 直采", &["CLI"], "fact", true),
+        ]
+        .join("\n");
+        let out =
+            merge_with(&jsonl, &empty_proposal(), &doc_only_opts()).expect("合并应当成功");
+        assert_eq!(out.stats.doc_only_entities, 2);
+        assert_eq!(out.stats.merged, 2);
+        assert_eq!(out.stats.doc_unmapped, 0);
+        let cli = doc_entity_key("CLI", &BTreeSet::new());
+        let cli_direct = doc_entity_key("CLI 直采", &BTreeSet::new());
+        assert_eq!(doc_claims(&out.document, &cli).len(), 1);
+        assert_eq!(doc_claims(&out.document, &cli_direct).len(), 1);
+    }
+
+    /// 规则 6 的加强版（REQ-143）：吃**自己的产物**再跑一次 ⇒ 条目逐字节相同、不重复建。
+    #[test]
+    fn doc_only_merging_its_own_output_is_idempotent() {
+        let once = merge_with(&three_assertions(), &empty_proposal(), &doc_only_opts())
+            .expect("第一次");
+        let twice =
+            merge_with(&three_assertions(), &once.document, &doc_only_opts()).expect("第二次");
+        assert_eq!(
+            serde_json::to_string_pretty(&once.document["items"]).unwrap(),
+            serde_json::to_string_pretty(&twice.document["items"]).unwrap(),
+            "重跑合并的条目必须逐字节相同（否则人每跑一次都要重看 diff）"
+        );
+        assert_eq!(twice.stats.doc_only_entities, 0, "第二轮不该再「新建」实体");
+        assert_eq!(twice.stats.doc_only_links, 0, "第二轮不该再「新建」关系");
+        assert_eq!(twice.stats.items_added, 0);
+        assert_eq!(twice.stats.merged, 3);
+        assert_eq!(twice.stats.duplicate_claims, 0, "已在文件里的证据不算重复断言");
     }
 
     // ══════════════════════════════════════════════════════
