@@ -19,7 +19,7 @@
 //! | 2 | doc 条目 band 最高 `medium`、`reviewed_by: null`；⛔ 不许 `strong` | [`cap_band`]（**唯一**的压档实现）+ [`DOC_BAND_CAP`] |
 //! | 3 | 关系必须有显式 `maps_to`（child 列 + parent 列）；没有 ⇒ `doc_unmapped`；⛔ 不许猜表 | [`Index::resolve_relation`]：端点逐个校验（给了 `--schema` 就严格到列） |
 //! | 4 | 同实体 ⇒ 一条，`origin: "both"`，两侧证据都保留 | [`Slot`] + `payload.doc_evidence`（DB 的 `payload.evidence` 原样不动） |
-//! | 5 | 冲突双保留 + `applicable: false` | [`Conflict`]（`doc_says` / `db_says` 都在） |
+//! | 5 | 冲突双保留 + `applicable: false` | [`Conflict`]（doc-vs-db：`doc_says`+`db_says`；doc-vs-doc（REQ-143）：`doc_says`+`doc_says_2`） |
 //! | 6 | 确定性：同一输入两次 ⇒ 逐字节相同 | 无时间戳 / 无随机 / 全程 `BTreeMap` + 稳定排序 + [`render_merged`] |
 //! | 7 | 未签 ⇒ apply 时忽略 | 合并器只写 `reviewed_by: null`；签字走 [`sign`]（文件级、只写两栏）；忽略发生在 `domain::apply::unsigned_doc_only`（**同一判据**） |
 //!
@@ -39,20 +39,36 @@
 //! 上面那套纪律的前提是「**库里已经有这张表**」。没有关系库的项目（Ops360）里
 //! 概念永远命中不了、关系永远没有 `maps_to` ⇒ 并入 0、全量未映射。
 //!
-//! 打开 `--allow-doc-only` 之后**只多一条出口**，其余规则一字不改：
+//! 打开 `--allow-doc-only` 之后多出的是「概念 / 关系可以**新建**」这条出口。
+//! ⚠️ 有一处对既有对齐口径的**刻意偏离**，**只在开关打开时生效**：**名字优先于别名**
+//! （见下节；不开开关时仍是 REQ-129 的「名字 ∪ 别名」口径）。其余规则一字不改。
 //!
 //! | 情形 | 行为 |
 //! | --- | --- |
-//! | 概念命中实体（名字/别名/`maps_to`） | 与不开开关时**相同**（`origin: both`，合并证据） |
+//! | 概念命中实体（`maps_to` / 名字 / 别名） | `origin: both`，合并两侧证据；**名字/别名的先后见下节** |
 //! | 概念**没命中** | 新建 `add_entity_type`：key = [`doc_entity_key`]、`display_name` = 概念名、`band` = [`DOC_ONLY_BAND`]、`reviewed_by: null`、`origin: "doc"` |
 //! | 关系两端都能解析（命中或本轮新建） | 新建 `add_link_type`：`from_type`/`to_type` = 实体 key、**没有 join 列**（`evidence[0].column` 为空串）、key = [`doc_link_key`] |
 //! | 关系任一端解析不到 | 仍进 `doc_unmapped`（码 `endpoint_not_resolved`）—— ⛔ 不许凭空造端点 |
-//! | 冲突 / 不可对齐 | 与不开开关时完全相同（双保留 + `applicable:false`；`alignable:false` 排除并计数） |
+//! | 自环关系（`subject == object`） | 排除并计数（码 `self_link` + [`MergeStats::skipped_self_link`]）—— 与老路径的 `self_link` 同一条纪律 |
+//! | 冲突（doc-vs-db，或**同一对端点的两条 doc 断言基数不一致**） | **双保留** + `applicable: false`：doc-vs-db 写 `doc_says`/`db_says`；doc-vs-doc 写 `doc_says`/`doc_says_2`。⛔ 不「先到者赢」（那会静默丢证据、且结果依赖断言行序） |
+//! | 不可对齐（`future` / `example` / `alignable:false`） | 与不开开关时完全相同：排除并计数 |
+//!
+//! ## ⭐ 名字**优先**于别名（只在开关打开时）
+//!
+//! - **不开开关**：REQ-129 的口径是「名字 ∪ 别名」并起来看，命中 ≠ 1 ⇒ `ambiguous_name`。
+//! - **开开关**：先看**名字** —— 名字唯一命中就直接认它；名字不中才用**别名**兜底
+//!   （[`Index::resolve_mention`]）。名字本身歧义时**不**退到别名（那只会更不确定）。
+//!
+//! 为什么必须分开：真实样本里「`CLI 直采` 的别名 = `CLI`」，而 `CLI` **自己也是一个概念**。
+//! 按并集看这两条都会命中 2 个实体 ⇒ 双双 `ambiguous_name`，刚为它们新建的两个实体就变成
+//! **没有任何证据的空类**。名字优先让「自己的名字」胜过「别人的别名」，两条断言各归各的实体。
+//! ⛔ 这不是模糊匹配：名字/别名仍是**全等**，歧义仍然不猜；别名兜底仍是 REQ-129 的老能力。
 //!
 //! 开关**默认关闭**：不开时这条通路**一行都不执行**，产物与旧版逐字节相同（R5）。
 //!
 //! ⛔ 开关**不**放松的事：不猜语义（「套餐」不会因为像 `package_templates` 就被并进去）、
-//! 不给新条目 `strong`、不给关系编造 join 列、不在歧义时挑一个「最像的」。
+//! 不给新条目 `strong`、不给关系编造 join 列、不在歧义时挑一个「最像的」、
+//! 不因为「先到」就把后到的冲突说法丢掉。
 //! 新建实体的 key **只由名字决定**（无序号 / 时间 / 随机 / 输入顺序，见
 //! [`doc_entity_key`]）⇒ 同一份输入两次运行，`merged.json` 逐字节相同。
 //!
@@ -320,19 +336,31 @@ impl DocClaim {
 // 冲突（demand 规则 5）
 // ──────────────────────────────────────────────────────────
 
-/// 一条**基数冲突**：doc 的说法与 DB 推断不一致。
+/// 一条**基数冲突**：两侧说法不一致，条目 `applicable: false`。
 ///
-/// 两侧都留（`doc_says` / `db_says`），条目 `applicable: false` ——
-/// 挑一边是**人的决定**，不是合并器的。
+/// 两种形态（`db_says` 与 `doc_says_2` **互斥**，各出现一个）：
+///
+/// | 形态 | 字段 | 场景 |
+/// | --- | --- | --- |
+/// | doc-vs-db | `doc_says` + `db_says` | doc 断言给了 `maps_to`，与提案里那条边的 `payload.cardinality` 不一致（规则 5） |
+/// | doc-vs-doc | `doc_says` + `doc_says_2` | 同一对端点 / 同一谓词的两条 doc 断言基数不一致（REQ-143） |
+///
+/// 挑一边是**人的决定**，不是合并器的 —— 所以两种形态都**双保留**：
+/// 两条说法都在条目里，`applicable: false` 让 `proposal apply` 拒绝并点名。
+/// ⛔ 不做「先到者赢」：那会静默丢掉后到的那条证据，而且结果依赖断言行序。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Conflict {
     pub subject: String,
     pub predicate: String,
     pub object: String,
-    /// doc 写的基数（例：`1:1`）。
+    /// 第一条 doc 的基数（例：`1:1`）。
     pub doc_says: String,
-    /// DB 推断的基数（例：`N:1`，来自提案里那条边的 `payload.cardinality`）。
-    pub db_says: String,
+    /// **第二条 doc** 的基数（只有 doc-vs-doc 冲突才有这一栏）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_says_2: Option<String>,
+    /// DB 推断的基数（例：`N:1`，来自提案里那条边的 `payload.cardinality`；只有 doc-vs-db 才有）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_says: Option<String>,
     pub file: String,
     pub chunk_id: String,
     pub quote: String,
@@ -405,6 +433,9 @@ pub struct MergeStats {
     /// 由文档**新建**的关系条目数（没有 join 列）。
     #[serde(default, skip_serializing_if = "is_zero")]
     pub doc_only_links: usize,
+    /// ⭐ REQ-143 · 被排除的**自环**关系数（`subject == object`，码 `self_link`）。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skipped_self_link: usize,
     /// 未映射按原因分档（键是稳定码，`BTreeMap` ⇒ 输出顺序确定）。
     pub unmapped_reasons: BTreeMap<String, usize>,
     pub unmapped_samples: Vec<String>,
@@ -453,6 +484,7 @@ impl MergeStats {
             v["allow_doc_only"] = Value::Bool(true);
             v["doc_only_entities"] = Value::from(self.doc_only_entities);
             v["doc_only_links"] = Value::from(self.doc_only_links);
+            v["skipped_self_link"] = Value::from(self.skipped_self_link);
             v["doc_only_band"] = Value::from(DOC_ONLY_BAND);
         }
         v
@@ -1439,6 +1471,9 @@ pub fn merge_with(
     // 被 doc 触碰过 / 由 doc 新建的槽位（origin = both / doc）。
     let mut touched: BTreeSet<Slot> = BTreeSet::new();
     let mut doc_slots: BTreeSet<Slot> = BTreeSet::new();
+    // ⭐ REQ-143 · 纯文档**关系**槽位：它们的基数冲突要等**全部说法都收齐**才判
+    // （「谁和谁打架」与断言行序无关，见写回阶段）。
+    let mut doc_link_slots: BTreeSet<Slot> = BTreeSet::new();
 
     // ⭐ REQ-143 · 纯文档通路（开关**默认关闭**：这一段整块跳过）。
     //
@@ -1524,6 +1559,7 @@ pub fn merge_with(
                 &mut band_of_slot,
                 &mut touched,
                 &mut doc_slots,
+                &mut doc_link_slots,
                 &mut pending,
                 opts,
             )?,
@@ -1551,6 +1587,9 @@ pub fn merge_with(
         }
         if doc_slots.remove(&from) {
             doc_slots.insert(to.clone());
+        }
+        if doc_link_slots.remove(&from) {
+            doc_link_slots.insert(to.clone());
         }
     }
 
@@ -1604,6 +1643,9 @@ pub fn merge_with(
         // doc 证据：已在文件里的（本模块上一轮的产物）不算「重复断言」，只做去重合并。
         let already = read_existing_claims(item);
         let mut fresh = claims.remove(&Slot::Existing(idx)).unwrap_or_default();
+        // ⚠️ 记账用「本轮这条边上的断言数」（**保留重复**）：纯文档边的 merged/conflicts
+        // 在下面统一结算，去掉重复会把「两条一样的断言」漏记成一条。
+        let n_fresh_all = fresh.len();
         // 已在文件里的证据（本模块上一轮的产物）先摘掉 —— 它们不是「重复断言」。
         fresh.retain(|c| !already.contains(c));
         let n_fresh = fresh.len();
@@ -1614,24 +1656,60 @@ pub fn merge_with(
         all.extend(fresh);
         all.sort_by(|a, b| a.order_key().cmp(&b.order_key()));
         all.dedup();
-        let payload = payload_mut(item)?;
-        payload.insert(
+        payload_mut(item)?.insert(
             DOC_EVIDENCE_KEY.to_string(),
             serde_json::to_value(&all).context("doc 证据序列化失败")?,
         );
 
+        // ⭐ REQ-143 · 纯文档关系边的**基数裁决**：以这条边上的**全部** doc 说法为准
+        // （不看行序），≥2 种基数 ⇒ 每种说法一条 conflict + `applicable:false`。
+        let mut doc_vs_doc: Vec<Conflict> = Vec::new();
+        if doc_link_slots.contains(&Slot::Existing(idx)) {
+            doc_vs_doc = doc_vs_doc_conflicts(&all);
+            if doc_vs_doc.is_empty() {
+                stats.merged += n_fresh_all;
+                // 基数归一：这条边上只有**一种显式**说法 ⇒ 就用它。
+                // （否则 item 的 cardinality 取决于「谁先到」：先到的是没写基数的说法时会被
+                //  默认成 `N:1`，和后来那条显式说法不一致 —— 同一输入打乱行序就变。）
+                let mut cards: BTreeSet<&str> =
+                    all.iter().filter_map(|c| c.cardinality.as_deref()).collect();
+                if cards.len() == 1 {
+                    if let Some(only) = cards.pop_first() {
+                        payload_mut(item)?
+                            .insert("cardinality".to_string(), Value::from(only));
+                    }
+                }
+            } else {
+                // 冲突的断言进 `conflicts` 这一档（**每条说法都算**，不是「后到的才不算」）。
+                stats.conflicts += n_fresh_all;
+            }
+        }
+
         // 冲突：双保留 + applicable:false（规则 5 / AC-006）。
         let mut cfs = conflicts.remove(&Slot::Existing(idx)).unwrap_or_default();
+        cfs.extend(doc_vs_doc);
         cfs.sort();
         cfs.dedup();
         if !cfs.is_empty() {
-            stats.conflicts += cfs.len();
+            // doc-vs-db 的冲突在这里记账；doc-vs-doc 已在上面记过（按断言数）。
+            stats.conflicts += cfs.iter().filter(|c| c.db_says.is_some()).count();
+            // ⭐ REQ-143 · doc-vs-doc 冲突时把 `payload.cardinality` 归一成**字典序最小**的说法：
+            // 条目本来就 `applicable:false`（值只作展示），归一是为了「打乱断言行序 ⇒ 条目不变」。
+            let doc_vs_doc_min = cfs.iter().any(|c| c.doc_says_2.is_some()).then(|| {
+                all.iter()
+                    .filter_map(|c| c.cardinality.as_deref())
+                    .min()
+                    .map(str::to_string)
+            });
             for c in &cfs {
                 if stats.conflict_samples.len() < MAX_SAMPLES {
                     stats.conflict_samples.push(c.clone());
                 }
             }
             set_field(item, "applicable", Value::Bool(false));
+            if let Some(Some(min_card)) = doc_vs_doc_min {
+                payload_mut(item)?.insert("cardinality".to_string(), Value::from(min_card));
+            }
             set_field(
                 item,
                 "conflicts",
@@ -1723,6 +1801,7 @@ fn merge_relation(
     band_of_slot: &mut BTreeMap<Slot, &'static str>,
     touched: &mut BTreeSet<Slot>,
     doc_slots: &mut BTreeSet<Slot>,
+    doc_link_slots: &mut BTreeSet<Slot>,
     pending: &mut BTreeMap<String, Value>,
     opts: &MergeOptions,
 ) -> Result<()> {
@@ -1734,13 +1813,13 @@ fn merge_relation(
     if opts.allow_doc_only && maps.is_none() {
         return merge_doc_only_relation(
             index,
-            items,
             r,
             stats,
             claims,
             band_of_slot,
             touched,
             doc_slots,
+            doc_link_slots,
             pending,
         );
     }
@@ -1759,30 +1838,52 @@ fn merge_relation(
     );
 
     // 已有边（含本轮刚建的同键边）
-    if let Some(slot) = index.links.get(&tuple).cloned() {
-        let db_card = match &slot {
-            Slot::Existing(i) => items
-                .get(*i)
-                .and_then(payload)
-                .and_then(|p| p.get("cardinality"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            Slot::Pending(key) => pending
-                .get(key)
-                .and_then(payload)
-                .and_then(|p| p.get("cardinality"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        };
+    //
+    // ⭐ REQ-143 · 开关打开时也要认回**本轮新建**的边：`index.links` 只收提案里的边、
+    // 不收 `pending`；不认的话第二条断言会覆盖 pending（last-wins ⇒ 依赖行序）。
+    // 开关关闭时保持 REQ-129 的老行为（R5：老路径一个字节都不许动）。
+    let existing_slot = if opts.allow_doc_only {
+        pending
+            .get_key_value(&target.key())
+            .map(|(k, _)| Slot::Pending(k.clone()))
+            .or_else(|| index.links.get(&tuple).cloned())
+    } else {
+        index.links.get(&tuple).cloned()
+    };
+    if let Some(slot) = existing_slot {
+        let existing_item = item_of_slot(&slot, items, pending);
+        let db_card = existing_item
+            .and_then(payload)
+            .and_then(|p| p.get("cardinality"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // 这条边是不是**doc 自己建的**（`Pending` 一定是；`Existing` 看 origin）。
+        let prior_is_doc =
+            matches!(slot, Slot::Pending(_)) || existing_item.and_then(origin_of_value) == Some(ORIGIN_DOC);
         band_of_slot
             .entry(slot.clone())
             .and_modify(|b| *b = band_max(*b, DOC_BAND_CAP))
             .or_insert(DOC_BAND_CAP);
+        // ⭐ N-1 · 开关下：doc-vs-doc 的基数分歧一律**双保留**（`doc_says`/`doc_says_2`），
+        // ⛔ 不「先到者赢」、也不冒充 `db_says`。不开开关时下面的老分支原样执行（R5）。
+        if opts.allow_doc_only && prior_is_doc {
+            if let (Some(doc), Some(prev)) = (r.cardinality.as_deref(), db_card.as_deref()) {
+                if doc != prev {
+                    let new_claim =
+                        push_doc_vs_doc_conflict(conflicts, &slot, r, doc, prev, claims);
+                    stats.conflicts += 1;
+                    claims.entry(slot.clone()).or_default().push(new_claim);
+                    touched.insert(slot);
+                    return Ok(());
+                }
+            }
+        }
         match (r.cardinality.as_deref(), db_card.as_deref()) {
             // 两侧都说了、且不一致 ⇒ 冲突（规则 5）：**双保留**，条目不可 apply。
             (Some(doc), Some(db)) if doc != db => {
                 if matches!(slot, Slot::Pending(_)) {
                     // doc-vs-doc 的分歧不叫「与 DB 冲突」（`db_says` 必须真的是 DB 的）。
+                    // （开关打开时上面已经拦掉；这里只剩不开开关的 REQ-129 老口径。）
                     stats.note_unmapped(
                         "doc_cardinality_conflict",
                         format!(
@@ -1797,7 +1898,8 @@ fn merge_relation(
                     predicate: r.predicate.clone(),
                     object: r.object.clone(),
                     doc_says: doc.to_string(),
-                    db_says: db.to_string(),
+                    doc_says_2: None,
+                    db_says: Some(db.to_string()),
                     file: r.evidence.file.clone(),
                     chunk_id: r.evidence.chunk_id.clone(),
                     quote: r.evidence.quote.clone(),
@@ -1853,26 +1955,35 @@ fn merge_relation(
 
 /// ⭐ REQ-143 · 没有 `maps_to` 的关系：两端按**精确名字/别名**解析，能解析就建无 join 列的边。
 ///
-/// # 三条边界（AC-005 / R4）
+/// # 五条边界（AC-005 / R4 / N-1 / N-2）
 ///
 /// | 情形 | 行为 |
 /// | --- | --- |
 /// | 两端都解析到**唯一**实体 | 建 `add_link_type`（`from_type`/`to_type` = 实体 key，`evidence[0].column` = `""`） |
 /// | 任一端解析不到 / 命中多个 | `doc_unmapped`（码 `endpoint_not_resolved`）—— ⛔ **不凭空造端点** |
-/// | 同键的边已经存在（本轮或上一轮） | 并证据，**不重复建**（重跑合并幂等） |
+/// | 自环（`from == to`） | `doc_unmapped`（码 `self_link`）+ [`MergeStats::skipped_self_link`] —— 与老路径同一条纪律 |
+/// | 同键的边已经存在 | 并证据，**不重复建**（重跑合并幂等） |
+/// | 同一条边上出现**不一致的基数**（≥2 种 doc 说法） | **双保留**：写 `conflicts[]`（每种说法一条，`doc_says` 是它自己、`doc_says_2` 是其余说法）+ `applicable:false`；⛔ 不「先到者赢」 |
+///
+/// # 基数裁决为什么留到写回阶段
+///
+/// 「谁和谁打架」要看到这条边上的**全部** doc 说法才判得对：若只在「第二条断言到达时」和
+/// 第一条比，冲突条数会取决于 `N:1` 和 `1:1` **谁先出现**（真实样本 728 条打乱行序 ⇒ 2 条 vs 3 条）。
+/// 所以这里只收证据、**不记账**（[`MergeStats::merged`] / `conflicts` 都在写回阶段按
+/// 该槽位的**全部**说法一次性结算），于是「同一输入打乱顺序 ⇒ conflicts 内容相同」。
 ///
 /// 已有边只可能是 doc 边（key 是 [`doc_link_key`] 的产物，DB 侧的键法不同）；
 /// 万一真有同键的 DB 边，`origin` 会按老规矩变成 `both`，⛔ 不覆盖 DB 侧证据。
 #[allow(clippy::too_many_arguments)]
 fn merge_doc_only_relation(
     index: &Index,
-    items: &[Value],
     r: &RelationAssertion,
     stats: &mut MergeStats,
     claims: &mut BTreeMap<Slot, Vec<DocClaim>>,
     band_of_slot: &mut BTreeMap<Slot, &'static str>,
     touched: &mut BTreeSet<Slot>,
     doc_slots: &mut BTreeSet<Slot>,
+    doc_link_slots: &mut BTreeSet<Slot>,
     pending: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let (Some(from), Some(to)) = (
@@ -1893,6 +2004,18 @@ fn merge_doc_only_relation(
         );
         return Ok(());
     };
+    // ⭐ N-2 · 自环排除：老路径（`resolve_relation`）有 `self_link`，doc-only 不能比它松。
+    if from == to {
+        stats.skipped_self_link += 1;
+        stats.note_unmapped(
+            "self_link",
+            format!(
+                "{} -[{}]-> {}：两端解析到同一个实体（{}）—— 自环不在本需求范围",
+                r.subject, r.predicate, r.object, from
+            ),
+        );
+        return Ok(());
+    }
     let key = doc_link_key(&from, &r.predicate, &to);
 
     // 同一条边已经存在？（本轮刚建 / 上一轮合并的产物）
@@ -1902,27 +2025,8 @@ fn merge_doc_only_relation(
         index.key_slots.get(&key).cloned()
     };
     if let Some(slot) = existing {
-        let prior = item_of_slot(&slot, items, pending);
-        let prior_card = prior
-            .and_then(payload)
-            .and_then(|p| p.get("cardinality"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        // doc-vs-doc 的基数分歧**不是**「与 DB 冲突」（`db_says` 必须真的是 DB 的）。
-        if prior.and_then(origin_of_value) == Some(ORIGIN_DOC) {
-            if let (Some(doc), Some(prev)) = (r.cardinality.as_deref(), prior_card.as_deref()) {
-                if doc != prev {
-                    stats.note_unmapped(
-                        "doc_cardinality_conflict",
-                        format!(
-                            "{} -[{}]-> {}：两条 doc 断言对同一条边的基数不一致（{} vs {}）",
-                            r.subject, r.predicate, r.object, doc, prev
-                        ),
-                    );
-                    return Ok(());
-                }
-            }
-        }
+        // 同一条边的后续说法：只收证据（顺带把档位记成 low）。
+        // ⛔ 这里**不判**基数冲突 —— 判据要看这条边上的全部说法，见函数头。
         claims
             .entry(slot.clone())
             .or_default()
@@ -1931,8 +2035,8 @@ fn merge_doc_only_relation(
             .entry(slot.clone())
             .and_modify(|b| *b = band_max(*b, DOC_ONLY_BAND))
             .or_insert(DOC_ONLY_BAND);
-        touched.insert(slot);
-        stats.merged += 1;
+        touched.insert(slot.clone());
+        doc_link_slots.insert(slot);
         return Ok(());
     }
 
@@ -1952,10 +2056,90 @@ fn merge_doc_only_relation(
         .push(DocClaim::relation(r, None));
     band_of_slot.insert(slot.clone(), DOC_ONLY_BAND);
     touched.insert(slot.clone());
-    doc_slots.insert(slot);
-    stats.merged += 1;
+    doc_slots.insert(slot.clone());
+    doc_link_slots.insert(slot);
     stats.doc_only_links += 1;
     Ok(())
+}
+
+/// ⭐ REQ-143 · 记一条 **doc-vs-doc** 基数冲突（双保留 + 与断言行序无关）。
+///
+/// - 两个基数**排序**后写进 `doc_says` / `doc_says_2`：同一对断言换顺序得到**同一条** conflict；
+/// - 证据取两条里 `order_key` 较小的那条（内容序，不看行号）；
+/// - 返回「后到那条」的 claim：调用方把它塞进 `doc_evidence`（证据不丢），但**不计 merged**
+///   —— 它落在 `conflicts` 这一档，[`MergeStats::close`] 的闭合式仍然成立。
+fn push_doc_vs_doc_conflict(
+    conflicts: &mut BTreeMap<Slot, Vec<Conflict>>,
+    slot: &Slot,
+    r: &RelationAssertion,
+    doc: &str,
+    other: &str,
+    claims: &BTreeMap<Slot, Vec<DocClaim>>,
+) -> DocClaim {
+    let new_claim = DocClaim::relation(r, None);
+    let canonical = match claims.get(slot).and_then(|v| v.first()) {
+        Some(old) if old.order_key() <= new_claim.order_key() => old.clone(),
+        _ => new_claim.clone(),
+    };
+    let (lo, hi) = if doc <= other { (doc, other) } else { (other, doc) };
+    conflicts.entry(slot.clone()).or_default().push(Conflict {
+        subject: canonical.subject.clone().unwrap_or_default(),
+        predicate: canonical.predicate.clone().unwrap_or_default(),
+        object: canonical.object.clone().unwrap_or_default(),
+        doc_says: lo.to_string(),
+        doc_says_2: Some(hi.to_string()),
+        db_says: None,
+        file: canonical.file.clone(),
+        chunk_id: canonical.chunk_id.clone(),
+        quote: canonical.quote.clone(),
+        span: canonical.span,
+    });
+    new_claim
+}
+
+/// ⭐ REQ-143 · 一条纯文档边上的**全部** doc 说法 → doc-vs-doc 冲突（与输入顺序无关）。
+///
+/// - 每种**基数**一条 conflict：`doc_says` = 这种说法，`doc_says_2` = 其余说法按字典序 `" / "` 连接；
+/// - 证据取该基数组里 `order_key` 最小的 claim（内容序，不看行号/行序）；
+/// - 只有 0/1 种基数 ⇒ 空 vec（不是冲突）。
+///
+/// 这样 `N:1` 和 `1:1` 谁先出现都不影响输出；三条以上说法也不会因为「和第一条比」而漏记。
+fn doc_vs_doc_conflicts(all: &[DocClaim]) -> Vec<Conflict> {
+    let mut groups: BTreeMap<&str, &DocClaim> = BTreeMap::new();
+    for c in all {
+        let Some(card) = c.cardinality.as_deref() else {
+            continue;
+        };
+        groups
+            .entry(card)
+            .and_modify(|cur| {
+                if c.order_key() < cur.order_key() {
+                    *cur = c;
+                }
+            })
+            .or_insert(c);
+    }
+    if groups.len() < 2 {
+        return Vec::new();
+    }
+    let cards: Vec<&str> = groups.keys().copied().collect();
+    let mut out = Vec::with_capacity(cards.len());
+    for (card, claim) in &groups {
+        let others: Vec<&str> = cards.iter().copied().filter(|c| c != card).collect();
+        out.push(Conflict {
+            subject: claim.subject.clone().unwrap_or_default(),
+            predicate: claim.predicate.clone().unwrap_or_default(),
+            object: claim.object.clone().unwrap_or_default(),
+            doc_says: (*card).to_string(),
+            doc_says_2: Some(others.join(" / ")),
+            db_says: None,
+            file: claim.file.clone(),
+            chunk_id: claim.chunk_id.clone(),
+            quote: claim.quote.clone(),
+            span: claim.span,
+        });
+    }
+    out
 }
 
 /// 槽位 → 条目（本轮待建的也算）。
@@ -3302,6 +3486,14 @@ mod tests {
         .join("\n")
     }
 
+    /// 一条关系断言，但**引文/位置可换**（用来验「冲突与行序无关」）。
+    fn relation_at(card: &str, quote: &str, span: [usize; 2]) -> String {
+        let mut v: Value = serde_json::from_str(&relation_jsonl(Some(card), None, false)).unwrap();
+        v["evidence"]["quote"] = serde_json::json!(quote);
+        v["evidence"]["span"] = serde_json::json!(span);
+        v.to_string()
+    }
+
     /// AC-001 / R1 / R5 · 开关**默认关闭**：三条断言全未映射、不新建任何条目。
     ///
     /// 变异自证（纪律 G①）：把 `MergeOptions::default()` 改成 `allow_doc_only: true`
@@ -3324,6 +3516,10 @@ mod tests {
             "不开开关时 merged.json 不许出现 REQ-143 的新键"
         );
         assert!(out.document["doc_merge"].get("doc_only_entities").is_none());
+        assert!(
+            !out.rendered.contains("skipped_self_link"),
+            "不开开关时 merged.json 也不许出现自环计数"
+        );
     }
 
     /// AC-002 / AC-005 的正向：概念没命中 ⇒ 每个概念一个实体；关系两端能解析 ⇒ 一条无 join 列的边。
@@ -3563,6 +3759,141 @@ mod tests {
         assert_eq!(twice.stats.items_added, 0);
         assert_eq!(twice.stats.merged, 3);
         assert_eq!(twice.stats.duplicate_claims, 0, "已在文件里的证据不算重复断言");
+    }
+
+    // ══════════════════════════════════════════════════════
+    // ⭐ REQ-143 · N-1 / N-2（QA 复审的两条一致性要求）
+    // ══════════════════════════════════════════════════════
+
+    /// N-1 · doc-vs-doc 基数冲突：**双保留**（`doc_says`/`doc_says_2` + `applicable:false`），
+    /// 且**与断言行序无关**。
+    ///
+    /// 判据（QA）：同一输入打乱顺序 ⇒ 冲突条目数相同、`conflicts` 内容相同。
+    /// 这里把判据加强成「整份 `items` 逐字节相同」—— 因为 `cardinality` 也归一到字典序最小。
+    #[test]
+    fn doc_only_doc_vs_doc_conflicts_keep_both_sides_and_ignore_line_order() {
+        let a = relation_at("1:1", "文档说一对一", [10, 14]);
+        let b = relation_at("N:1", "文档说多对一", [20, 24]);
+        let head = [
+            concept_jsonl("订单", &[], "fact", true),
+            concept_jsonl("客户", &[], "fact", true),
+        ];
+        let in_order = [head[0].clone(), head[1].clone(), a.clone(), b.clone()].join("\n");
+        let shuffled = [head[0].clone(), head[1].clone(), b, a].join("\n");
+
+        let one = merge_with(&in_order, &empty_proposal(), &doc_only_opts()).expect("原序");
+        let two = merge_with(&shuffled, &empty_proposal(), &doc_only_opts()).expect("换序");
+
+        // 两条关系断言**都**进冲突档（⛔ 不「先到者赢」）：合并数只剩两个概念。
+        assert_eq!(one.stats.merged, 2, "2 概念；关系的两条说法都进冲突档");
+        assert_eq!(one.stats.conflicts, 2, "每种 doc 说法都算一条冲突断言");
+        assert_eq!(one.stats.doc_unmapped, 0, "⛔ 冲突不再被静默算成「未映射」");
+        assert!(one.stats.close());
+
+        let link = |doc: &Value| -> Value {
+            items(doc)
+                .into_iter()
+                .find(|it| it["kind"] == serde_json::json!("add_link_type"))
+                .expect("必须有一条关系")
+        };
+        let l1 = link(&one.document);
+        assert_eq!(l1["applicable"], serde_json::json!(false), "冲突条目不许 apply");
+        let c = &l1["conflicts"][0];
+        assert_eq!(c["doc_says"], serde_json::json!("1:1"), "两个说法按字典序排");
+        assert_eq!(c["doc_says_2"], serde_json::json!("N:1"));
+        assert!(
+            c.get("db_says").is_none(),
+            "doc-vs-doc 冲突不许冒充 db_says：{c}"
+        );
+        // 双保留：两条 doc 说法都在 doc_evidence 里（证据不丢）
+        assert_eq!(
+            l1["payload"]["doc_evidence"].as_array().map(Vec::len),
+            Some(2),
+            "两条 doc 断言都要留证据：{l1}"
+        );
+        // 打乱顺序 ⇒ 整份 items 逐字节相同（冲突内容 + 归一后的 cardinality）
+        assert_eq!(
+            serde_json::to_string_pretty(&one.document["items"]).unwrap(),
+            serde_json::to_string_pretty(&two.document["items"]).unwrap(),
+            "冲突条目数与内容都必须与行序无关"
+        );
+        // 冲突文档也幂等：吃自己的产物再跑一次，条目不变
+        let again =
+            merge_with(&in_order, &one.document, &doc_only_opts()).expect("吃自己的产物");
+        assert_eq!(
+            serde_json::to_string_pretty(&one.document["items"]).unwrap(),
+            serde_json::to_string_pretty(&again.document["items"]).unwrap()
+        );
+    }
+
+    /// N-1 的另一半：**有 `maps_to`** 的 doc-vs-doc 冲突在开关下也双保留；
+    /// 不开开关时保持 REQ-129 的 `doc_cardinality_conflict` 未映射口径（R5）。
+    #[test]
+    fn doc_vs_doc_conflict_on_a_mapped_edge_only_changes_when_the_flag_is_on() {
+        let maps = maps_new_edge();
+        let mut r1: Value =
+            serde_json::from_str(&relation_jsonl(Some("1:1"), Some(maps.clone()), false)).unwrap();
+        r1["evidence"]["quote"] = serde_json::json!("一对一说法");
+        r1["evidence"]["span"] = serde_json::json!([10, 14]);
+        let mut r2: Value =
+            serde_json::from_str(&relation_jsonl(Some("N:1"), Some(maps), false)).unwrap();
+        r2["evidence"]["quote"] = serde_json::json!("多对一说法");
+        r2["evidence"]["span"] = serde_json::json!([20, 24]);
+        let jsonl = [r1.to_string(), r2.to_string()].join("\n");
+
+        // 开关打开：双保留 + applicable:false
+        let on = merge_with(&jsonl, &proposal(), &doc_only_opts()).expect("开开关");
+        assert_eq!(on.stats.conflicts, 1);
+        assert_eq!(on.stats.unmapped_reasons.get("doc_cardinality_conflict"), None);
+        let link = link_item(&on.document, "order_template_id__package_templates");
+        assert_eq!(link["applicable"], serde_json::json!(false));
+        assert_eq!(link["conflicts"][0]["doc_says"], serde_json::json!("1:1"));
+        assert_eq!(link["conflicts"][0]["doc_says_2"], serde_json::json!("N:1"));
+
+        // 不开开关：**老路径原样** —— 同键的两条带 `maps_to` 的断言不会进 `conflicts[]`
+        // （REQ-129 的单轮行为），`doc_cardinality_conflict` 也不会出现。
+        // 这里只验「开关才是那条分界线」；逐字节不变由 AC-001 的基线对拍守着（R5）。
+        let off = merge(&jsonl, &proposal()).expect("不开开关");
+        assert_eq!(off.stats.conflicts, 0);
+        let off_link = link_item(&off.document, "order_template_id__package_templates");
+        assert_eq!(off_link["applicable"], serde_json::json!(true));
+        assert!(
+            off_link.get("conflicts").is_none(),
+            "不开开关时不许凭空长出 conflicts[]：{off_link}"
+        );
+    }
+
+    /// N-2 · 自环关系（`subject == object`）在 doc-only 路径**排除并计数**，与老路径同一条纪律。
+    #[test]
+    fn doc_only_excludes_self_links_and_counts_them() {
+        let mut self_link: Value =
+            serde_json::from_str(&relation_jsonl(Some("N:1"), None, false)).unwrap();
+        self_link["subject"] = serde_json::json!("客户");
+        self_link["object"] = serde_json::json!("客户");
+        self_link["predicate"] = serde_json::json!("引用自己");
+        let jsonl = [
+            concept_jsonl("客户", &[], "fact", true),
+            self_link.to_string(),
+        ]
+        .join("\n");
+
+        let out = merge_with(&jsonl, &empty_proposal(), &doc_only_opts()).expect("合并应当成功");
+        assert_eq!(out.stats.doc_only_entities, 1, "概念照常新建");
+        assert_eq!(out.stats.doc_only_links, 0, "⛔ 自环不建边");
+        assert_eq!(out.stats.skipped_self_link, 1);
+        assert_eq!(out.stats.unmapped_reasons.get("self_link").copied(), Some(1));
+        assert_eq!(out.stats.doc_unmapped, 1);
+        assert!(out.stats.close());
+        assert!(
+            items(&out.document)
+                .iter()
+                .all(|it| it["kind"] != serde_json::json!("add_link_type")),
+            "条目里不许出现自环"
+        );
+        assert_eq!(
+            out.document["doc_merge"]["skipped_self_link"],
+            serde_json::json!(1)
+        );
     }
 
     // ══════════════════════════════════════════════════════

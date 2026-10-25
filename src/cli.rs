@@ -426,11 +426,18 @@ pub enum DocCmd {
     ///
     /// | 情形 | 开关打开后的行为 |
     /// | --- | --- |
-    /// | 概念命中已有实体 | 照旧（`origin: both`，合并证据） |
+    /// | 概念命中已有实体 | 照旧（`origin: both`，合并证据）；**名字/别名的先后见下方「⭐ 名字优先」** |
     /// | 概念**没命中** | **新建** `add_entity_type`：key 由名字确定性派生（`doc_<slug>_<sha256前12位>`）、`display_name` = 概念名、`band: low`、`reviewed_by: null`、`origin: doc` |
     /// | 关系两端都能解析（命中或新建） | 新建 `add_link_type`：`from_type`/`to_type` = 实体 key、**没有 join 列**（`evidence[0].column` 为空串） |
     /// | 关系任一端解析不到 | 仍进 `doc_unmapped`（`endpoint_not_resolved`）—— ⛔ 不凭空造端点 |
-    /// | 冲突 / `alignable: false` | 与不开开关**完全相同**（双保留 + `applicable:false`；排除并计数） |
+    /// | 自环关系（`subject == object`） | 排除并计数（`stats.skipped_self_link`，码 `self_link`）—— 与老路径同一条纪律 |
+    /// | 冲突 / `alignable: false` | 双保留 + `applicable:false`（doc-vs-db 写 `doc_says`/`db_says`；**doc-vs-doc 写 `doc_says`/`doc_says_2`**，⛔ 不先到者赢）；排除规则与不开开关相同 |
+    ///
+    /// ⚠️ ⭐ **名字优先于别名**（**只在开关打开时**）：先看名字，名字唯一命中就认它；
+    /// 名字不中才用别名兜底。不开开关时仍是 REQ-129 的「名字 ∪ 别名」口径。
+    /// 为什么：真实样本里「`CLI 直采` 的别名 = `CLI`」，而 `CLI` 自己也是概念 ——
+    /// 按并集看两条都会变成 `ambiguous_name`，刚新建的实体就成了没有证据的空类。
+    /// ⛔ 这不是模糊匹配：名字/别名仍是**全等**，歧义仍然不猜。
     ///
     /// ⚠️ 开关**默认关闭**：不传时行为与 REQ-129/130 **逐字节相同**（R5 的回归判据）。
     /// ⚠️ key **只由名字决定**（无序号/时间/随机/输入顺序）⇒ 同一输入两次运行 `merged.json` 逐字节相同。
