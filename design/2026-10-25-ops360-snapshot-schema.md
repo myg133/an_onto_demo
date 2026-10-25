@@ -202,3 +202,95 @@ SELECT ?alarm ?res ?app ?peer ?backup WHERE {
 **这段现在跑不了**（v1 不支持 `OPTIONAL`）——demo 要么改成两段查询，要么把 `backup` 做成必填关系。
 
 **这是个真约束，得在写剧本前定下来。**
+
+
+---
+
+## 八 · 决策：应用归属用**云资源标签**（2026-10-25）
+
+### 8.1 标签怎么拿
+
+腾讯云 `DescribeInstances` 的返回里，每个实例自带 `Tags`：
+
+```json
+{ "InstanceId": "ins-abc123",
+  "InstanceName": "order-svc-web-01",
+  "Tags": [ { "Key": "app",   "Value": "order-svc" },
+            { "Key": "env",   "Value": "prod" },
+            { "Key": "owner", "Value": "zhangsan" } ] }
+```
+
+⇒ **不需要额外调 `DescribeTags`**，跟资源一起回来。
+
+### 8.2 表结构相应调整
+
+```sql
+CREATE TABLE cloud_resource (
+  id             text PRIMARY KEY,
+  name           text NOT NULL,
+  resource_type  text NOT NULL,
+  region         text, zone text, status text,
+  account_id     text REFERENCES cloud_account(id),
+  snapshot_id    uuid REFERENCES ops_snapshot(id),
+
+  -- ⭐ 标签：原始全存 + 规范化提取
+  tags           jsonb NOT NULL DEFAULT '{}'::jsonb,   -- {"app":"order-svc","env":"prod"}
+  app_code       text,                                  -- 从标签按规则提取
+  app_source     text NOT NULL DEFAULT 'unknown'        -- tag / inferred / unknown
+);
+```
+
+**为什么要两个字段而不是一个**：
+
+| 字段 | 作用 |
+| --- | --- |
+| `tags` | **原始事实**（云上到底打了什么）——将来换规则可以重算 |
+| `app_code` | **规范化结果**（按声明规则提取出来） |
+| `app_source` | 这个结果**可不可信**（`tag` = 事实；`inferred` = 猜的；`unknown` = 没有） |
+
+**⛔ 不许只存 `app_code`**：一旦提取规则错了，原始标签就再也拿不回来。
+
+### 8.3 提取规则（必须声明，不能散在代码里）
+
+```json
+{ "app_tag_keys": ["app", "application", "业务系统", "service"],
+  "owner_tag_keys": ["owner", "负责人"],
+  "env_tag_keys": ["env", "environment"],
+  "fallback": "inferred_from_name",     // 标签都没有时，从实例名前缀推断
+  "inferred_prefix_regex": "^([a-z][a-z0-9-]{2,})-.*$"
+}
+```
+
+| 情形 | `app_source` |
+| --- | --- |
+| 命中 `app_tag_keys` 任一个 | `tag`（**事实**） |
+| 只有命名能推出来 | `inferred`（**猜的**，界面上要标） |
+| 都没有 | `unknown` |
+
+### 8.4 标签的四个现实问题（必须认）
+
+| # | 问题 | 处置 |
+| --- | --- | --- |
+| 1 | **很多存量资源没打标签** | 落 `unknown`，不硬猜 |
+| 2 | **标签键不统一**（`app` / `application` / `业务`） | 用声明式 `app_tag_keys` 列表，按优先级 |
+| 3 | **标签会被改**（归属会变） | 每次采集更新；归属是"当前值"，**不是历史**（要历史需另建变更表） |
+| 4 | **不是所有资源类型都支持标签** | 该类型落 `unknown`，别把"没标签"当成"没归属" |
+
+### 8.5 一个必须说清的边界
+
+**标签给的是「标识」，不是「详情」**：
+
+```
+标签 app=order-svc     ← 云上真有这个字符串
+        ↓ 还需要一张字典
+订单服务（负责人张三，等级 P0，下游：支付网关/库存）
+```
+
+**影响面**用标签就够（同 `app` 标签的资源 = 一组）：
+
+```sql
+SELECT count(*) FROM cloud_resource
+WHERE app_code = 'order-svc' AND app_source = 'tag';
+```
+
+**要负责人/等级**，才需要一张 10–20 行的应用字典（`app` 表）。demo 可以先不做。
