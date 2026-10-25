@@ -402,6 +402,16 @@ pub enum DocCmd {
     ///     （`stats.rejected.no_evidence`，本通道屏幕上叫 `discarded_no_quote`）。
     /// ⚠️ **失败要响**：连不上 / 超时 / 不报用量 / 全部块失败 / 一条都没抽到
     ///     ⇒ **退出码非 0 且不产出断言文件**；⛔ **绝不静默回落内置 LLM**。
+    ///
+    /// # ⭐ REQ-147 · R-2 · 「有产物 ⇒ 一定可重放」
+    ///
+    /// 失败块**不进缓存**（一次瞬时故障不该变成永久结论）⇒ 重跑会**重调**它们，
+    /// 而模型的第二次回答不一定相同 ⇒ 那种 JSONL **不可重放**。两条路都受影响。
+    ///
+    /// | 开关 | 行为 |
+    /// | --- | --- |
+    /// | 不传（默认） | 产物照出，屏幕上**必须**打一行「本轮 N 块失败，重跑会重调这 N 块 ⇒ 产物可能变化」 |
+    /// | `--strict-deterministic` | `failed_calls > 0` ⇒ **退出码非 0 且一个产物都不写** |
     Ingest {
         /// 输入：一个 `.md`/`.txt` 文件，或一个目录（递归）。
         /// ⛔ `.pdf` / `.docx` / `.doc` 直接报错并点名格式。
@@ -456,6 +466,18 @@ pub enum DocCmd {
         /// 超过即该块失败（不重试、不回落）；全部块失败 ⇒ 退出码非 0 且不出产物。
         #[arg(long)]
         agent_timeout_secs: Option<u64>,
+        /// ⭐ REQ-147 · R-2：**要么可重放，要么不出产物**。
+        ///
+        /// 本轮只要有一块失败（`stats.failed_calls > 0`）⇒ **退出码非 0 且不产出断言文件**。
+        ///
+        /// 为什么需要它：失败块**不进缓存**（一次瞬时故障不该变成永久结论），
+        /// 所以重跑会重调它们、产物可能与上一份不同 —— 那种 JSONL **不可重放**。
+        /// 加上这个开关，「有产物 ⇒ 一定可重放」变成**无条件**成立。
+        ///
+        /// 省略时：产物照出，但屏幕上会打一行
+        /// 「本轮 N 块失败，重跑会重调这 N 块 ⇒ 产物可能变化」。
+        #[arg(long)]
+        strict_deterministic: bool,
     },
     /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
     ///
@@ -2268,6 +2290,7 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
             agent_command,
             agent_skill,
             agent_timeout_secs,
+            strict_deterministic,
         } => {
             return doc_ingest_cmd(
                 input,
@@ -2281,6 +2304,7 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
                 agent_command,
                 agent_skill,
                 agent_timeout_secs,
+                strict_deterministic,
             )
             .await
         }
@@ -2451,6 +2475,7 @@ async fn doc_ingest_cmd(
     agent_command: Option<String>,
     agent_skill: Option<PathBuf>,
     agent_timeout_secs: Option<u64>,
+    strict_deterministic: bool,
 ) -> anyhow::Result<()> {
     use crate::extract::doc_ingest as di;
 
@@ -2558,6 +2583,34 @@ async fn doc_ingest_cmd(
         );
     }
 
+    // ⑦.4 ⭐ REQ-147 · R-2/A · **确定性提示**：本轮只要有块失败，就**必须说出来**。
+    //
+    // # 为什么这句话必须印出来（不是提醒，是判据）
+    //
+    // 「同输入两次跑 ⇒ 逐字节相同」只在**每一块都有回答**时成立：
+    // 失败块**不进缓存**（`doc_ingest` 的既有纪律：传输失败要能重试，不能把一次
+    // 瞬时故障变成永久结论 —— 这正是 R-2 明确否掉的 B 方案），
+    // 于是重跑会**重新调用**那几块，而模型的第二次回答不一定与第一次相同 ⇒ 产物会变。
+    //
+    // 换言之：没有这句话，用户会以为「有缓存 ⇒ 可重放」，而他手上那份**恰好不可重放**。
+    // 实测（REQ-147，16 篇 / 95 块）：首轮 2 块失败 ⇒ 第二次重调那 2 块，
+    // 断言 2349 → 2352、sha256 变了。
+    //
+    // ⚠️ **两条路都印**：内置通道同样有这个问题（历史那次 16 篇运行 `failed_calls=5`，
+    //    意味着那份产物本来也不可重放）。只在 ACP 上印等于假装内置没这个毛病。
+    if stats.failed_calls > 0 {
+        eprintln!(
+            "⚠ 本轮 {} 块失败（共 {} 块）：重跑会**重调这 {} 块** ⇒ 产物可能变化",
+            stats.failed_calls,
+            chunks.len(),
+            stats.failed_calls
+        );
+        eprintln!(
+            "  （失败块**不进缓存**：一次瞬时故障不该被当成永久结论。\
+             要「要么可重放、要么不出产物」，加 --strict-deterministic。）"
+        );
+    }
+
     // ⑦.5 ⭐ REQ-147 · **ACP 通道的出产物闸**（R3）。
     //
     // 内置路径没有这道闸，因为它的失败面全在预算上；ACP 多了一整类**传输级**失败
@@ -2569,6 +2622,41 @@ async fn doc_ingest_cmd(
     //    （放宽条件重跑不重复计费），而断言文件一个字节都不写。
     if acp.is_some() {
         crate::extract::doc_acp::require_usable_output(&stats, chunks.len())?;
+    }
+
+    // ⑦.6 ⭐ REQ-147 · R-2/C · `--strict-deterministic`：**宁可不出产物，也不出一份
+    //     不可重放的产物**。
+    //
+    // 判据只有一条：`failed_calls > 0` ⇒ exit≠0 且一个产物文件都不写。
+    // 于是 AC-003（同输入两次跑逐字节相同 + 第二次 0 次调用）在**任何输入**下都成立 ——
+    // 因为「有失败块」这一种唯一的反例被变成了「没有产物」。
+    //
+    // 为什么是「拒绝」而不是「失败块进缓存」：后者会把一次瞬时故障（超时、对端抽风）
+    // 变成**永久结论** —— 重跑永远拿到那个 Err，而人以为「这份文档就是这样」。
+    if strict_deterministic && stats.failed_calls > 0 {
+        anyhow::bail!(
+            "--strict-deterministic：本轮有 {} 块失败（共 {} 块）—— **不产出任何断言文件**。\n\
+             \n\
+             为什么拒：失败块不进缓存（一次瞬时故障不该变成永久结论），\
+             所以重跑会重调它们、产物会变 —— 一份**不可重放**的 JSONL 违背 AC-003 的\
+             「同输入两次跑逐字节相同」。本开关把这种情形直接变成失败，\n\
+             于是「有产物 ⇒ 一定可重放」成为**无条件**成立的判据。\n\
+             \n\
+             三种出路：① 重跑（失败的块会重试，多半就过了）；\
+             ② 去掉 --strict-deterministic（接受「这一轮有块没跑到」的产物）；\
+             ③ 换更稳的对端 / 调大 --agent-timeout-secs。\n\
+             \n\
+             丢弃明细：证据对不上 {} · 模态 {} · 谓词 {} · 字段空 {} · 解析 {}。\n\
+             缓存已落盘（{}）：重跑时**成功的那些块不会重复计费**。",
+            stats.failed_calls,
+            chunks.len(),
+            stats.rejected_no_evidence,
+            stats.rejected_modality,
+            stats.rejected_predicate,
+            stats.rejected_empty,
+            stats.rejected_parse,
+            cache_path.display()
+        );
     }
 
     // ⑧ 产物：断言 JSONL（稳定排序）+ stats.json。

@@ -79,6 +79,26 @@ fn write_corpus(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
+/// 两篇文档（各 1 块）—— 用来构造「**恰好一块失败**、另一块成功」的中间态。
+///
+/// 为什么必须要两篇：只有一篇时「一块失败」= 「全部失败」，那会先被
+/// `require_usable_output`（另一道闸）拦下，就测不到 R-2 要测的两种行为
+/// （不加开关 ⇒ 出产物 + 屏幕提示；加 `--strict-deterministic` ⇒ 什么都不出）。
+fn write_two_doc_corpus(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("建语料目录");
+    std::fs::write(
+        dir.join("a.md"),
+        "# 采集约束\n\n只读采集云证书与公网域名 TLS 握手结果。\n",
+    )
+    .expect("写语料 a");
+    std::fs::write(
+        dir.join("b.md"),
+        "# 报告格式\n\n每条结论都必须附一段原文引用。\n",
+    )
+    .expect("写语料 b");
+    dir.to_path_buf()
+}
+
 struct Run {
     code: i32,
     stdout: String,
@@ -523,5 +543,87 @@ fn ac004c_budget_exceeded_exits_nonzero_without_output() {
     let all = r.all();
     assert!(all.contains("预算超限"), "必须报预算超限：{all}");
     assert!(all.contains("已用") && all.contains("上限"), "必须报「已用 / 上限」：{all}");
+}
+
+// ──────────────────────────────────────────────────────────
+// R-2（BA 裁定 A + C）· 「有产物 ⇒ 一定可重放」
+// ──────────────────────────────────────────────────────────
+
+/// **A**：本轮只要有块失败，屏幕上**必须**报「重跑会重调这 N 块 ⇒ 产物可能变化」。
+///
+/// 构造：两篇文档各 1 块，假 agent 的 `flaky` 模式让**恰好第 1 块**不回 `usage_update`
+/// ⇒ 该块失败、第 2 块成功 ⇒ 产物存在，但**不可重放**（失败块不进缓存）。
+///
+/// 这条判据的意义：没有这句话，用户会以为「有缓存 ⇒ 可重放」，
+/// 而他手上那份**恰好不可重放** —— 而屏幕上一切正常。
+#[test]
+fn r2a_failed_blocks_are_announced_on_screen() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("r2a");
+    let corpus = write_two_doc_corpus(&o.join("docs"));
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let r = run_fake(acp_args(&corpus, &out, &stats, &cache), "flaky", &log);
+    assert_eq!(r.code, 0, "不加 --strict-deterministic 时应照常出产物：{}", r.all());
+
+    let s = read_json(&stats);
+    assert_eq!(s["failed_calls"], 1, "构造前提：恰好一块失败：{s}");
+    assert!(out.exists(), "不加严格开关 ⇒ 产物照出（这是 A 存在的理由）");
+    let all = r.all();
+    assert!(all.contains("块失败"), "必须报有几块失败：{all}");
+    assert!(
+        all.contains("重调这 1 块"),
+        "必须说清「重跑会重调这 N 块」：{all}"
+    );
+    assert!(all.contains("产物可能变化"), "必须说清后果：{all}");
+    assert!(
+        all.contains("--strict-deterministic"),
+        "必须给出「要么可重放、要么不出产物」的出路：{all}"
+    );
+}
+
+/// **C**：`--strict-deterministic` ⇒ 有任何失败块就 exit≠0 且**一个产物都不出**。
+///
+/// 于是「AC-003 无条件成立」：**有产物 ⇒ 每一块都有回答 ⇒ 重跑全部命中 ⇒ 逐字节相同**。
+/// 与上面同一个夹具、同一份输入 —— **唯一差别就是这个开关**（否则判据也不是它）。
+#[test]
+fn r2c_strict_deterministic_refuses_unreplayable_output() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("r2c");
+    let corpus = write_two_doc_corpus(&o.join("docs"));
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let mut args = acp_args(&corpus, &out, &stats, &cache);
+    args.push("--strict-deterministic".into());
+    let r = run_fake(args, "flaky", &log);
+
+    assert_ne!(r.code, 0, "有失败块 + 严格开关 ⇒ 必须 exit≠0：{}", r.all());
+    assert!(!out.exists(), "严格开关下**一个断言文件都不许有**");
+    assert!(!stats.exists(), "严格开关下 stats.json 也不许有（它也是产物）");
+    let all = r.all();
+    assert!(all.contains("--strict-deterministic"), "必须点名是哪个开关拒的：{all}");
+    assert!(all.contains("不产出任何断言文件"), "必须说清后果：{all}");
+    assert!(all.contains("1 块失败"), "必须报是几块失败：{all}");
+}
+
+/// `--strict-deterministic` 必须出现在 `--help` 里（可发现性：没人会去看源码）。
+#[test]
+fn strict_deterministic_flag_is_documented() {
+    let r = run(
+        &["doc".into(), "ingest".into(), "--help".into()],
+        &[],
+    );
+    let all = r.all();
+    assert!(all.contains("--strict-deterministic"), "help 里必须能查到：{all}");
+    assert!(
+        all.contains("要么可重放，要么不出产物"),
+        "help 必须说清它保证的是什么：{all}"
+    );
 }
 

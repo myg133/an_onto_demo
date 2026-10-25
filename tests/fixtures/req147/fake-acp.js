@@ -9,7 +9,7 @@
 // 这里只测**接线**：一次问答端到端走通、缓存命中 0 次调用、编造的 quote 被丢。
 //
 // 环境变量：
-//   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang
+//   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang | flaky
 //   FAKE_ACP_LOG   每收到一条 `session/prompt` 就往这个文件追加一行（数调用次数用）
 'use strict';
 
@@ -130,8 +130,14 @@ process.stdin.on('data', (d) => {
       // 分两片发：正文必须靠**累积**才完整（F-1）
       chunk(answer.slice(0, mid));
       chunk(answer.slice(mid));
-      usage += 1000;
-      note({ sessionUpdate: 'usage_update', used: usage, size: 200000 });
+      // `flaky`：**恰好让一块失败**（第 2 条 prompt = 第 1 块）。
+      // 手法 = 这一轮**一条 `usage_update` 都不报** —— 客户端必须把它判成失败
+      //（「不知道花了多少」不许当成 0）。于是得到「1 块失败 + 其余成功」的中间态：
+      // 产物存在，但**不可重放**（失败块不进缓存，重跑会重调它）。
+      if (!(MODE === 'flaky' && prompts === 2)) {
+        usage += 1000;
+        note({ sessionUpdate: 'usage_update', used: usage, size: 200000 });
+      }
       send({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
     } else {
       send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'method not found' } });
