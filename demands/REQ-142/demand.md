@@ -32,16 +32,18 @@ REQ-140 把 JSON-LD 做成了**可选**：
 | REST `POST /api/sparql` | **JSON-LD** | `?format=rows` 或 `Accept: application/json` |
 | MCP `sparql_query` | **JSON-LD** | `format: "rows"` |
 
-### 判定优先级（显式 > 隐式）
+### 判定优先级（**以代码现状为准**，见 §裁定 R-1）
 
 ```
-1. body.format（最显式）
-2. ?format= 查询参数
+1. ?format= 查询参数      ← 实际最高（REQ-140 已实现并断言）
+2. body.format
 3. Accept 头
    - application/ld+json → jsonld
    - application/json    → rows
    - */* 或缺失          → **默认 jsonld**（← 本次改变点）
 ```
+
+> ⚠️ 本节最初写的是「body.format 在前」，与已实现的行为相反；按 R-1 已订正。
 
 ## 不做
 

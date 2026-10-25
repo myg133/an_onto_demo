@@ -289,7 +289,8 @@ Invoke-RestMethod http://127.0.0.1:8800/api/catalog -Headers $H | ConvertTo-Json
 
 # 查数据
 $body = @{ query = 'SELECT ?d ?amt WHERE { ?d :deductions__deduction_amount ?amt }' } | ConvertTo-Json
-Invoke-RestMethod http://127.0.0.1:8800/api/sparql -Method Post -Headers $H -Body $body | ConvertTo-Json -Depth 5
+# ⚠️ 默认回执是 JSON-LD 图；下面这条要的是**表格**，所以显式 ?format=rows
+Invoke-RestMethod 'http://127.0.0.1:8800/api/sparql?format=rows' -Method Post -Headers $H -Body $body | ConvertTo-Json -Depth 5
 ```
 
 ### 8.2 MCP（JSON-RPC，同一 token）
@@ -323,8 +324,9 @@ Invoke-RestMethod http://127.0.0.1:8800/mcp -Method Post -Headers $H -Body $body
 
 ```powershell
 # 用 A 的 token 查，结果里不得出现 B 的任何行
-$A = Invoke-RestMethod http://127.0.0.1:8800/api/sparql -Method Post -Headers $H -Body $bodyA
-$B = Invoke-RestMethod http://127.0.0.1:8800/api/sparql -Method Post -Headers $HB -Body $bodyB
+# 要逐行比主键 ⇒ 必须显式 format=rows（默认是图，没有 rows）
+$A = Invoke-RestMethod 'http://127.0.0.1:8800/api/sparql?format=rows' -Method Post -Headers $H -Body $bodyA
+$B = Invoke-RestMethod 'http://127.0.0.1:8800/api/sparql?format=rows' -Method Post -Headers $HB -Body $bodyB
 # 逐行比对两边的主键集合，交集必须为空
 ```
 
