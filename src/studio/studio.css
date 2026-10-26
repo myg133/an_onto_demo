@@ -220,7 +220,10 @@ body::before {
   font-size: 10px; fill: var(--text-3); font-family: var(--mono);
   pointer-events: none; transition: opacity 0.18s var(--ease);
 }
-.edge-label-bg { fill: rgba(7, 10, 16, 0.86); transition: opacity 0.18s var(--ease); }
+.edge-label-bg { fill: rgba(7, 10, 16, 0.86); }
+/* ⚠️ 这里**不许**写 `opacity: 0`：CSS 的 opacity 比 SVG 属性优先，
+   会把 syncEdges 设的 opacity 属性整体压掉 ⇒ 关系名永远不显示。 */
+.edge-label, .edge-label-bg { transition: opacity 0.18s var(--ease); }
 
 .node-g { cursor: pointer; }
 /* 辉光：呼吸 */
@@ -284,17 +287,21 @@ body::before {
 
 
 /* 动效开关：默认**关**。开了才有呼吸/自转（会持续重绘 ⇒ 观感更炫但更耗） */
-body[data-motion="on"] .node-halo { animation: haloBreathe 4.6s ease-in-out infinite; }
-body[data-motion="on"] .node-orbit { animation: orbitSpin 22s linear infinite; }
+body[data-motion="on"] .node-halo { animation: haloBreathe 3.4s ease-in-out infinite; }
+body[data-motion="on"] .node-orbit {
+  animation: orbitSpin 7s linear infinite;
+  opacity: 1;            /* 开动效时环要看得见，否则"没效果" */
+  stroke-width: 1.15;
+}
 body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
 
 /* 边的入场：淡入 + 略微"展开"的观感（dasharray 归弱证据边用，别抢） */
-.edge-line { animation: edgeIn 0.5s var(--ease) both; }
-.edge-label, .edge-label-bg { opacity: 0; transition: opacity 0.18s var(--ease); }
-@keyframes edgeIn {
-  from { opacity: 0; }
-  to   { opacity: 0.55; }
-}
+/* ⚠️ 入场动画必须放在**组**上，且**不要 fill-mode: both**：
+   之前在 `.edge-line` 上写 `animation: edgeIn … both`，动画结束后 opacity 被
+   永久锁在 0.55 —— JS 再怎么改 `opacity` 属性都不生效（「弱证据」点了没反应的真因）。
+   现在动画只作用于 `g.g-edges` 这一层（opacity 相乘），子元素各自受属性控制。 */
+.g-edges { animation: edgesIn 0.5s var(--ease); }
+@keyframes edgesIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* 节点入场：整组淡入（transform 留给 hover / 拖拽，避免被 animation 覆盖） */
 .node-g {
@@ -322,7 +329,9 @@ body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
 
 /* 悬浮工具条（图层开关 + 缩放） */
 .floaters {
-  position: absolute; right: 16px; bottom: 16px;
+  position: absolute; right: 16px;
+  /* ⚠️ 比底部标签栏高一行：两者都在 bottom:16px 时，抽屉一开浮动条左移就压在标签栏上 */
+  bottom: 60px;
   display: flex; align-items: center; gap: 8px;
   /* ⚠️ 必须高于抽屉（z-index 8）：抽屉一开就盖住右下角，点了没反应 */
   z-index: 40;

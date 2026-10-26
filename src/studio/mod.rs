@@ -83,18 +83,23 @@ pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; 
 connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; \
 frame-ancestors 'none'";
 
-/// 三个响应必须带的头（与 console 同一组）。
+/// 响应必须带的头。
 ///
 /// 写成常量数组而不是就地拼 `HeaderMap`：调用点只有 [`studio_response`] 一处，
 /// 「漏一个头」在 `tests` 里逐项红。
-pub const SECURITY_HEADERS: [(&str, &str); 3] = [
+///
+/// ⚠️ 第 4 个是 **`cache-control: no-cache`**，不是安全头，是**运维头**：
+/// 没有它时 Cloudflare/浏览器按 `max-age=14400` 缓存 JS/CSS 四小时，
+/// 于是「修了线上却还是老样子」——踩过一次，别再踩。
+pub const SECURITY_HEADERS: [(&str, &str); 4] = [
     ("content-security-policy", CSP),
     ("x-content-type-options", "nosniff"),
     ("referrer-policy", "no-referrer"),
+    ("cache-control", "no-cache"),
 ];
 
 /// 把 [`SECURITY_HEADERS`] 变成 axum 的头部数组（类型转换只在这一处）。
-pub fn security_headers() -> [(HeaderName, HeaderValue); 3] {
+pub fn security_headers() -> [(HeaderName, HeaderValue); 4] {
     [
         (
             HeaderName::from_static(SECURITY_HEADERS[0].0),
@@ -107,6 +112,10 @@ pub fn security_headers() -> [(HeaderName, HeaderValue); 3] {
         (
             HeaderName::from_static(SECURITY_HEADERS[2].0),
             HeaderValue::from_static(SECURITY_HEADERS[2].1),
+        ),
+        (
+            HeaderName::from_static(SECURITY_HEADERS[3].0),
+            HeaderValue::from_static(SECURITY_HEADERS[3].1),
         ),
     ]
 }
@@ -283,9 +292,12 @@ mod tests {
         ] {
             assert!(CSP.contains(needle), "CSP 缺 {needle:?}：{CSP}");
         }
-        assert_eq!(SECURITY_HEADERS.len(), 3);
+        assert_eq!(SECURITY_HEADERS.len(), 4);
         assert_eq!(SECURITY_HEADERS[1].1, "nosniff");
         assert_eq!(SECURITY_HEADERS[2].1, "no-referrer");
+        /* 第 4 个是运维头：没有它，浏览器/CF 会把 JS/CSS 缓存 4 小时 ⇒「修了还是老样子」 */
+        assert_eq!(SECURITY_HEADERS[3].0, "cache-control");
+        assert_eq!(SECURITY_HEADERS[3].1, "no-cache");
     }
 
     /// ⭐ 回归守卫：**hover 不许改几何**。
@@ -363,6 +375,42 @@ mod tests {
         assert!(
             !STUDIO_JS.contains("(ui.layers.weak || !isWeak("),
             "关系名的可见性又被「弱证据」门控了：34 条关系全 unverified 时会一条都不显示"
+        );
+    }
+
+    /// ⭐ 回归守卫：**CSS 不许把边的 opacity 写死**。
+    ///
+    /// 真事故（v0.2.2 线上）：
+    ///  · `.edge-line { animation: edgeIn … both }` —— `both` 让动画结束后
+    ///    opacity **永久**停在 0.55，JS 再改 `opacity` 属性都不生效
+    ///    ⇒「弱证据」点了没反应。
+    ///  · `.edge-label { opacity: 0 }` —— CSS 的 opacity 优先级高于 SVG 属性，
+    ///    把 syncEdges 设的值整体压掉 ⇒ **关系名永远不显示**。
+    ///
+    /// 判据：`.edge-line` / `.edge-label` 的规则里不许出现 `opacity`，
+    /// 也不许出现 `fill-mode: both` 这类会把终值锁死的动画。
+    #[test]
+    fn css_must_not_hardcode_edge_opacity() {
+        for (i, line) in STUDIO_CSS.lines().enumerate() {
+            let l = line.trim();
+            let is_edge_rule = l.starts_with(".edge-line")
+                || l.starts_with(".edge-label")
+                || l.starts_with(".edge-label-bg");
+            /* 只看**声明** `opacity:`，别把 `transition: opacity …` 也算进来 */
+            if is_edge_rule && l.contains("opacity:") {
+                panic!(
+                    "第 {} 行给边/标签写死了 opacity：`{l}`\n\
+                     ⛔ CSS 的 opacity 比 SVG 属性优先，会把 syncEdges 设的值压掉。\n\
+                     透明度只能由 JS 的属性来控制。",
+                    i + 1
+                );
+            }
+        }
+        /* ⚠️ 只查**声明形态**：注释里可能出现同样的文字（本文件就写过一次），
+           直接 `contains("animation: edgeIn")` 会被注释绊倒。 */
+        assert!(
+            !STUDIO_CSS.contains(".edge-line { animation:"),
+            "`.edge-line` 上不要挂入场动画（`both` 会把 opacity 锁死）"
         );
     }
 }

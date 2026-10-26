@@ -332,7 +332,7 @@
 
   var svg = byId("graph");
   var gRoot = s("g", { id: "g-root" });
-  var gEdges = s("g");
+  var gEdges = s("g", { "class": "g-edges" });
   var gNodes = s("g");
   var gProps = s("g", { opacity: "0" });
 
@@ -353,7 +353,7 @@
     edges.forEach(function (e) { e.a.deg++; e.b.deg++; });
 
     gRoot = s("g", { id: "g-root" });
-    gEdges = s("g");
+    gEdges = s("g", { "class": "g-edges" });
     gNodes = s("g");
     gProps = s("g", { opacity: "0" });
     gRoot.appendChild(gEdges);
@@ -456,7 +456,12 @@
       });
       line.style.animationDelay = (i * 9) + "ms";
       var lbl = s("text", { "class": "edge-label" });
-      lbl.textContent = shortName(e.r.name);
+      /* ⚠️ 这里曾经用 shortName(名字) —— 但本套 34 条关系的名字都是 `from__to`，
+         shortName 取的是**后半段（目标类名）**，看起来像"关系没有名字"。
+         开关既然叫「关系名」，就显示真名。 */
+      var fullName = String(e.r.name || "");
+      lbl.textContent = fullName.length > 18 ? fullName.slice(0, 17) + "…" : fullName;
+      if (fullName) lbl.setAttribute("title", fullName);
       var lbg = s("rect", { "class": "edge-label-bg", rx: "3", height: "13" });
       gEdges.appendChild(line);
       gEdges.appendChild(lbg);
@@ -811,12 +816,14 @@
           var ev = evOf(r);
           var other = r.from === key ? r.to : r.from;
           var dir = r.from === key ? "→" : "←";
-          return h("div", { class: "rel" }, [
-            h("b", { text: shortName(r.name) }),
-            h("span", { class: "arrow", text: dir }),
-            h("span", { text: other }),
-            h("span", { class: "ev " + ev.cls, text: ev.label })
-          ]);
+          /* ⚠️ 曾经显示 shortName(name)：34 条关系名都是 `from__to`，shortName 取后半段
+                   （目标类名），看起来像"关系没有名字"。现在给：方向 + 对方类 + 完整名字 + 证据。 */
+                return h("div", { class: "rel" }, [
+                  h("span", { class: "arrow", text: dir }),
+                  h("b", { text: other }),
+                  h("span", { class: "pk", text: String(r.name || "") }),
+                  h("span", { class: "ev " + ev.cls, text: ev.label })
+                ]);
         }))
       ]));
     }
@@ -826,6 +833,9 @@
 
   /* 图例：按真实数据生成（外加"全部未验证"的诚实提示） */
   function buildLegend() {
+    /* 诚实提示：本套 34 条关系的名字都是 `from__to` 自动生成的端点对，本体没有语义动词。
+       ⛔ 别在 UI 里"编"一个好看的动词（那就是造假）。 */
+    /* 诚实提示：关系名是 from__to 自动生成，本体没有语义动词 */
     var box = byId("legend");
     clear(box);
     var apiN = S.classes.filter(isApi).length;
@@ -1278,9 +1288,13 @@
         b.classList.toggle("is-on");
         ui.layers[k === "weak" ? "weak" : k] = b.classList.contains("is-on");
         applyLayers();
-        if (k === "props" && ui.layers.props && !ui.focus) {
-          setStatus([h("span", { text: "属性层已开：点一个类，它的属性会围在周围" })]);
-        }
+        var NAME = { props: "属性", labels: "关系名", weak: "弱证据" };
+        var onoff = ui.layers[k] ? "开" : "关";
+        var extra = "";
+        if (k === "props" && ui.layers.props && !ui.focus) extra = " —— 点一个类，属性会围在它周围";
+        if (k === "labels" && ui.layers.labels) extra = " —— 边的名字在边中点上";
+        if (k === "weak") extra = " —— 34 条关系全是未验证，开启时虚线边变亮";
+        setStatus([h("span", { text: "图层 · " + NAME[k] + "：" + onoff + extra })]);
       });
     });
 
