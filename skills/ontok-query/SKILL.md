@@ -197,6 +197,128 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 3. `meta.complete` 现在是 `false` —— 处理完 `@pending` 再作答
 
 **跨源边**：如果两个类一个在库、一个在 API，那条边**不会给你 `get`** ⇒ 拆两段：先查库拿 ID，再按 ID 调接口。
+硬走会得到 `CROSS_SOURCE_UNSUPPORTED`——**重试无效**。
+
+### 4.4 取数侧怎么落地（**上一轮实测踩过的四个坑**）
+
+拿到 `get` 之后，取数由你完成。以下四条是实测总结，照做能省掉一轮返工。
+
+#### ① 凭据**只注入一次**，⛔ 不要每次调用都重新贴
+
+实测最坏的一轮：同一条 `export SECRET_ID=… SECRET_KEY=…` 在 47 次 shell 调用里**重复了 17 次**。
+后果：**凭据明文进了会话日志**（会话导出会带着它走），而且白白烧 token。
+
+✅ 正确做法（按环境挑一个）：
+
+```bash
+# A. 写进 .env，之后只 source（推荐）
+printf 'TC_SECRET_ID=%s\nTC_SECRET_KEY=%s\n' "$ID" "$KEY" > .env && chmod 600 .env
+set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo 变量
+
+# B. 包里自带执行器（若有，最省事：签名/翻页/限流都替你做了）
+#    例：ontok access fetch --mapping <已签映射> --entity <class> --filter '{...}' --allow-network
+```
+
+⛔ 禁忌：`echo $SECRET_KEY`、把凭据写进命令行参数（会进 shell history 与进程列表）、
+把凭据写进脚本文件后提交。
+
+#### ② ⛔ 不要自己从零造签名 / 翻页 / 地域发现
+
+实测一轮里 9 次错误，**6 次**都在这上面（模块名猜错、并发代码写崩、地域列表没有）。
+
+优先级：**先用包里自带的执行器** → 没有再自己写 → 写就照附录 A 抄，⛔ 别重新发明。
+
+#### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`
+
+实测：`curl -o /tmp/onto.ttl` 在 Windows 上直接失败（`系统找不到指定的文件`）。
+✅ 用 `./onto.ttl` 或 `./.tmp/<name>`，结束时清掉临时目录。
+
+#### ④ 翻页形态**因接口而异**，⛔ 不要假设一种就够
+
+同一家云里就并存三种：顶层 `Offset/Limit`、`PageNumber/PageSize`（页码从 **1** 起）、
+以及"`Offset` 与 `Limit` 都必填 + `Limit` 有硬上限（如 300）"。
+
+✅ 做法：**先取一页，看返回里有没有 `TotalCount`**；有 `TotalCount` 就按它算页数，
+没有就"取到空页为止"。⛔ 不要写死 `while offset < 1000` 这种假设。
+
+---
+
+## 附录 A · 参考实现（**可直接跑**，约 60 行）
+
+> ⚠️ **为什么附录里出现具体厂商**：本部署的 `get` 指向腾讯云，签名算法必须逐字节正确，
+> 抽象描述不足以实现。**换厂商只需替换 `call()` 里的签名段**，其余（翻页/重试/收窄）通用。
+>
+> 用途：当包里**没有**现成执行器时，抄这段，⛔ 不要自己重写。
+
+```python
+# ref_fetch.py —— 不要 echo 凭据；从环境变量读
+import os, json, time, hmac, hashlib, urllib.request
+
+SID, KEY = os.environ["TC_SECRET_ID"], os.environ["TC_SECRET_KEY"]
+
+def call(host, service, action, version, region, payload, timeout=60):
+    """一次 POST；返回 Response 里的 dict。签名 = TC3-HMAC-SHA256。"""
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    ts = int(time.time())
+    date = time.strftime("%Y-%m-%d", time.gmtime(ts))
+
+    # —— 签名段（换厂商只需改这里）——
+    signed = f"content-type;host;x-tc-action"
+    canon_headers = (f"content-type:application/json; charset=utf-8\n"
+                     f"host:{host}\nx-tc-action:{action.lower()}\n")
+    canon_req = "\n".join(["POST", "/", "", canon_headers, signed,
+                           hashlib.sha256(body.encode()).hexdigest()])
+    scope = f"{date}/{service}/tc3_request"
+    sts = "\n".join(["TC3-HMAC-SHA256", str(ts), scope,
+                     hashlib.sha256(canon_req.encode()).hexdigest()])
+    k = ("TC3" + KEY).encode()
+    for msg in (date, service, "tc3_request"):
+        k = hmac.new(k, msg.encode(), hashlib.sha256).digest()
+    sig = hmac.new(k, sts.encode(), hashlib.sha256).hexdigest()
+    auth = (f"TC3-HMAC-SHA256 Credential={SID}/{scope}, "
+            f"SignedHeaders={signed}, Signature={sig}")
+
+    headers = {"Authorization": auth, "Content-Type": "application/json; charset=utf-8",
+               "Host": host, "X-TC-Action": action, "X-TC-Version": version,
+               "X-TC-Timestamp": str(ts)}
+    if region:
+        headers["X-TC-Region"] = region
+    req = urllib.request.Request(f"https://{host}/", body.encode(), headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        out = json.loads(r.read())["Response"]
+    if "Error" in out:                       # 厂商把错误放在 200 里
+        raise RuntimeError(f'{action}: {out["Error"]["Code"]} {out["Error"]["Message"]}')
+    return out
+
+def pages(host, service, action, version, region, payload, list_key,
+          offset_param="Offset", limit_param="Limit", limit=100, cap=50):
+    """翻页：有 TotalCount 按它算，没有就取到空页。⛔ 不写死上限假设。"""
+    got, page = [], 0
+    while page < cap:
+        p = dict(payload); p[offset_param] = page * limit; p[limit_param] = limit
+        out = call(host, service, action, version, region, p)
+        batch = out.get(list_key) or []
+        got += batch
+        total = out.get("TotalCount")
+        page += 1
+        if not batch or (isinstance(total, int) and len(got) >= total):
+            break
+    return got
+
+if __name__ == "__main__":
+    # 地域别硬编码：先问一次
+    host = "cvm.tencentcloudapi.com"
+    regs = call(host, "cvm", "DescribeRegions", "2017-03-12", "", {})["RegionSet"]
+    for rg in [r["Region"] for r in regs]:
+        try:
+            rows = pages(host, "cvm", "DescribeInstances", "2017-03-12", rg, {}, "InstanceSet")
+            print(rg, len(rows))             # 逐地域收窄，⛔ 不无过滤全量拉
+        except Exception as e:
+            print(rg, "ERR", e)
+```
+
+**注意**：示例里的 `host/action/version` **必须来自 `get`（或 `describe` 的 `access`），不要凭记忆写**。
+若 `get` 没给，就按 `ref` 找运维要**已签映射**——⛔ 不要猜版本（实测有人把 SSL 猜成另一个版本，能跑通但字段对不上本体）。
 
 ---
 
