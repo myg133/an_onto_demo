@@ -57,3 +57,30 @@ Dev 子 agent **中途崩溃**、无收尾报告，留下：
 - [x] 用户拍板：bin 名 `ontok-builder`，镜像只放 `ontok`，不保留别名
 - [ ] Dev
 - [ ] QA（重点：AC-002 的 QG 能红、AC-006 结构性、AC-008 人判独立实现）
+
+
+---
+
+## 验收与发布（2026-10-26）
+
+| 项 | 结果 |
+| --- | --- |
+| QA | **PASS（带非阻断）**，报告 `qa-review.md`（33 KB） |
+| 5 条 commit 独立编译 | 5/5 通过（崩溃后可恢复性：每步都是可编译的树） |
+| 服务面零回归 | 8 case 与 `8efd323` **逐字节相同**（QA 自编基线，含 343+209 生成物） |
+| 全量测试 | HEAD 1771/183/3 · 基线 1759/183/3 · **失败集合逐条相同**（0 条代码问题） |
+| AC-110（人判） | QA 只读 `AUTH-SPEC.md` 独立实现签名，复现全部 6 个中间值 ✅ |
+| N1（Deploy 未闭环） | **已补**：删投影脚本/产物、17 处旧 bin 名、镜像口径改为"只有一个 ontok" |
+| 合并 | `1137ea8` |
+| 部署 | `ontok:0.2.0`（digest `6469f78c…`）· 公网 `get` = **10 键** |
+| **发布前最后一道** | 从**公网**抓 `get`，只吃它真调：`cvm_instance` 3 台/字段 41/41；`alarm_policy` 236 条/Module 走 defaults ✅ |
+
+### 非阻断项（记债，不阻塞）
+1. `get` 里没有 `contract_version`——"键不存在"同时承载"版本没升/没配/故意不给"，客户端只能数键猜（建议下一版加法式加）
+2. `400 NOT_DB_SOURCE` 的 hint 只列 4 键（受 AC-108 逐字节约束不能改）
+3. `ontok-builder access fetch --help` 示例仍写 `ontok access fetch`
+4. AUTH-SPEC §3.2 骨架图易多写一个 `\n`；§7.1 的字面转义写法需补说明
+
+### 文档落地
+`AUTH-SPEC.md` / `RECIPE.md` 已复制进 `skills/ontok-query/`（接入方加载 skill 才看得到），
+`SKILL.md` 新增 §4.4 ⑦ 配套文档索引。
