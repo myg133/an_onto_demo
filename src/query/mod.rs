@@ -728,11 +728,6 @@ impl QueryService {
         }
     }
 
-    /// 本模式有没有数据源（横幅与 `run_sparql` 的唯一判据）。
-    pub fn has_source(&self) -> bool {
-        !self.mode.is_ontology_only() && self.source.is_some()
-    }
-
     /// ⭐ REQ-151 · **业务查询唯一**能拿到源库连接池的入口。
     ///
     /// 为什么要有这个函数（而不是各处直接 `svc.source.as_ref()`）：REQ-136 的

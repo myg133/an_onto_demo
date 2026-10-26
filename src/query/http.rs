@@ -731,7 +731,15 @@ async fn dispatch(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
                      ⚠️ 本部署是**本体服务模式**（无业务库）：catalog / describe / resources 正常；\
                      需要库的 sparql_query 与 sample 返回 NO_DATA_SOURCE（503 语义，重试无效）；\
                      只涉及 api 类（catalog 的 access.kind=api）的查询用默认 format=jsonld 时，\
-                     会得到 `@graph: []` + `@pending` 取数指引（format=rows 时报 NOT_DB_SOURCE）。"
+                     会得到 `@graph: []` + `@pending` 取数指引（format=rows 时报 NOT_DB_SOURCE）。\n\
+                     ⚠️ `max_rows=0` 是**参数错误（400 BAD_REQUEST）**，与部署模式无关；\
+                     需要库的查询仍先得到 503（模式闸在前），纯 api 类才会看到这个 400。\n\
+                     ⚠️ 本体模式的 `@pending[].get.filter` 可能是 `{{}}`：那表示**平台无法替你\
+                     确定取数标识**（没有库侧主键）。⛔ **不要直接全量拉取**（账单 / 告警一类接口\
+                     会烧钱并触发限流）：先按该类的实例标识属性（`describe` 看属性，\
+                     如 `:cvm_instance__instance_id`）在**你自己的取数侧**拿到标识，再带 \
+                     `get.filter.ids` 重新组织取数；暂时拿不到标识时，至少用 `get.pushdown` \
+                     里的字段收窄范围。"
                 )
             } else {
                 INSTRUCTIONS.to_string()
