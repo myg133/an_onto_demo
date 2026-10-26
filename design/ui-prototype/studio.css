@@ -239,7 +239,11 @@ body::before {
   transform-origin: center;
   opacity: 0.75;
 }
-@keyframes orbitSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+/* ⚠️ 用 stroke-dashoffset 做"流动"，**不用 rotate**：
+   SVG 元素的 CSS transform 以 viewBox 原点为基准，一旦 transform-box 不生效
+   （或元素 bbox 计算异常），虚线环会绕原点甩出一大段弧 —— 线上表现为"开动效就跳得远"。
+   dashoffset 只改描边相位，几何一点不动。周期 = dasharray 的 2+7 = 9。 */
+@keyframes orbitSpin { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -9; } }
 
 /* 球体：低对比能量球 */
 .node-sphere { stroke: none; }
@@ -303,10 +307,14 @@ body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-/* ⚠️ hover **不许改几何**（见 REQ-155 P3 的真事故）*/
+/* ⚠️ hover **不许改几何**：节点是用 cx/cy 定位的，`<g>` 没有自己的 transform，
+   所以任何 `transform: scale()` 都会以 **SVG 原点**为中心缩放 —— 鼠标一进节点，
+   它朝原点跳一下；跳走后 mouseleave 又把 hover 撤掉，于是来回"躲"。
+   ⇒ hover 只做**视觉强调**（边缘光/细环/drop-shadow），不动位置。 */
 .node-g:hover .node-rim { stroke-opacity: 1; }
 .node-g:hover .node-ring { stroke-opacity: 0.95; stroke: var(--accent); }
 .node-g:hover .node-halo { opacity: 0.92; }
+.node-g:hover .node-core { fill: #ffffff; }
 .node-g:active { cursor: grabbing; }
 
 /* 拖拽时不要让文字被选中 */
@@ -316,8 +324,12 @@ body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
 .floaters {
   position: absolute; right: 16px; bottom: 16px;
   display: flex; align-items: center; gap: 8px;
-  z-index: 5;
+  /* ⚠️ 必须高于抽屉（z-index 8）：抽屉一开就盖住右下角，点了没反应 */
+  z-index: 40;
+  transition: right 0.28s var(--ease);
 }
+/* 抽屉打开时把工具条让开，别压在抽屉内容上 */
+body.drawer-open .floaters { right: 408px; }
 .floater {
   display: flex; align-items: center; gap: 2px;
   padding: 4px;
@@ -334,7 +346,10 @@ body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
 }
 .floater button:hover { color: var(--text); background: rgba(255,255,255,0.05); }
 .floater button.is-on { color: var(--text); background: var(--panel-2); }
-.floater.zoom button { width: 26px; padding: 0; font-size: 14px; }
+.floater.zoom button {
+  /* ⚠️ 不要写死宽度：「100%」换成「适应」这类两个汉字就竖排了 */
+  width: auto; min-width: 34px; padding: 0 10px; font-size: 12.5px; white-space: nowrap;
+}
 
 /* 底部视图切换 */
 .tabs {
