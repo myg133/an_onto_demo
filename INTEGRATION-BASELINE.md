@@ -1,4 +1,4 @@
-# 接入基线（**v0.2.7** · 2026-10-27）
+# 接入基线（**v0.2.9** · 2026-10-27）
 
 > 给接入方（Axon / 数字员工）与联调同学：**这套是当前冻结的接入基线**。
 > 上一版 `v0.1.8`（`get` 只有 4 个键）已被 `v0.2.0` 取代。
@@ -9,9 +9,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| **代码 tag** | `v0.2.7`（develop `3b5b414`） |
-| **部署 tag** | `deploy-uat-v0.2.7` |
-| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.7`<br>digest `sha256:be50fc943baf7f3066d108c4cc632c2cd9e874261593f225a73a07b2c238e195` |
+| **代码 tag** | `v0.2.9`（develop `aa6e52d`） |
+| **部署 tag** | `deploy-uat-v0.2.9` |
+| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.9`<br>digest `sha256:9eec7f91d845bac09228651c99fba3be8846e0fd76bf664ff9fd8f472e8ca818` |
 | **本体** | `cloud-resource` **v3**（已冻结）· 30 类 / 34 关系 / 752 属性 |
 | **TTL** | 209,429 B · sha256 `79741a7f…`（**契约升级不影响本体输出**） |
 | **access mapping** | `am-tencent.json` · **`contract_version: 2`** · 14 entity / 441 属性<br>sha256 `80fce221d5f803487983cb3afe2f9d2d…` · 已签 `michael@2026-10-26` |
@@ -22,7 +22,21 @@
 
 ---
 
-## 二 · v0.2.7 · 修 fail-open（**对外接口零变化**，纯内部防线）
+## 二 · v0.2.9 · 关系动词治理（**对外接口零变化**）
+
+| 项 | 说明 |
+| --- | --- |
+| 受控字典 | `relation-verbs.json`：**16 主键 + 13 别名 + 6 禁词**（`uses`/`associated_with`/`related_to`/`involves`/`has_many`/`is_related`） |
+| 校验命令 | `ontok-builder relation verbs check --project/--version/--snapshot`；`unknown`/`forbidden` ⇒ **exit 4**；别名归一与 `deprecated` 只提示 |
+| `semantic_cn` | 改**从字典读**中文标签（REQ-156 的 6 条原映射与兜底一字未动，15 个词标签逐条不变） |
+| 发布闸 | 新增第五档：`skos:altLabel` 里的**机器动词形态**也会被抓（实测 v3 的 109 条 altLabel **零误杀**：42 条 ASCII 全是 `NAT`/`CLB`/`AccountInfo` 这类驼峰） |
+| 抽取契约 | `parse.rs` 的 `semantic` 示例删掉枚举，改为「从字典 key 里选」 |
+| 线上回归 | 34 条关系仍全中文标签、TTL 210,592 B 与 v0.2.6 一致 |
+
+> ⚠️ **v0.2.8 作废**：tag 存在但**镜像构建失败**（Dockerfile 漏 `COPY relation-verbs.json`），无产物、未部署。
+> 已补 COPY，并新增守卫 `test_dockerfile_covers_include_str`（**这类问题本地 `cargo build` 永远是绿的**）。
+
+## 三 · v0.2.7 · 修 fail-open（**对外接口零变化**，纯内部防线）
 
 | 项 | 说明 |
 | --- | --- |
@@ -33,7 +47,7 @@
 
 > 接入方无需改动。这条只是"下次冻结时，带英文语义的视图会被拒绝"。
 
-## 三 · v0.2.6 · 关系语义透出（**接入方可以读到"边是什么意思"了**）
+## 四 · v0.2.6 · 关系语义透出（**接入方可以读到"边是什么意思"了**）
 
 | 位置 | 变化 |
 | --- | --- |
@@ -47,7 +61,7 @@
 
 > ⚠️ `使用` / `包含` / `关联` 这 3 个是**泛词**，REQ-157 会清掉（届时标签分布会再变）。
 
-## 四 · v0.2.5 · Studio UI 定稿
+## 五 · v0.2.5 · Studio UI 定稿
 
 | 修了什么 | 原因 |
 | --- | --- |
@@ -61,7 +75,7 @@
 > 请在 CF 里把该 zone 的 **Browser Cache TTL 设为 "Respect Existing Headers"**（或给 `/studio/*` 加一条 Cache Rule）。
 > 内网入口（`an-onto.local.anspire.cn`）的头是**正确**的，可用于判断"是不是 CF 干的"。
 
-## 五 · v0.2.2 新增：**Studio 页面上线**
+## 六 · v0.2.2 新增：**Studio 页面上线**
 
 ```
 GET /studio                 → 200 text/html（页面壳，**零数据**，免口令）
@@ -75,7 +89,7 @@ GET /studio/studio.js       → 200 application/javascript
 - `/api/*` 的鉴权与响应**逐字节未变**（8 case 对拍）
 - ⚠️ **客户门户（portal）已删除**（REQ-155 P1）：`ontok-builder portal` 已不存在
 
-## 六 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
+## 七 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
 
 | 项 | v0.2.0 | v0.2.1 |
 | --- | --- | --- |
@@ -85,7 +99,7 @@ GET /studio/studio.js       → 200 application/javascript
 **实测**：`04-pending` 3366 B（含 `contract_version: 2`）· `05-rows400` 1074 B。
 `get` 仍是 **10 个键**，一个不多一个不少。
 
-## 七 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
+## 八 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
 
 ```diff
   GET /api/sparql  →  @pending[0].get
@@ -112,7 +126,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 八 · 实测过的部分（接入方可直接依赖）
+## 九 · 实测过的部分（接入方可直接依赖）
 
 | 类 | 结果 |
 | --- | --- |
@@ -127,7 +141,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 九 · **没验过的部分**（接入方注意）
+## 十 · **没验过的部分**（接入方注意）
 
 | 类 | 状态 |
 | --- | --- |
@@ -139,7 +153,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 十 · 接入方自查（三条命令）
+## 十一 · 接入方自查（三条命令）
 
 ```bash
 # ① 通不通
@@ -157,7 +171,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 十一 · 冻结期间的规则
+## 十二 · 冻结期间的规则
 
 | 允许 | 不允许 |
 | --- | --- |
@@ -169,7 +183,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 十二 · 一句话
+## 十三 · 一句话
 
 > **v0.2.0 之后，接入方不需要懂任何云厂商 API**：
 > `get` 告诉你调什么、怎么拼、取哪个字段、怎么签名；
