@@ -287,4 +287,29 @@ mod tests {
         assert_eq!(SECURITY_HEADERS[1].1, "nosniff");
         assert_eq!(SECURITY_HEADERS[2].1, "no-referrer");
     }
+
+    /// ⭐ 回归守卫：**hover 不许改几何**。
+    ///
+    /// 真事故（v0.2.2 线上）：`.node-g:hover { transform: scale(1.06) }`。
+    /// 节点用 `cx/cy` 定位、`<g>` 没有自己的 transform ⇒ CSS 的 `transform`
+    /// 以 **SVG 原点**为中心缩放，鼠标一进节点它朝原点跳一下；跳走之后
+    /// `mouseleave` 撤掉 hover 又跳回来 ⇒ 用户看到的是"节点总在躲鼠标"。
+    ///
+    /// 判据：`.node-g` 的任何状态里都不许出现 `transform`（位置只能靠 cx/cy 更新）。
+    #[test]
+    fn css_hover_must_not_change_node_geometry() {
+        for (i, line) in STUDIO_CSS.lines().enumerate() {
+            let l = line.trim();
+            if !l.starts_with(".node-g") {
+                continue;
+            }
+            assert!(
+                !l.contains("transform"),
+                "第 {} 行给 .node-g 加了 transform：`{l}`\n\
+                 ⛔ 节点位置只能由 cx/cy 更新；SVG 的 CSS transform 以 viewBox 原点为基准，\
+                 会让节点在 hover 时跳走（v0.2.2 的真实事故）。",
+                i + 1
+            );
+        }
+    }
 }
