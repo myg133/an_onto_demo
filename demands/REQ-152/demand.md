@@ -87,17 +87,17 @@
 
 | 现状 | 归属 |
 | --- | --- |
-| `ontok`（主 CLI：serve/query/project/version/access…） | **拆开**：服务面 → `ontok`；构建面 → `ontok-build` |
-| `ontok-introspect` | → `ontok-build introspect` |
-| `ontok-propose` | → `ontok-build propose` |
-| `ontok-translate-names` | → `ontok-build translate-names` |
-| `ontok-gate-preflight` | → `ontok-build gate-preflight` |
+| `ontok`（主 CLI：serve/query/project/version/access…） | **拆开**：服务面 → `ontok`；构建面 → `ontok-builder` |
+| `ontok-introspect` | → `ontok-builder introspect` |
+| `ontok-propose` | → `ontok-builder propose` |
+| `ontok-translate-names` | → `ontok-builder translate-names` |
+| `ontok-gate-preflight` | → `ontok-builder gate-preflight` |
 
 **目标：两个 bin**
 
 ```
 ontok        服务面：query serve / mcp + catalog/describe/TTL 渲染      ← 唯一进镜像
-ontok-build  构建面：introspect / propose / translate-names / gate-preflight /
+ontok-builder  构建面：introspect / propose / translate-names / gate-preflight /
                      project / version / import / review / freeze / export /
                      access validate & fetch（含签名与凭据读取）
 ```
@@ -108,13 +108,13 @@ ontok-build  构建面：introspect / propose / translate-names / gate-preflight
 
 ```bash
 # ① 只有两个 bin
-ls target/release/ontok target/release/ontok-build && ls target/release/ontok-{introspect,propose,translate-names,gate-preflight} 2>/dev/null | wc -l   # ⇒ 0
+ls target/release/ontok target/release/ontok-builder && ls target/release/ontok-{introspect,propose,translate-names,gate-preflight} 2>/dev/null | wc -l   # ⇒ 0
 # ② 产品 bin 里没有签名代码
 strings target/release/ontok | grep -c 'X-TC-Action'                                   # ⇒ 0
 # ③ 产品 bin 里没有真调用入口
 target/release/ontok access fetch --allow-network 2>&1 | grep -q 'unrecognized|不认识的'  # ⇒ 命中
 # ④ 构建 bin 仍能真调（验收能力不丢）
-target/release/ontok-build access fetch --mapping … --allow-network                     # ⇒ 正常
+target/release/ontok-builder access fetch --mapping … --allow-network                     # ⇒ 正常
 # ⑤ 镜像里只有一个 bin
 podman run --rm <image> sh -c 'ls /usr/local/bin | grep -c ontok'                       # ⇒ 1
 ```
@@ -153,3 +153,22 @@ podman run --rm <image> sh -c 'ls /usr/local/bin | grep -c ontok'               
 | 2 | `get` 变大 ⇒ 响应体积上升 | 14 个 entity × 几个类，量级可接受；必要时按 `class` 分页返回 |
 | 3 | 客户端不兼容新 `get` | 加法式 + 老字段保留一版 |
 | 4 | 接入期改这个会影响接入方 | **不合入 v0.1.8**，接入验收通过后发 `v0.2.0` |
+
+
+### ⑦ 跟着改的引用（已扫，共 5 个文件 / 17 处）
+
+合并 bin 会**断掉老命令名**，这些地方要一起改：
+
+| 文件 | 处数 | 行 |
+| --- | --- | --- |
+| `Deploy/BUILD.md` | 6 | 19, 42 |
+| `Deploy/PROJECT-ONBOARDING.md` | 4 | 49, 52, 53, 66 |
+| `Deploy/README.md` | 3 | 21 |
+| `Deploy/k8s/UAT-PREREQ.md` | 2 | 86, 87 |
+| `Deploy/PRODUCTION-READINESS.md` | 2 | 77 |
+
+**另**：`.local/` 下有一批临时脚本也调老 bin（`pg-test.ps1`、`run-tests.ps1` 等）——**不跟改**，删掉或按需重写。
+
+**待定（要用户拍板）**：老命令名是否保留为别名。
+- 保留 ⇒ 上面 5 个文件可不改，但"两个 bin"会变成"两个 bin + 四个别名"
+- 不保留 ⇒ 干净，但要改 17 处
