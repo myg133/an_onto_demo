@@ -2,9 +2,25 @@
 
 ## 当前状态
 
-**已退回 · 补件中**（2026-10-25）
+**进行中 · 抢救版待 QA**（2026-10-26）
 
 > 通路已实现并提交（`b99c914`），但 BA 裁定的 3 件补件未完成 ⇒ **不能进 QA**。
+
+## C 方案（2026-10-26）
+
+原分支落后 develop **166 个提交**，rebase 会撞。用户拍板 **C 方案**：
+
+| 做法 | 结果 |
+| --- | --- |
+| 推送原分支留档 | ✅ `origin/feature/REQ-147`（3 提交） |
+| 只捞核心 | `doc_acp.rs`(973) + 测试(656) + 夹具 → 新分支 `feature/REQ-147-salvage`（基线 `1137ea8`） |
+| CLI 按新结构重写 | `DocCmd::Ingest` 加 5 参 + `build_doc_transport` 唯一岔口 |
+| 提交 | `0961e70`（1 个，7 files / +2212 / −13） |
+
+**BA 自查（已验证）**：
+- `cargo check --lib` 通过（模块与当前 `doc_ingest` API 兼容，语义未漂）
+- `strings ontok-builder | grep 'acp:'` = 1 · `strings ontok | grep 'acp:'` = **0** · `strings ontok | grep X-TC-Action` = **0**
+  ⇒ **只进构建面，服务面仍干净**
 
 ## 进度（2026-10-25 21:15 实测）
 
