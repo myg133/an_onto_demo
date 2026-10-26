@@ -1,4 +1,4 @@
-# 接入基线（**v0.2.1** · 2026-10-26）
+# 接入基线（**v0.2.2** · 2026-10-26）
 
 > 给接入方（Axon / 数字员工）与联调同学：**这套是当前冻结的接入基线**。
 > 上一版 `v0.1.8`（`get` 只有 4 个键）已被 `v0.2.0` 取代。
@@ -9,9 +9,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| **代码 tag** | `v0.2.1`（develop `aed51c6`，含 REQ-152 阶段1+2+CP4 + REQ-154 四小修） |
-| **部署 tag** | `deploy-uat-v0.2.1` |
-| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.1`<br>digest `sha256:02bbdea3856fdbcc7aa0e0ae1702192123cc6cd436de808678c6d879ad1f7e40` |
+| **代码 tag** | `v0.2.2`（develop `1a2fc0e`，含 REQ-152 + REQ-154 + REQ-155 P1/P2） |
+| **部署 tag** | `deploy-uat-v0.2.2` |
+| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.2`<br>digest `sha256:73771abce45cedb4a067e32b041e739e926880efc57440a833e343b25582c99c` |
 | **本体** | `cloud-resource` **v3**（已冻结）· 30 类 / 34 关系 / 752 属性 |
 | **TTL** | 209,429 B · sha256 `79741a7f…`（**契约升级不影响本体输出**） |
 | **access mapping** | `am-tencent.json` · **`contract_version: 2`** · 14 entity / 441 属性<br>sha256 `80fce221d5f803487983cb3afe2f9d2d…` · 已签 `michael@2026-10-26` |
@@ -22,7 +22,21 @@
 
 ---
 
-## 二 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
+## 二 · v0.2.2 新增：**Studio 页面上线**
+
+```
+GET /studio                 → 200 text/html（页面壳，**零数据**，免口令）
+GET /studio/studio.css      → 200 text/css
+GET /studio/studio.js       → 200 application/javascript
+写类请求（POST/PUT/DELETE）  → 405
+```
+
+- **页面壳不含任何本体数据**：类名/关系 grep = 0；数据一律经 `/api/*`（要口令）
+- 口令只存 `sessionStorage`（⛔ 不进 URL）
+- `/api/*` 的鉴权与响应**逐字节未变**（8 case 对拍）
+- ⚠️ **客户门户（portal）已删除**（REQ-155 P1）：`ontok-builder portal` 已不存在
+
+## 三 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
 
 | 项 | v0.2.0 | v0.2.1 |
 | --- | --- | --- |
@@ -32,7 +46,7 @@
 **实测**：`04-pending` 3366 B（含 `contract_version: 2`）· `05-rows400` 1074 B。
 `get` 仍是 **10 个键**，一个不多一个不少。
 
-## 三 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
+## 四 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
 
 ```diff
   GET /api/sparql  →  @pending[0].get
@@ -59,7 +73,7 @@
 
 ---
 
-## 四 · 实测过的部分（接入方可直接依赖）
+## 五 · 实测过的部分（接入方可直接依赖）
 
 | 类 | 结果 |
 | --- | --- |
@@ -74,7 +88,7 @@
 
 ---
 
-## 五 · **没验过的部分**（接入方注意）
+## 六 · **没验过的部分**（接入方注意）
 
 | 类 | 状态 |
 | --- | --- |
@@ -86,7 +100,7 @@
 
 ---
 
-## 六 · 接入方自查（三条命令）
+## 七 · 接入方自查（三条命令）
 
 ```bash
 # ① 通不通
@@ -104,7 +118,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 七 · 冻结期间的规则
+## 八 · 冻结期间的规则
 
 | 允许 | 不允许 |
 | --- | --- |
@@ -116,7 +130,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 八 · 一句话
+## 九 · 一句话
 
 > **v0.2.0 之后，接入方不需要懂任何云厂商 API**：
 > `get` 告诉你调什么、怎么拼、取哪个字段、怎么签名；
