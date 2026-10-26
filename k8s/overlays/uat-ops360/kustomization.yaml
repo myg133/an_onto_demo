@@ -18,7 +18,7 @@ resources:
 images:
   - name: ontok
     newName: aigccontainer.azurecr.cn/an_onto/ontok
-    newTag: 0.1.8
+    newTag: 0.2.0
 
 replicas:
   - { name: ontok-query, count: 1 }
