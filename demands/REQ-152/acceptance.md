@@ -88,3 +88,76 @@ grep -riE 'X-TC-|X-Amz-|X-Aliyun|tencent|aws|aliyun' \
 - **G** 变异：①把 `get` 的配方字段删掉 ⇒ AC-004 红 ②把厂商 header 写回 `net.rs`（若还在产品里）⇒ AC-002 红
   ③把执行器塞回产品二进制 ⇒ AC-006 红
 - **S** AC 也会错，发现直接说
+
+
+---
+
+## 二 · 阶段 2 的 AC（契约：`get` 给配方）
+
+### AC-101 · `get` 完整配方（contract v2）
+
+对 14 个 entity：`get` 必须能给出下列键（映射里有的都要给）：
+
+| 键 | 内容 |
+| --- | --- |
+| `source` | `base_url` · `auth_mode` |
+| `operation` | `method` · `path` · `headers{}` · `vars{}` |
+| `request` | `template` · `required` · `paging` |
+| `iterator` | 列表在响应里的路径 |
+| `fields` | 本体属性 → 响应字段 |
+| `auth` | `credential_env`（**只有变量名**）· `signed_headers` · `timestamp` · `scope` |
+
+判据：贴 1 个类的 `get` 原文 + 14 个类的键齐全度表。
+
+### AC-102 · `get` 里**零凭据值**
+
+- `grep -E 'AKID|SECRET_KEY\s*[:=]\s*"[^"]'` 在响应里 = 0
+- 只允许出现**环境变量名**（如 `TENCENT_SECRET_ID`）
+- 判据：一次响应全文 + grep
+
+### AC-103 · 契约 v1 向后兼容（R2）
+
+| 映射 | `get` |
+| --- | --- |
+| `contract_version: 1` / 不写 | **旧 4 键，一个不多** |
+| `contract_version: 2` | 完整配方 |
+
+- 判据：同一份 AM 改一行版本号，两次 `get` 原文对比
+
+### AC-104 · 已签 AM（旧形状）照常工作
+
+- `am-tencent.json` **一个字不改**，serve 能起、`get` 走 v1 分支
+- 判据：起服务 + 一次查询
+
+### AC-105 · `operation` 泛化（无厂商分支）
+
+- 映射里写任意 header 名（例如 `X-Amz-Target`），`get.operation.headers` **原样透出**
+- `grep -riE 'X-TC-|X-Amz-|tencent|aws' src/query/ src/access/{mod,validate,publish,path}.rs` = **0**（映射文件里的不算）
+- 判据：造一份假厂商映射跑一次 + grep
+
+### AC-106 · `auth` 只透传，不推断
+
+- 映射 `sources[].auth` 不给 `signed_headers` ⇒ `get.auth` **没有这个键**（⛔ 不许按 `mode` 猜一个默认值）
+- 判据：删掉该字段再跑一次
+
+### AC-107 · `get` 体积上限
+
+- 单类 `get` ≤ **12 KB**；超了要报（说明 `fields` 过肥）
+- 判据：14 个类的体积表
+
+### AC-108 · 服务面零回归（R1）
+
+- 8 case（health / catalog / describe / pending / rows 400 / 503 / TTL 两视图）与 `8efd323` **逐字节相同**
+- 判据：sha 表
+
+### AC-109 · 产品 bin 仍不含执行器（R4）
+
+- `strings target/release/ontok | grep -c 'X-TC-Action'` = **0**
+- `ls target/release | grep -c '^ontok'` = **2**（`ontok` / `ontok-builder`）
+- 判据：两条命令
+
+### AC-110 · `auth` 可实现规范
+
+- worktree 里 `docs/AUTH-SPEC.md` 存在，含：算法 / 规范化规则 / 时间戳 / scope / 签名字符串结构 / 自测向量
+- **人判**：QA 只读这份文档（不看源码）能独立实现并通过同一个向量
+- 判据：QA 的独立实现 + 向量比对
