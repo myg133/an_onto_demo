@@ -5,6 +5,10 @@
    ══════════════════════════════════════════════════════════════ */
 
 :root {
+  /* ⭐ 让浏览器把**原生控件**（select 弹出层、滚动条、自动填充背景）也画成深色。
+     没有它，<select> 的下拉列表会是一块白 —— background 管不到弹出层。 */
+  color-scheme: dark;
+
   --bg:        #070a10;
   --bg-2:      #0b0f17;
   --panel:     rgba(255, 255, 255, .028);
@@ -126,6 +130,17 @@ body::before {
 .sel:focus, .inp:focus, .code:focus { border-color: rgba(110,200,255,.5); background: rgba(255,255,255,.05); }
 .inp::placeholder { color: var(--fg-3); }
 .sel.slim { height: 24px; font-size: 12px; }
+/* 下拉**弹出层**：由系统渲染，只能靠 option 自身的背景/前景兜底 */
+.sel option {
+  background: #0b0f17;
+  color: var(--fg);
+}
+.sel option:checked,
+.sel option:hover {
+  background: #16202e;
+  color: #fff;
+}
+.sel:disabled { opacity: .5; cursor: not-allowed; }
 .token { width: 240px; font: 12px/1 var(--mono); }
 
 .btn {
