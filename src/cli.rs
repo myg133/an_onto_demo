@@ -772,7 +772,7 @@ pub enum AccessCmd {
     ///
     /// 【可以照抄的一整条】
     ///
-    /// ontok access validate --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    /// ontok-builder access validate --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
     ///
     /// **四条有牙的检查**（每条都能红，AC-002）：
     ///
@@ -810,12 +810,12 @@ pub enum AccessCmd {
     ///
     /// 【可以照抄的一整条（离线，⛔ 不发网络请求）】
     ///
-    /// ontok access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    /// ontok-builder access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
     /// --entity cvm_instance --filter '{"status":"STOPPED"}' --limit 50 --dry-run-fixture
     ///
     /// 【可以照抄的一整条（真调用，必须显式加 --allow-network）】
     ///
-    /// ontok access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
+    /// ontok-builder access fetch --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl
     /// --entity cvm_instance --filter '{"zone":"ap-guangzhou-2"}' --limit 50 --allow-network
     ///
     /// 两条通路**互斥**，且都**必须显式选一条**：两个都不给 ⇒ `DRY_RUN_REQUIRED`，
@@ -958,7 +958,7 @@ pub enum AccessCmd {
     ///
     /// 【可以照抄的一整条】
     ///
-    /// ontok access publish --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl --out .local/access/access.jsonld
+    /// ontok-builder access publish --mapping fixtures/access-cvm.json --ontology fixtures/access-ontology.ttl --out .local/access/access.jsonld
     ///
     /// 发布物只有 `@context` + `@graph`，能被 SPARQL 直接查，例如
     /// 「哪些类支持按 zone 过滤」—— 查询示例见 `fixtures/access-queries.rq`。
@@ -3040,7 +3040,7 @@ fn write_local(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
 // 它既不是客户视图、也不该被客户词汇闸改名。故登记为**内部轨**。
 // ══════════════════════════════════════════════════════════════
 
-/// `ontok access <子命令>` 的分派（**零库**；只有 `fetch --allow-network` 会出网）。
+/// `ontok-builder access <子命令>` 的分派（**零库**；只有 `fetch --allow-network` 会出网）。
 fn access_cmd(cmd: AccessCmd) -> anyhow::Result<()> {
     match cmd {
         AccessCmd::Validate { mapping, ontology } => access_validate(&mapping, &ontology),
@@ -3108,7 +3108,7 @@ fn access_mapping_dir(mapping: &std::path::Path) -> PathBuf {
     mapping.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `ontok access validate` —— 四条有牙检查 + 结构与本体自洽（AC-002）。
+/// `ontok-builder access validate` —— 四条有牙检查 + 结构与本体自洽（AC-002）。
 fn access_validate(mapping: &std::path::Path, ontology: &std::path::Path) -> anyhow::Result<()> {
     let (parsed, onto) = load_access_inputs(mapping, ontology)?;
     let dir = access_mapping_dir(mapping);
@@ -3146,7 +3146,7 @@ fn access_validate(mapping: &std::path::Path, ontology: &std::path::Path) -> any
     Ok(())
 }
 
-/// `ontok access fetch` —— 两条互斥通路：
+/// `ontok-builder access fetch` —— 两条互斥通路：
 /// `--dry-run-fixture`（读夹具，⛔ 不出网，阶段 0 行为逐字节不变）
 /// 与 `--allow-network`（真调用：TC3 签名 + 凭据 + 限流退避）。
 ///
@@ -3344,7 +3344,7 @@ fn access_fetch(
     Ok(())
 }
 
-/// `ontok access publish` —— JSON → JSON-LD（RML 风格，可被 SPARQL 查）。
+/// `ontok-builder access publish` —— JSON → JSON-LD（RML 风格，可被 SPARQL 查）。
 fn access_publish(
     mapping: &std::path::Path,
     ontology: &std::path::Path,
@@ -6233,6 +6233,51 @@ pub fn snapshot_to_view(
                 semantic: l.semantic.clone(),
             })
             .collect(),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 判据
+// ══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// ⭐ REQ-154 · `--help` 里的**命令行示例**必须写 `ontok-builder access …`。
+    ///
+    /// 背景：REQ-152 之后 `access` 在**构建面**（`ontok-builder`）上；旧写法
+    /// （`ontok` 后面直接跟 `access`）会得到 `unrecognized subcommand`。
+    /// 帮助正文是接入方照抄的那份，写错了就是一条死路。
+    ///
+    /// 判据读的是**clap 真正渲染出来的 `--help`**（`render_long_help`），⛔ 不是扫源码文本 ——
+    /// 只有解析器真收到的文案才会显示给用户。
+    ///
+    /// 变异自证：把任何一处示例改回旧 bin 名 ⇒ 本测试红；
+    /// 把示例改成 `ontok-builder access …` 的**别的拼法**（如 `ontok_builder`）⇒ 红。
+    #[test]
+    fn access_help_examples_use_the_builder_bin_name() {
+        let cli = Cli::command();
+        let access = cli
+            .find_subcommand("access")
+            .expect("`access` 子命令必须还在（REQ-144 的三条子命令）");
+        // 旧 bin 名拼出来比（源码里不留这个连续字面量：本仓要能 `grep -rn` 出一个 0）。
+        let stale = ["ontok", "access"].join(" ");
+        for sub in ["validate", "fetch", "publish"] {
+            let cmd = access
+                .find_subcommand(sub)
+                .unwrap_or_else(|| panic!("`access` 下缺 `{sub}` 子命令"));
+            let help = cmd.clone().render_long_help().to_string();
+            assert!(
+                !help.contains(&stale),
+                "`access {sub} --help` 里还有旧 bin 名（{stale}）—— REQ-152 之后它在 `ontok-builder` 上：\n{help}"
+            );
+            assert!(
+                help.contains(&format!("ontok-builder access {sub}")),
+                "`access {sub} --help` 必须给一条能照抄的示例（`ontok-builder access {sub} …`）：\n{help}"
+            );
+        }
     }
 }
 

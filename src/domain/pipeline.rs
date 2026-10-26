@@ -384,19 +384,19 @@ pub enum OutletId {
     /// （`&'static str`）。之所以仍要登记：它是一条**匿名可达**的外送通道
     /// （与 `/api/health` 同口径免 token），「不登记 = 没人管」正是 REQ-107 收口的洞。
     I28,
-    /// ⭐ REQ-144 · `ontok access validate` 的 **JSON 体检报告** → stdout。
+    /// ⭐ REQ-144 · `ontok-builder access validate` 的 **JSON 体检报告** → stdout。
     ///
     /// 内部轨：正文是**映射契约的自洽体检**（类 / IRI 模板 / 能力面 / fixture 覆盖率），
     /// 属 FDE 面的数据 —— 客户视图零读取它，也⛔ 不过客户词汇闸
     /// （与 I11 R2RML / I13 查询回执同一条口径）。
     I29,
-    /// ⭐ REQ-144 · `ontok access fetch --dry-run-fixture` 的 **JSON-LD** → stdout。
+    /// ⭐ REQ-144 · `ontok-builder access fetch --dry-run-fixture` 的 **JSON-LD** → stdout。
     ///
     /// 内部轨：它是**按契约从夹具取回的业务数据**（`@context` / `@graph` / `meta`），
     /// 与 `query serve` 的 JSON-LD 同形状但**另一条通路**（API 源而非库源）。
     /// 隔离靠「只读 + 只读夹具 + 扫描预算」，不是词汇闸 —— 与 I13/I14 同一条口径。
     I30,
-    /// ⭐ REQ-144 · `ontok access publish` 的 **JSON-LD 发布物** → `--out` 文件。
+    /// ⭐ REQ-144 · `ontok-builder access publish` 的 **JSON-LD 发布物** → `--out` 文件。
     ///
     /// 内部轨：产物是**映射本身**（RML 风格：端点 / 迭代器 / 字段路径 / 能力声明），
     /// 会随契约分发给客户侧执行器。⛔ 其中不含任何凭据值（只有环境变量名）。
@@ -1827,7 +1827,7 @@ pub const OUTLETS: &[Outlet] = &[
         call_site: "\"{report_json}\"",
         spec: spec_of(OutletId::I29),
         enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-144）：`ontok access validate` 的 JSON 体检报告 → stdout。\
+        exemption_reason: "内部（REQ-144）：`ontok-builder access validate` 的 JSON 体检报告 → stdout。\
          正文是**映射契约的自洽体检**（类 / IRI 模板对账 / 能力面重叠 / fixture 字段覆盖率），\
          属 FDE 面数据 —— 客户视图零读取它，也不过客户发布闸（与 I11 的 R2RML 同一条口径）。\
          ⛔ 不含凭据值：契约里只写环境变量名。",
@@ -1839,7 +1839,7 @@ pub const OUTLETS: &[Outlet] = &[
         call_site: "\"{jsonld}\"",
         spec: spec_of(OutletId::I30),
         enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-144）：`ontok access fetch --dry-run-fixture` 的 JSON-LD → stdout\
+        exemption_reason: "内部（REQ-144）：`ontok-builder access fetch --dry-run-fixture` 的 JSON-LD → stdout\
          （`@context` / `@graph` / `summary` / `meta`，与 `query serve` 同形状但**另一条通路**：\
          API 源而非库源）。阶段 0 只读**本地夹具**、⛔ 不发网络请求；\
          隔离靠「只读 + 夹具 + `max_scan_rows` 预算」，不是词汇闸 —— 与 I13/I14 同一条口径。",
@@ -1851,7 +1851,7 @@ pub const OUTLETS: &[Outlet] = &[
         call_site: "write_local(out, doc.as_bytes())",
         spec: spec_of(OutletId::I31),
         enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-144）：`ontok access publish` 的 JSON-LD 发布物 → `--out` 文件。\
+        exemption_reason: "内部（REQ-144）：`ontok-builder access publish` 的 JSON-LD 发布物 → `--out` 文件。\
          产物是**映射本身**（RML 风格：`rml:iterator` / `rr:template` / `rml:reference` / `rr:class`\
          + `ontok:` 扩展），会随契约分发给客户侧执行器。⛔ 其中只有凭据的**环境变量名**，没有值；\
          客户视图零读取它。",

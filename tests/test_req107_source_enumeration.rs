@@ -1829,7 +1829,7 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "concept_suggest_ai",
         "子命令 handler（`concept suggest --ai`：AI 语义分组；只读快照、只写声明文件）",
     ),
-    // ⭐ REQ-144 · `ontok access`（API 源的映射契约）：
+    // ⭐ REQ-144 · `ontok-builder access`（API 源的映射契约）：
     // 三条子命令**不连产品库、不发网络请求**（阶段 0），写出口登记在 OUTLETS 的 I29/I30/I31。
     (
         "src/cli.rs",

@@ -1,4 +1,4 @@
-//! `ontok access fetch --dry-run-fixture` —— 用 fixture 跑**完整取数流程**（⛔ 不发任何网络请求）。
+//! `ontok-builder access fetch --dry-run-fixture` —— 用 fixture 跑**完整取数流程**（⛔ 不发任何网络请求）。
 //!
 //! # 一次取数被拆成六步（每一步都能单独解释、单独判）
 //!
@@ -265,7 +265,7 @@ pub fn dry_run(
         return Err(AccessError::new(
             CODE_ITERATOR_EMPTY,
             format!(
-                "`iterator` = `{}` 在 fixture 里选不出任何节点（先跑 `ontok access validate`）。",
+                "`iterator` = `{}` 在 fixture 里选不出任何节点（先跑 `ontok-builder access validate`）。",
                 entity.iterator
             ),
         ));

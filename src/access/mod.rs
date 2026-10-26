@@ -3,7 +3,7 @@
 //! ```text
 //! 本体（TTL）            ← 世界由什么构成（类 / 属性 / 关系）         ← REQ-110 / 119
 //! access mapping（本模块）← 每个类：哪个 API、哪些参数、响应哪一段、能不能过滤
-//! 执行器（`ontok access`）← 按映射取数，返回与 `query serve` 同形状的 JSON-LD
+//! 执行器（`ontok-builder access`）← 按映射取数，返回与 `query serve` 同形状的 JSON-LD
 //! ```
 //!
 //! 依据：`BA/design/2026-10-25-access-mapping-contract.md`（草案 v1）+

@@ -1,4 +1,4 @@
-//! `ontok access publish` —— 作者格式 JSON → **发布态 JSON-LD**（RML 风格）。
+//! `ontok-builder access publish` —— 作者格式 JSON → **发布态 JSON-LD**（RML 风格）。
 //!
 //! ```text
 //! access.json      ← 人写 / 人审 / 好 diff（作者格式）

@@ -252,6 +252,10 @@ impl ApiError {
     ///
     /// hint 必须给出**两条**可走的路：① 换 `format=jsonld` 拿 `@pending` + `get`；
     /// ② 按 `get.class` / `get.filter` 去取，或绕开这些类重写查询。
+    ///
+    /// ⭐ REQ-154 · ① 的括注改成「**这份映射能给什么就给什么**」的口径：v1 映射的 `get`
+    /// 只有 4 键、v2 才多出 6 个配方段。⛔ 不写死「10 个键」—— 那在 v1 部署上会自相矛盾
+    /// （同一句话里既说 10 个键、实际只给 4 个）。
     pub fn not_db_source(classes: &[String]) -> Self {
         let named = if classes.is_empty() {
             "这次查询点名的类".to_string()
@@ -266,7 +270,9 @@ impl ApiError {
                  行回执（`format=rows`）无法表达「少了一块」。"
             ),
             "① 改要 **JSON-LD**：`?format=jsonld` —— 会拿到 `@graph: []` + `@pending[]`\
-             （每条带 `get.class` / `get.filter` / `get.pushdown` / `get.ref`），\n  \
+             （每条带 `get` 取数配方：`class` / `filter` / `pushdown` / `ref`；v2 映射还带 \
+             `source` / `operation` / `request` / `iterator` / `fields` / `auth` —— \
+             声明了什么就给什么，缺的项 = 作者没声明（⛔ 不是默认值）），\n  \
              ② 再按 `get` 去取（凭据由你管）：`filter.ids` 里就是平台从查询里认出来的实例标识，\n  \
              ③ 平台**不做**跨源 join：需要库源 + API 源一起答时，拆成两段查（先库源、再按 `get` 取），\n  \
              ④ 想知道哪些类要这么走：`GET /api/catalog` / `GET /api/describe` 看 `access.kind`\
@@ -602,5 +608,65 @@ mod tests {
         let m = ApiError::tenant_mismatch("C0001");
         assert!(m.hint.contains("租户由凭证决定"), "{}", m.hint);
         assert_eq!(m.body()["code"], "TENANT_MISMATCH");
+    }
+
+    /// ⭐ REQ-154 · `NOT_DB_SOURCE` 的 hint 按「**这份映射能给什么就给什么**」写，
+    /// ⛔ 不写死键数。
+    ///
+    /// 为什么这条判据必须有：旧文案只列 4 个键，v2 映射实际给 10 个；而若改成写死「10 个键」，
+    /// v1 部署上又会自相矛盾（同一句话里说 10 个、实际 4 个）。所以判据是**两条方向相反**的：
+    /// ① 4 个 v1 键 + 6 个 v2 配方段都得点到（「列全」）；
+    /// ② 任何「N 个键」的绝对数量表述都不许出现（「不自相矛盾」）。
+    #[test]
+    fn not_db_source_hint_lists_what_the_mapping_can_give_without_hardcoding_a_count() {
+        let e = ApiError::not_db_source(&["cvm_instance".to_string()]);
+        assert_eq!(e.code, "NOT_DB_SOURCE");
+        assert_eq!(e.status, StatusCode::BAD_REQUEST);
+
+        // ① 列全：v1 的 4 键 + v2 的 6 段（缺任何一段，接入方就不知道 v2 能多给什么）。
+        for key in [
+            "class", "filter", "pushdown", "ref", "source", "operation", "request", "iterator",
+            "fields", "auth",
+        ] {
+            assert!(
+                e.hint.contains(&format!("`{key}`")),
+                "hint 没点到 `{key}`（这份映射能给的键要列全）：{}",
+                e.hint
+            );
+        }
+        assert!(
+            e.hint.contains("v2") && e.hint.contains("声明了什么就给什么"),
+            "hint 必须说清「按映射声明给」而不是「固定给 N 个」：{}",
+            e.hint
+        );
+        assert!(
+            e.hint.contains("不是默认值"),
+            "缺的项要说明「作者没声明」而不是「用默认值」：{}",
+            e.hint
+        );
+
+        // ② 不算键数：任何「10 个键 / 4 键 / N 键」的写法都会随版本自相矛盾。
+        for bad in ["10 个键", "10 键", "4 个键", "四个键", "4 键"] {
+            assert!(
+                !e.hint.contains(bad),
+                "hint 里写死了键数（{bad}）—— 换个 contract_version 就自相矛盾：{}",
+                e.hint
+            );
+        }
+
+        // ③ 保留「⛔ 重试无效」与两条可走的路（这三点是这条 400 的既有契约，⛔ 不许丢）。
+        assert!(e.hint.contains("⛔ 重试无效"), "{}", e.hint);
+        assert!(
+            e.hint.contains("?format=jsonld") && e.hint.contains("拆成两段"),
+            "两条可走的路（换 JSON-LD / 拆两段）不许丢：{}",
+            e.hint
+        );
+        // 屏幕 / JSON 双用途：别为了「列全」把一条 400 的 hint 写成一篇文档。
+        assert!(
+            e.hint.chars().count() <= 900,
+            "hint 长度 {} 超预算（屏幕与 JSON 双用途）：{}",
+            e.hint.chars().count(),
+            e.hint
+        );
     }
 }
