@@ -65,6 +65,11 @@
 //! | 只走**跨源边**（`?o :order__customers ?c`，没有点名 api 类） | [`SourceCheck::Api`]（`cross_source_edge`） | jsonld ⇒ `@pending`（**不带** `get`，但带 `ref` + `local_hint` + 三步 `hint`）；rows ⇒ `NOT_DB_SOURCE` |
 //! | 跨源边**还被要求往下走**（点名的 api 类 / 它的属性） | [`SourceCheck::CrossSource`] | 两种格式都 ⇒ **`CROSS_SOURCE_UNSUPPORTED`** |
 //!
+//! ⭐ REQ-151 · `Api` 还带一个 `needs_db`（**混合查询** = 同时点了库类 / 走了跨源边）。
+//! 普通模式不看它（REQ-145 的「混合 ⇒ 整体 pending」不变）；**本体服务模式**
+//! （`--ontology-only`）只有纯 api（`needs_db=false`）才给 `@pending`，混合 ⇒
+//! 503 `NO_DATA_SOURCE`（那个部署确实没有库，给一半指引会误导调用方以为数据齐了）。
+//!
 //! 「不带 `get`」的依据是契约规则 4：跨源边给了能力也**查不了**（平台不做跨源 join），
 //! 给了比不给更糟 —— 所以只说明「这里少了一块、要拆两段」，不给一条走不通的指令。
 //!
@@ -155,6 +160,15 @@ pub struct AccessMapping {
     by_class: BTreeMap<String, usize>,
     /// TTL 用的 api 类集合（`bind` 之后才有值：人读名要从本体取）。
     api: ApiClasses,
+    /// ⭐ REQ-151 · 本体里**不属于 api 源**的类本地名（`bind` 时从 model 一次算好）。
+    ///
+    /// 用途只有一个：判一条「碰到了 api 类」的查询**是不是混合查询**（还点了库类）。
+    /// 这个事实在本体侧（`model.entity_types`）而不是映射文件里 —— 映射只声明 api 类，
+    /// 「其余类默认在库」是它与本体对账后**推出来**的，⛔ 不要求映射再列一遍库类。
+    ///
+    /// `normal` 模式下它**不参与**任何判定（`needs_db` 只在本体模式的闸门里看，见
+    /// [`SourceCheck::needs_db`]）—— 于是 REQ-145 的既有行为逐字节不变（R1）。
+    db_locals: BTreeSet<String>,
     /// 跨源边的谓词本地名 → 边。**前向与反向都登记**（`order__customers` 与
     /// `customers__order` 指的是同一条边）—— 只登记前向的话，用反向谓词写的跨源
     /// 遍历会**漏判**，然后被当成库源查询真的去跑 SQL。
@@ -300,6 +314,7 @@ impl AccessMapping {
             entities,
             by_class,
             api: ApiClasses::default(),
+            db_locals: BTreeSet::new(),
             cross_edges: BTreeMap::new(),
         })
     }
@@ -344,6 +359,20 @@ impl AccessMapping {
             }
         }
         self.api = ApiClasses::new(self.entities.iter().map(|e| e.class.clone()), names);
+
+        // ⭐ REQ-151 · 「其余类默认在库」= 本体里存在、但**不在**这份 api 映射里的类。
+        // 存本地名（SPARQL 里写出来的那个），判定时只与谓词 / 类词法比较，⛔ 不做字符串匹配。
+        let api_locals: BTreeSet<String> = self
+            .entities
+            .iter()
+            .map(|e| local_model(&e.class))
+            .collect();
+        self.db_locals = model
+            .entity_types
+            .iter()
+            .map(|e| local_model(&e.key))
+            .filter(|local| !api_locals.contains(local))
+            .collect();
 
         // 跨源边：本体里**真实存在**的边，两端一条在 api、一条在库 ⇒ 跨源。
         let mut links: Vec<&crate::domain::model_view::ModelLinkView> =
@@ -446,6 +475,9 @@ impl AccessMapping {
         ontology_iri: &str,
         r2rml: Option<&R2rmlMapping>,
     ) -> SourceCheck {
+        // ⭐ REQ-151 · 这条查询**还点了库类**吗（混合查询的判据；只给本体模式的闸门用）。
+        // 依据是本体的类集合（`db_locals`）+ 写出来的三元组模式，⛔ 不做字符串拼接后匹配。
+        let mut db_hits = false;
         let mut api_hits: BTreeSet<String> = BTreeSet::new(); // 类 key
         let mut cross_hits: Vec<CrossEdge> = Vec::new(); // 走过的跨源边
 
@@ -457,6 +489,8 @@ impl AccessMapping {
                     if let Some(local) = iri.strip_prefix(&class_iri_prefix) {
                         if let Some(key) = self.key_of_local(local) {
                             api_hits.insert(key.to_string());
+                        } else if self.db_locals.contains(local) {
+                            db_hits = true;
                         }
                     }
                 }
@@ -470,10 +504,12 @@ impl AccessMapping {
                 // 这条边的一端是 api —— 但它是否「被要求往下走」要看有没有点名（下面判）。
                 continue;
             }
-            // 普通属性谓词：`<类>__<列>`，类在 api ⇒ 点名了 api 类。
+            // 普通属性谓词：`<类>__<列>`，类在 api ⇒ 点名了 api 类；在库 ⇒ 混合。
             if let Some((owner, _rest)) = pred_local.split_once("__") {
                 if let Some(key) = self.key_of_local(owner) {
                     api_hits.insert(key.to_string());
+                } else if self.db_locals.contains(owner) {
+                    db_hits = true;
                 }
             }
         }
@@ -526,6 +562,8 @@ impl AccessMapping {
             });
             return SourceCheck::Api {
                 pending: pendings,
+                // 跨源边的一端在库 ⇒ 这条查询**也要库**（哪怕本模式不执行 SQL）。
+                needs_db: db_hits || !cross_hits.is_empty(),
             };
         }
         SourceCheck::DbOnly
@@ -675,7 +713,16 @@ pub enum SourceCheck {
     /// 只碰库源 ⇒ 正常执行。
     DbOnly,
     /// 碰到 api 源 ⇒ 不执行 SQL，改为 pending（jsonld）/ 报错（rows）。
-    Api { pending: Vec<ApiPending> },
+    Api {
+        pending: Vec<ApiPending>,
+        /// ⭐ REQ-151 · 这条查询**除了 api 源之外还要库**（混合：点了库类 / 走了跨源边）。
+        ///
+        /// 普通模式**不看**它（那里的混合查询本来就走 pending，`@graph` 恒空）；
+        /// 本体模式只在**纯 api**（`false`）时给 `@pending`，`true` ⇒ 503 `NO_DATA_SOURCE`。
+        /// 为什么以「字段」而不是「另一个枚举分支」表达：它和 pending 是**同一个判定**
+        /// 的两个事实，分成两个分支会让 `pending()` 的调用点各判一次。
+        needs_db: bool,
+    },
     /// 需要跨源遍历 ⇒ 两种格式都报 `CROSS_SOURCE_UNSUPPORTED`。
     CrossSource {
         predicate: String,
@@ -687,6 +734,16 @@ pub enum SourceCheck {
 impl SourceCheck {
     pub fn is_db_only(&self) -> bool {
         matches!(self, SourceCheck::DbOnly)
+    }
+
+    /// ⭐ REQ-151 · 这条查询要拿到完整答案，是否需要**库源**。
+    ///
+    /// `DbOnly` / `CrossSource` 恒 `true`；`Api` 看混合判定。
+    pub fn needs_db(&self) -> bool {
+        match self {
+            SourceCheck::DbOnly | SourceCheck::CrossSource { .. } => true,
+            SourceCheck::Api { needs_db, .. } => *needs_db,
+        }
     }
 
     /// 这次查询要不要报 `CROSS_SOURCE_UNSUPPORTED`。
@@ -701,7 +758,7 @@ impl SourceCheck {
 
     pub fn pending(&self) -> &[ApiPending] {
         match self {
-            SourceCheck::Api { pending } => pending,
+            SourceCheck::Api { pending, .. } => pending,
             _ => &[],
         }
     }
@@ -995,5 +1052,50 @@ mod tests {
         let (predicate, from, to) = c.cross_source().expect("应当报跨源");
         assert_eq!(predicate, "order__customers");
         assert_eq!((from, to), ("order", "customers"));
+    }
+
+    // ── ⭐ REQ-151 · 「混合查询」判定（只给本体模式的闸门用）────────
+
+    /// 纯 api 查询：`needs_db = false` ⇒ 本体模式可以给 `@pending`。
+    #[test]
+    fn a_pure_api_query_does_not_need_the_db() {
+        let m = mapping();
+        let c = check_of(&m, "SELECT ?c WHERE { ?c a :customers }");
+        assert_eq!(c.pending().len(), 1, "{c:?}");
+        assert!(!c.needs_db(), "只有 api 类 ⇒ 不需要库：{c:?}");
+    }
+
+    /// 混合查询（同时点库类与 api 类）：仍是 `Api`（普通模式行为不变），但 `needs_db = true`。
+    ///
+    /// 变异：让 `db_locals` 恒空 ⇒ 本测试红（本体模式会把混合查询当成纯 api，返回 200）。
+    #[test]
+    fn a_mixed_query_is_api_but_needs_the_db() {
+        let m = mapping();
+        let c = check_of(
+            &m,
+            "SELECT ?o ?c WHERE { ?o a :order . ?c a :customers }",
+        );
+        assert_eq!(c.pending().len(), 1, "{c:?}");
+        assert!(c.needs_db(), "点了库类 ⇒ 混合查询：{c:?}");
+    }
+
+    /// 只走跨源边（没有点名库类）：一端在库 ⇒ 也要库。
+    #[test]
+    fn a_cross_source_edge_needs_the_db() {
+        let m = mapping();
+        let c = check_of(&m, "SELECT ?o ?c WHERE { ?o :order__customers ?c }");
+        assert_eq!(c.pending().len(), 1, "{c:?}");
+        assert!(c.needs_db(), "跨源边的一端在库：{c:?}");
+    }
+
+    /// 库类属性写成 `<类>__<列>` 也要被认成「点了库类」。
+    #[test]
+    fn a_db_class_property_counts_as_touching_the_db() {
+        let m = mapping();
+        let c = check_of(
+            &m,
+            "SELECT ?c ?n WHERE { ?c a :customers . ?c :customers__customer_name ?n . ?o :order__id ?x }",
+        );
+        assert!(c.needs_db(), "{c:?}");
     }
 }

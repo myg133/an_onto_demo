@@ -723,11 +723,15 @@ async fn dispatch(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
             let agreed = p::negotiate_protocol_version(requested);
             // ⭐ REQ-136 · 本体服务模式的 instructions **要说清「没有数据源」**：
             // Agent 只看这一段就决定要不要调 sparql_query；不说 = 它一定会调一次、失败一次。
+            // ⭐ REQ-151 · 也不能再说「恒失败」：纯 api 类（有 access 映射）会返回 @pending。
+            // 说清**哪种**查询会失败，Agent 才不会把「有指引」当成「服务坏了」。
             let instructions = if svc.mode.is_ontology_only() {
                 format!(
                     "{INSTRUCTIONS}\n\
-                     ⚠️ 本部署是**本体服务模式**（无业务库）：catalog / describe / resources 正常，\
-                     sparql_query 与 sample 恒返回 NO_DATA_SOURCE（503 语义，重试无效）。"
+                     ⚠️ 本部署是**本体服务模式**（无业务库）：catalog / describe / resources 正常；\
+                     需要库的 sparql_query 与 sample 返回 NO_DATA_SOURCE（503 语义，重试无效）；\
+                     只涉及 api 类（catalog 的 access.kind=api）的查询用默认 format=jsonld 时，\
+                     会得到 `@graph: []` + `@pending` 取数指引（format=rows 时报 NOT_DB_SOURCE）。"
                 )
             } else {
                 INSTRUCTIONS.to_string()
@@ -1267,8 +1271,71 @@ mod tests {
         }))
     }
 
-    async fn call(app: Router, req: axum::http::Request<Body>) -> (StatusCode, HeaderMap, String) {
-        let res = app.oneshot(req).await.expect("oneshot");
+    /// ⭐ REQ-151 · **本体模式 + access 映射**的夹具，且**故意塞一个连不上的源库池**。
+    ///
+    /// 为什么 `source: Some(坏池)`：生产上本体模式是 `None`（`serve` 根本不读 URL），
+    /// 这里塞一个池是为了让「任何代码路径都拿不到池」变成**可测**的事实 ——
+    /// 池的 `acquire_timeout` 只有 100 ms，真去连会立刻变成 500/TIMEOUT，
+    /// 于是「api 类仍是 200 @pending / 库类仍是 503」这组断言本身就证明零连接尝试。
+    fn test_service_ontology_only_with_access(audit: AuditSink) -> Arc<QueryService> {
+        let (schema, _mapping, model) = crate::query::test_fixture();
+        let _ = schema;
+        let policy = crate::sparql::policy::QueryPolicy::parse(
+            r#"{"version":"1.0.0","tenantSubject":"customers","tenantIdColumn":"id",
+                "perTable":{"orders":{"tenantColumn":"customer_id"}},"publicDimensions":[]}"#,
+        )
+        .expect("声明");
+        let ontology_iri = {
+            let opts = crate::domain::ttl::TtlOptions::new("demo", 2);
+            opts.ontology_iri()
+        };
+        let tokens = TokenTable::parse_for_mode(
+            &format!(
+                r#"{{"version":"1.0.0","tokens":[
+                {{"label":"a","token":"{TOKEN_A}","max_rows":5,"max_concurrency":1}}
+            ]}}"#
+            ),
+            crate::query::ServiceMode::OntologyOnly,
+        )
+        .expect("token 表");
+        // `customers` 是 api 类、`orders` 是库类 ⇒ 一句查询就能造出「纯 api / 纯库 / 混合」。
+        let access = crate::query::source_gate::AccessMapping::parse(
+            r#"{"contract_version":1,"mapping_version":3,
+                "entities":[{"id":"Customer","class":"customers",
+                             "capability":{"pushdown":["ids"]},"freshness":"realtime"}]}"#,
+        )
+        .expect("映射形状")
+        .bind(&model)
+        .expect("映射与本体对账");
+        let poisoned = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(100))
+            .connect_lazy("postgresql://nonexistent.invalid:1/x")
+            .expect("lazy pool");
+        Arc::new(QueryService::new(ServiceParts {
+            mode: crate::query::ServiceMode::OntologyOnly,
+            // ⚠️ 刻意的「不可能状态」：本体模式不该有池 —— 若代码真去拿，判据会红。
+            source: Some(poisoned),
+            facts: None,
+            // 与 `serve` 一致：本体模式不建 R2RML 映射（映射只用于库源规划）。
+            mapping: None,
+            model,
+            schema: crate::domain::ttl::SchemaTypes::default(),
+            policy,
+            ontology_iri,
+            project: "demo".into(),
+            version: 2,
+            timeout_ms: 1000,
+            sse_idle_timeout_ms: 1_000,
+            sse_max_connections: 2,
+            max_concurrent_queries: 2,
+            tokens,
+            audit,
+            ttl: crate::query::ttl::fixture(),
+            access: Some(access),
+        }))
+    }
+
+    async fn call(app: Router, req: axum::http::Request<Body>) -> (StatusCode, HeaderMap, String) {        let res = app.oneshot(req).await.expect("oneshot");
         let status = res.status();
         let headers = res.headers().clone();
         let bytes = axum::body::to_bytes(res.into_body(), 1024 * 1024)
@@ -2448,6 +2515,174 @@ mod tests {
             "⛔ 占位租户进了审计：{text}"
         );
         assert!(!text.contains(TOKEN_A), "⛔ 审计里出现了 token 明文：{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-151 · 本体模式只对「需要库」的查询 503；纯 api 类给 @pending
+    // ══════════════════════════════════════════════════════════
+
+    /// AC-001 / AC-002：本体模式 + 纯 api 类 ⇒ jsonld 200 + `@pending`；rows 400 `NOT_DB_SOURCE`。
+    ///
+    /// 夹具**故意带一个连不上的源库池**（`source: Some(坏池)`）：
+    /// 若这条路径尝试取连接，响应会是 500/TIMEOUT，而不是这里的 200/400 ——
+    /// 于是本测试同时是 **AC-006「零连接尝试」** 的判据。
+    #[tokio::test]
+    async fn req151_ontology_mode_pure_api_gets_pending_and_rows_gets_not_db_source() {
+        let svc = test_service_ontology_only_with_access(AuditSink::stdout_only());
+        // AC-006 的结构面：唯一取池入口在本模式恒 None（哪怕 source 字段被塞了池）。
+        assert!(
+            svc.source_pool().is_none(),
+            "本体模式下 source_pool 必须恒 None（否则「绝不碰源库」只靠顺序）"
+        );
+
+        let q = r#"{"query":"SELECT ?c WHERE { ?c a :customers }"}"#;
+        let (status, _, body) = call(
+            build_router(Arc::clone(&svc)),
+            post("/api/sparql?format=jsonld", Some(TOKEN_A), q),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "AC-001：纯 api 类不是 503：{body}");
+        let v: Value = serde_json::from_str(&body).expect("JSON-LD");
+        assert_eq!(v["@graph"], json!([]), "AC-001：@graph 必须空：{v}");
+        let pending = v["@pending"].as_array().expect("@pending 数组");
+        assert_eq!(pending.len(), 1, "{v}");
+        assert_eq!(pending[0]["reason"], "source_is_api", "{v}");
+        let get = &pending[0]["get"];
+        assert_eq!(get["class"], "customers", "R5：与普通模式同一份 get：{v}");
+        assert_eq!(get["pushdown"], json!(["ids"]), "{v}");
+        assert_eq!(get["ref"], "access#Customer@v3", "{v}");
+        assert!(get["filter"].is_object(), "filter 恒是对象：{v}");
+        assert_eq!(v["meta"]["complete"], false, "AC-001：{v}");
+        assert_eq!(v["meta"]["unresolved_classes"], json!(["customers"]), "{v}");
+        assert_eq!(v["meta"]["mapping_version"], 3, "{v}");
+
+        // AC-002：行回执挂不住「少了一块」⇒ 400 NOT_DB_SOURCE（⛔ 不是 503、⛔ 不是空表）。
+        let (status, _, body) = call(
+            build_router(Arc::clone(&svc)),
+            post("/api/sparql?format=rows", Some(TOKEN_A), q),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "AC-002：{body}");
+        let v: Value = serde_json::from_str(&body).expect("错误 JSON");
+        assert_eq!(v["code"], "NOT_DB_SOURCE", "{v}");
+        assert!(
+            v["hint"].as_str().is_some_and(|h| h.contains("jsonld") && h.contains("拆成两段")),
+            "AC-002：hint 必须可行动：{v}"
+        );
+        assert!(v.get("rows").is_none(), "⛔ 不许返回空表：{v}");
+    }
+
+    /// AC-003 / AC-004：本体模式下**需要库**的查询仍 503，且响应与基线**逐字节相同**。
+    ///
+    /// 变异：把混合查询也放行（`needs_db` 恒 false）⇒ 混合那条红；
+    /// 改 `ApiError::no_data_source()` 的文案 ⇒ 两条都红（R2）。
+    #[tokio::test]
+    async fn req151_ontology_mode_db_and_mixed_still_503_byte_identical() {
+        let svc = test_service_ontology_only_with_access(AuditSink::stdout_only());
+        // R2 的判据：503 正文必须还是 REQ-136 那一份（同一个构造函数）。
+        let expected = serde_json::to_string(&ApiError::no_data_source().body()).expect("JSON");
+        for (label, query) in [
+            ("AC-003 纯库类", r#"{"query":"SELECT ?o WHERE { ?o a :orders }"}"#),
+            (
+                "AC-004 混合（库 + api）",
+                r#"{"query":"SELECT ?c ?o WHERE { ?c a :customers . ?o a :orders }"}"#,
+            ),
+        ] {
+            let (status, _, body) = call(
+                build_router(Arc::clone(&svc)),
+                post("/api/sparql?format=jsonld", Some(TOKEN_A), query),
+            )
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{label}：{body}");
+            assert_eq!(body, expected, "{label}：码与文案必须与基线逐字节相同（R2）");
+        }
+    }
+
+    /// AC-005 / AC-007：`sample` 仍 503（MCP 信封 200 + `isError`）；审计三行 = 客户端实收。
+    #[tokio::test]
+    async fn req151_ontology_mode_sample_still_503_and_audit_codes_match() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontok-req151-audit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("audit.log");
+        let svc = test_service_ontology_only_with_access(
+            AuditSink::open(&path).expect("审计文件"),
+        );
+
+        // AC-001：200（半成品）⇒ 审计写 OK。
+        let (status, _, body) = call(
+            build_router(Arc::clone(&svc)),
+            post(
+                "/api/sparql?format=jsonld",
+                Some(TOKEN_A),
+                r#"{"query":"SELECT ?c WHERE { ?c a :customers }"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // AC-002：400 NOT_DB_SOURCE。
+        let (status, _, _) = call(
+            build_router(Arc::clone(&svc)),
+            post(
+                "/api/sparql?format=rows",
+                Some(TOKEN_A),
+                r#"{"query":"SELECT ?c WHERE { ?c a :customers }"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // AC-003：503 NO_DATA_SOURCE。
+        let (status, _, _) = call(
+            build_router(Arc::clone(&svc)),
+            post(
+                "/api/sparql?format=jsonld",
+                Some(TOKEN_A),
+                r#"{"query":"SELECT ?o WHERE { ?o a :orders }"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        // AC-005：sample 打 api 类 ⇒ 仍 503 语义（取样必须真连库）。
+        let line = r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"sample","arguments":{"name":":customers"}}}"#;
+        let (status, _, rpc) = call(
+            build_router(Arc::clone(&svc)),
+            post("/mcp", Some(TOKEN_A), line),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        let v: Value = serde_json::from_str(&rpc).expect("JSON-RPC");
+        assert_eq!(v["result"]["isError"], true, "{v}");
+        assert_eq!(
+            v["result"]["structuredContent"]["code"], "NO_DATA_SOURCE",
+            "AC-005：{v}"
+        );
+
+        // AC-007：四条审计，`code` 必须是客户端**实际收到**的那个（R4）。
+        let text = std::fs::read_to_string(&path).expect("读审计");
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 4, "四次调用四行：\n{text}");
+        let expect = [
+            ("code=OK", true),            // jsonld 200
+            ("code=NOT_DB_SOURCE", true), // rows 400
+            ("code=NO_DATA_SOURCE", false), // 库类 503
+            ("code=NO_DATA_SOURCE", false), // sample 503 语义
+        ];
+        for (line, (code, is_pending)) in lines.iter().zip(expect) {
+            assert!(line.contains(code), "审计 code 必须是客户端实收（R4）：{line}");
+            // `pending=false` 在 `AuditRecord` 的 Display 里不打印（只有 true 才出现）。
+            assert_eq!(
+                line.contains("pending=true"),
+                is_pending,
+                "pending 标记不对：{line}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
