@@ -98,8 +98,8 @@ async fn test_import_marks_extracted_by_as_declared_not_as_introspect_provenance
     )
     .unwrap();
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
-        .args(["propose", "import", "--file"])
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
+        .args(["import", "--file"])
         .arg(&file)
         .env(
             "ONTOK_DATABASE_URL",
@@ -167,7 +167,7 @@ async fn test_concept_import_also_marks_extracted_by_as_declared() {
     let file = dir.join("declaration.json");
     std::fs::write(&file, DECL_JSON).unwrap();
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
         .args(["concept", "import", "--file"])
         .arg(&file)
         .args(["--project", &project])
@@ -223,8 +223,8 @@ async fn test_proposal_without_extracted_by_stays_null() {
     )
     .unwrap();
 
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
-        .args(["propose", "import", "--file"])
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
+        .args(["import", "--file"])
         .arg(&file)
         .env(
             "ONTOK_DATABASE_URL",

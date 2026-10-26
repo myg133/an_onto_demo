@@ -12,7 +12,7 @@
 //! 复刻与二进制之间只要有一处漂移（多一行、少一次转义、漏一个加工），
 //! 复刻件全绿而生产件是错的 —— 而 REQ-069 那个洞**恰恰**是渲染层的性质。
 //!
-//! 本文件 spawn **真进程**（`env!("CARGO_BIN_EXE_ontok")`），走
+//! 本文件 spawn **真进程**（`env!("CARGO_BIN_EXE_ontok-builder")`），走
 //! **建项目 → 建版本 → 导提案 → `review show`** 的完整命令行序列，
 //! 断言落在**真实 stdout** 上。
 //!
@@ -198,7 +198,7 @@ impl Sandbox {
         std::fs::write(&file, serde_json::to_string_pretty(&doc).unwrap())
             .expect("写提案 JSON 失败");
 
-        let imp = self.run(&["propose", "import", "--file", file.to_str().unwrap()]);
+        let imp = self.run(&["import", "--file", file.to_str().unwrap()]);
         assert!(
             imp.status.success(),
             "propose import 失败：{}\n提案 JSON：{}",
@@ -243,7 +243,7 @@ impl Sandbox {
     }
 
     fn run_once(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_ontok"))
+        Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
             .args(args)
             // ⛔ 连接串只走环境变量：子进程继承的是**这个** URL，
             // 它由 `ONTOK_TEST_DATABASE_URL` 在进程内派生，口令**不进 argv**、

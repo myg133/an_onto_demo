@@ -32,8 +32,17 @@ use ontok::domain::concept::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-const BIN: &str = env!("CARGO_BIN_EXE_ontok");
-const BIN_PROPOSE: &str = env!("CARGO_BIN_EXE_ontok-propose");
+const BIN: &str = env!("CARGO_BIN_EXE_ontok-builder");
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
+}
 
 fn crate_root() -> PathBuf {
     common::crate_root()
@@ -130,7 +139,7 @@ fn run_propose(project: &str, names: &Path, exclusions: Option<&Path>, dir: &Pat
         args.push("--exclude".into());
         args.push(ex.to_string_lossy().into_owned());
     }
-    let o = Command::new(BIN_PROPOSE)
+    let o = propose_bin()
         .args(&args)
         .current_dir(crate_root())
         .output()
@@ -145,7 +154,7 @@ fn run_propose(project: &str, names: &Path, exclusions: Option<&Path>, dir: &Pat
 
 fn run_import(url: &str, proposal: &Path) -> String {
     let o = Command::new(BIN)
-        .args(["propose", "import", "--file", proposal.to_str().unwrap()])
+        .args(["import", "--file", proposal.to_str().unwrap()])
         .env("ONTOK_DATABASE_URL", url)
         .env("NO_COLOR", "1")
         .current_dir(crate_root())

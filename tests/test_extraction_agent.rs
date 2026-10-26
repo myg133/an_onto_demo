@@ -1222,7 +1222,7 @@ async fn test_cli_registry_path_is_byte_identical_when_registry_says_the_same() 
     let run = |extra: &[&str], tag: &str| -> String {
         let out = scratch.join(format!("proposal-{tag}.json"));
         let stats = scratch.join(format!("stats-{tag}.json"));
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"));
+        let mut cmd = propose_bin();
         cmd.args([
             "--schema",
             schema_path.to_str().unwrap(),
@@ -1359,7 +1359,7 @@ fn test_cli_unknown_registry_agent_fails_closed_without_writing_output() {
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&stats);
 
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"))
+    let o = propose_bin()
         .args([
             "--schema",
             schema_path.to_str().unwrap(),
@@ -1401,7 +1401,7 @@ fn test_cli_rejects_registry_plus_explicit_agent() {
     let scratch = cli_scratch("conflict");
     let (schema_path, names_path) = cli_inputs(&scratch);
 
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"))
+    let o = propose_bin()
         .args([
             "--schema",
             schema_path.to_str().unwrap(),
@@ -1426,4 +1426,15 @@ fn test_cli_rejects_registry_plus_explicit_agent() {
     assert!(!o.status.success(), "两套溯源来源并存必须被拒");
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("不能同时给"), "报错要说清冲突，实际：{err}");
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

@@ -81,7 +81,7 @@ fn run_cli(dir: &std::path::Path, project: &str, extra: &[&str]) -> (bool, Strin
     let (sp, np) = write_inputs(dir);
     let out = dir.join("proposal.json");
     let stats = dir.join("stats.json");
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"));
+    let mut cmd = propose_bin();
     cmd.args([
         "--schema",
         &sp,
@@ -391,4 +391,15 @@ async fn test_round_one_still_declares_base_version_one() {
         Some(1),
         "第 1 轮没有基版本可比，base_version 必须仍为 1（本 REQ 不改第 1 轮行为），产物：{proposal}"
     );
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

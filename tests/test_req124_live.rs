@@ -152,7 +152,7 @@ fn json_of(bytes: &[u8]) -> Value {
 }
 
 fn cli(pool_url: &str, args: &[&str]) -> std::process::Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"));
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
     cmd.args(args);
     cmd.env("ONTOK_DATABASE_URL", pool_url);
     cmd.output().expect("跑 ontok 失败")

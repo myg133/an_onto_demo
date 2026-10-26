@@ -34,8 +34,17 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-const BIN: &str = env!("CARGO_BIN_EXE_ontok");
-const BIN_PROPOSE: &str = env!("CARGO_BIN_EXE_ontok-propose");
+const BIN: &str = env!("CARGO_BIN_EXE_ontok-builder");
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
+}
 const LLM_ENVS: [&str; 3] = ["ONTOK_LLM_BASE_URL", "ONTOK_LLM_API_KEY", "ONTOK_LLM_MODEL"];
 const DB_ENVS: [&str; 2] = ["ONTOK_DATABASE_URL", "ONTOK_TEST_DATABASE_URL"];
 
@@ -511,7 +520,9 @@ fn run_propose(extra: &[String]) -> Run {
         "req118-fixture".into(),
     ];
     args.extend(extra.iter().cloned());
-    run_with(BIN_PROPOSE, &args, None)
+    let mut all: Vec<String> = vec!["propose".to_string()];
+    all.extend(args.iter().cloned());
+    run_with(env!("CARGO_BIN_EXE_ontok-builder"), &all, None)
 }
 
 #[test]

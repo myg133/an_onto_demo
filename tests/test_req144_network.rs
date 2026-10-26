@@ -1098,7 +1098,7 @@ fn credentials_never_reach_debug_or_display() {
 // ══════════════════════════════════════════════════════════════
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_ontok")
+    env!("CARGO_BIN_EXE_ontok-builder")
 }
 
 /// 跑一次 CLI，返回 (退出码, stdout, stderr)。

@@ -109,7 +109,7 @@ impl Sandbox {
         std::fs::write(&file, serde_json::to_string_pretty(&doc).unwrap()).expect("写提案 JSON 失败");
 
         // ⛔ `propose import` **只认 `--file`**（项目名在 JSON 里，见 `ProposeCmd::Import`）。
-        let imp = self.run(&["propose", "import", "--file", file.to_str().unwrap()]);
+        let imp = self.run(&["import", "--file", file.to_str().unwrap()]);
         assert!(
             imp.status.success(),
             "propose import 失败：{}\n提案 JSON：{}",
@@ -164,7 +164,7 @@ impl Sandbox {
     }
 
     fn run_once(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_ontok"))
+        Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
             .args(args)
             // ⛔ 连接串只走环境变量：口令不进 argv、不进文件、不进日志。
             .env("ONTOK_DATABASE_URL", &self.url)

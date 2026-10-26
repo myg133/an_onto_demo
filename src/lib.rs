@@ -7,11 +7,26 @@
 //! 另：判定器 AC-002 的 grep 范围是 `src/domain/`，
 //! 所以本文件声明存储层时不使用会被误伤的简写。
 
+// ⭐ REQ-152 · **构建面 CLI**（`ontok-builder` 的入口）。
+//
+// ⛔ 服务面（`ontok`）**不许**引用本模块：`cli` 的可达图里有 `access::net` /
+// `access::tc3` / `ureq`（真调用 + 签名），一旦服务面引用它，执行器就会被**链接进
+// 产品二进制**（判据：`strings target/release/ontok | grep -c X-TC-Action` ⇒ 0）。
+// 服务面的入口在 [`service`]，两者互不引用 —— 见 `src/service.rs` 的模块头。
 pub mod cli;
 pub mod config;
 pub mod db;
 pub mod domain;
 pub mod extract;
+
+// ⭐ REQ-152 · **服务面 CLI**（`ontok` 的入口）：只有 `query serve` / `mcp-server` / `serve`。
+// 与 [`cli`] 的关系是「同一份 lib、两条互不引用的入口」：拆分点不在 crate 边界，
+// 而在**可达图**边界（链接器按可达符号收对象）。
+pub mod service;
+
+// ⭐ REQ-152 · EPIPE 的 panic hook（两个 bin 共用一份实现）。
+// 它单独成模块，是为了让服务面也能装它而**不必**引用 [`cli`]。
+pub mod pipe_guard;
 
 // REQ-027 · MCP 服务器（§9.5「Claude Desktop 经 MCP 连接」）。
 // **不放 domain/**：它要连库、起进程，而 domain 的 AC-002 判据是「零 I/O」。

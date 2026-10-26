@@ -97,7 +97,7 @@ fn run(
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&stats);
 
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"))
+    let o = propose_bin()
         .args([
             "--schema",
             sp.to_str().unwrap(),
@@ -387,4 +387,15 @@ fn test_human_revision_semantics_lives_untouched_in_the_import_path() {
         v.is_null(),
         "人工修订序列化成 null，不是 {{}} —— 补成空对象会让「没有声明」与「有一个空声明」分不清"
     );
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

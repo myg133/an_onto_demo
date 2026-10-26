@@ -779,7 +779,7 @@ fn the_only_tenant_source_is_the_token_file() {
 #[test]
 fn the_help_documents_the_endpoints_and_the_two_token_limits() {
     // 真实进程的 `--help`（与 test_req121 / test_req122 同一条口径）。
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
         .args(["portal", "serve", "--help"])
         .output()
         .expect("跑不起 ontok 二进制");

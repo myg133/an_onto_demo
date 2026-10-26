@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-const BIN: &str = env!("CARGO_BIN_EXE_ontok");
+const BIN: &str = env!("CARGO_BIN_EXE_ontok-builder");
 
 /// 跑一次要用的环境变量名字（**全部先清掉**，再按用例注入）。
 const LLM_ENVS: [&str; 3] = ["ONTOK_LLM_BASE_URL", "ONTOK_LLM_API_KEY", "ONTOK_LLM_MODEL"];

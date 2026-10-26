@@ -148,8 +148,11 @@ const MAX_COLUMNS_IN_PROMPT: usize = 8;
 /// 它**不可能**指向别的实现：改成别的名字就得改这一行，而这一行就在产物里看得见。
 const REG090_MODULE_PATH: &str = module_path!();
 
-fn main() {
-    let code = match run() {
+/// REQ-152：本文件不再自己成 bin —— 它是 `ontok-builder translate-names` 的实现。
+/// argv 由外层的 clap 子命令**原样**递进来（`args` 就是去掉程序名之后的参数），
+/// 参数解析、退出码与产物一个字节都没变。
+pub fn main(args: Vec<String>) {
+    let code = match run(args) {
         Ok(code) => code,
         Err(err) => {
             // `{:#}` 打出 anyhow 的**整条因果链** ——
@@ -178,12 +181,12 @@ struct Args {
     batch_size: usize,
 }
 
-fn parse_args() -> Result<Option<Args>> {
+fn parse_args(args: Vec<String>) -> Result<Option<Args>> {
     let mut a = Args {
         batch_size: DEFAULT_BATCH_SIZE,
         ..Default::default()
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         let mut val = || {
             it.next()
@@ -535,8 +538,8 @@ fn translate(
 // 主流程
 // ══════════════════════════════════════════════════════════════
 
-fn run() -> Result<i32> {
-    let Some(args) = parse_args()? else {
+fn run(args: Vec<String>) -> Result<i32> {
+    let Some(args) = parse_args(args)? else {
         return Ok(EXIT_OK);
     };
     // ⛔ `--out` **必填、无默认**（AC-008）。翻译表是部署方资产，

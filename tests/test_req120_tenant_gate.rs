@@ -169,7 +169,7 @@ fn run(dir: &Path, signed: &Path, out: &Path, with_tenancy: bool) -> (bool, Stri
     let schema = write(dir, "schema.json", &schema_json());
     let names = write(dir, "names.json", &names_json());
     let stats = dir.join("stats.json");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ontok-propose"));
+    let mut cmd = propose_bin();
     cmd.args([
         "--schema",
         schema.to_str().unwrap(),
@@ -269,4 +269,15 @@ fn inherit_without_tenancy_declaration_is_rejected_too() {
     assert!(!produced);
     assert!(stderr.contains("租户键声明"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

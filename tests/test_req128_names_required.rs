@@ -25,7 +25,16 @@ use std::process::Command;
 
 mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_ontok-propose");
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
+}
 
 /// 一份**正常**翻译表：`fixtures/schema-req109.json` 的 3 张表都有中文名。
 const REAL_NAMES: &str = r#"{
@@ -73,7 +82,7 @@ struct Run {
 }
 
 fn run(args: &[&str]) -> Run {
-    let out = Command::new(BIN)
+    let out = propose_bin()
         .current_dir(crate_root())
         .args(args)
         .output()

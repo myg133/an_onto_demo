@@ -36,6 +36,12 @@
 //!       "capability": { "pushdown": ["ids"] }, "freshness": "realtime" } ] }
 //! ```
 //!
+//! ⭐ REQ-152 · **`freshness` 收两种写法**（一份 schema，两个解析器不再打架）：
+//! 上面那种字符串，或 access 契约 / 全量 AM 的对象
+//! `"freshness": { "mode": "realtime", "note": "…" }`。两种都取 `mode` 归一
+//! （见 [`RawFreshness`]）。所以 `--access-mapping` 可以直接吃**全量 AM**，
+//! 不再需要 `Deploy/.../gen-serve-mapping.py` 造一份投影。
+//!
 //! - `mapping_version` **必填**（`meta.mapping_version` 与 `get.ref` 的 `@v<n>` 都取它，
 //!   用于「映射与本体版本对得上」的追溯 —— 契约规则 3）；
 //! - `entities[].class` 是**本体里的类 key**（= 快照 `entity_types.key`，`catalog` 的 `table`）；
@@ -44,6 +50,7 @@
 //! - `capability.pushdown` ⇒ `access.pushdown_fields` / `get.pushdown`（省略 = `[]`，
 //!   ⛔ 不替调用方猜一个能力）；
 //! - `freshness` 可选（省略 ⇒ `access` 里不出现这个键，⛔ 不编一个「实时」）。
+//!   对象写法里没有 `mode` ⇒ **与省略同义**（同样不编）。
 //!
 //! 契约里其余字段（`source` / `operation` / `iterator` / `iri_template` / `fields`）
 //! 本模块**读进来就丢**：它们只在 access 契约里生效，平台既不执行也不转发
@@ -195,7 +202,7 @@ struct RawEntity {
     #[serde(default)]
     capability: Option<RawCapability>,
     #[serde(default)]
-    freshness: Option<String>,
+    freshness: Option<RawFreshness>,
     // 下面这些在契约里存在、本模块**不解释**（读进来就丢，见模块头）。
     #[serde(default)]
     #[allow(dead_code)]
@@ -212,6 +219,45 @@ struct RawEntity {
     #[serde(default)]
     #[allow(dead_code)]
     fields: Option<serde_json::Value>,
+}
+
+/// ⭐ REQ-152 · `freshness` 的**两种写法**（一份 schema，两个解析器不再打架）。
+///
+/// | 写法 | 谁在用 | 例 |
+/// | --- | --- | --- |
+/// | 字符串 | `query serve` 的历史形状（投影脚本产的那份） | `"freshness": "realtime"` |
+/// | 对象 | access 契约 / 部署侧那份**已签的全量 AM** | `"freshness": {"mode": "realtime", "note": "…"}` |
+///
+/// **归一规则**：两种都收，统一取 `mode`（字符串写法就是它自己）。
+/// 对象里没有 `mode`（或为空串）⇒ 与「省略 freshness」同义 —— ⛔ 不编一个「实时」。
+/// `note` **读进来就丢**：它是给人看的说明，不参与任何判定（阶段 2 才可能用）。
+///
+/// 为什么放宽在这里而不是让部署侧继续造投影文件：投影脚本
+/// （`Deploy/.../gen-serve-mapping.py`）是「同一份契约两个解析器」的补丁，
+/// 它自己就是漂移源 —— 全量 AM 里新增一个字段，投影那份不会跟着变。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawFreshness {
+    Text(String),
+    Object {
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        #[allow(dead_code)]
+        note: Option<String>,
+    },
+}
+
+impl RawFreshness {
+    /// 归一成 serve 侧唯一形状：`Option<非空 mode>`。
+    fn into_mode(self) -> Option<String> {
+        let raw = match self {
+            RawFreshness::Text(s) => Some(s),
+            RawFreshness::Object { mode, .. } => mode,
+        };
+        raw.map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,12 +335,7 @@ impl AccessMapping {
                 .collect::<Vec<String>>();
             pushdown.sort();
             pushdown.dedup();
-            let freshness = e
-                .freshness
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            let freshness = e.freshness.and_then(RawFreshness::into_mode);
             entities.push(Entity {
                 id,
                 class,

@@ -69,7 +69,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 /// 跑**真的 CLI 二进制**。`db = None` ⇒ **不设** `ONTOK_DATABASE_URL`
 /// （`doc merge` 必须在不碰库的条件下跑得起来）。
 fn cli(args: &[&str], db: Option<&str>) -> Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"));
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
     cmd.args(args);
     match db {
         Some(url) => cmd.env("ONTOK_DATABASE_URL", url),
@@ -1058,7 +1058,7 @@ fn import_and_accept(url: &str, merged: &Path) -> String {
     let o = cli(&["version", "new", "--project", &project], Some(url));
     assert!(o.status.success(), "建版本失败：{}", stderr(&o));
     let o = cli(
-        &["propose", "import", "--file", merged.to_str().unwrap()],
+        &["import", "--file", merged.to_str().unwrap()],
         Some(url),
     );
     assert!(o.status.success(), "导入失败：{}\n{}", stdout(&o), stderr(&o));
