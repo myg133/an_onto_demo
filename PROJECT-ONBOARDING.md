@@ -46,11 +46,11 @@ export ONTOK_DATABASE_URL='postgresql://.../ontok'          # 元数据库（共
 export ONTOK_SOURCE_DATABASE_URL='postgresql://ro_xxx@.../biz'   # 该项目源库
 
 # 2.1 勘查
-ontok-introspect --out /work/<项目>/schema.json
+ontok-builder introspect --out /work/<项目>/schema.json
 
 # 2.2 提案（AI 提案，不权威）
-ontok propose import ...   # 或先 ontok-propose 产出 proposal.json 再 import
-ontok-propose --schema /work/<项目>/schema.json \
+ontok-builder import ...   # 或先 ontok-builder propose 产出 proposal.json 再 import
+ontok-builder propose --schema /work/<项目>/schema.json \
               --names  /work/<项目>/table_names.json \
               --exclude /work/<项目>/exclusions.json \
               --tenancy /work/<项目>/tenancy.json \
@@ -63,7 +63,7 @@ ontok version freeze --project <项目> --version <N>
 ```
 
 > ⚠️ **`--names` 是必填**（REQ-128）：不传就直接失败，因为默认值是脱敏占位表。
-> 用 `ontok-translate-names` 或 `ontok name suggest --as-names` 生成。
+> 用 `ontok-builder translate-names` 或 `ontok name suggest --as-names` 生成。
 
 ### ③ 四份声明 + schema
 

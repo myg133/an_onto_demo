@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "mapping_version": 1,
   "project": "extracted",
   "ontology_version": 3,
@@ -13,6 +13,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -28,6 +42,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -43,6 +71,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -58,6 +100,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -73,6 +129,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -88,6 +158,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -103,6 +187,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -119,6 +217,20 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
         ]
       },
       "defaults": {
@@ -136,7 +248,19 @@
         "action": "DescribeInstances",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeInstances",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.InstanceSet[*]",
       "identity": {
@@ -273,7 +397,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "zone",
@@ -331,7 +454,19 @@
         "action": "DescribeVpcs",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeVpcs",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.VpcSet[*]",
       "identity": {
@@ -396,7 +531,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "vpc-id",
@@ -454,7 +588,19 @@
         "action": "DescribeSubnets",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSubnets",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.SubnetSet[*]",
       "identity": {
@@ -522,7 +668,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "zone",
@@ -590,7 +735,19 @@
         "action": "DescribeSecurityGroups",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSecurityGroups",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.SecurityGroupSet[*]",
       "identity": {
@@ -628,7 +785,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "security-group-id",
@@ -686,7 +842,19 @@
         "action": "DescribeSecurityGroupPolicies",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSecurityGroupPolicies",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.SecurityGroupPolicySet.Ingress[*]",
       "identity": {
@@ -737,7 +905,6 @@
           "security_group_id"
         ],
         "template": {
-          "Region": "{region}",
           "SecurityGroupId": "{security_group_id}",
           "Filters": [
             {
@@ -788,7 +955,19 @@
         "action": "DescribeDisks",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeDisks",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.DiskSet[*]",
       "identity": {
@@ -934,7 +1113,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "zone",
@@ -991,7 +1169,19 @@
         "action": "DescribeSnapshots",
         "version": "2017-03-12",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSnapshots",
+          "version": "2017-03-12"
+        }
       },
       "iterator": "$.Response.SnapshotSet[*]",
       "identity": {
@@ -1077,7 +1267,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "disk-id",
@@ -1134,7 +1323,19 @@
         "action": "DescribeLoadBalancers",
         "version": "2018-03-17",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeLoadBalancers",
+          "version": "2018-03-17"
+        }
       },
       "iterator": "$.Response.LoadBalancerSet[*]",
       "identity": {
@@ -1322,7 +1523,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "Filters": [
             {
               "Name": "master-zone-id",
@@ -1379,7 +1579,19 @@
         "action": "DescribeListeners",
         "version": "2018-03-17",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeListeners",
+          "version": "2018-03-17"
+        }
       },
       "iterator": "$.Response.Listeners[*]",
       "identity": {
@@ -1472,7 +1684,6 @@
           "load_balancer_id"
         ],
         "template": {
-          "Region": "{region}",
           "LoadBalancerId": "{load_balancer_id}",
           "Protocol": "{protocol}"
         },
@@ -1516,7 +1727,19 @@
         "action": "DescribeDBInstances",
         "version": "2017-03-20",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeDBInstances",
+          "version": "2017-03-20"
+        }
       },
       "iterator": "$.Response.Items[*]",
       "identity": {
@@ -1692,7 +1915,6 @@
           "region"
         ],
         "template": {
-          "Region": "{region}",
           "InstanceIds": [
             "{instance_ids}"
           ]
@@ -1744,7 +1966,19 @@
         "action": "DescribeBackups",
         "version": "2017-03-20",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeBackups",
+          "version": "2017-03-20"
+        }
       },
       "iterator": "$.Response.Items[*]",
       "identity": {
@@ -1828,7 +2062,6 @@
           "instance_id"
         ],
         "template": {
-          "Region": "{region}",
           "InstanceId": "{instance_id}",
           "MinStartTime": "{min_start_time}"
         },
@@ -1883,7 +2116,18 @@
         "action": "DescribeCertificates",
         "version": "2019-12-05",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeCertificates",
+          "version": "2019-12-05"
+        }
       },
       "iterator": "$.Response.Certificates[*]",
       "identity": {
@@ -2137,7 +2381,18 @@
         "action": "DescribeAlarmPolicies",
         "version": "2018-07-24",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeAlarmPolicies",
+          "version": "2018-07-24"
+        }
       },
       "iterator": "$.Response.Policies[*]",
       "identity": {
@@ -2247,7 +2502,18 @@
         "action": "DescribeBillDetail",
         "version": "2018-07-09",
         "method": "POST",
-        "content_type": "application/json"
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeBillDetail",
+          "version": "2018-07-09"
+        }
       },
       "iterator": "$.Response.DetailSet[*]",
       "identity": {

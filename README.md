@@ -18,7 +18,7 @@ cd code
 podman build -t ontok:dev -f Dockerfile .
 ```
 
-镜像里只有四个二进制（`ontok` / `ontok-introspect` / `ontok-propose` / `ontok-translate-names`）+ ca-certificates + tzdata，**不含任何声明、口令、证书**。
+镜像里只有四个二进制（`ontok` / `ontok-builder introspect` / `ontok-builder propose` / `ontok-builder translate-names`）+ ca-certificates + tzdata，**不含任何声明、口令、证书**。
 
 ## compose（单机）
 
@@ -74,7 +74,7 @@ kubectl -n ontok create secret generic ontok-db \
 # 2 在能连源库的机器上：建项目 → 提议 → 评审 → 应用 → 冻结
 ontok project new --name anspire_prod
 ontok version new --project anspire_prod
-ontok propose import --file proposal.json
+ontok-builder import --file proposal.json
 ontok review decide --proposal p1 --project anspire_prod --accept-all
 ontok proposal apply  --proposal p1 --project anspire_prod
 ontok version freeze  --project anspire_prod --version 3

@@ -16,7 +16,7 @@ podman build -t ontok:0.1.0 -f Dockerfile .
 
 | 内容 | 说明 |
 | --- | --- |
-| `ontok` / `ontok-introspect` / `ontok-propose` / `ontok-translate-names` | 四个二进制（musl 静态链接，alpine 运行） |
+| `ontok` / `ontok-builder introspect` / `ontok-builder propose` / `ontok-builder translate-names` | 四个二进制（musl 静态链接，alpine 运行） |
 | **Rust 1.96.0** | 构建期工具链；`rust-version` 声明是 **1.88**（依赖的硬下限） |
 | **bun** | 装包 + 运行 pi |
 | **pi 1.4.0 / pi-acp 0.0.34** | 抽取 agent 与 ACP 适配器（ACP 需要本地子进程，故与服务同镜像） |
@@ -39,7 +39,7 @@ podman run --rm ontok:0.1.0 --help | head -20
 
 # 2) 四个二进制
 podman run --rm --entrypoint sh ontok:0.1.0 -c \
-  "for b in ontok ontok-introspect ontok-propose ontok-translate-names; do printf '%s: ' \$b; \$b --help >/dev/null 2>&1 && echo ok || echo FAIL; done"
+  "for b in ontok ontok-builder introspect ontok-builder propose ontok-builder translate-names; do printf '%s: ' \$b; \$b --help >/dev/null 2>&1 && echo ok || echo FAIL; done"
 
 # 3) pi / pi-acp / bun（关键：pi 是否能在 bun 下跑）
 podman run --rm --entrypoint sh ontok:0.1.0 -c "bun --version; pi --version; pi-acp --help 2>&1 | head -3"

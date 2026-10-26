@@ -18,7 +18,7 @@ resources:
 images:
   - name: ontok
     newName: aigccontainer.azurecr.cn/an_onto/ontok
-    newTag: 0.1.7
+    newTag: 0.1.8
 
 replicas:
   - { name: ontok-query, count: 1 }
@@ -63,7 +63,7 @@ patches:
           - --tokens=/etc/ontok/secrets/query-tokens.json
           - --project=$(ONTOK_PROJECT)
           - --version=$(ONTOK_VERSION)
-          - --access-mapping=/etc/ontok/am/am-tencent.serve.json
+          - --access-mapping=/etc/ontok/am/am-tencent.json
           - --ontology-only
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
@@ -127,9 +127,10 @@ patches:
   - path: sidecar-patch.yaml
     target: { kind: Deployment, name: ontok-query }
 
-# AM（access mapping）：14 个类的取数契约。**不含凭据**（只有环境变量名）。
+# AM（access mapping）：14 个类的取数契约（contract_version 2，含 operation.headers 与
+# request.defaults）。**不含凭据**（只有环境变量名）。
 # 改它之后要重新 apply；`query serve --access-mapping` 会 bind 到本体，class 不在本体里就拒绝启动。
 configMapGenerator:
   - name: ontok-access-mapping
     files:
-      - am-tencent.serve.json
+      - am-tencent.json

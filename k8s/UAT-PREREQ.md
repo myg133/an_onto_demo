@@ -83,9 +83,9 @@ kubectl -n anspire-ontok-uat create configmap ontok-config \
 `query serve` / `portal serve` 启动时要 `--project` + `--version`，所以**先冻结再部署**：
 
 ```bash
-ontok-introspect --out schema.json
-ontok-propose --schema schema.json --names table_names.json --out proposal.json
-ontok propose import --file proposal.json
+ontok-builder introspect --out schema.json
+ontok-builder propose --schema schema.json --names table_names.json --out proposal.json
+ontok-builder import --file proposal.json
 ontok review decide --proposal p1 --project anspire_uat --accept-all
 ontok proposal apply --proposal p1 --project anspire_uat
 ontok version freeze --project anspire_uat --version 1

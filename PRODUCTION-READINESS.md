@@ -74,7 +74,7 @@ kubectl -n ontok-prod create configmap ontok-config --from-file=deploy-config/
 kubectl -n ontok-prod create secret generic ontok-secrets --from-file=deploy-tokens/
 
 # 4 抽取与冻结（在能连源库的机器上，一次性）
-ontok-introspect → ontok-propose → review decide → apply → version freeze
+ontok-builder introspect → ontok-builder propose → review decide → apply → version freeze
 
 # 5 部署
 kubectl apply -k Deploy/k8s/overlays/prod
