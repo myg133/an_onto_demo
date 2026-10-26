@@ -69,6 +69,12 @@ pub mod query;
 // 没有「直接改对象」的端点（需求风险 1）。见 `src/console/mod.rs` 模块头。
 pub mod console;
 
+// ⭐ REQ-155 · **Studio 页面壳**（`query serve` 上的 `/studio` + 两个静态资源）。
+// 为什么单独一个模块：它是**编译期常量**（`include_str!` 的 HTML / CSS / JS），
+// 与 `query/` 的取数逻辑零耦合；挂在 `query::http::build_router` 上只是为了同源
+// （CSP 的 `connect-src 'self'` 要的就是这个）。⛔ 不新增任何 `/api/*` 端点。
+pub mod studio;
+
 // ⭐ REQ-135 · **生产可观测性**（`GET /metrics` 的 Prometheus 文本格式）。
 // 为什么是独立模块而不是塞进各自的 http.rs：指标登记表 / 渲染 / 校验只有一个写点，
 // 两个服务共用同一份口径；而且它是纯计算（无 I/O、无业务数据），

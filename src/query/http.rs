@@ -116,6 +116,8 @@ pub struct Auth(pub TokenEntry);
 ///
 /// - `/api/health` 免 token（产品版本 + 项目名 + **本体**版本 + 语法版本；⛔ 无租户/表名）；
 /// - `/api/*` 与 `/mcp` 全部过 [`require_token`]；
+/// - ⭐ REQ-155 · `/studio` 与两个静态资源**不在门里**（`needs_auth` 只认 `/api` 与 `/mcp`），
+///   但它们是**编译期常量、零数据** —— 壳可匿名取得，拿了也没有任何本体内容；
 /// - **未注册的 `/api/*` 也走身份门**（无 token ⇒ 401，不泄露「这个接口存不存在」）；
 ///   已授权的人问路 ⇒ 404 + 可用端点清单。
 pub fn build_router(svc: Arc<QueryService>) -> Router {
@@ -128,6 +130,13 @@ pub fn build_router(svc: Arc<QueryService>) -> Router {
         .route("/api/sparql", post(post_sparql))
         .route("/api/catalog", get(get_catalog))
         .route("/api/describe", get(get_describe))
+        // ⭐ REQ-155 · Studio 页面壳（免 token、零数据、**只读**）。
+        // 三条都只注册 `get` ⇒ `POST/PUT/DELETE /studio` 由 axum 直接回 405（S1）。
+        // ⛔ 不改 `/api/*` 的任何行为：这里只是把三个**编译期常量**贴到同一个源上。
+        .route(crate::studio::STUDIO_PATH, get(crate::studio::index))
+        .route(crate::studio::STUDIO_INDEX_PATH, get(crate::studio::index))
+        .route(crate::studio::CSS_PATH, get(crate::studio::css))
+        .route(crate::studio::JS_PATH, get(crate::studio::js))
         // ⭐ REQ-127 · 整份 OWL：默认客户视图，`?view=model` 建模视图（同一道身份门）。
         .route(TTL_PATH, get(get_ontology_ttl))
         .route("/mcp", post(mcp_post).get(mcp_sse))
@@ -2957,5 +2966,132 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(v["hint"].as_str().unwrap().contains("jsonld"), "{body}");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-155 P2 · Studio 挂在查询服务上（AC-004 / AC-008 / AC-008b / AC-008c）
+    // ══════════════════════════════════════════════════════════
+
+    fn any_method(method: &str, uri: &str, token: Option<&str>) -> axum::http::Request<Body> {
+        let mut b = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            b = b.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    /// ⭐ AC-004 · 三条路由都 200，`Content-Type` 分别是 html / css / js，且**免口令**。
+    ///
+    /// 免口令是 ADR-010-A S2 的形状：浏览器导航带不了 `Authorization`，所以壳必须匿名可拿；
+    /// 壳里零数据（下一条用例）是它的代价条款。
+    /// 顺带钉住三个安全响应头 —— 「照 console 的做法」不是形容词，是这三行。
+    #[tokio::test]
+    async fn ac004_studio_assets_are_served_with_the_right_content_types_without_a_token() {
+        let cases = [
+            ("/studio", "text/html; charset=utf-8"),
+            ("/studio/", "text/html; charset=utf-8"),
+            ("/studio/studio.css", "text/css; charset=utf-8"),
+            ("/studio/studio.js", "application/javascript; charset=utf-8"),
+        ];
+        for (uri, want_type) in cases {
+            let (status, headers, body) = call(build_router(test_service()), get(uri, None)).await;
+            assert_eq!(status, StatusCode::OK, "{uri} 应当免口令可拿");
+            assert_eq!(
+                headers[header::CONTENT_TYPE], want_type,
+                "{uri} 的 Content-Type 不对"
+            );
+            assert!(!body.is_empty(), "{uri} 的正文是空的");
+            assert_eq!(headers["x-content-type-options"], "nosniff", "{uri}");
+            assert_eq!(headers["referrer-policy"], "no-referrer", "{uri}");
+            let csp = headers["content-security-policy"].to_str().unwrap();
+            for needle in [
+                "default-src 'self'",
+                "script-src 'self'",
+                "style-src 'self'",
+                "connect-src 'self'",
+            ] {
+                assert!(csp.contains(needle), "{uri} 的 CSP 缺 {needle:?}：{csp}");
+            }
+            assert!(!csp.contains("unsafe-inline"), "{uri} 的 CSP 放开了内联：{csp}");
+        }
+    }
+
+    /// ⭐ AC-008（S1）· `/studio` 只接受 GET：写类请求一律 **405**（三个资源都如此）。
+    ///
+    /// 405 由 axum 的 `MethodRouter` 给（路由只注册了 `get`），⛔ 没有第二个判定点。
+    /// 变异（红）：把某条路由写成 `get(h).post(h)` ⇒ 本用例红；恢复复绿。
+    #[tokio::test]
+    async fn ac008_studio_is_get_only() {
+        for uri in ["/studio", "/studio/studio.css", "/studio/studio.js"] {
+            for method in ["POST", "PUT", "DELETE"] {
+                let (status, headers, body) =
+                    call(build_router(test_service()), any_method(method, uri, Some(TOKEN_A))).await;
+                assert_eq!(
+                    status,
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "{method} {uri} 应当是 405（页面没有任何写能力），实际 {status}：{body}"
+                );
+                // 带上 token 也一样 405：这不是鉴权问题，是**方法**问题。
+                // ⚠️ axum 的 `get()` 同时登记 HEAD ⇒ Allow 是 `GET,HEAD`；写类方法一个都不许有。
+                let allow = headers[header::ALLOW].to_str().unwrap_or("").to_string();
+                assert!(allow.contains("GET"), "{method} {uri} 的 Allow 里应当有 GET：{allow}");
+                for forbidden in ["POST", "PUT", "DELETE", "PATCH"] {
+                    assert!(
+                        !allow.contains(forbidden),
+                        "{method} {uri} 的 Allow 里出现了 {forbidden}：{allow}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// ⭐ AC-008b（S2）· 壳里**零数据**：打真路由拿到的 HTML 里五个真实类名 + 快照变量 = 0。
+    ///
+    /// 变异（红）：往 `src/studio/index.html` 插一句 `cvm_instance` ⇒ 红；撤掉复绿。
+    #[tokio::test]
+    async fn ac008b_the_served_shell_carries_no_ontology_data() {
+        let (status, _, html) = call(build_router(test_service()), get("/studio", None)).await;
+        assert_eq!(status, StatusCode::OK);
+        for needle in [
+            "cvm_instance",
+            "cbs_disk",
+            "vpc",
+            "subnet",
+            "security_group",
+            "ONTOK_SNAPSHOT",
+        ] {
+            assert_eq!(
+                html.matches(needle).count(),
+                0,
+                "GET /studio 的正文里出现了 {needle:?} —— 页面壳必须零数据（AC-008b）"
+            );
+        }
+        // 反空转：壳里**该**有的东西在（否则「零命中」可能只是拿到了一段错误文案）。
+        assert!(html.contains("/studio/studio.js"), "壳里没有脚本引用");
+        assert!(html.contains("/studio/studio.css"), "壳里没有样式引用");
+    }
+
+    /// ⭐ AC-008c（S4 / S6）· 挂上 Studio **不改变** `/api/*` 的鉴权：无口令仍是 401，
+    /// 且 401 正文里不出现任何本体数据（类名一个都不许漏）。
+    ///
+    /// 变异（红）：把 `/studio` 加进 `needs_auth` 的豁免列表时顺手放宽 `/api` ⇒ 红；
+    /// 在 401 正文里塞一句「可用类：customers」⇒ 红。
+    #[tokio::test]
+    async fn ac008c_without_a_token_the_api_still_401s_and_leaks_nothing() {
+        for uri in ["/api/catalog", "/api/describe?name=:customers"] {
+            let (status, _, body) = call(build_router(test_service()), get(uri, None)).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} 无口令应当 401");
+            for needle in ["customers", "orders", "id", "tenant"] {
+                assert!(
+                    !body.contains(needle),
+                    "{uri} 的 401 正文里出现了 {needle:?}（S4：401 不泄漏数据）：{body}"
+                );
+            }
+        }
+        // 同一批端点在**没有** Studio 路由时也是这个行为（对照）：带口令就该 200。
+        let (status, _, body) =
+            call(build_router(test_service()), get("/api/catalog", Some(TOKEN_A))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("customers"), "带口令时目录里该有类：{body}");
     }
 }

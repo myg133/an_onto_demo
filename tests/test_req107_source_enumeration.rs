@@ -2120,6 +2120,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/console/mod.rs", "page"),
     ("src/console/mod.rs", "serve"),
     ("src/console/mod.rs", "tokens"),
+    // ⭐ REQ-155 · Studio 页面壳（`query serve` 的 `/studio` + 两个静态资源）。
+    // 三份正文都是 `include_str!` 的编译期常量；出口 I32 登记在 OUTLETS。
+    ("src/lib.rs", "studio"),
 ];
 
 #[test]

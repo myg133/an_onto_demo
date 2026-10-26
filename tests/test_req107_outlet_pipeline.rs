@@ -370,6 +370,10 @@ fn outlet_sources() -> BTreeMap<&'static str, String> {
     // 三个 http.rs 只调 `Metrics::http_response`，正文不在那里拼 —— 所以 needle
     // 对账必须落在 metrics.rs 上（否则「正文换了个写点」这张表看不见）。
     m.insert("src/metrics.rs", read_source("src/metrics.rs"));
+    // ⭐ REQ-155 · Studio 页面壳的唯一响应构造点（I32）在 `src/studio/mod.rs`。
+    // 三个资源（HTML / CSS / JS）都是 `include_str!` 常量、都调 `studio_response`，
+    // 所以 needle 对账落在那个函数定义上 —— 「壳里混进一条运行期字符串」在这张表上看得见。
+    m.insert("src/studio/mod.rs", read_source("src/studio/mod.rs"));
     m
 }
 
@@ -703,10 +707,11 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        + 1（REQ-135 的 `/metrics` 指标响应 I28）
     //        + 3（REQ-144 的 access mapping：`validate` 报告 I29 / `fetch` JSON-LD I30 /
     //             `publish` 发布物 I31）
-    //        ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 已移除 ⇒ 66 - 2 = 64。
+    //        + 1（REQ-155 的 Studio 页面壳 I32：三份编译期常量、零数据）
+    //        ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 已移除 ⇒ 67 - 2 = 65。
     assert_eq!(
         OUTLETS.len(),
-        64,
+        65,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
          + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）\
@@ -714,6 +719,7 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
          + 2（REQ-129 doc merge 合并提案 / doc sign 签字产物）\
          + 1（REQ-135 /metrics 指标响应）\
          + 3（REQ-144 access validate / fetch / publish）\
+         + 1（REQ-155 Studio 页面壳）\
          - 2（REQ-155 删除客户门户：I23/I24）"
     );
 
@@ -746,10 +752,11 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-144 内部 33→36（I29–I31）：access mapping 的三条写点
     // （`validate` 报告 / `fetch` JSON-LD / `publish` 发布物）—— 全是 FDE 与 Agent 面的
     // 内部产物，客户视图零读取；⛔ 阶段 0 不发网络请求，产物也⛔ 不含凭据值。
-    // ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 随之移除 ⇒ 内部 36→34、总条数 66→64。
+    // ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 随之移除 ⇒ 内部 36→34；同需求 P2 再加
+    // I32（Studio 页面壳，匿名可达、零数据）⇒ 内部 34→35、总条数 64→65。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 34);
+    assert_eq!(outlet_count(Track::Internal), 35);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -773,9 +780,10 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-129 · I26/I27（`doc merge` 的合并提案 / `doc sign` 的签字产物）
     // REQ-135 · I28（两个服务共用的 `/metrics` Prometheus 文本响应）
     // REQ-144 · I29–I31（access mapping：`validate` 报告 / `fetch` JSON-LD / `publish` 发布物）
+    // ⭐ REQ-155 · I32（Studio 页面壳：匿名可达、零数据的三份静态常量）
     // ⚠️ REQ-155 删除了 REQ-126 的 I23/I24（客户门户）⇒ 编号留空，不回填。
     want.extend(
-        (1..=31)
+        (1..=32)
             .filter(|i| *i != 23 && *i != 24)
             .map(|i| format!("I{i}")),
     );

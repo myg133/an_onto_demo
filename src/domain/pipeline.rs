@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**；⭐ REQ-155 再新增 **1** 条 Studio 页面壳出口（I32 HTML/CSS/JS 三份常量，**内部轨、零数据**）⇒ **65（客户 17 / 建模 10 / 内部 35 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ REQ-155 删除客户门户：REQ-126 当时新增的 I23/I24 两条出口随之移除（-2）；
@@ -393,6 +393,15 @@ pub enum OutletId {
     /// 会随契约分发给客户侧执行器。⛔ 其中不含任何凭据值（只有环境变量名）。
     /// 物理写点仍是 I10 的 `write_local`，这条钉的是「本命令会往盘上写什么」。
     I31,
+    /// ⭐ REQ-155 · 查询服务 · **Studio 页面壳**（`GET /studio` + 两个静态资源）。
+    ///
+    /// 内部轨（与 I22 同一条口径）：HTML / CSS / JS 三份都是 `include_str!` 的
+    /// **编译期常量**，壳内零数据（无类名 / 关系名 / 属性名 / 项目名 / 版本号）。
+    /// 之所以仍然登记：它是一条**匿名可达**的外送通道（浏览器导航带不了
+    /// `Authorization`，`/studio` 也刻意不在 `needs_auth` 的 `/api` 前缀里），
+    /// 「不登记 = 没人管」正是 REQ-107 收口的那个洞。
+    /// 数据面一个字节都不经过这里：页面的每个字段都来自 `/api/*`（同源、要口令）。
+    I32,
 }
 
 impl OutletId {
@@ -442,6 +451,7 @@ impl OutletId {
             OutletId::I29 => "I29",
             OutletId::I30 => "I30",
             OutletId::I31 => "I31",
+            OutletId::I32 => "I32",
         }
     }
 }
@@ -559,6 +569,8 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I29 => OutletSpec::of("I29", Track::Internal, Format::Json, Granularity::Whole),
         OutletId::I30 => OutletSpec::of("I30", Track::Internal, Format::Json, Granularity::Whole),
         OutletId::I31 => OutletSpec::of("I31", Track::Internal, Format::Json, Granularity::Whole),
+        // ⭐ REQ-155 · Studio 页面壳：**HTML**（三份静态资源共用这一个构造点）。
+        OutletId::I32 => OutletSpec::of("I32", Track::Internal, Format::Html, Granularity::Whole),
     }
 }
 
@@ -1811,6 +1823,24 @@ pub const OUTLETS: &[Outlet] = &[
          + `ontok:` 扩展），会随契约分发给客户侧执行器。⛔ 其中只有凭据的**环境变量名**，没有值；\
          客户视图零读取它。",
     },
+    // ⭐ REQ-155 · Studio 页面壳（`/studio` + `studio.css` + `studio.js`）
+    //
+    // 一个构造点、三份常量正文：`studio::studio_response` 是**唯一**把它们变成
+    // HTTP 响应的地方。壳内零数据（`tests` 里拿五个真实类名 + `ONTOK_SNAPSHOT` grep = 0）。
+    Outlet {
+        id: "I32",
+        path: "src/studio/mod.rs",
+        // 钉「静态常量变成响应的那一行」—— 三个 handler 都调它，不各自拼 Response。
+        call_site: "fn studio_response(",
+        spec: spec_of(OutletId::I32),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-155）：查询服务的 **Studio 页面壳**（`GET /studio` / \
+         `GET /studio/studio.css` / `GET /studio/studio.js`）。三份正文都是 `include_str!` 的\
+         编译期常量：壳内零数据（无类名 / 关系名 / 属性名 / 项目名 / 版本号，判据见 \
+         `src/studio/mod.rs` 的 `the_shell_carries_no_ontology_data`）。免 token 只是为了让\
+         浏览器导航打得开（ADR-010-A S2）；页面拿到的每个字段都来自 `/api/*`（同源 + Bearer）——\
+         ⛔ 不为前端新开端点（零新增接口，ADR-010-A）。",
+    },
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
@@ -1890,13 +1920,14 @@ mod tests {
     /// ⇒ **60（内部 30）**；REQ-135 再加 I28（两个服务的 `/metrics`，**内部轨**）
     /// ⇒ **61（内部 31）**；⭐ REQ-144 再加 I29–I31（access mapping 的三条写点：
     /// `validate` 报告 / `fetch` JSON-LD / `publish` 发布物，**全部内部轨**）
-    /// ⇒ **64（内部 34）**。
+    /// ⇒ **64（内部 34）**；⭐ REQ-155 再加 I32（Studio 页面壳的**三份静态常量**，
+    /// 内部轨、零数据）⇒ **65（内部 35）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            64,
+            65,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
@@ -1905,16 +1936,18 @@ mod tests {
              + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）\
              + 1（REQ-135 的 /metrics 指标响应）\
              + 3（REQ-144 的 access validate / fetch / publish）\
+             + 1（REQ-155 的 Studio 页面壳）\
              - 2（REQ-155 删除客户门户：I23/I24）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            34,
+            35,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
              + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 \
              + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28 + REQ-144 的 I29–I31 \
+             + REQ-155 的 I32（Studio 页面壳）\
              （REQ-155 删除了 REQ-126 的 I23/I24）"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
