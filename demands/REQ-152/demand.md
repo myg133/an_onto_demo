@@ -172,3 +172,32 @@ podman run --rm <image> sh -c 'ls /usr/local/bin | grep -c ontok'               
 **待定（要用户拍板）**：老命令名是否保留为别名。
 - 保留 ⇒ 上面 5 个文件可不改，但"两个 bin"会变成"两个 bin + 四个别名"
 - 不保留 ⇒ 干净，但要改 17 处
+
+
+---
+
+## 六 · 决策与分期（2026-10-26 用户拍板）
+
+| 决策 | 值 |
+| --- | --- |
+| bin 名 | `ontok`（服务面）/ **`ontok-builder`**（构建面） |
+| 镜像内容 | **只放 `ontok`** |
+| FDE 用法 | `ontok-builder` |
+| 老命令名别名 | **不保留**（⇒ ⑦ 的 17 处文档要跟着改） |
+
+**为什么分两阶段**：结构改动（bin 拆分）与契约改动（`get` 变丰）风险不同，
+混在一个 PR 里 review 不动。阶段 1 可独立上线，阶段 2 依赖阶段 1。
+
+### 阶段 1（本次开工）· 结构：两个 bin + 一份 schema
+
+- ⑤ 二进制合并成 `ontok` / `ontok-builder`（`ontok` 编译期**不链**签名代码）
+- ⑦ 更新 Deploy 的 17 处引用
+- ① 一份 mapping schema（accept 两种 `freshness`；删 `gen-serve-mapping.py` + `am-tencent.serve.json`）
+- QG：产品路径 grep 厂商 token = 0；`strings ontok | grep X-TC-Action` = 0；镜像只有 1 个 bin
+
+### 阶段 2（阶段 1 合并后）· 契约：`get` 变丰
+
+- ② `operation` → `headers{}` + `vars{}`
+- ③ `@pending.get` 给完整配方
+- ④ `auth` 可实现规范（`skills/ontok-query/AUTH-SPEC.md`）
+- ⑥ 契约 v1 → v2（加法式）

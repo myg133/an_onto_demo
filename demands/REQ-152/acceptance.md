@@ -49,8 +49,8 @@ grep -riE 'X-TC-|X-Amz-|X-Aliyun|tencent|aws|aliyun' \
 
 | 判据 | 期望 |
 | --- | --- |
-| `target/release/ontok` 与 `ontok-build` 存在 | ✅ 两个 |
-| `ontok-introspect` / `ontok-propose` / `ontok-translate-names` / `ontok-gate-preflight` | **不再产出**（已合并为 `ontok-build` 的子命令） |
+| `target/release/ontok` 与 `ontok-builder` 存在 | ✅ 两个 |
+| `ontok-introspect` / `ontok-propose` / `ontok-translate-names` / `ontok-gate-preflight` | **不再产出**（已合并为 `ontok-builder` 的子命令） |
 | `strings target/release/ontok \| grep -c 'X-TC-Action'` | **0** |
 | `target/release/ontok access fetch --allow-network` | **不认识**（子命令不在服务面） |
 | `podman run --rm <image> ls /usr/local/bin` | **只有 `ontok`** |
@@ -58,7 +58,7 @@ grep -riE 'X-TC-|X-Amz-|X-Aliyun|tencent|aws|aliyun' \
 
 ### AC-007 · 验收能力不丢（R5）
 
-- `ontok-build access fetch --mapping am-tencent.json --entity cvm_instance --allow-network`
+- `ontok-builder access fetch --mapping am-tencent.json --entity cvm_instance --allow-network`
   用**只读凭据**真调一次，返回 ≥1 行且 `rows_returned > 0`
 - 判据：命令 + 输出行数（凭据由 BA 提供，QA 不落地）
 
