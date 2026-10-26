@@ -88,10 +88,13 @@ RUN sed -i '1s|^#!/usr/bin/env node\r\?$|#!/usr/local/bin/bun|' \
  && head -1 /usr/local/install/global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
  && pi --version
 
-COPY --from=build /src/target/release/ontok                 /usr/local/bin/ontok
-COPY --from=build /src/target/release/ontok-introspect      /usr/local/bin/ontok-introspect
-COPY --from=build /src/target/release/ontok-propose         /usr/local/bin/ontok-propose
-COPY --from=build /src/target/release/ontok-translate-names /usr/local/bin/ontok-translate-names
+# ⭐ REQ-152 · **镜像里只有一个 ontok**（服务面）。
+#
+# ⛔ 不再 COPY `ontok-introspect` / `ontok-propose` / `ontok-translate-names`：
+#    它们是 FDE 本机的活，已经并进**构建面** `ontok-builder`（**不进镜像**）。
+#    留着它们的下一步就是「客户镜像里带着勘查/提案工具 + 执行器」，那正是
+#    REQ-152 要消灭的形状。判据：`podman run --rm <img> ls /usr/local/bin` ⇒ 只有 ontok。
+COPY --from=build /src/target/release/ontok /usr/local/bin/ontok
 
 USER ontok
 WORKDIR /data

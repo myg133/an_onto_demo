@@ -11,15 +11,30 @@ edition = "2021"
 # 本机实测工具链 1.96.0；镜像里也用 1.96.0（与本地一致，保证同一份代码两边都能编）。
 rust-version = "1.88"
 
+# REQ-152 · **只有两个二进制**（服务面 / 构建面）。
+#
+# ⛔ `autobins = false` 是承重的：`src/bin/` 下还留着四个工具的**源文件**
+# （`ontok-introspect.rs` 等），它们是 `ontok-builder` 的模块（见
+# `src/bin/ontok-builder.rs` 的 `#[path]`），**不再各自成 bin** ——
+# 若开着自动发现，`cargo build --bins` 会把它们也编成独立二进制，
+# 「镜像里只有一个 bin / 旧 bin 不再产出」两条判据当场变红。
+autobins = false
+
 [workspace]
 
 [lib]
 name = "ontok"
 path = "src/lib.rs"
 
+# 服务面（**唯一进镜像**的二进制）：`query serve` / `mcp-server` / `serve`。
 [[bin]]
 name = "ontok"
 path = "src/main.rs"
+
+# 构建面（FDE 本机）：四个工具 + 原来的构建子命令。
+[[bin]]
+name = "ontok-builder"
+path = "src/bin/ontok-builder.rs"
 
 [dependencies]
 # REQ-123：`time`（SSE 的 keep-alive / 空闲超时）是 MCP over HTTP 真用到的 tokio 模块。

@@ -296,9 +296,9 @@ const ACCEPTED_ARGS: &[&str] = &[
 /// 照做的人会以为本命令的基线跟着变了，实际**一点都不会变**。
 const SCHEMA_JSON_DISCLAIMER: &str = "两个门禁都会读它，但它**不参与**本命令的角色解析";
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = parse_args(std::env::args().skip(1))?;
+// REQ-152：本文件不再自己成 bin（`ontok-builder gate-preflight`）—— 运行时由外层提供
+pub async fn main(args: Vec<String>) -> Result<()> {
+    let cli = parse_args(args.into_iter())?;
     if cli.help {
         print_help();
         return Ok(());

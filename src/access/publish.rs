@@ -311,7 +311,7 @@ mod tests {
   "ontology_version": 2,
   "sources": [
     { "id": "svc-example", "kind": "http-json", "base_url": "https://api.example.com",
-      "auth": { "mode": "tc3-hmac-sha256", "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"] },
+      "auth": { "mode": "hmac-sha256", "credential_env": ["EXAMPLE_SECRET_ID", "EXAMPLE_SECRET_KEY"] },
       "defaults": { "Region": "ap-guangzhou" } }
   ],
   "entities": [

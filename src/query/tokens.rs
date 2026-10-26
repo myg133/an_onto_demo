@@ -132,7 +132,13 @@ where
 ///
 /// `tenant = None` 只可能来自本体模式（普通模式的 [`TokenSpec`] 里它是 `String`，
 /// serde 在解析阶段就要求它有值）。这样一个校验循环就能服务两种模式。
-struct RawSpec {
+///
+/// ⚠️ **REQ-152 · 名字是承重的**：原来叫 `Raw` + `Spec`，而 QG 的
+/// 「产品路径零厂商 token」判据里有一条**不区分大小写**的三字母厂商缩写 ——
+/// 那两个词首尾相接就**恰好命中**（前者的尾巴 + 后者的头），
+/// 于是 grep 把一行正经代码判成「厂商名」。
+/// ⛔ 别改回去：任何让那三个字母连起来的拼写都会让 AC-002 的 grep 变红。
+struct RawTokenSpec {
     token: String,
     tenant: Option<String>,
     max_rows: u64,
@@ -140,7 +146,7 @@ struct RawSpec {
     label: Option<String>,
 }
 
-impl From<TokenSpec> for RawSpec {
+impl From<TokenSpec> for RawTokenSpec {
     fn from(t: TokenSpec) -> Self {
         Self {
             token: t.token,
@@ -152,7 +158,7 @@ impl From<TokenSpec> for RawSpec {
     }
 }
 
-impl From<OntologyTokenSpec> for RawSpec {
+impl From<OntologyTokenSpec> for RawTokenSpec {
     fn from(t: OntologyTokenSpec) -> Self {
         Self {
             token: t.token,
@@ -222,16 +228,16 @@ impl TokenTable {
         if mode.is_ontology_only() {
             let doc: OntologyTokenFile = serde_json::from_str(json)
                 .map_err(|e| format!("tokens.json 不是合法形状：{e}"))?;
-            let specs: Vec<RawSpec> = doc.tokens.into_iter().map(RawSpec::from).collect();
+            let specs: Vec<RawTokenSpec> = doc.tokens.into_iter().map(RawTokenSpec::from).collect();
             return Self::validate(&doc.version, specs, mode);
         }
         let doc: TokenFile =
             serde_json::from_str(json).map_err(|e| format!("tokens.json 不是合法形状：{e}"))?;
-        let specs: Vec<RawSpec> = doc.tokens.into_iter().map(RawSpec::from).collect();
+        let specs: Vec<RawTokenSpec> = doc.tokens.into_iter().map(RawTokenSpec::from).collect();
         Self::validate(&doc.version, specs, mode)
     }
 
-    fn validate(version: &str, tokens: Vec<RawSpec>, mode: ServiceMode) -> Result<Self, String> {
+    fn validate(version: &str, tokens: Vec<RawTokenSpec>, mode: ServiceMode) -> Result<Self, String> {
         let major = version.trim().split('.').next().unwrap_or("");
         if major != "1" {
             return Err(format!(

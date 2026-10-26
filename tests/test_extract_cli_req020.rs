@@ -81,7 +81,7 @@ fn run_cli(dir: &std::path::Path, project: &str, extra: &[&str]) -> (bool, Strin
     std::fs::write(&np, NAMES_JSON).unwrap();
     let out = dir.join("proposal.json");
     let stats = dir.join("stats.json");
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"));
+    let mut cmd = propose_bin();
     cmd.args([
         "--schema",
         sp.to_str().unwrap(),
@@ -305,4 +305,15 @@ async fn test_round_one_is_unaffected_by_a_frozen_version() {
     let (ok, _so, se) = run_cli(&dir, &project, &["--round", "1"]);
     assert!(ok, "第 1 轮不比对基版本，不该被冻结拦住，stderr：{se}");
     assert!(!se.contains("冻结"), "第 1 轮不该提冻结，实际 stderr：{se}");
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

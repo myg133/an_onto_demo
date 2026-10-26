@@ -1671,13 +1671,9 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "sparql_cmd",
         "子命令 handler（`sparql query`：按声明注入租户 + 只读执行，写出 I13）",
     ),
-    // ⭐ REQ-123 · 查询服务：clap 参数 → `query::serve::ServeArgs` 的**纯搬运**。
-    // 它不做鉴权 / 限额 / 绑定判断，也**不写任何字节**（服务由 `query::serve` 起）。
-    (
-        "src/cli.rs",
-        "query_cmd",
-        "子命令 handler（`query serve`：只翻译参数，逻辑全在 `query::serve`；本函数零写出）",
-    ),
+    // ⭐ REQ-152 · `query_cmd` **已从 `src/cli.rs` 搬走**（`services` 面独立成
+    // `src/service.rs` 的模块）：它属于服务面，而服务面不许引用 `cli`（执行器会被
+    // 链进产品二进制）。登记表因此删掉这一格 —— 函数还在，只是不在出口文件里了。
     // ⭐ REQ-124 · 控制面：CLI 与控制面**共用**的领域调用层 + 纯搬运的参数翻译。
     (
         "src/cli.rs",
@@ -1973,6 +1969,17 @@ fn module_decls(code: &str) -> Vec<String> {
 const MODULES: &[(&str, &str)] = &[
     ("src/lib.rs", "agent"),
     ("src/lib.rs", "cli"),
+    // ⭐ REQ-152 · **服务面入口**（`ontok` 的 CLI）：与 `cli` 互不引用，
+    // 这样 `ontok` 的可达图里没有 `access::net` / `access::tc3` / `ureq`。
+    ("src/lib.rs", "service"),
+    // ⭐ REQ-152 · EPIPE 的 panic hook（两个 bin 共用一份实现；服务面装它不必引用 `cli`）。
+    ("src/lib.rs", "pipe_guard"),
+    // ⭐ REQ-152 · **构建面二进制**：四个原独立 bin 的工具用 `#[path]` 挂成模块，
+    // 路径与文件名都不变（`include_str!` 与「保留名」判据按精确路径钉着源码）。
+    ("src/bin/ontok-builder.rs", "gate_preflight"),
+    ("src/bin/ontok-builder.rs", "introspect"),
+    ("src/bin/ontok-builder.rs", "propose"),
+    ("src/bin/ontok-builder.rs", "translate_names"),
     ("src/lib.rs", "config"),
     ("src/lib.rs", "db"),
     ("src/lib.rs", "domain"),

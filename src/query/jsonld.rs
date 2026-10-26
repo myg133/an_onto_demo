@@ -104,7 +104,10 @@ pub struct JsonLd<'a> {
 /// ⭐ REQ-145 · `@pending[]` 的一条 ——「这一块平台没算，你要这样自己取」。
 ///
 /// 字段顺序即序列化顺序（`to_text` 与 REST 正文逐字节相同）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// ⚠️ REQ-152 起不再派生 `Eq`：`get` 的配方里有 `serde_json::Value`（原样透出的
+/// `operation` / `request`）⇒ 只有 `PartialEq`。`Eq` 在这里没有使用者。
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PendingNode {
     /// 待取节点的 IRI（**认不出实例标识时不出现** —— ⛔ 不编一个假 id）。
     #[serde(rename = "@id", skip_serializing_if = "Option::is_none")]
@@ -147,7 +150,12 @@ pub struct PendingLocalHint {
 }
 
 /// `@pending[].get` ——「按什么去取」。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// ⭐ REQ-152 · **只做加法**：前 4 个键（`class` / `filter` / `pushdown` / `ref`）是 v1 的形状，
+/// 名字、类型、顺序都不动；后面的配方段由 [`Recipe`] **摊平**接上 ——
+/// 契约 v1 的映射里 `Recipe` 全是 `None`，于是**一个键都不多**（AC-103），
+/// 这不是在序列化时判一次版本，而是结构上没有可写的东西。
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PendingGet {
     /// 取哪个类。
     pub class: String,
@@ -158,6 +166,11 @@ pub struct PendingGet {
     /// `access#<条目>@v<映射版本>` —— 可追溯到**签过的那一条**契约（规则 3）。
     #[serde(rename = "ref")]
     pub reference: String,
+    /// ⭐ REQ-152 · 取数配方（`source` / `operation` / `request` / `iterator` / `fields` / `auth`）。
+    ///
+    /// 摊平 ⇒ 键顺序 = [`Recipe`] 的声明顺序，且**缺的项不出现**（⛔ 不塞空对象）。
+    #[serde(flatten)]
+    pub recipe: super::source_gate::Recipe,
 }
 
 /// `get.filter`（目前只有 `ids`；`{}` 是合法形状 —— 契约规则 7）。
@@ -462,6 +475,8 @@ fn pending_node(p: &super::source_gate::ApiPending) -> PendingNode {
             },
             pushdown: g.pushdown.clone(),
             reference: g.reference.clone(),
+            // v1 ⇒ `Recipe::default()`（全 `None`）⇒ 摊平后**一个键都不多**。
+            recipe: g.recipe.clone().unwrap_or_default(),
         }),
     }
 }

@@ -61,8 +61,9 @@ use ontok::extract::exclusions::{Entry, Exclusions};
 use ontok::extract::introspect::{KeyCatalog, SchemaReport, SOURCE_DATABASE_URL_ENV};
 use ontok::extract::names::TableNames;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// REQ-152：本文件不再自己成 bin —— 它是 `ontok-builder propose` 的实现。
+/// argv 由外层 clap 子命令**原样**递进来，参数/帮助/退出码一个字节都没变。
+pub async fn main(args_vec: Vec<String>) -> Result<()> {
     let mut schema_path = String::from("out/schema.json");
     // ── REQ-128 · `--names` **没有默认值** ────────────────────────────
     //
@@ -144,7 +145,7 @@ async fn main() -> Result<()> {
     // 不给自己也能跑，但会在 stderr 明说「未声明租户键 ⇒ 继承闸对所有人放行」。
     let mut tenancy_path: Option<String> = None;
 
-    let mut args = std::env::args().skip(1);
+    let mut args = args_vec.into_iter();
     while let Some(a) = args.next() {
         let mut val = || args.next().with_context(|| format!("{a} 需要一个参数"));
         match a.as_str() {

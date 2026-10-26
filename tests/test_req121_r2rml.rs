@@ -566,7 +566,7 @@ fn structural_counts_agree_with_the_document() {
 
 #[test]
 fn cli_help_lists_the_generate_command_and_its_required_schema_flag() {
-    let out = Command::new(env!("CARGO_BIN_EXE_ontok"))
+    let out = Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
         .args(["r2rml", "generate", "--help"])
         .output()
         .expect("跑不起 ontok 二进制");

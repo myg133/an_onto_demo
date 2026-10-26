@@ -108,7 +108,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 /// 跑**真的 CLI 二进制**（`CARGO_BIN_EXE_ontok`）—— 对拍的另一头必须是命令行，不是同一段代码。
 fn cli(pool_url: &str, args: &[&str]) -> std::process::Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"));
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
     cmd.args(args);
     cmd.env("ONTOK_DATABASE_URL", pool_url);
     cmd.output().expect("跑 ontok 失败")

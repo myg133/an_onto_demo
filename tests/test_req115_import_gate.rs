@@ -93,7 +93,7 @@ fn write_decl(json: &str, tag: &str) -> std::path::PathBuf {
 }
 
 fn run_import(file: &std::path::Path, project: &str) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
         .args(["concept", "import", "--file"])
         .arg(file)
         .args(["--project", project, "--base-version", "1"])

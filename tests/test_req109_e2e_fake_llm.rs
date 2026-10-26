@@ -34,7 +34,16 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-const BIN: &str = env!("CARGO_BIN_EXE_ontok-propose");
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
+}
 
 fn manifest_dir() -> PathBuf {
     common::crate_root()
@@ -151,7 +160,7 @@ struct Run {
 }
 
 fn run_propose(args: &[String], envs: &[(&str, String)]) -> Run {
-    let mut cmd = Command::new(BIN);
+    let mut cmd = propose_bin();
     cmd.current_dir(manifest_dir());
     // 先把 LLM 三个变量清干净，再按参数注入 —— 免得开发机上的真凭据混进测试
     for k in [

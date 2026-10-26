@@ -181,7 +181,7 @@ struct Run {
 fn run_propose(dir: &Path, schema: &Path, exclusions: Option<&Path>, extra: &[&str], tag: &str) -> Run {
     let out = dir.join(format!("proposal-{tag}.json"));
     let stats = dir.join(format!("stats-{tag}.json"));
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-propose"));
+    let mut cmd = propose_bin();
     cmd.args([
         "--schema",
         schema.to_str().unwrap(),
@@ -428,8 +428,8 @@ async fn test_single_file_import_persists_the_audit_block() {
     }
 
     // ⭐ 只给一个 `--file`：没有侧车、没有第二个参数
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"))
-        .args(["propose", "import", "--file", proposal_path.to_str().unwrap()])
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
+        .args(["import", "--file", proposal_path.to_str().unwrap()])
         .env("ONTOK_DATABASE_URL", &url)
         .env("NO_COLOR", "1")
         .output()
@@ -776,4 +776,15 @@ async fn test_review_api_says_why_there_is_no_exclusion_record() {
         "三种「没有记录」要分开说：{}",
         body["exclusions"]["reason"]
     );
+}
+
+/// REQ-152：构建面命令已并入 **`ontok-builder`**（子命令 `propose`）。
+///
+/// 参数、产物与退出码一个字节都没变 —— 只是二进制名字变了、多一层子命令。
+/// 返回 `Command` 而不是 `&str`: 调用点大多是 `Command::new(..).arg(..)` 的链，
+/// 换成字符串就得在每个调用点各插一行 `.arg("propose")`（漏一个就红得莫名其妙）。
+fn propose_bin() -> std::process::Command {
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
+    c.arg("propose");
+    c
 }

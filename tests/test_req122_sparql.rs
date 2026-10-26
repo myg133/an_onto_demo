@@ -627,7 +627,7 @@ fn ac010_the_shipped_declaration_parses_and_has_no_contradiction() {
 
 #[test]
 fn cli_help_lists_the_sparql_query_command_and_its_flags() {
-    let out = Command::new(env!("CARGO_BIN_EXE_ontok"))
+    let out = Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
         .args(["sparql", "query", "--help"])
         .output()
         .expect("跑不起 ontok 二进制");

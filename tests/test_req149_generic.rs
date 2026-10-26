@@ -390,7 +390,7 @@ fn cli_mapping_text() -> String {
 }
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_ontok")
+    env!("CARGO_BIN_EXE_ontok-builder")
 }
 
 fn run_cli(args: &[&str]) -> (i32, String, String) {

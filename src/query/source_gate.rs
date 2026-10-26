@@ -36,6 +36,12 @@
 //!       "capability": { "pushdown": ["ids"] }, "freshness": "realtime" } ] }
 //! ```
 //!
+//! ⭐ REQ-152 · **`freshness` 收两种写法**（一份 schema，两个解析器不再打架）：
+//! 上面那种字符串，或 access 契约 / 全量 AM 的对象
+//! `"freshness": { "mode": "realtime", "note": "…" }`。两种都取 `mode` 归一
+//! （见 [`RawFreshness`]）。所以 `--access-mapping` 可以直接吃**全量 AM**，
+//! 不再需要 `Deploy/.../gen-serve-mapping.py` 造一份投影。
+//!
 //! - `mapping_version` **必填**（`meta.mapping_version` 与 `get.ref` 的 `@v<n>` 都取它，
 //!   用于「映射与本体版本对得上」的追溯 —— 契约规则 3）；
 //! - `entities[].class` 是**本体里的类 key**（= 快照 `entity_types.key`，`catalog` 的 `table`）；
@@ -44,6 +50,7 @@
 //! - `capability.pushdown` ⇒ `access.pushdown_fields` / `get.pushdown`（省略 = `[]`，
 //!   ⛔ 不替调用方猜一个能力）；
 //! - `freshness` 可选（省略 ⇒ `access` 里不出现这个键，⛔ 不编一个「实时」）。
+//!   对象写法里没有 `mode` ⇒ **与省略同义**（同样不编）。
 //!
 //! 契约里其余字段（`source` / `operation` / `iterator` / `iri_template` / `fields`）
 //! 本模块**读进来就丢**：它们只在 access 契约里生效，平台既不执行也不转发
@@ -86,7 +93,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::model_view::ModelTrackView;
 use crate::domain::r2rml::R2rmlMapping;
@@ -154,10 +161,18 @@ pub struct CrossEdge {
 #[derive(Debug, Clone)]
 pub struct AccessMapping {
     mapping_version: u64,
+    /// ⭐ REQ-152 · 契约版本（缺省按 1）：`>= 2` 才允许下发完整配方（AC-103）。
+    contract_version: u64,
     /// 单个类最多声明一次（重复 ⇒ 加载期报错）；按类 key 升序。
     entities: Vec<Entity>,
     /// 类 key → `entities` 下标（唯一索引）。
     by_class: BTreeMap<String, usize>,
+    /// ⭐ REQ-152 · 类 key → 取数配方（**只有 v2 映射才有**；v1 ⇒ 表是空的）。
+    ///
+    /// 为什么放在这里而不是 [`Entity`] 里：`Entity` 要参与排序 / 去重（`Ord + Eq`），
+    /// 而配方里有 `serde_json::Value`（原样透出的 `operation` / `request`），
+    /// 它既没有 `Ord` 也没有 `Eq` —— 硬塞进去会把 `Entity` 的派生全拆掉。
+    recipes: BTreeMap<String, Recipe>,
     /// TTL 用的 api 类集合（`bind` 之后才有值：人读名要从本体取）。
     api: ApiClasses,
     /// ⭐ REQ-151 · 本体里**不属于 api 源**的类本地名（`bind` 时从 model 一次算好）。
@@ -183,7 +198,53 @@ struct RawMapping {
     #[serde(default)]
     contract_version: Option<u64>,
     #[serde(default)]
+    sources: Vec<SourceDecl>,
+    #[serde(default)]
     entities: Vec<RawEntity>,
+}
+
+/// ⭐ REQ-152 · `sources[]`（本模块只用三样：`id` / `base_url` / `auth` 的**声明**
+/// —— 凭据值一个都不读，也没有地方可放）。
+#[derive(Debug, Deserialize)]
+struct SourceDecl {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    auth: Option<RawAuth>,
+    /// ⭐ REQ-152 · CP4 · 源级默认值（`source=default` 的绑定从这里取值）。
+    ///
+    /// **原样**透出到 `get.request.defaults`：键名 / 大小写 / 嵌套结构一个字符不改
+    /// （真实映射里 `{"Region":…,"module":…}` 两个键的大小写本来就不一致）。
+    /// ⛔ 这里不做任何解释 —— 哪个占位符该填哪个键，是客户端与映射作者之间的事。
+    #[serde(default)]
+    defaults: Option<serde_json::Value>,
+}
+
+/// ⭐ REQ-152 · `sources[].auth`。v1 只认前两项；v2 的三项声明**可选**
+/// （缺 ⇒ `get.auth` 里就没有那个键，⛔ 不按 `mode` 猜默认值 —— AC-106）。
+#[derive(Debug, Deserialize)]
+struct RawAuth {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    credential_env: Vec<String>,
+    #[serde(default)]
+    signed_headers: Option<Vec<String>>,
+    #[serde(default)]
+    timestamp: Option<RawTimestamp>,
+    #[serde(default)]
+    scope: Option<Vec<String>>,
+}
+
+/// ⭐ REQ-152 · 时间戳声明（写哪个 header + 什么格式）。两项缺一 ⇒ 不透出（不编）。
+#[derive(Debug, Deserialize)]
+struct RawTimestamp {
+    #[serde(default)]
+    header: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,29 +256,233 @@ struct RawEntity {
     #[serde(default)]
     capability: Option<RawCapability>,
     #[serde(default)]
-    freshness: Option<String>,
-    // 下面这些在契约里存在、本模块**不解释**（读进来就丢，见模块头）。
+    freshness: Option<RawFreshness>,
+    /// ⭐ REQ-152 · 指向 [`RawMapping::sources`] 的 `id`（配方里 `source` 段要用）。
     #[serde(default)]
-    #[allow(dead_code)]
     source: Option<String>,
+    /// ⭐ REQ-152 · `operation` 段：**原样透出**给 `get.operation`（产品代码不认识里面任何名字）。
     #[serde(default)]
-    #[allow(dead_code)]
     operation: Option<serde_json::Value>,
+    /// ⭐ REQ-152 · `request` 段（模板 / 必填 / 绑定 / 分页路径）：**原样透出**。
     #[serde(default)]
-    #[allow(dead_code)]
+    request: Option<serde_json::Value>,
+    #[serde(default)]
     iterator: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
     iri_template: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     fields: Option<serde_json::Value>,
+}
+
+/// ⭐ REQ-152 · `freshness` 的**两种写法**（一份 schema，两个解析器不再打架）。
+///
+/// | 写法 | 谁在用 | 例 |
+/// | --- | --- | --- |
+/// | 字符串 | `query serve` 的历史形状（投影脚本产的那份） | `"freshness": "realtime"` |
+/// | 对象 | access 契约 / 部署侧那份**已签的全量 AM** | `"freshness": {"mode": "realtime", "note": "…"}` |
+///
+/// **归一规则**：两种都收，统一取 `mode`（字符串写法就是它自己）。
+/// 对象里没有 `mode`（或为空串）⇒ 与「省略 freshness」同义 —— ⛔ 不编一个「实时」。
+/// `note` **读进来就丢**：它是给人看的说明，不参与任何判定（阶段 2 才可能用）。
+///
+/// 为什么放宽在这里而不是让部署侧继续造投影文件：投影脚本
+/// （`Deploy/.../gen-serve-mapping.py`）是「同一份契约两个解析器」的补丁，
+/// 它自己就是漂移源 —— 全量 AM 里新增一个字段，投影那份不会跟着变。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawFreshness {
+    Text(String),
+    Object {
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        #[allow(dead_code)]
+        note: Option<String>,
+    },
+}
+
+impl RawFreshness {
+    /// 归一成 serve 侧唯一形状：`Option<非空 mode>`。
+    fn into_mode(&self) -> Option<String> {
+        let raw = match self {
+            RawFreshness::Text(s) => Some(s.clone()),
+            RawFreshness::Object { mode, .. } => mode.clone(),
+        };
+        raw.map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct RawCapability {
     #[serde(default)]
     pushdown: Vec<String>,
+}
+
+/// ⭐ REQ-152 · 单类 `get` 的**体积上限**（序列化后字节数；超 ⇒ 加载期报错，不是静默瘦身）。
+///
+/// 为什么要有上限：`fields` 是可以写成几百条的长表，配方的体积会跟着映射作者的
+/// 手速长；一个 200 KB 的 `@pending` 挂在每个响应里，真正的问题（字段映射过肥）
+/// 会被"响应慢"这个表象盖住。12 KB 是「够用且看得出异常」的口径。
+const MAX_GET_RECIPE_BYTES: usize = 12 * 1024;
+
+/// ⭐ REQ-152 · 一条 `get` 的**取数配方**（`contract_version >= 2` 才下发）。
+///
+/// 每一段都是 `Option`：**映射里没有的项 ⇒ 整个键不出现**（⛔ 不塞空对象）。
+/// 序列化顺序 = 声明顺序（`jsonld::PendingGet` 用 `#[serde(flatten)]` 接在旧 4 键之后）。
+///
+/// | 段 | 从映射哪里来 | 产品代码做什么 |
+/// | --- | --- | --- |
+/// | `source` | `entities[].source` → `sources[].{base_url,auth.mode}` | 只取这两个值 |
+/// | `operation` | `entities[].operation` | **原样透出**（不认识任何 header 名） |
+/// | `request` | `entities[].request` + 所属源的 `sources[].defaults` | **原样透出**（模板 / 必填 / 绑定 / 分页路径；CP4 起多一个 `defaults`，仅当源写了才出现） |
+/// | `iterator` | `entities[].iterator` | 原样透出 |
+/// | `fields` | `entities[].fields` | 摊平成 `属性 → 响应字段路径` |
+/// | `auth` | `sources[].auth` 的声明 | 只透传（变量名 / 头名 / scope 段名） |
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Recipe {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<RecipeSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iterator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<RecipeAuth>,
+}
+
+/// `get.source`：打到哪儿、用哪种鉴权**模式**（模式名是给客户端选实现的，不是给代码分支的）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecipeSource {
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+}
+
+/// `get.auth`：**只有声明**（变量名 / 头名 / 段名）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RecipeAuth {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub credential_env: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_headers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<RecipeTimestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
+}
+
+/// `get.auth.timestamp`：时间戳写哪个 header、什么格式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecipeTimestamp {
+    pub header: String,
+    pub format: String,
+}
+
+impl Recipe {
+    /// 空配方（v1 / 缺一切）—— `PendingGet` 摊平它之后**一个键都不多**。
+    pub fn is_empty(&self) -> bool {
+        self.source.is_none()
+            && self.operation.is_none()
+            && self.request.is_none()
+            && self.iterator.is_none()
+            && self.fields.is_none()
+            && self.auth.is_none()
+    }
+}
+
+/// 从 `entities[]` 的一条 + `sources[]` 造配方（⭐ REQ-152）。
+///
+/// ⚠️ 这里**只搬数据**：不查表、不推默认值、不因为某个 `mode` 就补一组签名头 ——
+/// 猜出来的 header 名是**错的签名**，比没有签名更难查（AC-106）。
+fn build_recipe(
+    e: &RawEntity,
+    sources: &BTreeMap<String, &SourceDecl>,
+) -> Recipe {
+    // `source`：只有实体指了源、且那个源写了 `base_url` 才给（⛔ 不编一个地址）。
+    let src = e
+        .source
+        .as_deref()
+        .and_then(|id| sources.get(id).copied());
+    let source = src.and_then(|s| {
+        s.base_url.as_ref().map(|base_url| RecipeSource {
+            base_url: base_url.clone(),
+            auth_mode: s.auth.as_ref().and_then(|a| a.mode.clone()),
+        })
+    });
+    // `auth`：只透出声明；三项各自缺 ⇒ 各自不出现。
+    let auth = src.and_then(|s| s.auth.as_ref()).map(|a| RecipeAuth {
+        credential_env: a.credential_env.clone(),
+        signed_headers: a.signed_headers.clone(),
+        timestamp: a
+            .timestamp
+            .as_ref()
+            .and_then(|t| match (&t.header, &t.format) {
+                (Some(header), Some(format)) => Some(RecipeTimestamp {
+                    header: header.clone(),
+                    format: format.clone(),
+                }),
+                _ => None,
+            }),
+        scope: a.scope.clone(),
+    });
+    // `fields`：摊平成 `属性 → 响应字段路径`（值不是 `{path}` 的条目跳过 —— 那是坏映射，
+    // 由 `access validate` 负责报错，本模块只负责把**能用**的部分透出）。
+    let fields = e.fields.as_ref().and_then(|f| f.as_object()).map(|map| {
+        map.iter()
+            .filter_map(|(k, v)| {
+                v.get("path")
+                    .and_then(|p| p.as_str())
+                    .map(|p| (k.clone(), p.to_string()))
+            })
+            .collect::<BTreeMap<String, String>>()
+    });
+    Recipe {
+        source,
+        operation: e.operation.clone(),
+        request: with_defaults(e.request.clone(), src.and_then(|s| s.defaults.clone())),
+        iterator: e.iterator.clone(),
+        fields: fields.filter(|f| !f.is_empty()),
+        // `credential_env` 全空且三项也没有 ⇒ 整个 `auth` 不出现。
+        auth: auth.filter(|a| {
+            !a.credential_env.is_empty()
+                || a.signed_headers.is_some()
+                || a.timestamp.is_some()
+                || a.scope.is_some()
+        }),
+    }
+}
+
+/// ⭐ REQ-152 · CP4 · `sources[].defaults` → `get.request.defaults`（**只搬不改**）。
+///
+/// 为什么挂在 `request` 下：`bindings.<名>.source = "default"` 只说「从默认值取」，
+/// 而值本身在 `sources[].defaults` 里 —— 不把它透出来，客户端拿到 `{module}` 也
+/// 不知道填什么（实测：`alarm_policy` 因此报 `MissingParameter`）。
+///
+/// 口径：
+/// - 源**没有** `defaults` ⇒ 整个键不出现（⛔ 不塞 `{}`、⛔ 不按占位符名编一个）；
+/// - 映射写了什么就透什么：键名 / 大小写 / 嵌套结构**原样**（⛔ 不合并进 `template`、
+///   ⛔ 不解释成「某个 header 的值」）；
+/// - `request` 本身就缺、但有 defaults ⇒ 给 `{"defaults": …}`；
+/// - `request` 不是对象（坏映射）⇒ 原样留着，⛔ 不静默改写（`access validate` 负责报错）。
+fn with_defaults(
+    request: Option<serde_json::Value>,
+    defaults: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let Some(defaults) = defaults else { return request };
+    match request {
+        None => Some(serde_json::json!({ "defaults": defaults })),
+        Some(serde_json::Value::Object(mut obj)) => {
+            obj.insert("defaults".to_string(), defaults);
+            Some(serde_json::Value::Object(obj))
+        }
+        other => other,
+    }
 }
 
 impl AccessMapping {
@@ -235,19 +500,31 @@ impl AccessMapping {
         if mapping_version == 0 {
             return Err("`mapping_version` 是 0。版本从 1 起（0 会被读成「没有版本」）。".to_string());
         }
-        if let Some(cv) = doc.contract_version {
-            if cv == 0 {
-                return Err("`contract_version` 是 0。契约版本从 1 起。".to_string());
-            }
+        // ⭐ REQ-152 · 契约版本：缺省 = 1（旧形状）。`>= 2` 才允许下发完整配方。
+        let contract_version = doc.contract_version.unwrap_or(1);
+        if contract_version == 0 {
+            return Err("`contract_version` 是 0。契约版本从 1 起。".to_string());
         }
         if doc.entities.is_empty() {
             // 「加载了映射但一条 api 类都没有」是一个可用的状态（全是库源），但要说出来 ——
             // 否则运维会以为映射生效了。这里不当作错误，只由调用方打一行提示。
         }
 
+        // ⭐ REQ-152 · `sources[]` 只留三样（`id` → 声明）；没有 `id` 的源没人引用得上。
+        let mut sources: BTreeMap<String, &SourceDecl> = BTreeMap::new();
+        for s in &doc.sources {
+            if let Some(id) = s.id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                sources.insert(id.to_string(), s);
+            }
+        }
+        let with_recipe = contract_version >= 2;
+        let mut recipes: BTreeMap<String, Recipe> = BTreeMap::new();
+        // 配方超限的类（加载期一次性报全，⛔ 不静默瘦身 —— 瘦身等于悄悄改契约）。
+        let mut oversized: Vec<(String, usize)> = Vec::new();
+
         let mut entities: Vec<Entity> = Vec::with_capacity(doc.entities.len());
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
-        for (i, e) in doc.entities.into_iter().enumerate() {
+        for (i, e) in doc.entities.iter().enumerate() {
             let id = e
                 .id
                 .as_deref()
@@ -281,7 +558,8 @@ impl AccessMapping {
             seen.insert(class.clone(), id.clone());
             let mut pushdown = e
                 .capability
-                .map(|c| c.pushdown)
+                .as_ref()
+                .map(|c| c.pushdown.clone())
                 .unwrap_or_default()
                 .into_iter()
                 .map(|p| p.trim().to_string())
@@ -289,12 +567,18 @@ impl AccessMapping {
                 .collect::<Vec<String>>();
             pushdown.sort();
             pushdown.dedup();
-            let freshness = e
-                .freshness
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            let freshness = e.freshness.as_ref().and_then(RawFreshness::into_mode);
+            // ⭐ REQ-152 · v2 才建配方；v1 ⇒ 表里一条都没有（`get` 一个键都不多）。
+            if with_recipe {
+                let recipe = build_recipe(e, &sources);
+                if !recipe.is_empty() {
+                    let bytes = serde_json::to_string(&recipe).map(|s| s.len()).unwrap_or(0);
+                    if bytes > MAX_GET_RECIPE_BYTES {
+                        oversized.push((class.clone(), bytes));
+                    }
+                    recipes.insert(class.clone(), recipe);
+                }
+            }
             entities.push(Entity {
                 id,
                 class,
@@ -304,6 +588,21 @@ impl AccessMapping {
         }
         entities.sort_by(|a, b| a.class.cmp(&b.class));
 
+        if !oversized.is_empty() {
+            let list = oversized
+                .iter()
+                .map(|(c, n)| format!("{c}（{n} B）"))
+                .collect::<Vec<_>>()
+                .join("、");
+            return Err(format!(
+                "有 {} 个类的 `@pending.get` 配方超过 {MAX_GET_RECIPE_BYTES} B：{list}。\
+                 通常是 `entities[].fields` 过肥 —— 几十 KB 的字段表挂在每个 `@pending` 里，\
+                 调用方既读不完也缓存不住。请只映射真正要用的属性。\
+                 ⛔ 本实现不会替你截断（截断等于悄悄改契约）。",
+                oversized.len()
+            ));
+        }
+
         let mut by_class: BTreeMap<String, usize> = BTreeMap::new();
         for (i, e) in entities.iter().enumerate() {
             by_class.insert(e.class.clone(), i);
@@ -311,8 +610,10 @@ impl AccessMapping {
 
         Ok(Self {
             mapping_version,
+            contract_version,
             entities,
             by_class,
+            recipes,
             api: ApiClasses::default(),
             db_locals: BTreeSet::new(),
             cross_edges: BTreeMap::new(),
@@ -414,6 +715,16 @@ impl AccessMapping {
 
     pub fn mapping_version(&self) -> u64 {
         self.mapping_version
+    }
+
+    /// ⭐ REQ-152 · 契约版本（`>= 2` 才允许下发完整配方）。
+    pub fn contract_version(&self) -> u64 {
+        self.contract_version
+    }
+
+    /// ⭐ REQ-152 · 某个类的取数配方（v1 映射 ⇒ 恒 `None`）。
+    pub fn recipe(&self, class_key: &str) -> Option<&Recipe> {
+        self.recipes.get(class_key)
     }
 
     /// api 类集合（交给 TTL；只含「是 / 不是」，不含任何接口细节）。
@@ -600,6 +911,8 @@ impl AccessMapping {
                 ids: id.into_iter().collect(),
                 pushdown: entity.pushdown.clone(),
                 reference: entity.reference(self.mapping_version),
+                // ⭐ REQ-152 · v1 映射这里恒 `None` ⇒ `get` 只有旧 4 键（AC-103）。
+                recipe: self.recipes.get(class_key).cloned(),
             }),
         })
     }
@@ -652,7 +965,10 @@ impl AccessMapping {
 }
 
 /// 一条 `@pending`（**不进 `@graph`**，契约规则 2）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ⚠️ REQ-152 起不再派生 `Eq`：`get` 的配方里有 `serde_json::Value`（原样透出的
+/// `operation` / `request`），它只有 `PartialEq`；`Eq` 在这里没有使用者。
+#[derive(Debug, Clone, PartialEq)]
 pub struct ApiPending {
     /// 本体里的类 key（`unresolved_classes` 报的是本地名，见 [`Self::class_local`]）。
     pub class_key: String,
@@ -695,7 +1011,7 @@ pub struct LocalHint {
 }
 
 /// `@pending[].get` ——「这一块怎么自己取」。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GetInstruction {
     /// 要取哪个类（SPARQL 侧的名字）。
     pub class: String,
@@ -705,10 +1021,15 @@ pub struct GetInstruction {
     pub pushdown: Vec<String>,
     /// `access#<id>@v<mapping_version>`。
     pub reference: String,
+    /// ⭐ REQ-152 · 取数配方（**契约 v2** 才有；v1 ⇒ `None`）。
+    ///
+    /// 它被 `jsonld::PendingGet` 用 `#[serde(flatten)]` 接在旧 4 键之后，
+    /// 于是「v1 ⇒ 一个键都不多」是**结构**上的事，不靠在哪里判一次版本。
+    pub recipe: Option<Recipe>,
 }
 
 /// 一条查询的**源判定**（[`AccessMapping::check`] 的返回值）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SourceCheck {
     /// 只碰库源 ⇒ 正常执行。
     DbOnly,

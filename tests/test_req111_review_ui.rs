@@ -327,7 +327,7 @@ async fn ac004_page_signs_then_the_cli_reads_it_and_back() {
     assert_eq!(body_json(&b)["biz"], json!("accepted"));
 
     let (code, stdout, stderr) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &["review", "show", "--proposal", &f.proposal_id.to_string(), "--project", &f.project],
     );
     assert_eq!(code, 0, "review show 应当成功：{stderr}");
@@ -338,7 +338,7 @@ async fn ac004_page_signs_then_the_cli_reads_it_and_back() {
 
     // ── 方向 ②：CLI 签 ⇒ 页面读得到 ──
     let (code, stdout, stderr) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &[
             "review", "decide", "--proposal", &f.proposal_id.to_string(),
             "--project", &f.project, "--item", "2", "--track", "model", "--accept",
@@ -397,7 +397,7 @@ async fn ac005_signing_twice_overwrites_and_keeps_one_row() {
 
     // `review show` 也只反映最后一次。
     let (code, stdout, _) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &["review", "show", "--proposal", &f.proposal_id.to_string(), "--project", &f.project],
     );
     assert_eq!(code, 0);
@@ -546,12 +546,12 @@ async fn apply_after_start_is_a_conflict_and_leaves_the_rows_alone() {
     // ② 另一个终端：两轨签完（apply 的前提）再应用提案。
     let pid = f.proposal_id.to_string();
     let (code, _, err) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &["review", "decide", "--proposal", &pid, "--project", &f.project, "--accept-all"],
     );
     assert_eq!(code, 0, "--accept-all 应当成功：{err}");
     let (code, _, err) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &["proposal", "apply", "--proposal", &pid, "--project", &f.project],
     );
     assert_eq!(code, 0, "proposal apply 应当成功：{err}");
@@ -644,7 +644,7 @@ async fn ac009_audit_distinguishes_ui_from_cli() {
 
     // CLI 签 item 2 / model（真二进制，与用户敲的是同一条命令）。
     let (code, _, stderr) = run_bin(
-        env!("CARGO_BIN_EXE_ontok"),
+        env!("CARGO_BIN_EXE_ontok-builder"),
         &[
             "review", "decide", "--proposal", &f.proposal_id.to_string(),
             "--project", &f.project, "--item", "2", "--track", "model", "--accept",

@@ -687,7 +687,7 @@ async fn live_frozen_version(prefix: &str, poisoned: bool) -> (String, i32) {
 }
 
 fn run_export(project: &str, version: i32, extra: &[&str]) -> std::process::Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok"));
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ontok-builder"));
     cmd.args(["ontology", "export", "--project", project, "--version", &version.to_string()]);
     cmd.args(extra);
     cmd.env(

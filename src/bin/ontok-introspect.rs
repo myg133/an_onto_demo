@@ -20,10 +20,11 @@
 use anyhow::{Context, Result};
 use ontok::extract::introspect::{introspect_with_keys, SOURCE_DATABASE_URL_ENV};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// REQ-152：本文件不再自己成 bin —— 它是 `ontok-builder introspect` 的实现。
+/// argv 由外层 clap 子命令**原样**递进来，参数/帮助/退出码一个字节都没变。
+pub async fn main(args: Vec<String>) -> Result<()> {
     let mut out = String::from("out/schema.json");
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => {
