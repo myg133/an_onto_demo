@@ -303,8 +303,11 @@ body[data-motion="on"] .brand-mark { animation: orbSpin 26s linear infinite; }
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-.node-g:hover { transform: scale(1.06); filter: drop-shadow(0 0 12px rgba(110,200,255,0.35)); }
-.node-g:active { transform: scale(1.02); cursor: grabbing; }
+/* ⚠️ hover **不许改几何**（见 REQ-155 P3 的真事故）*/
+.node-g:hover .node-rim { stroke-opacity: 1; }
+.node-g:hover .node-ring { stroke-opacity: 0.95; stroke: var(--accent); }
+.node-g:hover .node-halo { opacity: 0.92; }
+.node-g:active { cursor: grabbing; }
 
 /* 拖拽时不要让文字被选中 */
 #graph { user-select: none; -webkit-user-select: none; }
