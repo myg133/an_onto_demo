@@ -53,7 +53,13 @@ fn section(text: &str, from: &str, to: &str) -> String {
 
 #[test]
 fn test_req107_red_lines_and_guard_are_untouched() {
-    // ① 红线四文件：与 `develop` 的差异必须**为空**。
+    // ① 红线四文件：与 `develop` 的差异必须为空 —— **REQ-156 的例外是点名的、且只允许追加**。
+    //
+    //   REQ-156 授权：`src/domain/view.rs` 允许**追加** `semantic_cn` 的中文映射分支
+    //   （以及配套的 `semantic_label` 助手与单测）。⛔ 不许改/删既有行。
+    //   ⚠️ 这条 numstat 只证明「没删」；「追加的内容没顺手改语义」由
+    //   `tests/test_req156_semantic_cn_invariants.rs` 的四条不变式钉住 ——
+    //   白名单 + 专属守卫，两道一起才成立（不能只把文件名加进白名单）。
     let numstat = git(&[
         "diff",
         "--numstat",
@@ -61,13 +67,35 @@ fn test_req107_red_lines_and_guard_are_untouched() {
         "--",
         "tests/drop_rate.rs",
         "tests/test_fk_naming.rs",
-        "src/domain/view.rs",
         "src/domain/review_view.rs",
     ]);
     assert!(
         numstat.trim().is_empty(),
         "⛔ 红线文件被改动了（AC-009：禁改）：\n{numstat}"
     );
+
+    // ⭐ REQ-156 · 唯一获准的第四个红线文件：只准**追加**，不准删改。
+    let view_numstat = git(&["diff", "--numstat", "develop", "--", "src/domain/view.rs"]);
+    if !view_numstat.trim().is_empty() {
+        let fields: Vec<&str> = view_numstat.split_whitespace().collect();
+        assert_eq!(
+            fields.len(),
+            3,
+            "src/domain/view.rs 的 numstat 形状不对：{view_numstat:?}"
+        );
+        assert_eq!(fields[2], "src/domain/view.rs", "numstat 指向了别的文件：{view_numstat:?}");
+        assert_eq!(
+            fields[1], "0",
+            "⛔ REQ-156 只授权**追加** src/domain/view.rs（删除行数必须为 0）：\n{view_numstat}"
+        );
+        let added: u32 = fields[0]
+            .parse()
+            .unwrap_or_else(|_| panic!("读不出新增行数：{view_numstat:?}"));
+        assert!(
+            added > 0,
+            "view.rs 有 diff 却没有新增行 —— numstat 读错了：{view_numstat:?}"
+        );
+    }
 
     // ② 守门器实现不许动：`src/mcp/tools.rs` 的新增/删除行里不得出现实现关键串。
     //    ⚠️ 允许 `guard` 被**调用**（本需求改的是调用点），所以只禁「实现那几行」。

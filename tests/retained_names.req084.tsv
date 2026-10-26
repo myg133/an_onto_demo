@@ -81,7 +81,7 @@ R-注释	src/domain/view.rs	44	27	customers	红线不变量：外键属性名必
 R-注释	src/domain/view.rs	62	19	order	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
 R-代码	src/domain/view.rs	87	7	order	红线词表 `BUSINESS_WORDS` 的词根条目：剥掉 `_id/_no/_num/_code/_key` 后按词根查表翻中文	改词根条目等于改客户视图的翻译能力；`order`→`t064` 会让 `order_no` 这类列翻不出「订单编号」，且位于红线文件
 R-注释	src/domain/view.rs	163	33	instance_manager	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
-R-注释	src/domain/view.rs	1311	10	instance_manager	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
+R-注释	src/domain/view.rs	1419	10	instance_manager	红线不变量：外键属性名必须由**关系**推导，且不得照用目标表英文名（`license` = `licenses` 的英文名） / 词根回退词表的缺口记录	红线文件内的判例与词表；改动会改变 `fk_property_name` 的客户可见输出，且 AC-004 要求红线 `git diff --numstat` 无输出
 L	src/extract/propose.rs	280	60	customer_rebate	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
 L	src/extract/propose.rs	280	46	customers	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明
 L	src/extract/propose.rs	928	59	licenses	上条的论证文本：逐条记录哪个词干命中/不命中、哪处歧义必须弃权	换成 `t0xx` 后「`t0xx` 是否以 `template` 结尾」恒为否，文档在陈述恒真前提，等于删掉算法说明

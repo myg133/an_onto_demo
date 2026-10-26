@@ -722,7 +722,46 @@ fn semantic_cn(s: &str) -> String {
         "references" => "关联到".to_string(),
         "records" => "记录了".to_string(),
         "derived_from" => "算自".to_string(),
+        // ── ⭐ REQ-156 · 真实语料里另外 9 种动词（15 种中的其余部分）──
+        // 同义归一：`binds` / `binds_to` 是同一件事，给**同一个**标签。
+        "binds_to" | "binds" => "绑定到".to_string(),
+        // 同义归一：`attaches_to` / `attached_to` 是同一件事，给**同一个**标签。
+        "attached_to" | "attaches_to" => "挂载于".to_string(),
+        "notifies_via" => "通知到".to_string(),
+        "applies_to" => "适用于".to_string(),
+        "targets" => "指向".to_string(),
+        "bills" => "计费到".to_string(),
+        "based_on" => "基于".to_string(),
+        "deployed_to" => "部署于".to_string(),
+        // ⚠️ 泛词（语义太宽，几乎可以套在任何关系上）—— **REQ-157 会清掉**。
+        // 现在仍要给中文：否则 `semantic_label` 会把英文 key 漏给客户/Studio。
+        "uses" => "使用".to_string(),
+        // ⚠️ 泛词（REQ-157 会清掉）。
+        "contains" => "包含".to_string(),
+        // ⚠️ 泛词（REQ-157 会清掉）。
+        "associated_with" => "关联".to_string(),
+        // ⛔ 兜底**刻意不动**：`untranslated_semantic_hit` 靠「原样返回英文」来判定漏翻。
         _ => s.to_string(),
+    }
+}
+
+/// 关系语义 → **可选的中文标签**（REQ-156）。
+///
+/// 与 [`semantic_cn`] 的区别只有一个：认不出的动词返回 `None`，而不是把英文 key
+/// 原样当成「标签」递出去（catalog 的 `semantic_label` 用这个）。
+///
+/// 判据与 [`untranslated_semantic_hit`] **同一条**：标签里出现任何 ASCII 字母
+/// ⇒ 它就不是中文标签。空语义（映射侧 `MappedJoin` 没有语义）同样返回 `None`。
+/// ⛔ 这里**不编**任何兜底中文 —— 认不出就是认不出。
+pub fn semantic_label(s: &str) -> Option<String> {
+    if s.trim().is_empty() {
+        return None;
+    }
+    let label = semantic_cn(s);
+    if label.chars().any(|c| c.is_ascii_alphabetic()) {
+        None
+    } else {
+        Some(label)
     }
 }
 
@@ -1173,6 +1212,75 @@ mod tests {
     fn test_semantic_and_cardinality_cn() {
         assert_eq!(semantic_cn("has"), "拥有");
         assert_eq!(cardinality_cn("1:N"), "一对多");
+    }
+
+    // ── ⭐ REQ-156 · 15 种真实动词全部有人话，且标签里不许有 ASCII ──────
+    //
+    // 真实快照（cloud-resource v3）的 34 条关系一共 15 种 semantic：
+    // belongs_to 16 / references 4 / binds_to 2 / attached_to 1 / attaches_to 1 /
+    // notifies_via 1 / applies_to 1 / targets 1 / binds 1 / uses 1 / contains 1 /
+    // associated_with 1 / bills 1 / based_on 1 / deployed_to 1。
+    // 补课前的映射只有 6 个（其中 4 个在本套数据里根本没出现）⇒ 13 种 key 原样
+    // 漏进客户视图 TTL 的 `rdfs:comment`（`语义：applies_to（多对多）`）。
+    const REAL_VERBS: [(&str, &str); 15] = [
+        ("belongs_to", "归属于"),
+        ("references", "关联到"),
+        ("binds_to", "绑定到"),
+        ("attached_to", "挂载于"),
+        ("attaches_to", "挂载于"),
+        ("notifies_via", "通知到"),
+        ("applies_to", "适用于"),
+        ("targets", "指向"),
+        ("binds", "绑定到"),
+        ("uses", "使用"),
+        ("contains", "包含"),
+        ("associated_with", "关联"),
+        ("bills", "计费到"),
+        ("based_on", "基于"),
+        ("deployed_to", "部署于"),
+    ];
+
+    #[test]
+    fn test_semantic_cn_covers_all_15_real_verbs_and_labels_are_chinese() {
+        for (raw, want) in REAL_VERBS {
+            assert_eq!(semantic_cn(raw), want, "{raw} 的中文映射不对");
+        }
+        // 同义归一：两个 key **同一个**标签（AC-003）。
+        assert_eq!(semantic_cn("binds"), semantic_cn("binds_to"));
+        assert_eq!(semantic_cn("attaches_to"), semantic_cn("attached_to"));
+
+        // AC-002 的判据与 `untranslated_semantic_hit` **同一条**：
+        // 标签里出现任何 ASCII 字母 ⇒ 它不是中文标签。
+        for (raw, _) in REAL_VERBS {
+            let label = semantic_label(raw).unwrap_or_else(|| panic!("{raw} 应当有中文标签"));
+            assert!(
+                !label.chars().any(|c| c.is_ascii_alphabetic()),
+                "{raw} 的标签含 ASCII 字母：{label}"
+            );
+            assert!(!label.is_empty(), "{raw} 的标签不许是空串");
+        }
+
+        // 已有映射仍在（⛔ 没被这轮改动弄丢）。
+        for (raw, want) in [
+            ("has", "拥有"),
+            ("depends_on", "依赖"),
+            ("records", "记录了"),
+            ("derived_from", "算自"),
+        ] {
+            assert_eq!(semantic_cn(raw), want);
+        }
+    }
+
+    /// AC-004 · 认不出的动词 ⇒ `None`（⛔ 不编中文、⛔ 不塞空串）；
+    /// 空语义（映射侧没有 semantic）同样 `None`。
+    #[test]
+    fn test_semantic_label_is_none_for_unknown_or_empty() {
+        assert_eq!(semantic_label("xyz_unknown"), None);
+        assert_eq!(semantic_label("aggregates"), None);
+        assert_eq!(semantic_label(""), None);
+        assert_eq!(semantic_label("   "), None);
+        // `semantic_cn` 的兜底**没变**（守着 `untranslated_semantic_hit` 的形态判据）。
+        assert_eq!(semantic_cn("xyz_unknown"), "xyz_unknown");
     }
 
     // ── REQ-003 · 基数记号零透出（B1）─────────────────────

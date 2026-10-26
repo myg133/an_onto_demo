@@ -46,6 +46,7 @@ use serde::Serialize;
 use crate::domain::model_view::{ModelEntityView, ModelLinkView, ModelPropertyView, ModelTrackView};
 use crate::domain::r2rml::R2rmlMapping;
 use crate::domain::ttl::{effective_column, local_model, model_link_locals, parse_allowed_values, xsd_range};
+use crate::domain::view::semantic_label;
 
 use super::error::ApiError;
 use super::QueryService;
@@ -172,6 +173,16 @@ pub struct RelationItem {
     pub evidence_level: String,
     /// 证据原文（`value-overlap 5/5 …`）。
     pub evidence: String,
+    /// ⭐ REQ-156 · 关系语义的**原样英文 key**（`belongs_to` / `binds_to` …）。
+    ///
+    /// 本体服务模式：快照 `link_types[].semantic` 原样给出。
+    /// 普通模式：映射的 [`crate::domain::r2rml::MappedJoin`] **没有**语义字段
+    /// ⇒ 空串（⛔ 不从 `predicate_local`（`子__父`）反推 —— 那就是编）。
+    pub semantic: String,
+    /// ⭐ REQ-156 · 语义的中文标签；认不出的动词 ⇒ `null`（⛔ 不塞空串、⛔ 不编中文）。
+    ///
+    /// 与 `semantic` 成对：`semantic` 保留机器可读的 key，`semantic_label` 是只给人看的。
+    pub semantic_label: Option<String>,
 }
 
 /// 各类条目的计数（一次翻页看不全时，调用方据此判断值不值得翻）。
@@ -283,6 +294,10 @@ pub struct RelationDetail {
     pub cardinality: Option<String>,
     pub evidence_level: String,
     pub evidence: String,
+    /// ⭐ REQ-156 · 语义原样英文 key（来源与 [`RelationItem::semantic`] **同一处**）。
+    pub semantic: String,
+    /// ⭐ REQ-156 · 语义中文标签；认不出 ⇒ `null`（与 [`RelationItem::semantic_label`] 同一条口径）。
+    pub semantic_label: Option<String>,
     /// `false` = 映射里没有这条边（写了会被 planner 拒绝）。
     ///
     /// ⭐ 本体服务模式**恒 `false`**：那个部署没有数据源，任何边都查不了
@@ -511,6 +526,10 @@ pub fn build_items(
                     cardinality: model_cardinality(model, &j.child_table, &j.parent_table, &j.child),
                     evidence_level: j.state.as_str().to_string(),
                     evidence: j.evidence.clone(),
+                    // ⭐ REQ-156 · `MappedJoin` 这一侧**没有** semantic（映射只描述
+                    // 「哪一列 join 哪一列」，不描述语义）⇒ 如实留空，⛔ 不拿谓词名反推。
+                    semantic: String::new(),
+                    semantic_label: None,
                 }));
             }
         }
@@ -533,6 +552,9 @@ pub fn build_items(
                         .map(|s| s.as_str().to_string())
                         .unwrap_or_else(|| "unverified".to_string()),
                     evidence: l.join_evidence.clone().unwrap_or_default(),
+                    // ⭐ REQ-156 · 快照 `link_types[]` 本来就有 `semantic` —— 原样透出。
+                    semantic: l.semantic.clone(),
+                    semantic_label: semantic_label(&l.semantic),
                 }));
             }
         }
@@ -852,6 +874,9 @@ fn relations_of_snapshot(idx: &SnapshotIndex<'_>, class_key: &str) -> Vec<Relati
                 .map(|s| s.as_str().to_string())
                 .unwrap_or_else(|| "unverified".to_string()),
             evidence: l.join_evidence.clone().unwrap_or_default(),
+            // ⭐ REQ-156 · 与 catalog 的 relation 项**同一处来源**（快照 link_types）。
+            semantic: l.semantic.clone(),
+            semantic_label: semantic_label(&l.semantic),
             // 没有数据源 ⇒ 一条都查不了（R4）。
             queryable: false,
         });
@@ -914,6 +939,10 @@ fn relations_of(svc: &QueryService, class_key: &str) -> Vec<RelationDetail> {
                 ),
                 evidence_level: j.state.as_str().to_string(),
                 evidence: j.evidence.clone(),
+                // ⭐ REQ-156 · 映射侧的 join **没有**语义（与 catalog 的 `Some(mapping)`
+                // 分支同一条理由）⇒ 空串 / `null`，⛔ 不编。
+                semantic: String::new(),
+                semantic_label: None,
                 queryable: true,
             });
         }
@@ -1254,5 +1283,103 @@ mod tests {
         assert_eq!(counts.excluded_relations, Some(0));
         assert_eq!(counts.classes, 2);
         assert_eq!(counts.relations, 1);
+    }
+
+    // ── ⭐ REQ-156 · 语义透出（AC-001 / AC-004）────────────────────
+
+    fn only_relation(items: &[CatalogItem]) -> &RelationItem {
+        items
+            .iter()
+            .find_map(|i| match i {
+                CatalogItem::Relation(r) => Some(r),
+                _ => None,
+            })
+            .expect("必须有一条关系")
+    }
+
+    /// AC-001 · 本体模式：快照里的 `semantic` **原样**透出，中文标签成对出现。
+    #[test]
+    fn ontology_mode_relation_carries_semantic_and_chinese_label() {
+        let mut model = documentary_fixture();
+        model.link_types[0].semantic = "belongs_to".into();
+        let items = build_items(&model, None, None);
+        let rel = only_relation(&items);
+        assert_eq!(rel.semantic, "belongs_to", "英文 key 必须原样保留");
+        assert_eq!(rel.semantic_label.as_deref(), Some("归属于"));
+
+        let v = serde_json::to_value(CatalogItem::Relation(rel.clone())).unwrap();
+        assert_eq!(v["semantic"], "belongs_to");
+        assert_eq!(v["semantic_label"], "归属于");
+    }
+
+    /// AC-004 · 未知动词：标签是 `null`，**整条关系仍然在**（⛔ 不许 swallowed），
+    /// `semantic` 原样保留（⛔ 不许编中文）。
+    #[test]
+    fn unknown_semantic_keeps_the_relation_with_a_null_label() {
+        let mut model = documentary_fixture();
+        model.link_types[0].semantic = "xyz_unknown".into();
+        let items = build_items(&model, None, None);
+        assert_eq!(
+            counts(None, &items).relations,
+            1,
+            "未知动词不许把整条关系吞掉：{items:#?}"
+        );
+        let rel = only_relation(&items);
+        assert_eq!(rel.semantic, "xyz_unknown");
+        assert_eq!(rel.semantic_label, None, "⛔ 不编标签、⛔ 不塞空串");
+
+        let v = serde_json::to_value(CatalogItem::Relation(rel.clone())).unwrap();
+        assert_eq!(v["semantic"], "xyz_unknown");
+        assert!(v.get("semantic_label").is_some(), "字段必须在，值才是 null");
+        assert!(v["semantic_label"].is_null());
+
+        // 「catalog 仍 200」的等价判据：含这条未知动词的**整页**必须能正常序列化，
+        // 且 counts.relations 仍把它数进去（⛔ 不吞掉整条）。
+        let page = CatalogPage {
+            project: "demo".into(),
+            version: 2,
+            page: 1,
+            page_size: 50,
+            total_items: items.len(),
+            total_pages: 1,
+            has_more: false,
+            counts: counts(None, &items),
+            skipped_classes: vec![],
+            items,
+        };
+        let pv = serde_json::to_value(&page).expect("未知动词不许让整页序列化失败");
+        assert_eq!(pv["counts"]["relations"], 1);
+        let rel_json = pv["items"]
+            .as_array()
+            .expect("items 是数组")
+            .iter()
+            .find(|i| i["kind"] == "relation")
+            .expect("未知动词不许把关系从页里吞掉");
+        assert_eq!(rel_json["semantic"], "xyz_unknown");
+        assert!(rel_json["semantic_label"].is_null());
+    }
+
+    /// 普通模式：映射侧**没有**语义 ⇒ 空串 / `null`（⛔ 不从 `子__父` 反推）。
+    #[test]
+    fn mapping_side_has_no_semantic_and_invents_none() {
+        let (_, mapping, model) = crate::query::test_fixture();
+        let items = build_items(&model, Some(&mapping), None);
+        let rel = only_relation(&items);
+        assert_eq!(rel.semantic, "", "映射没有语义 ⇒ 空串（不是谓词名）");
+        assert_eq!(rel.semantic_label, None);
+    }
+
+    /// describe 的关系行走**同一处来源**（快照）⇒ 同样的 semantic / label。
+    #[test]
+    fn describe_snapshot_relations_carry_the_same_semantic() {
+        let mut model = documentary_fixture();
+        model.link_types[0].semantic = "binds".into();
+        let idx = snapshot_index(&model);
+        let rels = relations_of_snapshot(&idx, "doc_02_bbbb");
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].semantic, "binds");
+        assert_eq!(rels[0].semantic_label.as_deref(), Some("绑定到"));
+        // 同义归一：`binds` 与 `binds_to` 标签相同。
+        assert_eq!(rels[0].semantic_label, crate::domain::view::semantic_label("binds_to"));
     }
 }

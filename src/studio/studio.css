@@ -440,6 +440,7 @@ body.drawer-open .floaters { right: 408px; }
   background: var(--panel); font-size: 12px;
 }
 .rel b { font-weight: 500; }
+.rel .sem { margin-left: 6px; font-weight: 500; color: var(--text); }
 .rel .arrow { color: var(--text-3); margin: 0 5px; }
 .rel .ev { font-size: 10px; margin-left: 6px; padding: 0 5px; border-radius: 4px; }
 .ev-strong { color: var(--ok); background: rgba(95,211,163,0.12); }
