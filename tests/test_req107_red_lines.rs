@@ -148,6 +148,15 @@ fn test_req107_red_lines_and_guard_are_untouched() {
     );
 
     // ⑤ 不许删除测试文件。
+    //
+    // ⚠️ **REQ-155 的例外是点名的**（需求 §三①「测试」一行要求删掉门户的两份测试文件：
+    // `tests/test_req126_portal.rs` / `tests/test_req126_live.rs` —— 它们整份都在测
+    // REQ-126 的客户门户，门户已删除，留着必然编译不过）。
+    // 除这两个名字之外，**任何**测试文件的删除仍然红 —— 判据只是窄化，不是放宽。
+    const REQ155_AUTHORIZED_DELETIONS: [&str; 2] = [
+        "tests/test_req126_portal.rs",
+        "tests/test_req126_live.rs",
+    ];
     let deleted = git(&[
         "diff",
         "develop",
@@ -156,9 +165,15 @@ fn test_req107_red_lines_and_guard_are_untouched() {
         "--",
         "tests",
     ]);
+    let unexpected: Vec<&str> = deleted
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !REQ155_AUTHORIZED_DELETIONS.contains(l))
+        .collect();
     assert!(
-        deleted.trim().is_empty(),
-        "⛔ 删除了测试文件（AC-009：不许删测试）：\n{deleted}"
+        unexpected.is_empty(),
+        "⛔ 删除了测试文件（AC-009：不许删测试；REQ-155 只授权删门户的两份）：\n{}",
+        unexpected.join("\n")
     );
 }
 

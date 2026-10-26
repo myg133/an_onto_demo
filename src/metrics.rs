@@ -7,7 +7,7 @@
 //! - **取值**：[`Metrics`] 是每个服务进程**私有的**注册表（一个 `Mutex<BTreeMap<_>>`），
 //!   服务在 `new()` 里建它 ⇒ 测试各自一份，断言不必和并行用例抢全局状态；
 //! - **响应体**：[`Metrics::http_response`] 是 `/metrics` 的**唯一**响应构造点
-//!   （三个服务共用；`Content-Type` 也在这里）。
+//!   （两个服务共用；`Content-Type` 也在这里）。
 //!
 //! # 为什么手写、不引 prometheus crate
 //!
@@ -19,7 +19,7 @@
 //! 标签值全部是 `&'static str`：`service` / `endpoint`（路由**模式**，不是真实路径）/
 //! `code`（HTTP 状态码） / `reason`（代码里写死的拒绝原因） / `view`（`customer|model`）。
 //! 类型层就**传不进**租户 id、表名、SQL 或查询原文 —— 那些都是运行时 `String`。
-//! 端点标签用 axum 的 [`MatchedPath`]（`/q/:id` 这类**模式**），不是原始 URL。
+//! 端点标签用路由**模式**（`/api/config/:kind` 这类），不是原始 URL。
 //!
 //! # 已知限制
 //!
@@ -41,16 +41,14 @@ pub const METRICS_PATH: &str = "/metrics";
 /// Prometheus 0.0.4 的 `Content-Type`（AC-001 逐字要求）。
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4";
 
-/// 三个服务在 `service` 标签里的名字（与 `/api/health` 的 `service` 字段同源）。
+/// 两个服务在 `service` 标签里的名字（与 `/api/health` 的 `service` 字段同源）。
 pub const SERVICE_QUERY: &str = "ontok-query";
 pub const SERVICE_CONSOLE: &str = "ontok-console";
-pub const SERVICE_PORTAL: &str = "ontok-portal";
 
-/// 租户拒绝的四个原因（标签值的**全集**，⛔ 不接受运行时字符串）。
+/// 租户拒绝的三个原因（标签值的**全集**，⛔ 不接受运行时字符串）。
 pub const REASON_TENANT_MISMATCH: &str = "TENANT_MISMATCH";
 pub const REASON_TENANT_UNRESOLVED: &str = "TENANT_UNRESOLVED";
 pub const REASON_TOKEN_KIND_FORBIDDEN: &str = "TOKEN_KIND_FORBIDDEN";
-pub const REASON_TENANT_FROM_CLIENT: &str = "TENANT_FROM_CLIENT";
 
 /// TTL 视图标签值。
 pub const VIEW_CUSTOMER: &str = "customer";
@@ -167,31 +165,20 @@ pub const CONSOLE_ENDPOINTS: &[&str] = &[
     METRICS_PATH,
 ];
 
-/// 门户的路由模式。
-pub const PORTAL_ENDPOINTS: &[&str] = &[
-    "/",
-    "/api/health",
-    "/api/questions",
-    "/q/:id",
-    METRICS_PATH,
-];
-
 /// 查询服务会产的拒绝原因。
 pub const QUERY_DENIED_REASONS: &[&str] = &[REASON_TENANT_MISMATCH, REASON_TENANT_UNRESOLVED];
 /// 控制面会产的拒绝原因。
 pub const CONSOLE_DENIED_REASONS: &[&str] = &[REASON_TOKEN_KIND_FORBIDDEN];
-/// 门户会产的拒绝原因。
-pub const PORTAL_DENIED_REASONS: &[&str] = &[REASON_TENANT_FROM_CLIENT];
 
 /// 路径 → **固定的**端点标签值（路由模式的等价物）。
 ///
 /// 为什么不用 axum 的 `MatchedPath`：它要打开 `matched-path` feature，
 /// 而本需求的纪律是 **`Cargo.toml` 零改动**（AC-008）。这里用**同一张静态表**
-/// 做匹配：已知路由原样返回，带路径参数的两条（`/q/<id>` / `/api/config/<kind>`）
+/// 做匹配：已知路由原样返回，带路径参数的那一条（`/api/config/<kind>`）
 /// 只认**单段**并折叠成模式；其余一律 `other`。
 ///
-/// ⛔ 绝不把原始 URL 当标签：`/q/abc` 与 `/q/def` 会各自长出一条时间序列
-/// （维度爆炸 + 业务 id 泄漏）。未知路径（含探测 `/wp-admin`）都只落一行 `other`。
+/// ⛔ 绝不把原始 URL 当标签：`/api/config/a` 与 `/api/config/b` 会各自长出一条
+/// 时间序列（维度爆炸 + 业务 id 泄漏）。未知路径（含探测 `/wp-admin`）都只落一行 `other`。
 pub fn endpoint_label(path: &str) -> &'static str {
     // 先把 query string / fragment 切掉（它们不参与路由，也不该进标签）。
     let p = path.split(['?', '#']).next().unwrap_or("");
@@ -212,12 +199,9 @@ pub fn endpoint_label(path: &str) -> &'static str {
         "/api/audit" => "/api/audit",
         "/api/review" => "/api/review",
         "/api/decide" => "/api/decide",
-        "/api/questions" => "/api/questions",
         METRICS_PATH => METRICS_PATH,
         other => {
-            if single_segment_after(other, "/q/") {
-                "/q/:id"
-            } else if single_segment_after(other, "/api/config/") {
+            if single_segment_after(other, "/api/config/") {
                 "/api/config/:kind"
             } else {
                 "other"
@@ -226,7 +210,7 @@ pub fn endpoint_label(path: &str) -> &'static str {
     }
 }
 
-/// `path` 是不是 `prefix` 后面**恰好一段**（`/q/abc` 是，`/q/a/b` 与 `/q/` 不是）。
+/// `path` 是不是 `prefix` 后面**恰好一段**（`/api/config/a` 是，`/api/config/a/b` 不是）。
 fn single_segment_after(path: &str, prefix: &str) -> bool {
     let Some(rest) = path.strip_prefix(prefix) else {
         return false;
@@ -261,7 +245,7 @@ pub fn status_label(status: u16) -> &'static str {
     }
 }
 
-/// 错误码 → 拒绝原因（**唯一**的映射；只认四个安全码，别的一律 `None`）。
+/// 错误码 → 拒绝原因（**唯一**的映射；只认三个安全码，别的一律 `None`）。
 ///
 /// 为什么用错误码而不在调用点各写一遍：`TENANT_UNRESOLVED` 是查询面在
 /// `ApiError::from_query_error` 里造出来的，调用点拿不到「为什么」，
@@ -271,7 +255,6 @@ pub fn denied_reason(code: &str) -> Option<&'static str> {
         REASON_TENANT_MISMATCH => Some(REASON_TENANT_MISMATCH),
         REASON_TENANT_UNRESOLVED => Some(REASON_TENANT_UNRESOLVED),
         REASON_TOKEN_KIND_FORBIDDEN => Some(REASON_TOKEN_KIND_FORBIDDEN),
-        REASON_TENANT_FROM_CLIENT => Some(REASON_TENANT_FROM_CLIENT),
         _ => None,
     }
 }
@@ -377,11 +360,6 @@ impl Metrics {
     /// 控制面（`ontok console serve`）。
     pub fn for_console() -> Self {
         Self::new(SERVICE_CONSOLE, CONSOLE_DENIED_REASONS, CONSOLE_ENDPOINTS)
-    }
-
-    /// 客户门户（`ontok portal serve`）。
-    pub fn for_portal() -> Self {
-        Self::new(SERVICE_PORTAL, PORTAL_DENIED_REASONS, PORTAL_ENDPOINTS)
     }
 
     /// 本服务在 `service` 标签里的名字。
@@ -559,7 +537,7 @@ impl Metrics {
         out
     }
 
-    /// `/metrics` 的**唯一**响应构造点（三个服务共用）。
+    /// `/metrics` 的**唯一**响应构造点（两个服务共用）。
     pub fn http_response(&self) -> Response {
         (
             StatusCode::OK,
@@ -628,9 +606,9 @@ fn escape_label_into(out: &mut String, value: &str) {
 // 中间件：每个请求一行计数 + 一次耗时观察
 // ══════════════════════════════════════════════════════════════
 
-/// 整张路由的最外层中间件（三个服务各挂一次）。
+/// 整张路由的最外层中间件（两个服务各挂一次）。
 ///
-/// 端点取自 [`endpoint_label`]（**路由模式**，如 `/q/:id`），不是原始 URL；
+/// 端点取自 [`endpoint_label`]（**路由模式**，如 `/api/config/:kind`），不是原始 URL；
 /// 未知路径 ⇒ `other`。状态码经 [`status_label`] 收口。
 pub async fn track(
     axum::extract::State(metrics): axum::extract::State<Metrics>,
@@ -1092,10 +1070,9 @@ mod tests {
             );
         }
         // 端点标签是**路由模式**，不是真实 URL。
-        assert_eq!(endpoint_label("/q/abc-123"), "/q/:id");
-        assert_eq!(endpoint_label("/q/abc-123?x=1"), "/q/:id");
         assert_eq!(endpoint_label("/api/config/policy"), "/api/config/:kind");
-        assert_eq!(endpoint_label("/q/a/b"), "other");
+        assert_eq!(endpoint_label("/api/config/policy?x=1"), "/api/config/:kind");
+        assert_eq!(endpoint_label("/api/config/a/b"), "other");
         assert_eq!(endpoint_label("/wp-admin"), "other");
         assert_eq!(endpoint_label("/api/sparql"), "/api/sparql");
         assert_eq!(endpoint_label("/metrics"), "/metrics");

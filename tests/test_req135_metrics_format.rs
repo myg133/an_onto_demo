@@ -3,7 +3,7 @@
 //! 本机没有 `promtool`（需求风险 4），所以判据是**手写校验器**
 //! [`ontok::metrics::validate_exposition`] —— 不是「跳过」：
 //!
-//! 1. 三个服务各渲染一份 → 全部通过校验器；
+//! 1. 两个服务各渲染一份 → 全部通过校验器；
 //! 2. 六种「手写格式会犯的错」各喂一次 → 校验器必须**逐条**报出来（反空转）；
 //! 3. 若给了 `ONTOK_REQ135_METRICS_FILE`（真服务 `curl /metrics` 的抓取结果），
 //!    对**真实输出**再跑一次同样的校验。
@@ -12,12 +12,11 @@ use ontok::metrics::{
     Metrics, VIEW_CUSTOMER, VIEW_MODEL,
 };
 
-/// 三个服务各产一份「有流量之后」的 /metrics 正文。
+/// 两个服务各产一份「有流量之后」的 /metrics 正文。
 fn exercised(service: &str) -> (Metrics, String) {
     let m = match service {
         "ontok-query" => Metrics::for_query(),
         "ontok-console" => Metrics::for_console(),
-        "ontok-portal" => Metrics::for_portal(),
         other => panic!("不认识的服务 {other}"),
     };
     m.observe_request("/api/health", "200", std::time::Duration::from_millis(2));
@@ -26,8 +25,7 @@ fn exercised(service: &str) -> (Metrics, String) {
     m.rows(5);
     m.note_denial_code(match service {
         "ontok-query" => "TENANT_MISMATCH",
-        "ontok-console" => "TOKEN_KIND_FORBIDDEN",
-        _ => "TENANT_FROM_CLIENT",
+        _ => "TOKEN_KIND_FORBIDDEN",
     });
     m.set_ttl_bytes(VIEW_CUSTOMER, 4_321);
     m.set_ttl_bytes(VIEW_MODEL, 12_345);
@@ -37,8 +35,8 @@ fn exercised(service: &str) -> (Metrics, String) {
 }
 
 #[test]
-fn all_three_services_render_valid_exposition() {
-    for service in ["ontok-query", "ontok-console", "ontok-portal"] {
+fn both_services_render_valid_exposition() {
+    for service in ["ontok-query", "ontok-console"] {
         let (_, text) = exercised(service);
         if let Err(errs) = ontok::metrics::validate_exposition(&text) {
             panic!(
