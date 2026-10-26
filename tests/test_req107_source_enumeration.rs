@@ -1758,6 +1758,12 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "doc_ingest_cmd",
         "子命令 handler（`doc ingest`：文档 → 带证据的断言；**不连产品库**，产物/缓存全在本地）",
     ),
+    // ⭐ REQ-147 · 「这次用哪个抽取实现」的**唯一**装配点（内置 LLM / ACP 子进程）。
+    (
+        "src/cli.rs",
+        "build_doc_transport",
+        "运维辅助（REQ-147：`--agent` 的岔口 —— 默认内置 LLM 原路；`acp` 起子进程并握手）",
+    ),
     // ⭐ REQ-129 · `doc merge`：断言 → 提案的机械合并。写出口 I26 登记在 OUTLETS。
     (
         "src/cli.rs",
@@ -2053,6 +2059,8 @@ const MODULES: &[(&str, &str)] = &[
     ("src/extract/mod.rs", "exclusions"),
     // ⭐ REQ-116 · 文档摄取与断言抽取（格式闸 / 分块 / 证据校验 / 指纹缓存 / 预算）
     ("src/extract/mod.rs", "doc_ingest"),
+    // ⭐ REQ-147 · `doc ingest --agent acp`：同一套编排的另一个搬运工（不另立判据）。
+    ("src/extract/mod.rs", "doc_acp"),
     // ⭐ REQ-118 · AI 提案框架（ADR-005：提案形状 / 校验 / 指纹缓存 / 预算 / 渲染；三命令共用）
     ("src/extract/mod.rs", "proposal"),
     // ⭐ REQ-129 · 文档断言 → 提案的**机械合并**（七条规则 / 五项统计 / 确定性；零 I/O）。
