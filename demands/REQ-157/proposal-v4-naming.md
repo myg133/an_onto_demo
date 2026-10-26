@@ -100,3 +100,32 @@ python .local/_verify_ev.py     # 期望：不可定位的证据 = 0
 # 4) 字典校验（REQ-157 P1 的命令落地后）
 ontok-builder relation verbs check --proposal proposal-v4-naming.json   # 期望 exit 0
 ```
+
+
+---
+
+## 六 · 用字典校验提案（**已跑，全绿**）
+
+拿 REQ-157 P1 的字典草稿（16 主键 / 13 别名 / 6 禁用）对提案跑一遍：
+
+```
+命中禁用: 0    未知词: 0    需归一: 0
+```
+
+**提案落地后的动词分布**：
+
+| 动词 | 条数 | 变化 |
+| --- | ---: | --- |
+| `belongs_to` | 16 | 不变 |
+| `binds_to` | **5** | 2 不变 + **3 从泛词/别名改来** |
+| `references` | **5** | 4 不变 + **1 从 `associated_with` 改来** |
+| `attached_to` | **2** | 1 不变 + **1 从 `attaches_to` 归一** |
+| `notifies_via` / `applies_to` / `targets` / `bills` / `based_on` / `deployed_to` | 各 1 | 不变 |
+
+| 指标 | 改前（v3） | 改后（v4 提案） |
+| --- | ---: | ---: |
+| 动词种类 | **15** | **10** |
+| 泛词条数 | **3** | **0** |
+| 同义并存 | `attaches_to`+`attached_to` · `binds`+`binds_to` | **无** |
+
+> 15 → 10 不是"丢信息"：**消失的 5 种是别名和泛词**，语义都落到有证据的主键上了。
