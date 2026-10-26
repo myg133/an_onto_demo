@@ -1,57 +1,69 @@
-# REQ-156 · 关系语义动词（把 `from__to` 变成能读的边）
+# REQ-156 · 把关系语义动词透出到 API 与 Studio
 
-- 状态：**草稿**（待评审 → 已就绪）
-- 提出：2026-10-26
-- 来源：Studio 上线后用户反馈「关系没有名称」；排查发现 **34/34 条关系名都是 `from__to` 自动生成**，本体里没有任何语义动词
-- 关联：REQ-120（外键推断关系）、REQ-128（类名必须业务化）、REQ-155（Studio 显示）
-
----
-
-## 一 · 问题
-
-现在的关系名叫：
-
-```
-clb_listener__clb_backend
-cbs_auto_snapshot_policy__cbs_disk
-alarm_policy__alarm_notice
-```
-
-**34 条全部如此。** 后果：
-
-| 受影响的地方 | 表现 |
-| --- | --- |
-| Studio 的边标签 | 只能显示 `clb_listener__clb_backend`（或截断），读不出"**转发到**"这层意思 |
-| 抽屉的"关系"列表 | 只能写 `→ clb_backend`，等于没说 |
-| 巡检报告 | 只能罗列"有关联"，说不出"**挂载在**""**属于**""**引用**" |
-| 接入方 | 拿到 TTL 也不知道这条边在业务上是什么意思 |
-
-**这不是显示问题，是本体缺了一层语义。**
+- 状态：**已就绪**
+- 提出：2026-10-27
+- 类型：**透出**（数据已存在，只是没往外递）
+- 关联：REQ-150（关系语义）、REQ-155（Studio 显示）、REQ-157（动词治理，后续）
 
 ---
 
-## 二 · 目标
+## 一 · 一句话
 
-每条关系有一个**动词式名字**（中文显示名 + 英文 key），且**每条都有出处**：
-
-```
-clb_listener -[转发到/forwards_to]→ clb_backend
-cbs_disk     -[挂载于/attached_to]→ cvm_instance
-alarm_policy -[通知到/notifies]→ alarm_notice
-```
+本体里**已经有** `semantic`（34 条 / 15 种动词），但 `/api/catalog` 不输出它 ⇒ Studio 只能显示 `from__to`。本需求把它透出来，并给中文标签。
 
 ---
 
-## 三 · 范围（**只做命名，不改关系拓扑**）
+## 二 · 事实（已核实）
 
-| # | 做什么 | 不做什么 |
+| 层 | 有没有 semantic | 证据 |
 | --- | --- | --- |
-| ① | 新增 `ontok-builder relation name`：读本体 + 文档语料 → 产出**命名提案** | ⛔ 不新增/删除任何关系 |
-| ② | 提案**必须带证据**（文档原文片段 + 位置），无证据的名字不许提 | ⛔ 不许用"推断得差不多"的名字 |
-| ③ | 动词**字典**（`relation-verbs.json`）：`forwards_to` / `attached_to` / `belongs_to` / `notifies` / `references` … 只认字典，⛔ 不许自由发挥 | ⛔ 不改类名/属性名 |
-| ④ | 未命名的关系：**保留 `from__to` 并标 `unmapped`**（⛔ 不静默丢、⛔ 不编名字） | ⛔ 不动 AM（access mapping） |
-| ⑤ | 人审：提案走 `review decide` 流程，签过 `reviewed_by` 才进本体 | |
-| ⑥ | 出新版本（v4），Studio / TTL / 报告自动带上动词 | |
+| 提案 | ✅ | `"payload": {"key": "cvm_instance_belongs_to_subnet", "semantic": "belongs_to"}` |
+| 本体库 `link_types.semantic` | ✅ | `apply.rs:422` 读它，缺省 `"has"` |
+| 建模视图 TTL | ✅ | `ontok:semantic` **34 次**，15 种动词 |
+| 客户视图 TTL | 🟡 降级为 `rdfs:comment` | `语义：归属于（多对一）` |
+| **`/api/catalog` 关系项** | ❌ **没有** | 只有 `name`/`from`/`to`/`cardinality`/`evidence_level` |
+| Studio 显示 | ❌ 只能 `name`（=`from__to`） | —— |
+
+**现有 15 种动词**（英文 key，中文只有 6 个有映射）：
+
+```
+belongs_to 16 · references 4 · binds_to 2 · attached_to 1 · attaches_to 1
+notifies_via 1 · applies_to 1 · targets 1 · binds 1 · uses 1 · contains 1
+associated_with 1 · bills 1 · based_on 1 · deployed_to 1
+```
+
+---
+
+## 三 · 要做的
+
+| # | 改哪 | 做什么 |
+| --- | --- | --- |
+| ① | `src/query/catalog.rs` 的 `RelationItem` | 加 `semantic`（原样英文 key）+ `semantic_label`（中文，走 `semantic_cn`） |
+| ② | `src/domain/view.rs::semantic_cn` | **补齐映射**：现有 15 个词全部有中文（含 `attached_to`/`attaches_to` 同义归一） |
+| ③ | Studio（`src/studio/studio.js`） | 边标签优先 `semantic_label`；抽屉关系行显示 `标签 + 英文 key` |
+| ④ | 客户视图 TTL | 关系上加 `skos:altLabel "归属于"`（现在只有中文 `rdfs:comment`，机器读不到） |
+
+### ② 的映射（B 方案：英文 key + 中文标签）
+
+| key | 标签 | 备注 |
+| --- | --- | --- |
+| `belongs_to` | 归属于 | 已有 |
+| `references` | 关联到 | 已有 |
+| `has` | 拥有 | 已有 |
+| `depends_on` | 依赖 | 已有 |
+| `records` | 记录了 | 已有 |
+| `derived_from` | 算自 | 已有 |
+| `binds_to` / `binds` | 绑定到 | **同一件事，归一到 `binds_to`** |
+| `attached_to` / `attaches_to` | 挂载于 | **同一件事，归一到 `attached_to`** |
+| `notifies_via` | 通知到 | 新增 |
+| `applies_to` | 适用于 | 新增 |
+| `targets` | 指向 | 新增 |
+| `uses` | ⚠️ 使用 | **泛词**，REQ-157 必清 |
+| `contains` | ⚠️ 包含 | **泛词**，REQ-157 必清 |
+| `associated_with` | ⚠️ 关联 | **泛词**，REQ-157 必清 |
+| `bills` | 计费到 | 新增 |
+| `based_on` | 基于 | 新增 |
+| `deployed_to` | 部署于 | 新增 |
 
 ---
 
@@ -59,42 +71,22 @@ alarm_policy -[通知到/notifies]→ alarm_notice
 
 | # | 判据 |
 | --- | --- |
-| AC-001 | 34 条关系里：**有证据的全部命名**，无证据的**明确标 `unmapped`**（两者相加 = 34，⛔ 不许有"漏掉"的） |
-| AC-002 | 每条命中的关系带 `evidence{file, quote, span}`；`quote` 能在原文里定位到（复用 `locate_quote`） |
-| AC-003 | 动词**全部来自字典**；出现字典外的动词 ⇒ 拒绝（fail-closed） |
-| AC-004 | 未命名的关系名保持 `from__to` 且带 `unmapped` 标记；TTL 里能看出区别 |
-| AC-005 | 命名提案**未经人签不许进本体**（`reviewed_by` 为空 ⇒ 拒绝 apply） |
-| AC-006 | 命名前后：**关系数量、方向、基数不变**（只改 name/display_name） |
-| AC-007 | Studio 边标签显示动词；抽屉显示 `动词 + 完整 key + 证据` |
-| AC-008 | 服务面 8 case 里 `catalog/describe` 的**关系字段**变化可解释（新增 name/display_name），其余不变 |
+| AC-001 | `/api/catalog` 的 relation 项含 `semantic` 与 `semantic_label`；34 条**全部**有值 |
+| AC-002 | `semantic_label` **不含任何 ASCII 字母**（复用 `untranslated_semantic_hit` 的形态判据） |
+| AC-003 | `attached_to` 与 `attaches_to` 的 `semantic_label` **相同**（都是「挂载于」） |
+| AC-004 | 未知动词（造一个 `xyz_unknown`）⇒ `semantic_label` 为 **null**，且**不 swallowed**：catalog 正常返回 + 该条 `semantic` 原样保留 |
+| AC-005 | Studio 边标签显示中文；无标签时退回英文 key（⛔ 不许显示空白） |
+| AC-006 | 8 case：**只有 02-catalog / 03-describe 会变**（新增字段），其余 6 个逐字节不变 |
+| AC-007 | `get` 键数不变（v1=4 / v2=10）；`meta.contract_version` 不变 |
+| AC-008 | ⛔ 不改 `semantic` 的存储值（只加映射与透出）；⛔ 不重写 v3 |
 
 ---
 
-## 五 · 关键设计决定（待评审确认）
+## 五 · 不做（留给 REQ-157）
 
-| # | 决定 | 理由 |
-| --- | --- | --- |
-| 1 | **动词从字典来**，不从模型自由生成 | 自由生成会得到"关联/涉及/包含"这类泛动词——正是 REQ-147 里泛动词 18.65% 那种垃圾 |
-| 2 | **没证据就不命名**，宁可 `unmapped` | 编一个漂亮的名字比留 `from__to` 更危险：**它看起来可信** |
-| 3 | 命名**必须人签** | 这是本体语义，不是格式 |
-| 4 | 英文 key 用 `snake_case` 动词短语（`forwards_to`） | 与现有 key 风格一致 |
-
----
-
-## 六 · 风险
-
-| # | 风险 | 缓解 |
-| --- | --- | --- |
-| 1 | 34 条里可能**大部分都没有文档证据**（Tencent 文档讲字段不讲关系） | 那就大部分 `unmapped`——**如实标注比编名字好**；AC-001 允许这个结果 |
-| 2 | 命名会**改变 TTL**，接入方可能按旧 key 写死 | 新的 version（v4）；旧 v3 保留可查 |
-| 3 | 字典太小会卡住 | 先定 8–12 个基础动词，用真实语料验证覆盖度 |
-
----
-
-## 七 · 分期
-
-| 期 | 内容 |
+| 不做 | 为什么 |
 | --- | --- |
-| P1 | 字典 + `relation name` 提案命令 + 证据校验（离线，不写库） |
-| P2 | 人审 → apply → 出新版本；Studio 显示动词 |
-| P3 | 报告/巡检引用动词（等 P2 稳定） |
+| 删/改 v3 里的英文动词 | 那要重抽出新版本，是数据治理 |
+| 禁泛动词（`uses`/`contains`/`associated_with`） | 同上 |
+| 动词字典文件 + 校验（拒绝字典外动词） | REQ-157 的 P1 |
+| 改 `parse.rs` 的 schema 示例 | REQ-157 的 P2（与 skill 一起改） |
