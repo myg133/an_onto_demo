@@ -15,7 +15,6 @@ images:
 replicas:
   - { name: ontok-query,   count: 1 }
   - { name: ontok-console, count: 1 }
-  - { name: ontok-portal,  count: 1 }
 
 patches:
   - target: { kind: Deployment }

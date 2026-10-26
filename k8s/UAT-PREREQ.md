@@ -64,10 +64,10 @@ kubectl -n anspire-ontok-uat create secret generic ontok-db \
   --from-literal=source-url="postgresql://ontok_ro:${RO}@postgres-service.middlewave.svc.cluster.local:5432/anspire_open_uat"
 ```
 
-## 步骤 5 · 三套口令 + 四份声明
+## 步骤 5 · 两套口令 + 三份声明
 
 ```bash
-# 口令（kind 必须互斥：admin / query / portal）
+# 口令（kind 必须互斥：admin / query）
 kubectl -n anspire-ontok-uat create secret generic ontok-secrets \
   --from-file=deploy-tokens/
 
@@ -76,11 +76,11 @@ kubectl -n anspire-ontok-uat create configmap ontok-config \
   --from-file=deploy-config/
 ```
 
-`deploy-config/` 至少四份：`query-policy.json` / `tenancy.json` / `exclusions.json` / `portal-questions.json` + `schema.json`。
+`deploy-config/` 至少三份：`query-policy.json` / `tenancy.json` / `exclusions.json` + `schema.json`。
 
 ## 步骤 6 · 抽一次本体并冻结（**在集群外跑**）
 
-`query serve` / `portal serve` 启动时要 `--project` + `--version`，所以**先冻结再部署**：
+`query serve` 启动时要 `--project` + `--version`，所以**先冻结再部署**：
 
 ```bash
 ontok-builder introspect --out schema.json
@@ -125,7 +125,7 @@ curl -s -H "Authorization: Bearer <query-token>" localhost:8800/api/catalog | he
 | 副本 | 1 | 1 |
 | 审计挂载 | `emptyDir` | **PVC `ontok-audit`（5Gi）** |
 | 内存 limit | 1Gi | 512Mi |
-| Ingress | 无 | traefik × 3 |
+| Ingress | 无 | traefik × 2 |
 | 镜像 | `ontok:dev` | `aigccontainer.azurecr.cn/<repo>/ontok:0.1.0` |
 
 ---

@@ -1,6 +1,6 @@
 version: "3.9"
 
-# 共用镜像，不同 command：查询 / 控制面 / 客户门户
+# 共用镜像，不同 command：查询 / 控制面
 x-ontok: &ontok
   image: ${ONTOK_IMAGE:-ontok:dev}
   restart: unless-stopped
@@ -81,33 +81,8 @@ services:
       timeout: 3s
       retries: 6
 
-  # ── 客户门户：租户锁死，只能点预置问题 ──────────────────────────────
-  portal:
-    <<: *ontok
-    command:
-      - portal
-      - serve
-      - --bind=0.0.0.0:8900
-      - --allow-public
-      - --tokens=/etc/ontok/secrets/portal-tokens.json
-      - --project=${ONTOK_PROJECT}
-      - --version=${ONTOK_VERSION}
-      - --schema=/etc/ontok/config/schema.json
-      - --policy=/etc/ontok/config/query-policy.json
-      - --questions=/etc/ontok/config/portal-questions.json
-    ports:
-      - "127.0.0.1:${PORTAL_PORT:-8900}:8900"
-    volumes:
-      - ./config:/etc/ontok/config:ro
-      - ./secrets:/etc/ontok/secrets:ro
-      - portal-audit:/data/audit
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8900' || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
+  # ── 客户门户已删除（REQ-155）───────────────────────────────────────
 
 volumes:
   pgdata:
   console-audit:
-  portal-audit:

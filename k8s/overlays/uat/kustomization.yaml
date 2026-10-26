@@ -21,19 +21,10 @@ images:
 replicas:
   - { name: ontok-query,   count: 1 }    # UAT 先单副本
   - { name: ontok-console, count: 1 }
-  - { name: ontok-portal,  count: 1 }
 
 patches:
   # 审计从 emptyDir 换成 PVC（stdout + PVC 双写，BA 已拍板）
   - target: { kind: Deployment, name: ontok-console }
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/volumes/2
-        value:
-          name: audit
-          persistentVolumeClaim:
-            claimName: ontok-audit
-  - target: { kind: Deployment, name: ontok-portal }
     patch: |-
       - op: replace
         path: /spec/template/spec/volumes/2

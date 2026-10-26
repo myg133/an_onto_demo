@@ -16,7 +16,6 @@ images:
 replicas:
   - { name: ontok-query,   count: 3 }
   - { name: ontok-console, count: 1 }
-  - { name: ontok-portal,  count: 2 }
 
 patches:
   - target: { kind: Deployment, name: ontok-query }
@@ -29,14 +28,6 @@ patches:
   # stdout 靠集群采集；PVC 是进程自己写的那份证据。
   # volumes 顺序在 base 里是 config(0) / secrets(1) / audit(2)。
   - target: { kind: Deployment, name: ontok-console }
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/volumes/2
-        value:
-          name: audit
-          persistentVolumeClaim:
-            claimName: ontok-audit
-  - target: { kind: Deployment, name: ontok-portal }
     patch: |-
       - op: replace
         path: /spec/template/spec/volumes/2
@@ -72,15 +63,3 @@ patches:
               prometheus.io/scrape: "true"
               prometheus.io/path: "/metrics"
               prometheus.io/port: "8899"
-  - target: { kind: Deployment, name: ontok-portal }
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata: { name: ontok-portal }
-      spec:
-        template:
-          metadata:
-            annotations:
-              prometheus.io/scrape: "true"
-              prometheus.io/path: "/metrics"
-              prometheus.io/port: "8900"

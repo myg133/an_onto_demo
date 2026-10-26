@@ -27,7 +27,7 @@
 审计是这套系统的**合规证据**（谁查了什么、谁签了什么）。现在：
 
 ```
-console/portal: --audit-out /data/audit/*.log  →  emptyDir
+console:          --audit-out /data/audit/*.log  →  emptyDir
 query:           走 stderr                         →  跟容器日志一起丢
 ```
 
@@ -68,8 +68,8 @@ cd code && podman build -t <registry>/ontok:0.1.0 -f Dockerfile .
 podman push <registry>/ontok:0.1.0
 
 # 3 生成声明与口令（本项目一套）
-#    query-policy.json / tenancy.json / exclusions.json / portal-questions.json
-#    admin/query/portal-tokens.json
+#    query-policy.json / tenancy.json / exclusions.json
+#    admin/query-tokens.json
 kubectl -n ontok-prod create configmap ontok-config --from-file=deploy-config/
 kubectl -n ontok-prod create secret generic ontok-secrets --from-file=deploy-tokens/
 
@@ -102,11 +102,11 @@ kubectl apply -k Deploy/k8s/overlays/prod
 
 ## 五 · 首版建议范围（canary）
 
-**不要一次上三个面**。建议：
+**不要一次上两个面**。建议：
 
 | 阶段 | 开什么 | 给谁 |
 | --- | --- | --- |
-| **v0** | `query` 内网 + `portal` 一个客户 | 内部验证 |
+| **v0** | `query` 内网 | 内部验证 |
 | **v1** | 加 `console` 内网 | FDE 开始用 |
 | **v2** | 数字员工接 MCP | Agent 接入 |
 | **v3** | 多项目 | 每项目一套负载 |

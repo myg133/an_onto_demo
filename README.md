@@ -4,7 +4,7 @@
 
 | 目录 | 用途 |
 | --- | --- |
-| `compose/` | 单机 docker-compose（db + query + console + portal） |
+| `compose/` | 单机 docker-compose（db + query + console） |
 | `k8s/` | Kubernetes 清单（kustomize：base + overlays/dev + overlays/prod） |
 
 > ⭐ **skill 不在本分支**：`ontok-build` / `ontok-extract` / `ontok-query` / `<项目>-ontology`
@@ -25,7 +25,7 @@ podman build -t ontok:dev -f Dockerfile .
 ```bash
 cd Deploy/compose
 cp .env.example .env          # 填源库只读连接串、项目名、版本
-# 四份声明 → config/ ；三份口令 → secrets/（都不入库）
+# 三份声明 → config/ ；两份口令 → secrets/（都不入库）
 docker compose up -d
 ```
 
@@ -34,7 +34,6 @@ docker compose up -d
 | `db` | 55432→5432 | **仅元数据库**（本体/提案/快照），源库是外部的 |
 | `query` | 8800 | REST `/api/sparql` + MCP `/mcp`（数字员工用） |
 | `console` | 8899 | 内部工作台（管理 API + 页面） |
-| `portal` | 8900 | 客户门户（只能问预置问题） |
 
 ## Kubernetes（kustomize）
 
@@ -45,10 +44,10 @@ kubectl apply -k Deploy/k8s/overlays/prod   # 先改 overlays/prod 的镜像仓�
 
 | 资源 | 说明 |
 | --- | --- |
-| `Deployment × 3` | 共用镜像，不同 `args` |
-| `Service × 3` | ClusterIP；对外走你们的 Ingress |
-| `ConfigMap ontok-config` | 四份声明 + schema.json（**进版本库、可评审**） |
-| `Secret ontok-secrets` | 三份口令（示例为空，生产用 sealed-secrets / 外部密钥） |
+| `Deployment × 2` | 共用镜像，不同 `args` |
+| `Service × 2` | ClusterIP；对外走你们的 Ingress |
+| `ConfigMap ontok-config` | 三份声明 + schema.json（**进版本库、可评审**） |
+| `Secret ontok-secrets` | 两份口令（示例为空，生产用 sealed-secrets / 外部密钥） |
 | `Secret ontok-db` | `metadata-url` 与 `source-url` —— **必须自行创建** |
 
 ```bash

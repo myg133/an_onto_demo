@@ -1,7 +1,7 @@
 # 在 k8s 上加一个新项目（运维手册）
 
 > **前提认知**：当前一套服务绑定 **一个项目 + 一个版本**。
-> `query serve` / `portal serve` 启动时必须给 `--project` 与 `--version`，运行期不切换。
+> `query serve` 启动时必须给 `--project` 与 `--version`，运行期不切换。
 > 所以「加项目」= **加一套负载 + 一份声明**，不是点一个「新建项目」按钮。
 
 ---
@@ -13,13 +13,13 @@
       ↓  Secret: ontok-db { metadata-url, source-url }
 ② 建项目 + 抽取 + 人签 + 冻结（一次性）
       ↓  元数据库里的 project / version（已冻结）
-③ 四份声明 + schema.json
+③ 三份声明 + schema.json
       ↓  ConfigMap: ontok-<项目>-config
-④ 三套口令
+④ 两套口令
       ↓  Secret: ontok-<项目>-tokens
-⑤ 三个 Deployment（--project/--version）
+⑤ 两个 Deployment（--project/--version）
       ↓
-⑥ Ingress（query / console / portal 三个入口）
+⑥ Ingress（query / console 两个入口）
 ```
 
 ---
@@ -65,7 +65,7 @@ ontok version freeze --project <项目> --version <N>
 > ⚠️ **`--names` 是必填**（REQ-128）：不传就直接失败，因为默认值是脱敏占位表。
 > 用 `ontok-builder translate-names` 或 `ontok name suggest --as-names` 生成。
 
-### ③ 四份声明 + schema
+### ③ 三份声明 + schema
 
 ```yaml
 apiVersion: v1
@@ -78,7 +78,6 @@ data:
   query-policy.json: |      # 逐表租户列 + 公共维度（**必须每项目单独写**）
   tenancy.json: |
   exclusions.json: |
-  portal-questions.json: |  # 客户门户的预置问题（必须有人签 reviewed_by）
 ```
 
 ### ④ 口令
@@ -86,13 +85,12 @@ data:
 ```bash
 kubectl -n ontok create secret generic ontok-<项目>-tokens \
   --from-file=admin-tokens.json \
-  --from-file=query-tokens.json \
-  --from-file=portal-tokens.json
+  --from-file=query-tokens.json
 ```
 
-`kind` 必须分别是 `admin` / `query` / `portal`，**同一张 token 不许两种 kind**。
+`kind` 必须分别是 `admin` / `query`，**同一张 token 不许两种 kind**。
 
-### ⑤ 三个 Deployment
+### ⑤ 两个 Deployment
 
 复制 `k8s/base/` 的 deployment，改三处：
 
@@ -118,7 +116,6 @@ k8s/overlays/prod-demo/kustomization.yaml
 | --- | --- | --- |
 | console | `console-<项目>.internal` | **只内网**（admin token） |
 | query | `api-<项目>.internal` | 数字员工 |
-| portal | `<项目>.example.com` | 客户 |
 
 ---
 
@@ -199,8 +196,8 @@ spec:
 
 | 项 | 现值 |
 | --- | --- |
-| 每套：3 个 Deployment × 1 副本 | 3 Pod |
+| 每套：2 个 Deployment × 1 副本 | 2 Pod |
 | 每 Pod 内存 | request 256Mi / limit 1Gi |
-| 10 个项目 | 30 Pod / 内存 request 2.5Gi |
+| 10 个项目 | 20 Pod / 内存 request 5Gi |
 
 **10 个以内用「一套一项目」完全可行；到几十个就该开「多项目单服务」的需求。**

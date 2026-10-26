@@ -8,7 +8,7 @@ kind: Kustomization
 #   · catalog / describe / ontology.ttl 直接读快照
 #   · SPARQL ⇒ 503 NO_DATA_SOURCE（REST）/ 200+isError（MCP）
 #
-# 为什么不用 console/portal：合作方只要本体接口，多开一个面就多一份暴露。
+# 为什么不用 console：合作方只要本体接口，多开一个面就多一份暴露。
 namespace: anspire-ontok-uat
 
 resources:
@@ -24,31 +24,19 @@ replicas:
   - { name: ontok-query, count: 1 }
 
 patches:
-  # ① 删掉 console 与 portal（只留 query）
+  # ① 删掉 console（只留 query）
   - target: { kind: Deployment, name: ontok-console }
     patch: |-
       $patch: delete
       apiVersion: apps/v1
       kind: Deployment
       metadata: { name: ontok-console }
-  - target: { kind: Deployment, name: ontok-portal }
-    patch: |-
-      $patch: delete
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata: { name: ontok-portal }
   - target: { kind: Service, name: ontok-console }
     patch: |-
       $patch: delete
       apiVersion: v1
       kind: Service
       metadata: { name: ontok-console }
-  - target: { kind: Service, name: ontok-portal }
-    patch: |-
-      $patch: delete
-      apiVersion: v1
-      kind: Service
-      metadata: { name: ontok-portal }
 
   # ② 本体模式的启动参数：去掉 --schema / --policy（R1 互斥），加 --ontology-only
   - target: { kind: Deployment, name: ontok-query }
