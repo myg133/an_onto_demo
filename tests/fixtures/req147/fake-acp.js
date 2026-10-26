@@ -9,7 +9,7 @@
 // 这里只测**接线**：一次问答端到端走通、缓存命中 0 次调用、编造的 quote 被丢。
 //
 // 环境变量：
-//   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang | flaky
+//   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang | flaky | halfgarbage | garbagetwo
 //   FAKE_ACP_LOG   每收到一条 `session/prompt` 就往这个文件追加一行（数调用次数用）
 'use strict';
 
@@ -129,8 +129,11 @@ process.stdin.on('data', (d) => {
       const text = chunkTextOf(m.params.prompt.map((p) => p.text || '').join(''));
       // `halfgarbage`：**只让第 2 条 prompt（= 第 1 块）**回一段不是 JSON 的话
       // ⇒ 「1 块回答不可用、其余正常」：断言还有、`rejected.parse` = 1、`failed_calls` = 0。
-      const answer =
-        MODE === 'halfgarbage' && prompts === 2 ? '好的，我来抽取这一段：' : answerFor(text);
+      // `garbagetwo`：让**前两块**都不可用（第 2、3 条 prompt）—— 用来构造
+      // 「2 块 / 12 块 = 16.7%」这种**低于** 20% 的比例（阈值判据必须两侧都成立）。
+      const garbageBlocks = MODE === 'halfgarbage' ? 1 : MODE === 'garbagetwo' ? 2 : 0;
+      const isGarbage = prompts >= 2 && prompts < 2 + garbageBlocks;
+      const answer = isGarbage ? '好的，我来抽取这一段：' : answerFor(text);
       const mid = Math.floor(answer.length / 2);
       // 分两片发：正文必须靠**累积**才完整（F-1）
       chunk(answer.slice(0, mid));

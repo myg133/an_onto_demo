@@ -10,6 +10,7 @@
 //! | AC-003 | 同一输入跑两次 ⇒ JSONL **sha256 相同** + 第二次 **0 次 prompt**（假 agent 的日志为空）|
 //! | AC-004 | ①程序不存在 ②单轮超时 ③预算超限 ⇒ **各 exit≠0 且不出断言文件** |
 //! | AC-005 | 编造的 quote ⇒ 该条**被丢** + `discarded_no_quote` 计数（变异：正常模式下该计数必须为 0）|
+//! | R-13③ | 回答不可用率 > 20%（3 块 1 坏）+ `--strict-deterministic` ⇒ exit≠0 且零产物；16.7%（12 块 2 坏）⇒ 照出 |
 //!
 //! # 为什么用 Node 写的假 agent
 //!
@@ -100,6 +101,22 @@ fn write_two_doc_corpus(dir: &Path) -> PathBuf {
         "# 报告格式\n\n每条结论都必须附一段原文引用。\n",
     )
     .expect("写语料 b");
+    dir.to_path_buf()
+}
+
+/// N 篇文档（每篇 **1 块**）—— 把「块数」变成可控的分母（3 块 / 12 块）。
+///
+/// 一篇 = `# 标题` + 一段正文 ⇒ `chunk_document` 恰好切 1 块（标题并进正文块），
+/// 于是块数 = 文件数：⛔ 不需要 `--limit-chunks` 去凑分母（那会引入另一个变量）。
+fn write_n_doc_corpus(dir: &Path, n: usize) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("建语料目录");
+    for i in 1..=n {
+        std::fs::write(
+            dir.join(format!("d{i}.md")),
+            format!("# 采集约束 {i}\n\n只读采集云证书与公网域名 TLS 握手结果 {i}。\n"),
+        )
+        .expect("写语料");
+    }
     dir.to_path_buf()
 }
 
@@ -656,5 +673,102 @@ fn unusable_answers_are_announced_with_their_rate() {
     assert!(all.contains("回答不可用"), "必须报出来：{all}");
     assert!(all.contains("%"), "必须给比例：{all}");
     assert!(all.contains("全部丢失"), "必须说清后果：{all}");
+}
+
+// ──────────────────────────────────────────────────────────
+// R-13③ · 「回答不可用率 > 20%」也算失败（`--strict-deterministic` 的第二条判据）
+// ──────────────────────────────────────────────────────────
+
+/// **R-13③ 判据 1**：3 块里 1 块回答不可用（**33%**）+ `--strict-deterministic`
+/// ⇒ **exit≠0 且一个产物都不写**。
+///
+/// 这就是 QA 构造出来的「脏绿」：`rejected_parse` 不进 `failed_calls`，
+/// 于是改动前这 33% 的死块只换来一行告警 —— `assertions.jsonl` 与 `stats.json`
+/// 照样落盘、exit 0，下游把残片当全量吃掉。
+///
+/// ⚠️ 断言里专门排除了「有块失败」那条判据的措辞：这条必须由**可用率**触发，
+/// 否则加上第二条判据后它可能只是被①顺带拦下的（那判据就是空的）。
+#[test]
+fn r13c3_unusable_33pct_with_strict_flag_exits_nonzero_without_output() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("r13c3_33pct");
+    let corpus = write_n_doc_corpus(&o.join("docs"), 3);
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let mut args = acp_args(&corpus, &out, &stats, &cache);
+    args.push("--strict-deterministic".into());
+    let r = run_fake(args, "halfgarbage", &log);
+
+    assert_ne!(r.code, 0, "33% 回答不可用 + 严格开关 ⇒ 必须 exit≠0：{}", r.all());
+    assert!(!out.exists(), "严格开关下**一个断言文件都不许有**（哪怕还有 2 块成功）");
+    assert!(!stats.exists(), "严格开关下 stats.json 也不许有（它也是产物）");
+    let all = r.all();
+    assert!(all.contains("回答不可用"), "必须点名是「回答不可用率」拒的：{all}");
+    assert!(all.contains("33%"), "必须报出真实的不可用率：{all}");
+    assert!(all.contains("超过 20%"), "必须说清阈值：{all}");
+    assert!(all.contains("--strict-deterministic"), "必须点名是哪个开关：{all}");
+    assert!(
+        !all.contains("重跑会重调它们、产物会变"),
+        "这条必须由**可用率**判据拒，而不是被「有块失败」那条顺带拦下：{all}"
+    );
+}
+
+/// **R-13③ 判据 2**：同一份输入、**不给**这个开关 ⇒ exit=0 且产物照出。
+///
+/// 与判据 1 **只差一个开关**（否则测的就不是这个开关的行为）。
+#[test]
+fn r13c3_same_input_without_flag_still_writes_output() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("r13c3_33pct_nostrict");
+    let corpus = write_n_doc_corpus(&o.join("docs"), 3);
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let r = run_fake(acp_args(&corpus, &out, &stats, &cache), "halfgarbage", &log);
+
+    assert_eq!(r.code, 0, "不给严格开关 ⇒ 照常出产物：{}", r.all());
+    assert!(out.exists(), "不给严格开关 ⇒ 断言文件照出");
+    assert!(stats.exists(), "不给严格开关 ⇒ stats.json 照出");
+    assert!(!lines_of(&out).is_empty(), "还有 2 块成功 ⇒ 断言不该是空的");
+    let s = read_json(&stats);
+    assert_eq!(s["chunks"], 3, "构造前提：恰好 3 块：{s}");
+    assert_eq!(s["rejected"]["parse"], 1, "构造前提：恰好 1 块回答不可用：{s}");
+    assert_eq!(s["failed_calls"], 0, "「回答不可用」不是传输失败：{s}");
+}
+
+/// **R-13③ 判据 3（阈值另一侧）**：12 块里 2 块回答不可用（**16.7%**）
+/// + `--strict-deterministic` ⇒ **exit=0**、产物照出。
+///
+/// 没有这一条，判据可以靠「一律拒绝」变绿 —— 那等于把开关变成 `--never-output`。
+/// `2 * 5 = 10 ≤ 12` ⇒ 不触发；`1 块 / 3 块` ⇒ `5 > 3` 触发。
+#[test]
+fn r13c3_unusable_167pct_with_strict_flag_stays_green() {
+    if !require_node() {
+        return;
+    }
+    let o = out_dir("r13c3_167pct");
+    let corpus = write_n_doc_corpus(&o.join("docs"), 12);
+    let (out, stats, cache) = (o.join("a.jsonl"), o.join("s.json"), o.join("c.json"));
+    let log = o.join("calls.log");
+
+    let mut args = acp_args(&corpus, &out, &stats, &cache);
+    args.push("--strict-deterministic".into());
+    let r = run_fake(args, "garbagetwo", &log);
+
+    assert_eq!(r.code, 0, "16.7% 不该触发 20% 的闸：{}", r.all());
+    assert!(out.exists(), "16.7% ⇒ 产物照出（阈值下侧必须能绿）");
+    assert!(stats.exists(), "16.7% ⇒ stats.json 照出");
+    assert!(!lines_of(&out).is_empty(), "还有 10 块成功 ⇒ 断言不该是空的");
+    let s = read_json(&stats);
+    assert_eq!(s["chunks"], 12, "构造前提：恰好 12 块：{s}");
+    assert_eq!(s["rejected"]["parse"], 2, "构造前提：恰好 2 块回答不可用：{s}");
+    assert_eq!(s["failed_calls"], 0, "构造前提：没有传输失败：{s}");
+    let all = r.all();
+    assert!(all.contains("回答不可用"), "16.7% 仍要**报**出来（只是不拒）：{all}");
 }
 

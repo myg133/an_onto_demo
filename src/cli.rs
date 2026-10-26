@@ -328,7 +328,7 @@ pub enum DocCmd {
     /// | `--agent-command` | 子进程命令行（`pi-acp` / `mcode acp` / 绝对路径）；⛔ 无默认值 |
     /// | `--agent-skill` | 抽取契约（skill）的路径；⛔ 不写死，内容随每块下发 |
     /// | `--agent-timeout-secs` | 单轮往返截止（默认 180 秒），超时即该块失败 |
-    /// | `--strict-deterministic` | 本轮有块失败 ⇒ **退出码非 0 且一个产物都不写** |
+    /// | `--strict-deterministic` | 本轮有块失败 **或** 回答不可用率 > 20% ⇒ **退出码非 0 且一个产物都不写** |
     ///
     /// ⚠️ **默认关闭**：不给 `--agent` 时，产物与 REQ-116 的路径**逐字节相同**（R1）。
     /// ⚠️ 产物 **schema 完全一致**（同一份 JSONL 照样能被 `doc merge` 吃）。
@@ -395,11 +395,15 @@ pub enum DocCmd {
         agent_timeout_secs: Option<u64>,
         /// ⭐ REQ-147 · R-2：**要么可重放，要么不出产物**。
         ///
-        /// 本轮只要有一块失败（`stats.failed_calls > 0`）⇒ **退出码非 0 且不产出断言文件**。
+        /// 本轮只要有一块失败（`stats.failed_calls > 0`）**或回答不可用率超过 20%**
+        /// （`rejected_parse * 5 > chunks`，整数算术）⇒ **退出码非 0 且不产出断言文件**。
         ///
         /// 为什么需要它：失败块**不进缓存**（一次瞬时故障不该变成永久结论），
         /// 所以重跑会重调它们、产物可能与上一份不同 —— 那种 JSONL **不可重放**。
         /// 加上这个开关，「有产物 ⇒ 一定可重放」变成**无条件**成立。
+        ///
+        /// 而「回答不可用」的块断言**全部丢失**：三分之一的块读不懂时，
+        /// 一份只剩残片的产物即便逐字节可重放，也不该被当成这一轮的结果。
         ///
         /// 省略时：产物照出，但屏幕上会打一行
         /// 「本轮 N 块失败，重跑会重调这 N 块 ⇒ 产物可能变化」。
@@ -2419,8 +2423,8 @@ async fn doc_ingest_cmd(
     //
     // `rejected_parse` 是「这一块的回答没变成断言」的合计：对端吐的不是 JSON /
     // 正文被截断 / 传输失败 / 不报用量 —— 全都落在这里。它**不进** `failed_calls`，
-    // 所以既不触发 ⑦.4 的提示、也不触发 `--strict-deterministic`（那些块的回答
-    // **进了缓存**，重跑逐字节相同，确定性没问题）。
+    // 所以不触发 ⑦.4 那段提示（那段只数 `failed_calls`）；`--strict-deterministic`
+    // 也**不看单块**，只在它超过 20% 时按 ⑦.6 的第二条判据拒绝。
     //
     // 但**质量**上它必须可见：REQ-147 实测同一条命令两轮之间能是 2/95 与 29/95 ——
     // 29 块回答作废而屏幕上一切正常，是最容易被误读成「这一轮抽得少」的形态。
@@ -2435,7 +2439,8 @@ async fn doc_ingest_cmd(
         );
         eprintln!(
             "  （它们的回答**已进缓存** ⇒ 重跑不会变、也不会重试。\
-             要重试请删掉对应缓存条目或换 --cache；把这一类算成失败请用 --strict-deterministic 之外的闸。）"
+             要重试请删掉对应缓存条目或换 --cache；**回答不可用率 > 20%** 时 \
+             --strict-deterministic 会把它算成失败——一个产物都不写。）"
         );
     }
 
@@ -2455,12 +2460,20 @@ async fn doc_ingest_cmd(
     // ⑦.6 ⭐ REQ-147 · R-2/C · `--strict-deterministic`：**宁可不出产物，也不出一份
     //     不可重放的产物**。
     //
-    // 判据只有一条：`failed_calls > 0` ⇒ exit≠0 且一个产物文件都不写。
-    // 于是 AC-003（同输入两次跑逐字节相同 + 第二次 0 次调用）在**任何输入**下都成立 ——
-    // 因为「有失败块」这一种唯一的反例被变成了「没有产物」。
+    // 判据两条（R-13③ 补的是第二条）：
+    // ① `failed_calls > 0` ⇒ exit≠0 且一个产物文件都不写。于是 AC-003（同输入两次跑
+    //    逐字节相同 + 第二次 0 次调用）在**任何输入**下都成立 —— 因为「有失败块」
+    //    这一种唯一的反例被变成了「没有产物」。
+    // ② **回答不可用率 > 20%**（`rejected_parse * 5 > chunks_total`，**整数算术**）
+    //    ⇒ 同样 exit≠0 且零产物。三分之一的块回答作废时，产物只剩残片：
+    //    那不是「这一轮抽得少」，而是「这一轮不算数」。
     //
     // 为什么是「拒绝」而不是「失败块进缓存」：后者会把一次瞬时故障（超时、对端抽风）
     // 变成**永久结论** —— 重跑永远拿到那个 Err，而人以为「这份文档就是这样」。
+    //
+    // ⚠️ 两条判据**分两段报**：① 的措辞与行为一字未动（这是加法，不是改写）。
+    let chunks_total = stats.chunks; // 复用 stats 已有口径（= ingest_all 实际跑的块数）
+    let unusable_too_high = chunks_total > 0 && stats.rejected_parse * 5 > chunks_total;
     if strict_deterministic && stats.failed_calls > 0 {
         anyhow::bail!(
             "--strict-deterministic：本轮有 {} 块失败（共 {} 块）—— **不产出任何断言文件**。\n\
@@ -2478,6 +2491,40 @@ async fn doc_ingest_cmd(
              缓存已落盘（{}）：重跑时**成功的那些块不会重复计费**。",
             stats.failed_calls,
             chunks.len(),
+            stats.rejected_no_evidence,
+            stats.rejected_modality,
+            stats.rejected_predicate,
+            stats.rejected_empty,
+            stats.rejected_parse,
+            cache_path.display()
+        );
+    }
+
+    // ② **回答不可用率 > 20%** ⇒ 与①同一条处置：exit≠0、零产物。
+    //
+    // 判据用**整数算术**：`rejected_parse * 5 > chunks_total` 就是「> 20%」
+    // （33% 红、16.7% 绿、恰好 20% 绿）—— 浮点在这里只会带来边界抖动。
+    if strict_deterministic && unusable_too_high {
+        anyhow::bail!(
+            "--strict-deterministic：本轮 {} 块**回答不可用**（共 {} 块，{}%）—— 超过 20% ⇒ \
+             **不产出任何断言文件**。\n\
+             \n\
+             为什么拒：回答不可用的块（对端吐的不是 JSON / 被截断 / 传输失败 / 不报用量）\
+             断言**全部丢失**，产物只剩残片。「三块里一块读不懂」不是「这一轮抽得少」，\
+             是「这一轮不算数」。\n\
+             \n\
+             ⚠️ 这与「有块失败」不同：这些块的回答**已进缓存**（重跑逐字节相同、也不会重试），\
+             所以问题不在确定性，而在**可用率** —— 本开关把两者一并算成失败。\n\
+             \n\
+             三种出路：① 删掉对应缓存条目或换 --cache 重跑（这些块会重试）；\
+             ② 去掉 --strict-deterministic（接受「有一部分块不算数」的产物）；\
+             ③ 换更稳的对端 / 调大 --max-tokens（正文被截断是主因之一）。\n\
+             \n\
+             丢弃明细：证据对不上 {} · 模态 {} · 谓词 {} · 字段空 {} · **解析 {}**。\n\
+             缓存已落盘（{}）：**成功的那些块不会重复计费**。",
+            stats.rejected_parse,
+            chunks_total,
+            stats.rejected_parse * 100 / chunks_total,
             stats.rejected_no_evidence,
             stats.rejected_modality,
             stats.rejected_predicate,
