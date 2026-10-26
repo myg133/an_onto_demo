@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "verbs": {
+    "belongs_to":   { "label": "归属于", "aliases": ["belong_to", "owned_by"] },
+    "attached_to":  { "label": "挂载于", "aliases": ["attaches_to", "attached", "mounts_to"] },
+    "binds_to":     { "label": "绑定到", "aliases": ["binds"] },
+    "references":   { "label": "关联到", "aliases": ["refers_to"] },
+    "notifies_via": { "label": "通知到", "aliases": ["notifies"] },
+    "applies_to":   { "label": "适用于", "aliases": ["applied_to"] },
+    "forwards_to":  { "label": "转发到", "aliases": ["forwarded_to"] },
+    "targets":      { "label": "指向", "aliases": [] },
+    "bills":        { "label": "计费到", "aliases": ["billed_to"] },
+    "based_on":     { "label": "基于", "aliases": [] },
+    "deployed_to":  { "label": "部署于", "aliases": ["deploys_to"] },
+    "has":          { "label": "拥有", "aliases": [] },
+    "depends_on":   { "label": "依赖", "aliases": ["depends"] },
+    "records":      { "label": "记录了", "aliases": [] },
+    "derived_from": { "label": "算自", "aliases": [] },
+    "contains":     { "label": "包含", "aliases": [], "deprecated": "泛词；仅保留以兼容 v3" }
+  },
+  "forbidden": ["uses", "associated_with", "related_to", "involves", "has_many", "is_related"]
+}

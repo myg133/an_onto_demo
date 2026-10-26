@@ -64,4 +64,9 @@ pub mod ttl;
 // 与 `ttl` 同一条理由独立成文件：它是 TTL 的**下游消费者**，不是 TTL 的改造
 // （命名 / 实例 IRI / 数据类型三处**复用** ttl 的唯一实现，不抄第二份）。
 pub mod r2rml;
+// ⭐ REQ-157 · **关系动词字典**（`relation-verbs.json`，`include_str!` 编进二进制）。
+// 为什么放在 domain 而不放在 cli：它是**判据**（谁是合法动词、同义怎么归一、
+// 泛词是哪些），服务面（`view::semantic_cn` 出中文标签）与构建面
+// （`relation verbs check`）必须用**同一份**，否则两边迟早各改各的。
+pub mod relation_verbs;
 pub mod view;
