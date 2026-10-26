@@ -78,11 +78,11 @@ use super::fetch::{self, classify_filters, FilterValue, FreshnessReceipt, JsonLd
 use super::path;
 use super::tc3::{self, SignInput};
 use super::{
-    expand_iri_template, placeholders, AccessError, BindingSource, Entity, Mapping, Ontology,
-    PagingValue, RequestSpec, Source, CODE_API_ERROR, CODE_AUTH_MISSING,
-    CODE_AUTH_MODE_UNSUPPORTED, CODE_AUTH_REJECTED, CODE_ENTITY_UNKNOWN, CODE_FIELD_PATH,
-    CODE_KEY_MISSING, CODE_RATE_LIMITED, CODE_REQUEST_BINDING_MISSING, CODE_REQUEST_SHAPE,
-    CODE_SCAN_LIMIT, CODE_SCHEMA, CODE_UNREVIEWED, CODE_UPSTREAM_TIMEOUT,
+    expand_iri_template, placeholders, AccessError, Binding, BindingShape, BindingSource,
+    BindingValueType, Entity, Mapping, Ontology, PagingValue, RequestSpec, Source, CODE_API_ERROR,
+    CODE_AUTH_MISSING, CODE_AUTH_MODE_UNSUPPORTED, CODE_AUTH_REJECTED, CODE_ENTITY_UNKNOWN,
+    CODE_FIELD_PATH, CODE_KEY_MISSING, CODE_RATE_LIMITED, CODE_REQUEST_BINDING_MISSING,
+    CODE_REQUEST_SHAPE, CODE_SCAN_LIMIT, CODE_SCHEMA, CODE_UNREVIEWED, CODE_UPSTREAM_TIMEOUT,
     CODE_UPSTREAM_UNREACHABLE,
 };
 
@@ -762,7 +762,7 @@ pub fn fetch_network_capturing(
         }
 
         let (payload, region) =
-            build_payload(entity, source, &plan.pushdown_filters, offset, page_limit)?;
+            build_payload(entity, source, &plan.pushdown_filters, offset, page_limit, pages)?;
         let signed = tc3::sign(&SignInput {
             secret_id: creds.secret_id(),
             secret_key: creds.secret_key(),
@@ -1026,34 +1026,50 @@ pub fn fetch_network_capturing(
 /// | 数组元素（该元素子树里有一处被剪） | 丢掉整个元素；数组变空则连这个键一起丢 |
 /// | 字符串里**嵌着**占位符（`"a-{x}"`） | **报错**（⛔ 不写半截字符串） |
 ///
-/// # 分页
+/// # 分页（REQ-149 · 缺口 A/B）
 ///
-/// `paging.offset` / `.limit` 是**路径**（`Offset` 或 `Page.Number`），渲染后按路径写入
-/// （中间层不存在就建对象）。⛔ 不硬编码位置，也不做「偏移 → 页码」这类算术变换
-/// （契约只能给值，不能给表达式 —— 见模块头「已知限制」）。
+/// `paging.offset` / `.limit` / `.page` 是**路径**（`Offset` 或 `Page.Number`），
+/// 渲染后按路径写入（中间层不存在就建对象）。⛔ 不硬编码位置。
+///
+/// | 契约写法 | 第 N 页发出的值 |
+/// | --- | --- |
+/// | `"offset": "Offset"`（默认 0 基） | `已取条数` |
+/// | `"page": "PageNumber"`（默认 1 基） | `已取页数 + 1` |
+/// | `"offset": "Offset", "offset_base": 1` | 同上（`offset_base: 1` 按**页码**解释） |
+///
+/// 页码用**已取页数**而不是 `已取条数 / 单页上限`：后者在「客户端 `--limit` 把
+/// 最后一页压小」时会算错（100/50 ⇒ 第 3 页，跳过第 2 页）。页数是分页器自己的计数，
+/// 与每页实际要多少行无关 —— 这是唯一不会算错的来源。
+///
+/// `value_type`（`number` 默认 / `string`）决定这个值的 JSON 类型；
+/// 它同时作用于模板里的 `{offset}` / `{limit}` 占位符 —— 一处声明，两个出口一致。
 fn build_payload(
     entity: &Entity,
     source: &Source,
     pushdown: &[(String, FilterValue)],
     offset: usize,
     page_limit: usize,
+    pages_fetched: usize,
 ) -> Result<(String, Option<String>), AccessError> {
     ensure_json_post(entity)?;
 
-    let offsets = PagingPaths {
-        offset: entity
-            .request
-            .paging_offset
+    let request = &entity.request;
+    let paths = PagingPaths {
+        offset: request
+            .paging_page
             .clone()
+            .or_else(|| request.paging_offset.clone())
             .or_else(|| entity.paging.as_ref().map(|p| p.offset_param.clone()))
             .unwrap_or_else(|| "Offset".to_string()),
-        limit: entity
-            .request
+        limit: request
             .paging_limit
             .clone()
             .or_else(|| entity.paging.as_ref().map(|p| p.limit_param.clone()))
             .unwrap_or_else(|| "Limit".to_string()),
     };
+    let offset_number = paging_offset_number(entity, offset, pages_fetched);
+    let offset_value = request.paging_value_type.json(offset_number);
+    let limit_value = request.paging_value_type.json(page_limit);
 
     // `X-TC-Region`：只来自 `sources[].defaults.Region`（大小写不敏感）；
     // 没有 default 时，退让给「名叫 region 的下推过滤条件」（保持旧行为）。
@@ -1077,8 +1093,8 @@ fn build_payload(
                 defaults: &source.defaults,
                 pushdown,
                 spec: &entity.request,
-                offset,
-                limit: page_limit,
+                offset: offset_value.clone(),
+                limit: limit_value.clone(),
             };
             // 必填绑定先对账（缺 ⇒ REQUEST_BINDING_MISSING，而不是发出一个空值）
             for name in &entity.request.required {
@@ -1111,7 +1127,12 @@ fn build_payload(
                 if name.eq_ignore_ascii_case("region") {
                     continue; // 已进头
                 }
-                body.insert(name.clone(), filter_value_json(value));
+                // 没模板时也能用缺口 C：绑定声明了类型/形状就按它转，否则逐字节保持旧行为。
+                let converted = match request.bindings.get(name) {
+                    Some(b) if b.has_type_decl() => filter_binding_json(name, b, value)?,
+                    _ => filter_value_json(value),
+                };
+                body.insert(name.clone(), converted);
             }
             Value::Object(body)
         }
@@ -1119,12 +1140,31 @@ fn build_payload(
 
     // 分页值按**路径**写进去（模板里没有这条路就建出来）
     let mut body = body;
-    set_path(&mut body, &offsets.offset, json!(offset))?;
-    set_path(&mut body, &offsets.limit, json!(page_limit))?;
+    set_path(&mut body, &paths.offset, offset_value)?;
+    set_path(&mut body, &paths.limit, limit_value)?;
 
     // ⚠️ 这里序列化出来的**就是**被签名的 payload（⛔ 不发第二份）。
     let text = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
     Ok((text, region))
+}
+
+/// 这一页应该发出的**位置值**（偏移量或页码，取决于契约怎么写）。
+///
+/// | 契约 | `page_mode` | `base` | 发出的值 |
+/// | --- | --- | --- | --- |
+/// | 什么都没写 | ✗ | 0 | `已取条数`（旧行为，逐字节不变） |
+/// | `offset` + `offset_base: 0` | ✗ | 0 | `已取条数` |
+/// | `page`（默认 1 基） | ✓ | 1 | `已取页数 + 1` |
+/// | `page` + `offset_base: 0` | ✓ | 0 | `已取页数` |
+/// | `offset` + `offset_base: 1` | ✓ | 1 | 与 `page` 同义（见类型文档的裁定） |
+fn paging_offset_number(entity: &Entity, rows_fetched: usize, pages_fetched: usize) -> usize {
+    let base = entity.request.offset_base;
+    let page_mode = entity.request.paging_page.is_some() || base == Some(1);
+    if page_mode {
+        pages_fetched + base.unwrap_or(1) as usize
+    } else {
+        rows_fetched + base.unwrap_or(0) as usize
+    }
 }
 
 /// 分页值要写到的两个路径。
@@ -1174,8 +1214,10 @@ struct RenderCtx<'a> {
     defaults: &'a BTreeMap<String, Value>,
     pushdown: &'a [(String, FilterValue)],
     spec: &'a RequestSpec,
-    offset: usize,
-    limit: usize,
+    /// 已经按 `request.paging.value_type` 转好类型的**位置值**（页码或偏移）。
+    offset: Value,
+    /// 同上，本页条数。
+    limit: Value,
 }
 
 impl RenderCtx<'_> {
@@ -1189,25 +1231,179 @@ impl RenderCtx<'_> {
             ));
         };
         match binding.source {
-            BindingSource::Default => Ok(self.defaults.get(name).cloned().or_else(|| {
-                self.defaults
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                    .map(|(_, v)| v.clone())
-            })),
+            BindingSource::Default => {
+                let found = self.defaults.get(name).cloned().or_else(|| {
+                    self.defaults
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                        .map(|(_, v)| v.clone())
+                });
+                match found {
+                    // 没声明类型/形状 ⇒ 原样返回（旧行为逐字节不变）。
+                    Some(v) if !binding.has_type_decl() => Ok(Some(v)),
+                    Some(v) => default_binding_json(name, binding, &v).map(Some),
+                    None => Ok(None),
+                }
+            }
             BindingSource::Filter => Ok(self
                 .pushdown
                 .iter()
                 .find(|(k, _)| k == name)
-                .map(|(_, v)| match v {
-                    FilterValue::One(s) => Value::String(s.clone()),
-                    FilterValue::Many(items) => {
-                        Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
+                .map(|(_, v)| {
+                    if binding.has_type_decl() {
+                        filter_binding_json(name, binding, v)
+                    } else {
+                        // 旧行为：单值 ⇒ 字符串，多值 ⇒ 字符串数组。
+                        Ok(match v {
+                            FilterValue::One(s) => Value::String(s.clone()),
+                            FilterValue::Many(items) => {
+                                Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
+                            }
+                        })
                     }
-                })),
-            BindingSource::Paging(PagingValue::Offset) => Ok(Some(json!(self.offset))),
-            BindingSource::Paging(PagingValue::Limit) => Ok(Some(json!(self.limit))),
+                })
+                .transpose()?),
+            BindingSource::Paging(PagingValue::Offset) => Ok(Some(self.offset.clone())),
+            BindingSource::Paging(PagingValue::Limit) => Ok(Some(self.limit.clone())),
         }
+    }
+}
+
+/// 过滤值 → 按绑定声明的**类型 + 形状**转成 JSON（REQ-149 · 缺口 C）。
+///
+/// 口径：
+/// - `shape: scalar`（默认）：多值 ⇒ **报错点名**（⛔ 不挑第一个、不 join）；
+/// - `shape: array`：单值也包成 `[v]`；
+/// - `integer` / `boolean` 解析失败 ⇒ **报错点名**（⛔ 不静默降级成字符串）。
+fn filter_binding_json(
+    name: &str,
+    binding: &Binding,
+    value: &FilterValue,
+) -> Result<Value, AccessError> {
+    let ty = binding.value_type();
+    match binding.shape() {
+        BindingShape::Scalar => match value {
+            FilterValue::One(s) => scalar_text_json(name, ty, s),
+            FilterValue::Many(items) => Err(AccessError::new(
+                CODE_SCHEMA,
+                format!(
+                    "绑定 `{name}` 声明 `shape: scalar`（默认），但过滤值是多值 {items:?}。\n\
+                     改法：① 写 `\"shape\": \"array\"`（多数接口的 `N` 后缀参数就是数组）；\
+                     ② 或只传一个值。⛔ 本实现不会替你挑一个、也不会悄悄 join 成字符串。"
+                ),
+            )),
+        },
+        BindingShape::Array => {
+            let items: Vec<&String> = match value {
+                FilterValue::One(s) => vec![s],
+                FilterValue::Many(items) => items.iter().collect(),
+            };
+            let mut out = Vec::with_capacity(items.len());
+            for s in items {
+                out.push(scalar_text_json(name, ty, s)?);
+            }
+            Ok(Value::Array(out))
+        }
+    }
+}
+
+/// 把一段文本按声明类型转成 JSON 标量。
+fn scalar_text_json(name: &str, ty: BindingValueType, text: &str) -> Result<Value, AccessError> {
+    match ty {
+        BindingValueType::String => Ok(Value::String(text.to_string())),
+        BindingValueType::Integer => text.trim().parse::<i64>().map(Value::from).map_err(|_| {
+            AccessError::new(
+                CODE_SCHEMA,
+                format!(
+                    "绑定 `{name}` 声明 `value_type: integer`，但过滤值 `{text}` 不是整数。\n\
+                     ⛔ 本实现不会把它静默当成字符串发出去（服务端会拒，或更糟：把 `\"1\"` 与 `1` 当两个值）。"
+                ),
+            )
+        }),
+        BindingValueType::Boolean => match text.trim().to_ascii_lowercase().as_str() {
+            "true" => Ok(Value::Bool(true)),
+            "false" => Ok(Value::Bool(false)),
+            _ => Err(AccessError::new(
+                CODE_SCHEMA,
+                format!(
+                    "绑定 `{name}` 声明 `value_type: boolean`，但过滤值 `{text}` 不是 `true` / `false`。\
+                     ⛔ 不静默降级。"
+                ),
+            )),
+        },
+    }
+}
+
+/// 默认值 → 按绑定声明的**类型 + 形状**转成 JSON（缺口 C 的另一半）。
+fn default_binding_json(
+    name: &str,
+    binding: &Binding,
+    value: &Value,
+) -> Result<Value, AccessError> {
+    let ty = binding.value_type();
+    match binding.shape() {
+        BindingShape::Scalar => {
+            let scalar = match value {
+                Value::Array(_) => {
+                    return Err(AccessError::new(
+                        CODE_SCHEMA,
+                        format!(
+                            "绑定 `{name}` 的 `sources[].defaults` 是数组，但绑定声明 `shape: scalar`。\
+                             要么写 `\"shape\": \"array\"`，要么把默认值改成单值（⛔ 不取第一个）。"
+                        ),
+                    ))
+                }
+                other => other,
+            };
+            json_scalar_typed(name, ty, scalar)
+        }
+        BindingShape::Array => {
+            let items: Vec<&Value> = match value {
+                Value::Array(a) => a.iter().collect(),
+                other => vec![other],
+            };
+            let mut out = Vec::with_capacity(items.len());
+            for v in items {
+                out.push(json_scalar_typed(name, ty, v)?);
+            }
+            Ok(Value::Array(out))
+        }
+    }
+}
+
+/// JSON 标量 → 声明类型（数字/布尔可转字符串；字符串可解析成整数/布尔）。
+fn json_scalar_typed(name: &str, ty: BindingValueType, v: &Value) -> Result<Value, AccessError> {
+    match ty {
+        BindingValueType::String => match v {
+            Value::String(s) => Ok(Value::String(s.clone())),
+            Value::Number(n) => Ok(Value::String(n.to_string())),
+            Value::Bool(b) => Ok(Value::String(b.to_string())),
+            other => Err(AccessError::new(
+                CODE_SCHEMA,
+                format!("绑定 `{name}` 声明 `value_type: string`，但默认值是 {other}（对象/数组）。"),
+            )),
+        },
+        BindingValueType::Integer => match v {
+            Value::Number(n) => n.as_i64().map(Value::from).ok_or_else(|| {
+                AccessError::new(
+                    CODE_SCHEMA,
+                    format!("绑定 `{name}` 声明 `value_type: integer`，但默认值 {n} 不是整数。"),
+                )
+            }),
+            Value::String(s) => scalar_text_json(name, ty, s),
+            other => Err(AccessError::new(
+                CODE_SCHEMA,
+                format!("绑定 `{name}` 声明 `value_type: integer`，但默认值是 {other}。"),
+            )),
+        },
+        BindingValueType::Boolean => match v {
+            Value::Bool(b) => Ok(Value::Bool(*b)),
+            Value::String(s) => scalar_text_json(name, ty, s),
+            other => Err(AccessError::new(
+                CODE_SCHEMA,
+                format!("绑定 `{name}` 声明 `value_type: boolean`，但默认值是 {other}。"),
+            )),
+        },
     }
 }
 
@@ -1474,5 +1670,197 @@ mod tests {
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
         let (_, e) = transport_error(ureq::Error::Io(io), URL);
         assert!(!e.message.contains("SECRET_KEY="), "{}", e.message);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // REQ-149 · 分页类型 / 页码 / 绑定类型（build_payload 是**签名并发出去的那一份**）
+    // ══════════════════════════════════════════════════════════
+
+    /// 一条最小映射；`request` 段由用例给。没有 `fixture`（REQ-149 · D 允许）。
+    fn req149_mapping(request_json: &str) -> Mapping {
+        let text = format!(
+            r#"{{
+  "contract_version": 1,
+  "project": "req149",
+  "sources": [{{ "id": "s", "base_url": "https://api.example.com",
+                 "defaults": {{ "Region": "r1" }} }}],
+  "entities": [{{
+    "id": "e",
+    "class": "c",
+    "source": "s",
+    "reviewed_by": "qa@2026-10-26",
+    "operation": {{ "action": "DescribeX" }},
+    "iterator": "$.Response.Set[*]",
+    "identity": {{ "key_path": "Id" }},
+    "iri_template": "ontok:c/{{id}}",
+    "fields": {{ "name": {{ "path": "Name" }} }},
+    "request": {request_json},
+    "paging": {{ "offset_param": "Offset", "limit_param": "Limit",
+                 "max_limit": 100, "total_path": "$.Response.TotalCount" }},
+    "capability": {{ "pushdown": ["status"], "local_only": [], "max_scan_rows": 5000 }},
+    "freshness": {{ "mode": "realtime" }}
+  }}]
+}}"#
+        );
+        super::super::parse(&text).expect("REQ-149 测试映射应当解析成功")
+    }
+
+    fn body_at(
+        mapping: &Mapping,
+        pushdown: &[(String, FilterValue)],
+        offset: usize,
+        page_limit: usize,
+        pages_fetched: usize,
+    ) -> String {
+        let e = mapping.entity("e").expect("entity");
+        let s = mapping.source("s").expect("source");
+        build_payload(e, s, pushdown, offset, page_limit, pages_fetched)
+            .expect("build_payload")
+            .0
+    }
+
+    /// 默认按「每页 100 行」推页数（测试映射的 `paging.max_limit` 就是 100）。
+    fn body(mapping: &Mapping, pushdown: &[(String, FilterValue)], offset: usize, page_limit: usize) -> String {
+        body_at(mapping, pushdown, offset, page_limit, offset / 100)
+    }
+
+    /// 断言「这里必须报错」并把错误拿出来。
+    fn err_code(r: Result<(String, Option<String>), AccessError>) -> AccessError {
+        match r {
+            Ok((body, _)) => panic!("这里应当报错，但它成功了：{body}"),
+            Err(e) => e,
+        }
+    }
+
+    /// 缺口 A：`value_type: string` ⇒ `Offset/Limit` 是**字符串** `"0"` / `"100"`。
+    ///
+    /// 变异（真跑过）：删掉 `"value_type": "string"` ⇒ 同一断言收到
+    /// `"Offset":0,"Limit":100` ⇒ 立刻红（那正是「文档写 String、执行器发数字」的 bug）。
+    #[test]
+    fn req149_a_paging_value_type_string() {
+        let m = req149_mapping(
+            r#"{"template":{"Region":"{region}"},
+                "bindings":{"region":{"source":"default"}},
+                "paging":{"offset":"Offset","limit":"Limit","value_type":"string"}}"#,
+        );
+        let b = body(&m, &[], 0, 100);
+        assert_eq!(b, r#"{"Limit":"100","Offset":"0","Region":"r1"}"#);
+
+        // 变异对照：不写 value_type ⇒ 旧行为（数字），且与上面**不同**。
+        let m_num = req149_mapping(
+            r#"{"template":{"Region":"{region}"},
+                "bindings":{"region":{"source":"default"}},
+                "paging":{"offset":"Offset","limit":"Limit"}}"#,
+        );
+        let b_num = body(&m_num, &[], 0, 100);
+        assert_eq!(b_num, r#"{"Limit":100,"Offset":0,"Region":"r1"}"#);
+        assert_ne!(b, b_num, "string / number 必须真的不同");
+    }
+
+    /// 缺口 B：`page` 语义 ⇒ 第 1 页 `PageNumber=1`，第 2 页 `2`。
+    #[test]
+    fn req149_b_page_numbers_start_at_one() {
+        let m = req149_mapping(
+            r#"{"template":{"Region":"{region}"},
+                "bindings":{"region":{"source":"default"}},
+                "paging":{"page":"PageNumber","limit":"PageSize"}}"#,
+        );
+        let b1 = body(&m, &[], 0, 100);
+        let b2 = body(&m, &[], 100, 100);
+        assert_eq!(b1, r#"{"PageNumber":1,"PageSize":100,"Region":"r1"}"#);
+        assert_eq!(b2, r#"{"PageNumber":2,"PageSize":100,"Region":"r1"}"#);
+        assert!(!b1.contains("PageNumber\":0"), "第 1 页绝不能发 0：{b1}");
+    }
+
+    /// 缺口 B 的等价写法（需求原文的形状）：`offset` + `offset_base: 1`
+    /// 必须**按页码解释**，而不是「已取条数 + 1」。
+    #[test]
+    fn req149_b_offset_base_one_is_page_semantics() {
+        let m = req149_mapping(
+            r#"{"template":{"Region":"{region}"},
+                "bindings":{"region":{"source":"default"}},
+                "paging":{"offset":"PageNumber","limit":"PageSize","offset_base":1}}"#,
+        );
+        assert!(body(&m, &[], 0, 100).contains(r#""PageNumber":1"#));
+        assert!(
+            body(&m, &[], 100, 100).contains(r#""PageNumber":2"#),
+            "第 2 页必须是 2，不是「已取条数 + 1 = 101」"
+        );
+        // 最后一页被 `--limit` 压小时（PageSize=50，但服务端页大小是 100）：
+        // 页码来自**已取页数**（1），不是 `100/50+1 = 3` —— 后者会跳过第 2 页。
+        assert!(
+            body_at(&m, &[], 100, 50, 1).contains(r#""PageNumber":2"#),
+            "页码必须来自分页器的页计数，不能拿 rows / page_limit 算"
+        );
+    }
+
+    /// 旧行为对照：什么都没写 ⇒ 仍是 0 基偏移量（`Offset: 0` / `Offset: 100`）。
+    #[test]
+    fn req149_default_paging_is_unchanged() {
+        let m = req149_mapping(
+            r#"{"template":{"Region":"{region}"},"bindings":{"region":{"source":"default"}}}"#,
+        );
+        assert_eq!(body(&m, &[], 0, 100), r#"{"Limit":100,"Offset":0,"Region":"r1"}"#);
+        assert_eq!(body(&m, &[], 100, 100), r#"{"Limit":100,"Offset":100,"Region":"r1"}"#);
+    }
+
+    /// 缺口 C：`value_type: integer` + `shape: array` ⇒ `CertificateStatus` 是 `[1]`（整数）。
+    ///
+    /// 变异（真跑过）：删掉 `"shape":"array"` ⇒ 数组模板里的整值占位符收到标量，
+    /// 发出 `[1]` 之前先报「多值 → scalar」错；删掉 `"value_type":"integer"`
+    /// ⇒ 发出 `["1"]`（字符串数组），断言 `[1]` 立刻红。
+    #[test]
+    fn req149_c_integer_array_binding() {
+        let m = req149_mapping(
+            r#"{"template":{"CertificateStatus":["{status}"]},
+                "bindings":{"status":{"source":"filter","value_type":"integer","shape":"array"}}}"#,
+        );
+        let push = vec![("status".to_string(), FilterValue::Many(vec!["1".into()]))];
+        assert_eq!(body(&m, &push, 0, 100), r#"{"CertificateStatus":[1],"Limit":100,"Offset":0}"#);
+
+        // 单值也包成数组（shape=array 的语义）。
+        let one = vec![("status".to_string(), FilterValue::One("1".into()))];
+        assert_eq!(body(&m, &one, 0, 100), r#"{"CertificateStatus":[1],"Limit":100,"Offset":0}"#);
+    }
+
+    /// 缺口 C 的反面：`shape: scalar` 收到多值 ⇒ **报错点名**（⛔ 不挑第一个、不 join）。
+    #[test]
+    fn req149_c_scalar_shape_with_many_values_is_named_error() {
+        let m = req149_mapping(
+            r#"{"template":{"Status":"{status}"},
+                "bindings":{"status":{"source":"filter","value_type":"integer"}}}"#,
+        );
+        let push = vec![("status".to_string(), FilterValue::Many(vec!["1".into(), "2".into()]))];
+        let e = err_code(build_payload(
+            m.entity("e").unwrap(),
+            m.source("s").unwrap(),
+            &push,
+            0,
+            100,
+            0,
+        ));
+        assert_eq!(e.code, CODE_SCHEMA, "{e}");
+        assert!(e.message.contains("status"), "要点名绑定：{e}");
+        assert!(e.message.contains("shape: scalar"), "要说清是哪个声明冲突：{e}");
+    }
+
+    /// 缺口 C 的解析闸：非整数 + `value_type: integer` ⇒ 报错点名（⛔ 不静默当字符串）。
+    #[test]
+    fn req149_c_non_integer_value_is_named_error() {
+        let m = req149_mapping(
+            r#"{"template":{"Status":"{status}"},
+                "bindings":{"status":{"source":"filter","value_type":"integer"}}}"#,
+        );
+        let push = vec![("status".to_string(), FilterValue::One("RUNNING".into()))];
+        let e = err_code(build_payload(
+            m.entity("e").unwrap(),
+            m.source("s").unwrap(),
+            &push,
+            0,
+            100,
+            0,
+        ));
+        assert_eq!(e.code, CODE_SCHEMA, "{e}");
+        assert!(e.message.contains("不是整数"), "{e}");
     }
 }

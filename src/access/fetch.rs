@@ -523,7 +523,21 @@ pub(crate) fn local_path(entity: &Entity, key: &str) -> Option<String> {
 }
 
 fn read_fixture(mapping_dir: &Path, entity: &Entity) -> Result<Value, AccessError> {
-    let p: PathBuf = super::validate::resolve_fixture(mapping_dir, &entity.fixture);
+    // REQ-149 · 缺口 D：`fixture` 是可选的，但**这条通路**必须有夹具 ——
+    // 明确拒绝并点名（⛔ 不静默降级成「返回空结果」，那看起来像「查了，没有」）。
+    let Some(fixture) = entity.fixture.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Err(AccessError::new(
+            super::CODE_FIXTURE_REQUIRED,
+            format!(
+                "entity `{}` 没有声明 `fixture` —— `--dry-run-fixture` 通路必须有一份夹具。\n\
+                 改法：① 给这条 entity 补 `\"fixture\": \"<脱敏响应>.json\"`；\
+                 ② 或用 `--allow-network` 走真调用（真调用不需要夹具）。\n\
+                 ⛔ 本实现不会在缺夹具时返回空结果 —— 那会看起来像「查过了，没有数据」。",
+                entity.id
+            ),
+        ));
+    };
+    let p: PathBuf = super::validate::resolve_fixture(mapping_dir, fixture);
     let text = std::fs::read_to_string(&p).map_err(|e| {
         AccessError::new(
             super::CODE_FIXTURE_UNREADABLE,

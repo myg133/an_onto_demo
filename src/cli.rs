@@ -781,9 +781,22 @@ pub enum AccessCmd {
     /// 3. relation 的 `from` / `to` 都在 `entities` 里（R7）
     /// 4. `fields.x.path` 在 fixture 里真的存在
     ///
+    /// ⭐ **`fixture` 是可选的**（REQ-149）：没有夹具的实体**不判失败**，而是
+    /// **退出码 0** + 一条 `FIELD_PATH_NOT_CHECKED` 警告（点名实体），
+    /// 并且该实体**不出现在** `field_coverage` 里（⛔ 不显示成 `1/1` 或 `0/0`）。
+    /// 这是「没证据」，不是「通过」—— 旧口径逼人从映射反向造夹具，造出了自证。
+    ///
+    /// 夹具是否**有独立证据力**也会写在报告里（`fixture_note`）：
+    ///
+    /// | 契约写法 | 输出 |
+    /// | --- | --- |
+    /// | `"fixture_source": "declared"` | 作者声明独立采集（工具**不核实**） |
+    /// | `"fixture_source": "derived"` | 明确警告：由映射键反向生成，无独立证据力 |
+    /// | 不写 | 工具启发式判断：每行只含映射引用到的字段 ⇒ 疑似反向生成 |
+    ///
     /// stdout = JSON 报告（`ok` / `entities[]` / `errors[]` / `warnings[]`）；
     /// stderr = 一条条点名到「哪条 entity / 哪个字段」的人话。
-    /// 有问题 ⇒ **退出码 1**（⛔ 不静默通过）。
+    /// 有**错误** ⇒ **退出码 1**（⛔ 不静默通过）；只有警告 ⇒ 退出码 0。
     #[command(verbatim_doc_comment)]
     Validate {
         /// 作者格式契约（`access.json`）。`fixture` 的相对路径**先按它的目录**解析
@@ -856,6 +869,44 @@ pub enum AccessCmd {
     ///
     /// ⭐ `--dump-raw <PATH>`：把**第一页原始响应体**原样落盘（完整结构、未裁剪），
     /// 用于把合成 fixture 换成真实响应。⛔ 默认不写；⛔ 不含凭据。
+    ///
+    /// ⭐ **分页与过滤绑定的通用表达力**（REQ-149；四个字段**全可选** ——
+    /// 不写任何一个时，输出与旧版本逐字节相同）：
+    ///
+    /// ```json
+    /// "request": {
+    ///   "paging": {
+    ///     "offset": "Offset",          // 偏移量语义（默认 0 基）
+    ///     "page":   "PageNumber",      // 或：页码语义（默认 1 基；与 offset 互斥）
+    ///     "limit":  "Limit",
+    ///     "value_type": "string",      // number（默认）/ string —— 写进请求体的 JSON 类型
+    ///     "offset_base": 1             // 0 / 1；缺省随语义：offset=0、page=1
+    ///   },
+    ///   "bindings": {
+    ///     "status": { "source": "filter", "value_type": "integer", "shape": "array" }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// 发出的位置值：
+    ///
+    /// | 契约 | 第 1 页 | 公式 |
+    /// | --- | --- | --- |
+    /// | `offset`（默认 0 基） | `0` | 已取条数 |
+    /// | `page`（默认 1 基） | `1` | `已取页数 + 1` |
+    /// | `offset` + `offset_base: 1` | `1` | 按**页码**解释（见下） |
+    ///
+    /// ⚠️ `offset_base: 1` 是**页码**，不是「已取条数 + 1」：位置值 = 0 时唯一自然的
+    /// 读法是「跳过多少条」，= 1 时唯一自然的读法是「第几页」。想要**不歧义**就写
+    /// `"page"`；本实现两者都对，但推荐 `page`。⛔ 没有「1 基条数偏移」这种表达。
+    ///
+    /// 绑定的 `value_type ∈ {string, integer, boolean}`、`shape ∈ {scalar, array}`
+    /// （封闭集合）。`integer + array` ⇒ `[1, 2]`（不是 `["1"]`），
+    /// 于是「整数数组」筛选能真正下推；解析失败 / 不认识的取值 ⇒ **报错并点名绑定**，
+    /// ⛔ 不静默降级成字符串。
+    ///
+    /// ⚠️ `fixture` 不再必填：`--dry-run-fixture` 对没有夹具的实体**明确拒绝并点名**
+    /// （`FIXTURE_REQUIRED`）；`--allow-network` **不受影响**（真调用不需要夹具）。
     #[command(verbatim_doc_comment)]
     Fetch {
         /// 作者格式契约
