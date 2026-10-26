@@ -274,3 +274,54 @@ Dev 上一轮报「skill 465 · 最小契约 0」，并在本轮更正：
 > **但「四条判据全绿」的这一轮尚未拿到**：v3 卡在 ③（6 条编造基数导致的冲突）、v4 卡在 ④（31% 回答作废）。
 
 ⛔ 不许说"skill 通过验收"——**直到有一轮四条同时满足**。
+
+
+---
+
+## R-13 裁定（2026-10-26 · QA 抢救版复审后）
+
+### 判：**FAIL（本次范围内）**
+
+QA 构造出 R-13 第 3 条该拦的"脏绿"：
+
+```
+3 块里 1 块回答不可用（33%）+ --strict-deterministic
+  ⇒ 实测 exit=0 且产出 a.jsonl / s.json
+  ⇒ 按 AC 应为 exit≠0 且零产物
+```
+
+**代码只判了 `failed_calls > 0`**（`cli.rs:2464`），`rejected_parse` 只出屏幕告警。
+
+**为什么不留到下一轮**：
+
+| # | 理由 |
+| --- | --- |
+| 1 | 这条 AC 是我批的，不是"没写过的期望" |
+| 2 | 它正是"假绿"本身：**33% 作废仍产出看起来成功的产物** |
+| 3 | 现有测试拦不住（只断言屏幕文字，不断言退出码） |
+| 4 | 补法很小（3–6 行 + 1 条 e2e） |
+
+**修法（Dev）**：
+
+```rust
+// --strict-deterministic：failed_calls > 0  OR  回答不可用率 > 20%
+// 用整数算术避免浮点：rejected_parse * 5 > chunks_total
+let unusable_rate_too_high = stats.rejected_parse * 5 > chunks_total;
+if failed_calls > 0 || unusable_rate_too_high { /* exit≠0，零产物 */ }
+```
+
+**必须补的判据**：
+- 3 块 / 1 块不可用（33%）+ `--strict-deterministic` ⇒ **exit≠0 且无 a.jsonl / s.json**
+- 同一输入**不给** `--strict-deterministic` ⇒ exit=0、产物照出（默认路径不受影响）
+- 12 块 / 2 块不可用（16.7%）⇒ **exit=0**（阈值边界必须能绿）
+- 默认路径产物**仍逐字节不变**
+
+**同时修掉那句误导文案**：屏幕现在写"把这一类算成失败请用 `--strict-deterministic` **之外的闸**"——改完后它就是这道闸，文案要改口。
+
+### 另三条非阻断（记录，不阻塞）
+
+| # | 项 | 处置 |
+| --- | --- | --- |
+| 1 | `failed_calls>0 / rejected_parse>0` 时 stderr 多 2/4 行 | **接受**（R1 的范围是**产物**；且只在已出问题时出现、不改退出码与缓存）。建议将来合成单行 |
+| 2 | `discarded_no_quote` 在 builder binary 里能搜到 2 次（运行时格式串） | 记录：**二进制的标记只能用 `acp:`**，不能用注释里的词 |
+| 3 | 「skill 值多少」的那组数字（809→2352 / 18.65%→1.31%）**混了模型变量** | 在 status.md 标注 **不得单独引用** |
