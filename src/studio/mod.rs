@@ -312,4 +312,57 @@ mod tests {
             );
         }
     }
+
+    /// ⭐ 回归守卫：**SVG 里的自转动画不许用 `rotate()`**。
+    ///
+    /// 真事故（v0.2.2 线上）：`.node-orbit` 用 `transform: rotate(360deg)` 做自转。
+    /// SVG 元素的 CSS transform 以 **viewBox 原点**为基准，`transform-box: fill-box`
+    /// 一旦不生效（浏览器差异 / bbox 计算异常），虚线环就绕原点甩出一大段弧
+    /// ⇒ 用户看到的"开了动效就跳得老远"。
+    /// 现在改成 `stroke-dashoffset`（只改描边相位，几何一点不动）。
+    #[test]
+    fn orbit_animation_must_not_rotate_svg() {
+        /* 只看 `orbitSpin` 这个 keyframe —— `orbSpin`（logo）是 HTML 元素，
+           它对 rotate 是安全的，不能一起禁。 */
+        let i = STUDIO_CSS.find("@keyframes orbitSpin").expect("orbitSpin 必须存在");
+        let rest = &STUDIO_CSS[i..];
+        let end = rest.find('}').map(|k| k + 1).unwrap_or(rest.len());
+        let block = &rest[..end];
+        assert!(
+            !block.contains("rotate"),
+            "orbitSpin 里又用了 rotate：`{block}`\n\
+             ⛔ SVG 的 CSS transform 以 viewBox 原点为基准，偏离原点会甩出大弧\
+             （线上表现为「开了动效节点跳得老远」）。请用 stroke-dashoffset。"
+        );
+        assert!(
+            STUDIO_CSS.contains("stroke-dashoffset"),
+            "orbitSpin 应该用 stroke-dashoffset 做流动"
+        );
+    }
+
+    /// ⭐ 回归守卫：**边的透明度只有一个写者**（`syncEdges`）。
+    ///
+    /// 之前 `focusNode` 和 `syncEdges` 都写 `o.line.opacity`，互相覆盖 ⇒
+    /// 「弱证据 / 关系名」这类开关点了没反应。
+    #[test]
+    fn edge_opacity_has_exactly_one_writer() {
+        let n = STUDIO_JS.matches("o.line.setAttribute(\"opacity\"").count();
+        assert_eq!(
+            n, 1,
+            "写 `o.line.opacity` 的地方有 {n} 处，应当只有 1 处（syncEdges）。\
+             多个写者会互相覆盖，界面上就表现为「开关点了没反应」。"
+        );
+    }
+
+    /// ⭐ 回归守卫：**「关系名」不被「弱证据」门控**。
+    ///
+    /// 本套 34 条关系全是 `unverified`；旧逻辑里 `show = labels && (weak || !isWeak)`，
+    /// 于是"关系名"默认打开却一条也不显示 ⇒ 用户以为按钮坏了。
+    #[test]
+    fn labels_are_not_gated_by_the_weak_layer() {
+        assert!(
+            !STUDIO_JS.contains("(ui.layers.weak || !isWeak("),
+            "关系名的可见性又被「弱证据」门控了：34 条关系全 unverified 时会一条都不显示"
+        );
+    }
 }

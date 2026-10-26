@@ -487,10 +487,17 @@
       o.lbg.setAttribute("y", my - 15);
       o.lbg.setAttribute("width", w);
 
+      /* 描边样式 + 透明度：**这里唯一决定**（focusNode 不再写） */
+      var weak = isWeak(o.e.r);
       var near = !ui.focus || o.e.a.key === ui.focus || o.e.b.key === ui.focus;
-      var show = ui.layers.labels && near &&
-                 (ui.layers.weak || !isWeak(o.e.r)) &&
-                 len > 74;
+      o.line.setAttribute("stroke-dasharray", weak ? "4 4" : "");
+      /* 「弱证据」只改**弱边的强调程度**，不决定它存不存在：
+         本套 34 条关系全是 unverified，若让它决定显隐，默认一条边都看不见。 */
+      o.line.setAttribute("opacity",
+        !near ? "0.06" : (weak ? (ui.layers.weak ? "0.95" : "0.55") : "0.85"));
+
+      /* 关系名：只看 labels + 焦点 + 放不放得下（⛔ 不再被「弱证据」门控） */
+      var show = ui.layers.labels && near && len > 74;
       if (show) {
         var rect = { x0: mx - w / 2 - 1, x1: mx + w / 2 + 1, y0: my - 15, y1: my - 2 };
         for (var i = 0; i < placed.length; i++) {
@@ -675,6 +682,8 @@
 
   function renderProps() {
     clear(gProps);
+    /* ⭐ 开关必须在这里生效：之前只有点击时才 clear，一聚焦又画回来 */
+    if (!ui.layers.props) { gProps.setAttribute("opacity", "0"); return; }
     if (!ui.focus) { gProps.setAttribute("opacity", "0"); return; }
     var n = nodeByKey[ui.focus];
     var list = (S.propsOf[ui.focus] || []).slice(0, 8);
@@ -694,6 +703,12 @@
     gProps.setAttribute("opacity", "1");
   }
 
+  /* 图层开关的**唯一应用点**：props / labels / weak 都在这里落地 */
+  function applyLayers() {
+    renderProps();
+    syncEdges();
+  }
+
   function focusNode(key) {
     ui.focus = key;
     var near = {};
@@ -710,11 +725,7 @@
       o.g.classList.toggle("is-near", !!ui.focus && ui.focus !== k && !!near[k]);
       o.g.classList.toggle("is-faded", !!ui.focus && !near[k]);
     });
-    edgeEls.forEach(function (o) {
-      var on = !ui.focus || o.e.a.key === ui.focus || o.e.b.key === ui.focus;
-      o.line.setAttribute("opacity", on ? "0.8" : "0.06");
-    });
-    syncEdges();
+    syncEdges();   /* 边的描边/透明度只在这里决定（单一写者） */
     renderProps();
     if (key) openDrawer(key); else closeDrawer();
     highlightRail(key);
@@ -723,6 +734,7 @@
   var drawer = byId("drawer");
 
   function openDrawer(key) {
+    document.body.classList.add("drawer-open");
     var seq = ++drawerSeq;
     renderDrawer(key, null);
     apiGet(API.describe + "?name=" + encodeURIComponent(iri(key))).then(function (d) {
@@ -730,7 +742,10 @@
       renderDrawer(key, d && d.kind === "class" ? d : null);
     }).catch(function () { /* 详情取不到就保留目录事实，⛔ 不编数据 */ });
   }
-  function closeDrawer() { if (drawer) drawer.classList.remove("is-open"); }
+  function closeDrawer() {
+    if (drawer) drawer.classList.remove("is-open");
+    document.body.classList.remove("drawer-open");
+  }
 
   function renderDrawer(key, detail) {
     var c = S.byName[key];
@@ -1262,11 +1277,9 @@
         var k = b.getAttribute("data-layer");
         b.classList.toggle("is-on");
         ui.layers[k === "weak" ? "weak" : k] = b.classList.contains("is-on");
-        if (k === "props") {
-          if (!ui.layers.props) { clear(gProps); gProps.setAttribute("opacity", "0"); }
-          else renderProps();
-        } else {
-          focusNode(ui.focus);
+        applyLayers();
+        if (k === "props" && ui.layers.props && !ui.focus) {
+          setStatus([h("span", { text: "属性层已开：点一个类，它的属性会围在周围" })]);
         }
       });
     });
