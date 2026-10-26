@@ -728,7 +728,7 @@ QA 的判断（BA 采纳）：**「有没有第三层」无解，但「规则不
 | REQ-155 | UI 重组：删 Portal · Studio 落地 · Console 重设计 | **已就绪** | ADR-010 | 2026-10-26 |
 | REQ-156 | 透出关系语义动词：catalog 加 `semantic`+`semantic_label`、补齐 15 个词的中文映射、Studio 显示中文 | **已完成**（v0.2.6） | REQ-155 反馈 | 2026-10-27 |
 | REQ-157 | 动词治理：字典 `relation-verbs.json` + `relation verbs check`（拒未知/泛词，同义归一）+ skill/schema 对齐 + 重抽 v4 提案（⛔ 不代签） | **已就绪** | REQ-156/158 | 2026-10-27 |
-| REQ-158 | 修 fail-open：客户视图 TTL 的英文语义能过闸（`untranslated_semantic_hit` 只认 JSON 形状，对 `rdfs:comment "语义：…"` 盲） | **已就绪**（hotfix 级） | REQ-156 实测 | 2026-10-27 |
+| REQ-158 | 修 fail-open：TTL 形状的英文语义能过闸（第四档-b，真进程实证 exit 0→2） | **已完成**（v0.2.7） | REQ-156 实测 | 2026-10-27 |
 
 ## REQ-066 验收结论（2026-10-10，**PASS · 三轮 · 建议合并**）
 
