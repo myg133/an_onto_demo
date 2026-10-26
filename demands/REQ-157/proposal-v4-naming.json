@@ -1,0 +1,345 @@
+{
+  "project": "cloud-resource",
+  "base_version": 3,
+  "target_version": 4,
+  "note": "关系动词治理提案：只改 semantic（不动拓扑/方向/基数）；5 条有证据的改动，其余 29 条保持。⛔ 未签 reviewed_by —— 待人审。",
+  "reviewed_by": null,
+  "items": [
+    {
+      "relation": "alarm_policy__alarm_notice",
+      "from": "alarm_policy",
+      "to": "alarm_notice",
+      "cardinality": "N:M",
+      "semantic_before": "notifies_via",
+      "action": "keep",
+      "semantic_after": "notifies_via"
+    },
+    {
+      "relation": "cbs_auto_snapshot_policy__cbs_disk",
+      "from": "cbs_auto_snapshot_policy",
+      "to": "cbs_disk",
+      "cardinality": "N:M",
+      "semantic_before": "applies_to",
+      "action": "keep",
+      "semantic_after": "applies_to"
+    },
+    {
+      "relation": "cbs_disk__cvm_instance",
+      "from": "cbs_disk",
+      "to": "cvm_instance",
+      "cardinality": "N:M",
+      "semantic_before": "attaches_to",
+      "action": "normalize_alias",
+      "semantic_after": "attached_to",
+      "why": "文档原话是「云硬盘挂载的云主机ID」",
+      "evidence": {
+        "file": "cbs.md",
+        "line": 141,
+        "quote": "| InstanceId | String | 云硬盘挂载的云主机ID。 |"
+      }
+    },
+    {
+      "relation": "cbs_snapshot__cbs_disk",
+      "from": "cbs_snapshot",
+      "to": "cbs_disk",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "cdb_instance__subnet",
+      "from": "cdb_instance",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "clb_backend__cvm_instance",
+      "from": "clb_backend",
+      "to": "cvm_instance",
+      "cardinality": "N:1",
+      "semantic_before": "targets",
+      "action": "keep",
+      "semantic_after": "targets"
+    },
+    {
+      "relation": "clb_listener__clb_backend",
+      "from": "clb_listener",
+      "to": "clb_backend",
+      "cardinality": "N:M",
+      "semantic_before": "binds",
+      "action": "rename",
+      "semantic_after": "binds_to",
+      "why": "文档原话是「绑定」",
+      "evidence": {
+        "file": "clb.md",
+        "line": 67,
+        "quote": "| Port | Integer | 后端服务的监听端口，如果是全端口段监听器绑定的全监听目标组场景，此端口返回0，表示无效端口，绑定的后端服务的端口随监听器端口。 |"
+      }
+    },
+    {
+      "relation": "clb_listener__clb_load_balancer",
+      "from": "clb_listener",
+      "to": "clb_load_balancer",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "clb_listener__ssl_certificate",
+      "from": "clb_listener",
+      "to": "ssl_certificate",
+      "cardinality": "N:1",
+      "semantic_before": "uses",
+      "action": "rename",
+      "semantic_after": "binds_to",
+      "why": "文档原话是「监听器绑定的证书信息」—— 不是「使用」这种泛词",
+      "evidence": {
+        "file": "clb.md",
+        "line": 828,
+        "quote": "| Certificate | CertificateOutput | 监听器绑定的证书信息<br>注意：此字段可能返回 null，表示取不到有效值。 |"
+      }
+    },
+    {
+      "relation": "clb_load_balancer__subnet",
+      "from": "clb_load_balancer",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "clb_rule__clb_listener",
+      "from": "clb_rule",
+      "to": "clb_listener",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "clb_target_group__clb_backend",
+      "from": "clb_target_group",
+      "to": "clb_backend",
+      "cardinality": "1:N",
+      "semantic_before": "contains",
+      "action": "rename",
+      "semantic_after": "binds_to",
+      "why": "文档原话是「绑定目标组 / 绑定的后端服务」",
+      "evidence": {
+        "file": "clb.md",
+        "line": 1584,
+        "quote": "| TargetType | String | 否 | 后端目标类型，NODE表示绑定普通节点，TARGETGROUP表示绑定目标组<br>枚举值：<br>- NODE： 绑定普通节点<br>- TARGETGROUP： 绑定目标组 v1<br>- TARGETGROUP-V2： 绑定目标组 v2 |"
+      }
+    },
+    {
+      "relation": "clb_target_group__clb_rule",
+      "from": "clb_target_group",
+      "to": "clb_rule",
+      "cardinality": "N:M",
+      "semantic_before": "associated_with",
+      "action": "rename",
+      "semantic_after": "references",
+      "why": "文档原话是「关联到的转发规则」",
+      "evidence": {
+        "file": "clb.md",
+        "line": 39,
+        "quote": "| LocationId | String | 关联到的转发规则ID<br>注意：此字段可能返回 null，表示取不到有效值。 |"
+      }
+    },
+    {
+      "relation": "cos_object__cos_bucket",
+      "from": "cos_object",
+      "to": "cos_bucket",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "cost_detail_bill__cvm_instance",
+      "from": "cost_detail_bill",
+      "to": "cvm_instance",
+      "cardinality": "N:1",
+      "semantic_before": "bills",
+      "action": "keep",
+      "semantic_after": "bills"
+    },
+    {
+      "relation": "cvm_instance__cvm_image",
+      "from": "cvm_instance",
+      "to": "cvm_image",
+      "cardinality": "N:1",
+      "semantic_before": "based_on",
+      "action": "keep",
+      "semantic_after": "based_on"
+    },
+    {
+      "relation": "cvm_instance__security_group",
+      "from": "cvm_instance",
+      "to": "security_group",
+      "cardinality": "N:M",
+      "semantic_before": "references",
+      "action": "keep",
+      "semantic_after": "references"
+    },
+    {
+      "relation": "cvm_instance__subnet",
+      "from": "cvm_instance",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "db_backup__cdb_instance",
+      "from": "db_backup",
+      "to": "cdb_instance",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "eip__cvm_instance",
+      "from": "eip",
+      "to": "cvm_instance",
+      "cardinality": "N:1",
+      "semantic_before": "binds_to",
+      "action": "keep",
+      "semantic_after": "binds_to"
+    },
+    {
+      "relation": "eip__network_interface",
+      "from": "eip",
+      "to": "network_interface",
+      "cardinality": "N:1",
+      "semantic_before": "binds_to",
+      "action": "keep",
+      "semantic_after": "binds_to"
+    },
+    {
+      "relation": "nat_gateway__subnet",
+      "from": "nat_gateway",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "nat_gateway__vpc",
+      "from": "nat_gateway",
+      "to": "vpc",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "network_interface__cvm_instance",
+      "from": "network_interface",
+      "to": "cvm_instance",
+      "cardinality": "N:1",
+      "semantic_before": "attached_to",
+      "action": "keep",
+      "semantic_after": "attached_to"
+    },
+    {
+      "relation": "network_interface__security_group",
+      "from": "network_interface",
+      "to": "security_group",
+      "cardinality": "N:M",
+      "semantic_before": "references",
+      "action": "keep",
+      "semantic_after": "references"
+    },
+    {
+      "relation": "network_interface__subnet",
+      "from": "network_interface",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "redis_backup__redis_instance",
+      "from": "redis_backup",
+      "to": "redis_instance",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "redis_instance__subnet",
+      "from": "redis_instance",
+      "to": "subnet",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "route_table__vpc",
+      "from": "route_table",
+      "to": "vpc",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "security_group_rule__security_group",
+      "from": "security_group_rule",
+      "to": "security_group",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    },
+    {
+      "relation": "ssl_certificate__clb_load_balancer",
+      "from": "ssl_certificate",
+      "to": "clb_load_balancer",
+      "cardinality": "N:M",
+      "semantic_before": "deployed_to",
+      "action": "keep",
+      "semantic_after": "deployed_to"
+    },
+    {
+      "relation": "subnet__network_acl",
+      "from": "subnet",
+      "to": "network_acl",
+      "cardinality": "N:1",
+      "semantic_before": "references",
+      "action": "keep",
+      "semantic_after": "references"
+    },
+    {
+      "relation": "subnet__route_table",
+      "from": "subnet",
+      "to": "route_table",
+      "cardinality": "N:1",
+      "semantic_before": "references",
+      "action": "keep",
+      "semantic_after": "references"
+    },
+    {
+      "relation": "subnet__vpc",
+      "from": "subnet",
+      "to": "vpc",
+      "cardinality": "N:1",
+      "semantic_before": "belongs_to",
+      "action": "keep",
+      "semantic_after": "belongs_to"
+    }
+  ]
+}
