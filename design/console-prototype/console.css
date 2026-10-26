@@ -81,6 +81,13 @@ body::before {
 }
 
 .nav-list { padding: 8px 8px; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.nav-group {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fg-3); opacity: .75;
+  padding: 10px 9px 3px;
+}
+.nav-group:first-child { padding-top: 2px; }
+
 .nav-item {
   display: flex; align-items: center; gap: 9px;
   padding: 8px 9px;
@@ -212,6 +219,25 @@ code { font: 11.5px/1 var(--mono); color: var(--accent); background: rgba(110,20
 .tbl .dim { color: var(--fg-3); }
 .tbl .empty { padding: 26px 12px; text-align: center; color: var(--fg-3); }
 
+.group-row td {
+  height: 30px;
+  background: rgba(255,255,255,.035);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-2);
+}
+.group-bar {
+  display: inline-block; width: 3px; height: 13px; border-radius: 2px;
+  margin-right: 8px; vertical-align: -2px;
+}
+.group-bar.ok { background: var(--ok); }
+.group-bar.warn { background: var(--warn); }
+.group-title { color: var(--fg); font-weight: 600; margin-right: 6px; }
+.group-count {
+  font: 11px/1 var(--mono); color: var(--fg);
+  background: rgba(255,255,255,.08); border-radius: 999px; padding: 2px 7px;
+}
+.group-note { color: var(--fg-3); font-size: 11.5px; margin-left: 9px; }
+
 /* 状态 */
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
@@ -332,7 +358,21 @@ textarea.code { display: block; }
 
 @media (max-width: 1080px) {
   .app { grid-template-columns: 60px minmax(0, 1fr); }
-  .brand-text, .nav-i, .nav-foot, .nav-item { font-size: 0; }
-  .nav-item { justify-content: center; }
+  .brand-text, .nav-i, .nav-foot, .nav-group {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fg-3); opacity: .75;
+  padding: 10px 9px 3px;
+}
+.nav-group:first-child { padding-top: 2px; }
+
+.nav-item { font-size: 0; }
+  .nav-group {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fg-3); opacity: .75;
+  padding: 10px 9px 3px;
+}
+.nav-group:first-child { padding-top: 2px; }
+
+.nav-item { justify-content: center; }
   .split { grid-template-columns: 1fr; }
 }

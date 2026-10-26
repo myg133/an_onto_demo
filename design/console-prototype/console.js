@@ -127,60 +127,91 @@
 
   /* ══ 02 评审 ═══════════════════════════════════════════ */
   var decisions = {};
-  function reviewRows() {
-    var rows = [];
+
+  function reviewGroups() {
+    /* 分组口径：**要不要人判断**。文档有据的概念 → 建议接受；关系全 unverified → 待确认。 */
+    var accept = [], confirm = [];
     classes.forEach(function (c, i) {
-      rows.push({
+      accept.push({
         id: "concept-" + (i + 1), track: "concept", name: c.name,
-        detail: c.display_name || "", hint: "AI 建议：接受（文档有据）"
+        detail: c.display_name || "", hint: "文档有据（" + c.property_count + " 属性）"
       });
     });
     rels.forEach(function (r, i) {
-      rows.push({
+      var verified = r.evidence_level === "verified";
+      var row = {
         id: "relation-" + (i + 1), track: "relation", name: r.name,
         detail: (r.from || "?") + " → " + (r.to || "?") + " · " + (r.cardinality || ""),
-        hint: r.evidence_level === "verified"
-          ? "AI 建议：接受（已实测）"
-          : "AI 建议：待确认（无实测证据）"
+        hint: verified ? "已实测" : "无实测证据（文档推断）"
+      };
+      (verified ? accept : confirm).push(row);
+    });
+    return [
+      { key: "accept", title: "建议接受", note: "文档有据 / 已实测", rows: accept, tone: "pill-ok" },
+      { key: "confirm", title: "待人工确认", note: "evidence_level = unverified，全部 34 条关系都在这一组", rows: confirm, tone: "pill-draft" }
+    ];
+  }
+
+  function renderReview() {
+    var groups = reviewGroups();
+    var tbl = $("tbl-review");
+    clear(tbl);
+
+    var cols = ["类型", "条目", "说明", "AI 建议", "决策", ""];
+    var thead = el("thead"), htr = el("tr");
+    cols.forEach(function (c) { htr.appendChild(el("th", null, c)); });
+    thead.appendChild(htr);
+    tbl.appendChild(thead);
+
+    var tb = el("tbody");
+    var total = 0, decided = 0;
+
+    groups.forEach(function (g) {
+      total += g.rows.length;
+      /* 组头：跨整行，左侧色条 + 计数 */
+      var gtr = el("tr", { "class": "group-row" });
+      var td = el("td", { colspan: String(cols.length) });
+      var bar = el("span", { "class": "group-bar " + (g.tone === "pill-ok" ? "ok" : "warn") });
+      td.appendChild(bar);
+      td.appendChild(el("span", { "class": "group-title" }, g.title));
+      td.appendChild(el("span", { "class": "group-count" }, String(g.rows.length)));
+      td.appendChild(el("span", { "class": "group-note" }, g.note));
+      gtr.appendChild(td);
+      tb.appendChild(gtr);
+
+      g.rows.forEach(function (r) {
+        var d = decisions[r.id];
+        if (d) decided++;
+        var tr = el("tr");
+        tr.appendChild(el("td", null, pill(r.track, r.track === "concept" ? "pill-ok" : "pill-api")));
+        tr.appendChild(el("td", { "class": "key" }, r.name));
+        tr.appendChild(el("td", { "class": "dim" }, r.detail || "—"));
+        tr.appendChild(el("td", { "class": "dim" }, r.hint));
+        tr.appendChild(el("td", null, d === "accept" ? pill("接受", "pill-ok")
+          : d === "reject" ? pill("驳回", "pill-bad") : pill("待定", "pill-draft")));
+        var act = el("td");
+        ["accept", "reject"].forEach(function (k) {
+          var b = el("button", { "class": "btn btn-ghost", style: "height:22px;padding:0 8px;margin-left:4px" },
+            k === "accept" ? "✓" : "✕");
+          b.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            decisions[r.id] = decisions[r.id] === k ? undefined : k;
+            renderReview();
+          });
+          act.appendChild(b);
+        });
+        tr.appendChild(act);
+        tb.appendChild(tr);
       });
     });
-    return rows;
-  }
-  function renderReview() {
-    var rows = reviewRows();
-    var cols = [
-      { label: "类型", render: function (r) { return pill(r.track, r.track === "concept" ? "pill-ok" : "pill-api"); } },
-      { label: "条目", cls: "key", render: function (r) { return r.name; } },
-      { label: "说明", cls: "dim", render: function (r) { return r.detail; } },
-      { label: "AI 建议", cls: "dim", render: function (r) { return r.hint; } },
-      {
-        label: "决策", render: function (r) {
-          var d = decisions[r.id];
-          if (d === "accept") return pill("接受", "pill-ok");
-          if (d === "reject") return pill("驳回", "pill-bad");
-          return pill("待定", "pill-draft");
-        }
-      },
-      {
-        label: "", render: function (r) {
-          var wrap = el("div");
-          ["accept", "reject"].forEach(function (k) {
-            var b = el("button", { "class": "btn btn-ghost", style: "height:22px;padding:0 8px;margin-left:4px" },
-              k === "accept" ? "✓" : "✕");
-            b.addEventListener("click", function (ev) {
-              ev.stopPropagation();
-              decisions[r.id] = decisions[r.id] === k ? undefined : k;
-              renderReview();
-            });
-            wrap.appendChild(b);
-          });
-          return wrap;
-        }
-      }
-    ];
-    table($("tbl-review"), cols, rows, { empty: "没有提案" });
-    var done = Object.keys(decisions).filter(function (k) { return decisions[k]; }).length;
-    $("rev-tally").textContent = done + " / " + rows.length + " 已决";
+
+    tbl.appendChild(tb);
+    $("rev-tally").textContent = decided + " / " + total + " 已决";
+    $("rev-all-yes").textContent = "全部接受（" + total + " 条）";
+    $("rev-all-yes").onclick = function () {
+      groups.forEach(function (g) { g.rows.forEach(function (r) { decisions[r.id] = "accept"; }); });
+      renderReview();
+    };
   }
 
   /* ══ 03 导出 ═══════════════════════════════════════════ */
@@ -427,10 +458,6 @@
     $("q-sample").addEventListener("change", function () { renderQuery(this.value); });
     $("q-run").addEventListener("click", function () { renderQuery($("q-sample").value); });
     $("ex-run").addEventListener("click", renderExport);
-    $("rev-all-yes").addEventListener("click", function () {
-      reviewRows().forEach(function (r) { decisions[r.id] = "accept"; });
-      renderReview();
-    });
     $("btn-reload").addEventListener("click", function () { rendered = {}; show(curView()); });
     $("btn-export-ttl").addEventListener("click", function () { show("export"); });
 
