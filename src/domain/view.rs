@@ -1077,6 +1077,96 @@ fn untranslated_semantic_hit(json: &str) -> Option<String> {
         .map(|v| format!("语义值含未翻译的英文：{v}"))
 }
 
+/// ⭐ REQ-158 · **TTL / HTML 形状**的关系语义取值 —— 只认 `语义：<token>（<基数>）` 里的 `<token>`。
+///
+/// ⛔ **不扫全文**：客户视图 TTL 的每个块里都有 `rdfs:comment` / `@zh` /
+/// `owl:ObjectProperty` 这些 ASCII 语法。把整行、或整份文档当「值」返回的话，
+/// **每一份**客户视图都会被误杀（判据恒红 = 恒假）。所以这里只取 `语义：`
+/// 之后、**到字段边界为止**的那一段：
+///
+/// ```text
+/// rdfs:comment "语义：applies_to（多对多）"@zh ;   ⇒  applies_to
+/// rdfs:comment "语义：归属于（多对一）"@zh ;       ⇒  归属于
+/// ```
+///
+/// 终止字符（任一个都算字段边界）：
+/// - `（` / `(` —— 基数那段的起点（`（多对多）`），这就是 REQ-110 的渲染形状；
+/// - `"` / `'` —— Turtle 字面量的收尾（后面还会跟 `@zh`）；
+/// - 空白 / `;` / `,` / `，` / `。` / `）` / `)` —— 「一个词结束」的那些。
+///
+/// # 「HTML 形状」这个名字的实情
+///
+/// 今天**只有** TTL 轨会产出这个形状（`domain::ttl` 的 `rdfs:comment`）；
+/// `domain::html_view` 压根**不透出** `meaning`（它只解构 `from`/`to`/`how_many`）。
+/// 而本函数认的是 `语义：` 这个标记本身，不是 `rdfs:comment` 这个外壳 ——
+/// 所以哪一轨将来这么写，它都覆盖（这正是「按形状判」的用处）。
+///
+/// # 为什么按「形状」而不是按词表
+///
+/// 与 [`cardinality_notation_hit`] / [`untranslated_semantic_hit`] 同一条纪律：
+/// 词表只能枚举写下来的那几种拼法，而 `语义：` 后面跟的是**任意**内部标识符
+/// （`applies_to` / `aggregates` / `is_a_of` …）。**词表是枚举，形状是判定。**
+///
+/// # 已知误判面（诚实交代，fail-closed）
+///
+/// 只要**自由文本**里出现 `语义：` 且紧跟一个含 ASCII 字母的词，本档就命中 ⇒
+/// 那份视图被**拒绝发布**。方向与第四档一致（宁可拒发，也不把英文标识符发给客户）。
+/// 真实产物里 `语义：` 只有一个来源：`domain::ttl` 在 `rdfs:comment` 里写的那一句。
+fn semantic_comment_values(text: &str) -> Vec<String> {
+    const MARKER: &str = "语义：";
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while let Some(rel) = text[pos..].find(MARKER) {
+        let start = pos + rel + MARKER.len();
+        // `语义：` 与 token 之间的空白先跳过（现在的渲染器不写，但白拿的稳健性）。
+        let after = &text[start..];
+        let lead = after.len() - after.trim_start().len();
+        let rest = &after[lead..];
+        let end = rest
+            .find(|c: char| {
+                matches!(c, '（' | '(' | '"' | '\'' | '）' | ')' | ';' | ',' | '，' | '。')
+                    || c.is_whitespace()
+            })
+            .unwrap_or(rest.len());
+        let token = &rest[..end];
+        if !token.is_empty() {
+            out.push(token.to_string());
+        }
+        // 落在边界字符上（而不是跳过它）：下一个 `语义：` 从头再找。
+        // 进度由 `start`（≥ pos + MARKER 的字节数）保证，不会原地打转。
+        pos = start + lead + end;
+    }
+    out
+}
+
+/// ⭐ REQ-158 · 第四档-b：**TTL 形状**的语义漏翻。
+///
+/// 判据与第四档 [`untranslated_semantic_hit`] **同一条** —— 值里出现任何 ASCII
+/// 字母就抓（`semantic_cn` 的所有分支输出都是中文，唯一的英文来源是它的兜底）。
+/// 只换了**取数形状**：第四档只认 JSON 键 `"meaning"`，而客户视图 TTL 把语义写成
+/// `rdfs:comment "语义：<token>（<基数>）"@zh`。
+///
+/// **这就是 fail-open 本身**：同一条数据（关系语义）有两种序列化形状，守卫只认一种
+/// ⇒ 另一种形状上的英文标识符**直接进客户视图**。REQ-156 之前实测 v3 客户视图 TTL
+/// 里 13 个英文动词 / 14 行全部经闸放行；REQ-156 把 15 种真实动词翻成中文之后，
+/// 这条形状**仍然是盲的** —— 抽取器吐出一个新拼法就原样漏出去，不需要任何数据改动
+/// （本单的端到端判据就是用真进程 + `aggregates` 这么证的：旧代码 exit 0 且**真的写出**
+/// 了 `rdfs:comment "语义：aggregates（多对一）"@zh`）。
+///
+/// ⛔ 为什么不做成「改 `untranslated_semantic_hit` 让它链两种取数器」：
+/// `src/domain/view.rs` 是红线文件，REQ-156 拿到的授权是**只许追加**
+/// （`tests/test_req107_red_lines.rs` 钉着「删除行数必须为 0」，
+/// `tests/test_req156_semantic_cn_invariants.rs` 又钉着那个函数体的签名与
+/// `meaning_values(json)` / `is_ascii_alphabetic()` 两处字面量）。
+/// 改一行就会同时打红那两道守卫，所以两种形状各占一档，
+/// **判据本身仍只有一句**：值里出现 ASCII 字母。
+fn untranslated_semantic_comment_hit(text: &str) -> Option<String> {
+    semantic_comment_values(text)
+        .into_iter()
+        .find(|v| v.chars().any(|c| c.is_ascii_alphabetic()))
+        .map(|v| format!("语义值含未翻译的英文：{v}"))
+}
+
 /// 把一段文本归一化成「可整体比对的词」：小写 + 非字母数字/下划线一律转下划线 + 压空白。
 ///
 /// `License Key` → `license_key`；`CARDINALITY` → `cardinality`；`  Key  ` → `key`。
@@ -1175,6 +1265,18 @@ pub fn scan_modeling_terms(json: &str) -> Vec<String> {
     // `semantic_cn` 的 `_ =>` 兜底与 B1 修之前的 `cardinality_cn` 同型，
     // 这里给它补上同型的防线 —— 否则「今天全是『归属于』」只是运气。
     if let Some(v) = untranslated_semantic_hit(json) {
+        let label = format!("未翻译的关系语义 {v}");
+        if !hits.iter().any(|h| *h == label) {
+            hits.push(label);
+        }
+    }
+    // ⭐ REQ-158 · 第四档-b：**同一条判据，第二种形状**（TTL 的 `语义：<token>（<基数>）`）。
+    //
+    // 客户视图 TTL 把关系语义写成 `rdfs:comment "语义：applies_to（多对多）"@zh`，
+    // 而上面那一档只认 JSON 键 `"meaning"` ⇒ 英文语义**经闸放行**（fail-open：
+    // 发错数据给客户，且不会自己暴露）。报告文案与第四档**逐字同形**
+    // （都是 `未翻译的关系语义 …`），所以下游不必区分是哪种形状命中的。
+    if let Some(v) = untranslated_semantic_comment_hit(json) {
         let label = format!("未翻译的关系语义 {v}");
         if !hits.iter().any(|h| *h == label) {
             hits.push(label);
