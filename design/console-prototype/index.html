@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>元方本体平台 · Console</title>
+<link rel="stylesheet" href="console.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ 左：导航 ═══ -->
+  <aside class="nav">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">元方本体平台<em>Console</em></span>
+    </div>
+
+    <nav class="nav-list" id="nav-list">
+      <button class="nav-item is-on" data-view="projects"><span class="nav-i">01</span>项目与版本</button>
+      <button class="nav-item" data-view="review"><span class="nav-i">02</span>评审</button>
+      <button class="nav-item" data-view="export"><span class="nav-i">03</span>导出</button>
+      <button class="nav-item" data-view="config"><span class="nav-i">04</span>声明编辑</button>
+      <button class="nav-item" data-view="audit"><span class="nav-i">05</span>审计</button>
+      <button class="nav-item" data-view="query"><span class="nav-i">06</span>查询台</button>
+      <button class="nav-item" data-view="catalog"><span class="nav-i">07</span>目录浏览</button>
+    </nav>
+
+    <div class="nav-foot">
+      <div class="kv"><span>服务</span><b id="h-service">—</b></div>
+      <div class="kv"><span>版本</span><b id="h-version">—</b></div>
+      <div class="kv"><span>数据</span><b id="h-source">快照</b></div>
+    </div>
+  </aside>
+
+  <!-- ═══ 右：主区 ═══ -->
+  <main class="main">
+
+    <header class="topbar">
+      <div class="ctx">
+        <span class="ctx-label">项目</span>
+        <select id="proj" class="sel"></select>
+        <span class="ctx-label">版本</span>
+        <select id="ver" class="sel"></select>
+        <span id="frozen-badge" class="pill">—</span>
+      </div>
+      <div class="tools">
+        <input id="token" class="inp token" type="password" placeholder="admin token（快照模式下无需）" autocomplete="off">
+        <button id="btn-reload" class="btn">刷新</button>
+      </div>
+    </header>
+
+    <!-- 01 项目与版本 -->
+    <section class="view is-on" id="v-projects">
+      <div class="view-head">
+        <h2>项目与版本</h2>
+        <p>版本是**不可变**的：冻结后不能改，只能出新版本。导出与查询都只认已冻结版本。</p>
+      </div>
+      <div class="cards" id="proj-cards"></div>
+      <div class="panel">
+        <div class="panel-head">
+          <span>版本</span>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost" id="btn-export-ttl">导出 TTL</button>
+        </div>
+        <div class="tablewrap"><table class="tbl" id="tbl-versions"></table></div>
+      </div>
+    </section>
+
+    <!-- 02 评审 -->
+    <section class="view" id="v-review">
+      <div class="view-head">
+        <h2>评审</h2>
+        <p>AI 出的提案逐条过。**决策记在审计里**，改不回来只能再提一轮。</p>
+      </div>
+      <div class="toolbar">
+        <span class="ctx-label">提案</span>
+        <select class="sel" id="prop"><option>p1 · 文档抽取（30 类）</option><option>p2 · 关系修订（34 条）</option></select>
+        <span class="spacer"></span>
+        <span class="tally" id="rev-tally">—</span>
+        <button class="btn btn-ghost" id="rev-all-yes">全部接受</button>
+        <button class="btn" id="rev-apply">应用</button>
+      </div>
+      <div class="tablewrap tall"><table class="tbl" id="tbl-review"></table></div>
+    </section>
+
+    <!-- 03 导出 -->
+    <section class="view" id="v-export">
+      <div class="view-head">
+        <h2>导出</h2>
+        <p>客户视图与建模视图**不是同一份**：客户视图隐去技术用语，实测隐去 748 条说明。</p>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head"><span>参数</span></div>
+          <div class="form">
+            <label>项目<input class="inp" id="ex-proj" value="cloud-resource"></label>
+            <label>版本<input class="inp" id="ex-ver" value="3"></label>
+            <label>视图
+              <select class="sel" id="ex-view"><option value="0">客户视图</option><option value="1">建模视图</option></select>
+            </label>
+            <label>schema<input class="inp" placeholder="（可选）"></label>
+            <label>租户<input class="inp" placeholder="（可选）"></label>
+            <button class="btn btn-wide" id="ex-run">导出 TTL</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>预览</span><span class="spacer"></span><span class="mono" id="ex-meta">—</span></div>
+          <pre class="code" id="ex-out"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 声明编辑 -->
+    <section class="view" id="v-config">
+      <div class="view-head">
+        <h2>声明编辑</h2>
+        <p>保存前**校验**：表/列必须存在、<code>main_only</code> 与 <code>publicDimensions</code> 必须带 <code>reason</code>。校验失败 ⇒ 原文件一个字节都不变。</p>
+      </div>
+      <div class="tabs" id="cfg-tabs">
+        <button class="tab is-on" data-cfg="exclusions">exclusions</button>
+        <button class="tab" data-cfg="policy">policy</button>
+        <button class="tab" data-cfg="tenancy">tenancy</button>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head"><span class="mono" id="cfg-name">exclusions.json</span><span class="spacer"></span><span class="pill pill-draft" id="cfg-state">未创建</span></div>
+          <textarea class="code area" id="cfg-body" spellcheck="false"></textarea>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>校验</span></div>
+          <div class="checks" id="cfg-checks"></div>
+          <button class="btn btn-wide" id="cfg-save">保存（先校验）</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 审计 -->
+    <section class="view" id="v-audit">
+      <div class="view-head">
+        <h2>审计</h2>
+        <p>每个写操作一行，**含失败**。令牌只记 <code>sha256</code> 前 12 位——不记原文。</p>
+      </div>
+      <div class="toolbar">
+        <span class="ctx-label">条数</span>
+        <select class="sel" id="audit-limit"><option>20</option><option>50</option><option>200</option></select>
+        <span class="spacer"></span>
+        <span class="mono" id="audit-count">—</span>
+      </div>
+      <div class="tablewrap tall"><table class="tbl" id="tbl-audit"></table></div>
+    </section>
+
+    <!-- 06 查询台 -->
+    <section class="view" id="v-query">
+      <div class="view-head">
+        <h2>查询台</h2>
+        <p>本体模式下 <strong>api 源</strong>的类会返回 <code>@graph: []</code> + <code>@pending[]</code>——平台**不执行** API 调用，配方给你自己取。</p>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head"><span>SPARQL</span><span class="spacer"></span>
+            <select class="sel slim" id="q-sample">
+              <option value="a">api 类（→ @pending）</option>
+              <option value="b">库源类（→ 503）</option>
+              <option value="c">目录（→ 计数）</option>
+            </select>
+          </div>
+          <textarea class="code area" id="q-body" spellcheck="false"></textarea>
+          <button class="btn btn-wide" id="q-run">运行</button>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>响应</span><span class="spacer"></span><span class="mono" id="q-meta">—</span></div>
+          <pre class="code" id="q-out"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- 07 目录浏览 -->
+    <section class="view" id="v-catalog">
+      <div class="view-head">
+        <h2>目录浏览</h2>
+        <p>30 个类 / 34 条关系 / 752 个属性。<strong>关系全部 <code>unverified</code></strong>——文档推断，无实测证据。</p>
+      </div>
+      <div class="toolbar">
+        <input class="inp" id="cat-filter" placeholder="搜索类名 / key / 说明…">
+        <span class="spacer"></span>
+        <span class="mono" id="cat-count">—</span>
+      </div>
+      <div class="tablewrap tall"><table class="tbl" id="tbl-catalog"></table></div>
+    </section>
+
+  </main>
+
+  <!-- 右侧抽屉：类详情 -->
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <span id="dr-title">—</span>
+      <button class="btn btn-icon" id="dr-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="drawer-body" id="dr-body"></div>
+  </aside>
+
+</div>
+<script src="snapshot.js"></script>
+<script src="console.js"></script>
+</body>
+</html>
