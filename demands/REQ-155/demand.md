@@ -48,8 +48,8 @@
 | 路由 | `GET /studio` → HTML；`GET /studio/studio.css`、`/studio/studio.js` |
 | 数据 | **同源相对路径**（`/api/catalog`、`/api/describe`、`/api/sparql`）⇒ ⛔ 无 CORS |
 | 鉴权 | 页面壳免口令；`/api/*` 仍要 Bearer（与 `query serve` 同口径） |
-| 开放 | 允许绑非回环地址（ADR-010 的 C1–C6 全部落实） |
-| 替代 | 退役 `ontok serve` 的旧页面壳；**保留 `/api/graph` 契约**（Studio 可以继续用它） |
+| 开放 | **挂 `query serve`**（已公开）；`ontok serve` 的回环限制**不动**（见 ADR-010-A） |
+| 替代 | `ontok serve` **保持原样**（本机只读工具，回环 + GET-only 不动）；Studio 不用 `/api/graph` |
 
 ### ③ Console 重设计（**先出视觉稿，不动代码**）
 
@@ -73,7 +73,9 @@
 | AC-005 | Studio 页面在浏览器里**能出图**（30 类 / 34 关系），点节点能看属性 |
 | AC-006 | **C1**：`POST /studio`、`PUT`、`DELETE` ⇒ **405** |
 | AC-007 | **C2/C4**：`/api/catalog` 无口令 ⇒ **401** 且响应体不含任何本体数据 |
-| AC-008 | **C6**：`--bind 0.0.0.0:8899` **能启动**并打印醒目警告（旧行为是拒绝启动） |
+| AC-008 | **S1**：`/studio` 只接受 GET，`POST/PUT/DELETE` ⇒ **405** |
+| AC-008b | **S2**：`/studio` 返回的 HTML **不含任何本体数据**（grep 类名 = 0） |
+| AC-008c | **S3/S4**：无口令 ⇒ 页面不显示数据、`/api/*` 得 401 |
 | AC-009 | **C5**：客户视图的脱敏闸仍生效（748 条说明仍被隐去） |
 | AC-010 | 服务面 8 case 里 **health/catalog/describe/503/TTL×2 不变**；`get` 仍 4/10 键 |
 | AC-011 | 镜像里仍**只有** `ontok` 一个 bin；`strings ontok \| grep -c X-TC-Action` = 0 |
@@ -85,7 +87,7 @@
 | 期 | 内容 | 依赖 |
 | --- | --- | --- |
 | **P1** | 删 Portal（含 Deploy） | 独立，**现在就能做** |
-| **P2** | Studio 进服务面 + 开放 + 退役旧页 | 依赖 ADR-010 |
+| **P2** | Studio 挂 `query serve`（静态资源 + `/studio` 路由） | ADR-010-A；**不动 `ontok serve`** |
 | **P3** | Console 重设计 | 依赖用户确认视觉稿（我先出） |
 
 ---
