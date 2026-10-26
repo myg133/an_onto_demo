@@ -161,6 +161,49 @@ POST /api/sparql
 
 ---
 
+## 四·五 · 取数侧（**你那一侧**）的四条铁律
+
+> 这四条来自**一次真实巡检**的复盘：两轮共 58 次工具调用、15 次报错，**其中 6 次都出在下面这些地方**。
+
+### ① 凭据只注入一次，⛔ 不要每条命令都重新贴
+
+那轮实测里，同一条 `export SECRET_ID=…` **重复了 17 次**（每条 shell 都是新进程）。
+后果：**真密钥进了会话日志**（导出成 HTML 就跟着走），还白烧 token。
+
+```bash
+# ✅ 写进 .env（chmod 600），之后只 source，⛔ 不要 echo
+printf 'TC_SECRET_ID=%s\nTC_SECRET_KEY=%s\n' "$ID" "$KEY" > .env && chmod 600 .env
+set -a; . ./.env; set +a
+```
+
+⛔ 禁：`echo $SECRET_KEY`、把密钥写进命令行参数（进 history）、把 `.env` 提交到仓库。
+
+### ② ⛔ 不要从零造签名/翻页/地域发现
+
+优先用**包里自带的执行器**（本部署：`ontok access fetch`）；没有再自己写；
+写就照 `skills/ontok-query/SKILL.md` **附录 A** 抄（那份已用腾讯云**官方向量**验过签名逐字节一致）。
+⛔ **不要凭记忆写 version/参数**——实测有人把 SSL 接口猜成另一个版本（能跑通，但字段对不上本体）。
+
+### ③ 路径用相对工作目录，⛔ 不要写 `/tmp`
+
+实测失败：`curl -o /tmp/onto.ttl` → `系统找不到指定的文件`。用 `./x.ttl` 或 `./.tmp/x`。
+
+### ④ 翻页形态因接口而异，⛔ 别假设只有一种
+
+本部署就并存三种：顶层 `Offset/Limit`、**`PageNumber`/`PageSize`（页码从 1 起）**、
+以及"`Offset` 与 `Limit` 都必填、`Limit` 有硬上限（账单是 300）"。
+
+✅ 稳妥做法：**先取一页看有没有 `TotalCount`**；有就按它算页数，没有就取到空页为止。
+
+### 附：本部署相关的两个具体坑
+
+| 坑 | 事实 |
+| --- | --- |
+| COS 的 Python SDK 包名 | 是 **`cos-python-sdk-v5`**；⛔ 不是 `tencentcloud-sdk-python-cos`（不存在，实测装失败） |
+| 其余产品 | 都是 `tencentcloud-sdk-python-<产品>`（cvm/cbs/cdb/clb/monitor/vpc/ssl/billing） |
+
+---
+
 ## 五 · 跨源关系：**没人替你 join**
 
 如果一条边两端一个在库、一个在 API：
