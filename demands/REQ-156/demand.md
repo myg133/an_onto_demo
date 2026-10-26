@@ -76,7 +76,9 @@ associated_with 1 · bills 1 · based_on 1 · deployed_to 1
 | AC-003 | `attached_to` 与 `attaches_to` 的 `semantic_label` **相同**（都是「挂载于」） |
 | AC-004 | 未知动词（造一个 `xyz_unknown`）⇒ `semantic_label` 为 **null**，且**不 swallowed**：catalog 正常返回 + 该条 `semantic` 原样保留 |
 | AC-005 | Studio 边标签显示中文；无标签时退回英文 key（⛔ 不许显示空白） |
-| AC-006 | 8 case：**只有 02-catalog / 03-describe 会变**（新增字段），其余 6 个逐字节不变 |
+| AC-006 | 8 case：**02 首屏不变**（分页口径：默认 50 条第 1 页没有 relation）· **03 describe +408 B** · **07 TTL +1163 B** · 其余 5 个逐字节不变 |
+| AC-006b | **新增 case 02b**：`?page_size=200&page=5`（relation 页）⇒ relation 项含 `semantic`/`semantic_label`，且**其余字段逐字节不变** |
+| AC-006c | 07 的 +1163 B 要能**拆开解释**：变中文的 `语义：` = 34 行 · 新增 `skos:altLabel` = 34 行 · 两者能对上字节数 |
 | AC-007 | `get` 键数不变（v1=4 / v2=10）；`meta.contract_version` 不变 |
 | AC-008 | ⛔ 不改 `semantic` 的存储值（只加映射与透出）；⛔ 不重写 v3 |
 
@@ -90,3 +92,39 @@ associated_with 1 · bills 1 · based_on 1 · deployed_to 1
 | 禁泛动词（`uses`/`contains`/`associated_with`） | 同上 |
 | 动词字典文件 + 校验（拒绝字典外动词） | REQ-157 的 P1 |
 | 改 `parse.rs` 的 schema 示例 | REQ-157 的 P2（与 skill 一起改） |
+
+
+---
+
+## 六 · 红线例外（已裁定 · 2026-10-27）
+
+`tests/test_req107_red_lines.rs` 把 `src/domain/view.rs` 列为**整文件禁改**，与本单 §三 ② 冲突。
+
+**裁定：批准为"有条件的例外"，⛔ 不是整文件白名单。**
+
+| # | 要求 |
+| --- | --- |
+| A1 | 在 `red_lines` 里**点名** `src/domain/view.rs`，注释写明"REQ-156 授权：只允许**追加** `semantic_cn` 映射分支"；其余三个红线文件**仍整文件禁改** |
+| A2 | **新增专属守卫**证明"只追加了"：① 原 6 条映射逐字未变 ② 兜底仍是 `_ => s.to_string()` ③ 每个分支输出不含 ASCII 字母 ④ `untranslated_semantic_hit` 判据未被改写 |
+
+**理由**：白名单只放行文件，不放行"改了什么"。**"允许追加"必须由机器证明只追加了**，不能靠人看 diff。
+
+守卫必须能红：
+- 把 `belongs_to → 归属于` 改成「所属」⇒ ① 红
+- 把 `_ =>` 改成 `_ => "未知"` ⇒ ② 红
+
+---
+
+## 七 · 顺带记录的一条独立 bug（待确认性质）
+
+实测发现：**v3 的客户视图 TTL（`/api/ontology.ttl`）里有 13 个英文动词漏出**（`applies_to` / `attached_to` / `uses` …），
+而 `untranslated_semantic_hit` 的判据是"meaning 里出现任何 ASCII 字母就抓"。
+
+**两种可能，性质完全不同**：
+
+| 可能 | 性质 | 处置 |
+| --- | --- | --- |
+| `/api/ontology.ttl` 的渲染路径**不经过**该守卫 | **fail-open bug**（客户能拿到未翻译的内部标识符） | **单独立单** |
+| 路径经过，只是 v3 冻结在守卫之前 | 历史数据问题 | 记录即可，重冻结即修复 |
+
+**已要求 Dev 用 `path:line` 确认是哪一种。**
