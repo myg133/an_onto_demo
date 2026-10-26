@@ -6,6 +6,9 @@
 | --- | --- |
 | `compose/` | 单机 docker-compose（db + query + console + portal） |
 | `k8s/` | Kubernetes 清单（kustomize：base + overlays/dev + overlays/prod） |
+
+> ⭐ **skill 不在本分支**：`ontok-build` / `ontok-extract` / `ontok-query` / `<项目>-ontology`
+> 统一放在**仓库根 `skills/`**（2026-10-26 从本分支迁出，避免两份副本漂移）。
 | `.local/` | 本地临时（不跟踪） |
 
 ## 镜像
