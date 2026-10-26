@@ -1,4 +1,4 @@
-# 接入基线（**v0.2.2** · 2026-10-26）
+# 接入基线（**v0.2.5** · 2026-10-26）
 
 > 给接入方（Axon / 数字员工）与联调同学：**这套是当前冻结的接入基线**。
 > 上一版 `v0.1.8`（`get` 只有 4 个键）已被 `v0.2.0` 取代。
@@ -9,9 +9,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| **代码 tag** | `v0.2.2`（develop `1a2fc0e`，含 REQ-152 + REQ-154 + REQ-155 P1/P2） |
-| **部署 tag** | `deploy-uat-v0.2.2` |
-| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.2`<br>digest `sha256:73771abce45cedb4a067e32b041e739e926880efc57440a833e343b25582c99c` |
+| **代码 tag** | `v0.2.5`（develop `22ab671`） |
+| **部署 tag** | `deploy-uat-v0.2.5` |
+| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.5`<br>digest `sha256:73ed3e14cd3aff8036cc3ed990ecf06e33b9f6c963a4d289fc953f1a8752647f` |
 | **本体** | `cloud-resource` **v3**（已冻结）· 30 类 / 34 关系 / 752 属性 |
 | **TTL** | 209,429 B · sha256 `79741a7f…`（**契约升级不影响本体输出**） |
 | **access mapping** | `am-tencent.json` · **`contract_version: 2`** · 14 entity / 441 属性<br>sha256 `80fce221d5f803487983cb3afe2f9d2d…` · 已签 `michael@2026-10-26` |
@@ -22,7 +22,21 @@
 
 ---
 
-## 二 · v0.2.2 新增：**Studio 页面上线**
+## 二 · v0.2.5 · Studio UI 定稿
+
+| 修了什么 | 原因 |
+| --- | --- |
+| 关系名显示**真名** | 34 条关系名都是 `from__to`；旧 UI 用 `shortName` 取后半段（目标类名），看起来像没名字 |
+| 「弱证据 / 关系名」开关生效 | `.edge-line { animation: … both }` 把 opacity 锁死；`.edge-label { opacity: 0 }` 压掉了 JS 属性 |
+| 抽屉不再遮挡工具条 | 浮动条上移 60px；抽屉打开时右移 |
+| 动效看得见 | 自转 22s → 7s、环不透明度 1 |
+| `/studio/*` 带 `no-cache` | 否则浏览器缓存 4 小时，修了还看旧的 |
+
+> ⚠️ **运维待办（Cloudflare）**：CF 的 **Browser Cache TTL** 会把我们的 `no-cache` 改写成 `max-age=14400`。
+> 请在 CF 里把该 zone 的 **Browser Cache TTL 设为 "Respect Existing Headers"**（或给 `/studio/*` 加一条 Cache Rule）。
+> 内网入口（`an-onto.local.anspire.cn`）的头是**正确**的，可用于判断"是不是 CF 干的"。
+
+## 三 · v0.2.2 新增：**Studio 页面上线**
 
 ```
 GET /studio                 → 200 text/html（页面壳，**零数据**，免口令）
@@ -36,7 +50,7 @@ GET /studio/studio.js       → 200 application/javascript
 - `/api/*` 的鉴权与响应**逐字节未变**（8 case 对拍）
 - ⚠️ **客户门户（portal）已删除**（REQ-155 P1）：`ontok-builder portal` 已不存在
 
-## 三 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
+## 四 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
 
 | 项 | v0.2.0 | v0.2.1 |
 | --- | --- | --- |
@@ -46,7 +60,7 @@ GET /studio/studio.js       → 200 application/javascript
 **实测**：`04-pending` 3366 B（含 `contract_version: 2`）· `05-rows400` 1074 B。
 `get` 仍是 **10 个键**，一个不多一个不少。
 
-## 四 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
+## 五 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
 
 ```diff
   GET /api/sparql  →  @pending[0].get
@@ -73,7 +87,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 五 · 实测过的部分（接入方可直接依赖）
+## 六 · 实测过的部分（接入方可直接依赖）
 
 | 类 | 结果 |
 | --- | --- |
@@ -88,7 +102,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 六 · **没验过的部分**（接入方注意）
+## 七 · **没验过的部分**（接入方注意）
 
 | 类 | 状态 |
 | --- | --- |
@@ -100,7 +114,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 七 · 接入方自查（三条命令）
+## 八 · 接入方自查（三条命令）
 
 ```bash
 # ① 通不通
@@ -118,7 +132,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 八 · 冻结期间的规则
+## 九 · 冻结期间的规则
 
 | 允许 | 不允许 |
 | --- | --- |
@@ -130,7 +144,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 九 · 一句话
+## 十 · 一句话
 
 > **v0.2.0 之后，接入方不需要懂任何云厂商 API**：
 > `get` 告诉你调什么、怎么拼、取哪个字段、怎么签名；
