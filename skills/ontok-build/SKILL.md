@@ -187,6 +187,34 @@ ontok ontology export --project <项目> --version 2 --out out/customer.ttl
 
 ---
 
+## 三·五 · 抽取用哪个实现：内置 LLM vs **ACP + skill**（有实测）
+
+**同一个模型**（`deepseek-v4.1-flash`）、**同一份语料**（3 篇 / 39 块）：
+
+| 指标 | 内置 LLM | **ACP + skill** |
+| --- | ---: | ---: |
+| 断言 / 关系 | 397 / 139 | **593 / 258** |
+| **泛动词占比** | 3.60% | **0.00%** |
+| **关系两端都是概念** | 65.5% | **89.9%** |
+| 耗时 / token | 7.1 min / 110K | **4.7 min** / 187K |
+
+```bash
+ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
+  --agent acp --agent-command "pi-acp" --agent-skill skills/ontok-extract/SKILL.md
+```
+
+**怎么读**：
+
+| # | 判读 |
+| --- | --- |
+| 1 | 效果**真实但不神奇**：泛动词清零、端点闭合 **+24pp**、关系数 +86% |
+| 2 | 关系变多不是"抽得更全"，是**更愿意把结构写成边**（`包含字段` 101 条 vs 内置 24 条） |
+| 3 | 代价 **token +71%**（skill 全文随每块下发），但**墙钟反而快 34%**（没有解析失败要重试） |
+| 4 | ⚠️ **单次运行（n=1）**，没测方差 |
+| 5 | ⛔ **旧材料里「泛动词降 93%、端点闭合 26%→96%」那组不得引用**——它混了模型变量（ACP 侧 MiniMax / 内置侧 deepseek），跨实验还换了语料，不可比 |
+
+> 要重新测：`BA/demands/REQ-147/evidence-same-model.md` 有完整复现命令与判读。
+
 ## 四 · 失败长相（**这一节最重要**）
 
 | 现象 | 真实原因 | 怎么办 |
