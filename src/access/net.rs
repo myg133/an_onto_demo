@@ -635,7 +635,7 @@ pub fn fetch_network(
 
 /// 同 [`fetch_network`]，但把**第一页的原始响应体**（逐字节、未裁剪）交给调用方。
 ///
-/// 用途：`ontok access fetch --allow-network --dump-raw <path>` ——
+/// 用途：`ontok-builder access fetch --allow-network --dump-raw <path>` ——
 /// 拿一份**真实响应**去替换合成的 fixture（`fixtures/README.md` 里欠的那件事）。
 ///
 /// 为什么是**第一页**：同一份响应的各页结构完全相同，第一页就是「结构样本」；

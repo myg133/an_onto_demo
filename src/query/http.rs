@@ -363,12 +363,15 @@ async fn post_sparql(
                 &out.projection,
                 &svc.ontology_iri,
                 svc.access.as_ref().map(|a| a.mapping_version()),
+                // ⭐ REQ-154 · 映射声明什么就给什么（没加载映射 ⇒ `None` ⇒ 键不出现）。
+                svc.access.as_ref().map(|a| a.contract_version()),
             )),
             Ok(super::SparqlAnswer::Pending(p)) => respond_jsonld(super::jsonld::render_pending(
                 &p.receipt,
                 &p.pending,
                 &svc.ontology_iri,
                 p.mapping_version,
+                p.contract_version,
             )),
             Err(e) => respond(e.status, e.body()),
         };
@@ -828,6 +831,7 @@ async fn tools_call(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) 
                             &out.projection,
                             &svc.ontology_iri,
                             svc.access.as_ref().map(|a| a.mapping_version()),
+                            svc.access.as_ref().map(|a| a.contract_version()),
                         );
                         tool_ok(id, &graph.to_text(), graph.to_value())
                     }
@@ -837,6 +841,7 @@ async fn tools_call(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) 
                             &p.pending,
                             &svc.ontology_iri,
                             p.mapping_version,
+                            p.contract_version,
                         );
                         tool_ok(id, &graph.to_text(), graph.to_value())
                     }
@@ -1286,6 +1291,21 @@ mod tests {
     /// 池的 `acquire_timeout` 只有 100 ms，真去连会立刻变成 500/TIMEOUT，
     /// 于是「api 类仍是 200 @pending / 库类仍是 503」这组断言本身就证明零连接尝试。
     fn test_service_ontology_only_with_access(audit: AuditSink) -> Arc<QueryService> {
+        // ⭐ REQ-154 · v1 已签映射的形状（`contract_version: 1` ⇒ `get` 只有旧 4 键）。
+        test_service_ontology_only_with_mapping(
+            r#"{"contract_version":1,"mapping_version":3,
+                "entities":[{"id":"Customer","class":"customers",
+                             "capability":{"pushdown":["ids"]},"freshness":"realtime"}]}"#,
+            audit,
+        )
+    }
+
+    /// ⭐ REQ-154 · 同 [`test_service_ontology_only_with_access`]，但映射由调用方给
+    /// （`meta.contract_version` 的判据要用**同一份服务、只换映射**来对拍 v1 / v2）。
+    fn test_service_ontology_only_with_mapping(
+        mapping_json: &str,
+        audit: AuditSink,
+    ) -> Arc<QueryService> {
         let (schema, _mapping, model) = crate::query::test_fixture();
         let _ = schema;
         let policy = crate::sparql::policy::QueryPolicy::parse(
@@ -1307,14 +1327,10 @@ mod tests {
         )
         .expect("token 表");
         // `customers` 是 api 类、`orders` 是库类 ⇒ 一句查询就能造出「纯 api / 纯库 / 混合」。
-        let access = crate::query::source_gate::AccessMapping::parse(
-            r#"{"contract_version":1,"mapping_version":3,
-                "entities":[{"id":"Customer","class":"customers",
-                             "capability":{"pushdown":["ids"]},"freshness":"realtime"}]}"#,
-        )
-        .expect("映射形状")
-        .bind(&model)
-        .expect("映射与本体对账");
+        let access = crate::query::source_gate::AccessMapping::parse(mapping_json)
+            .expect("映射形状")
+            .bind(&model)
+            .expect("映射与本体对账");
         let poisoned = sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(100))
             .connect_lazy("postgresql://nonexistent.invalid:1/x")
@@ -2579,6 +2595,100 @@ mod tests {
             "AC-002：hint 必须可行动：{v}"
         );
         assert!(v.get("rows").is_none(), "⛔ 不许返回空表：{v}");
+    }
+
+    /// ⭐ REQ-154 · `meta.contract_version` = **映射声明的版本**（v1 ⇒ 1 / v2 ⇒ 2），
+    /// 并且 `get` 的键集合**一个不多一个不少**（v1 4 键 / v2 10 键，R1）。
+    ///
+    /// 为什么这条判据同时钉「键数」：版本放 `meta` 的目的就是让 `get` 保持原样 ——
+    /// 若哪天有人图省事把 `contract_version` 塞进 `get`，v1 会变成 5 键、v2 变成 11 键，
+    /// 这里立刻红。变异自证：把 meta 里的值写死成 `1` ⇒ v2 那条红。
+    #[tokio::test]
+    async fn req154_meta_carries_contract_version_without_touching_get_keys() {
+        let v1_mapping = r#"{"contract_version":1,"mapping_version":3,
+            "entities":[{"id":"Customer","class":"customers",
+                         "capability":{"pushdown":["ids"]},"freshness":"realtime"}]}"#;
+        // v2：源 + 六段配方都写全 ⇒ `get` 恰好 10 键。
+        let v2_mapping = r#"{
+            "contract_version": 2,
+            "mapping_version": 3,
+            "sources": [{
+                "id": "s1",
+                "base_url": "https://api.example.test",
+                "auth": { "mode": "tc3-hmac-sha256",
+                          "credential_env": ["FAKE_SECRET_ID", "FAKE_SECRET_KEY"] }
+            }],
+            "entities": [{
+                "id": "Customer", "class": "customers", "source": "s1",
+                "capability": { "pushdown": ["ids"] },
+                "freshness": "realtime",
+                "operation": { "method": "POST", "path": "/" },
+                "request": { "template": { "InstanceIds": ["{ids}"] } },
+                "iterator": "$.Response.CustomerSet[*]",
+                "fields": { "name": { "path": "CustomerName" } }
+            }]
+        }"#;
+        let q = r#"{"query":"SELECT ?c WHERE { ?c a :customers }"}"#;
+
+        for (label, mapping, expected_cv, expected_keys) in [
+            (
+                "v1 映射",
+                v1_mapping,
+                1u64,
+                vec!["class", "filter", "pushdown", "ref"],
+            ),
+            (
+                "v2 映射",
+                v2_mapping,
+                2u64,
+                vec![
+                    "class", "filter", "pushdown", "ref", "source", "operation", "request",
+                    "iterator", "fields", "auth",
+                ],
+            ),
+        ] {
+            let svc = test_service_ontology_only_with_mapping(mapping, AuditSink::stdout_only());
+            let (status, _, body) = call(
+                build_router(Arc::clone(&svc)),
+                post("/api/sparql?format=jsonld", Some(TOKEN_A), q),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{label}：{body}");
+            let v: Value = serde_json::from_str(&body).expect("JSON-LD");
+            assert_eq!(
+                v["meta"]["contract_version"], expected_cv,
+                "{label}：`meta.contract_version` 必须是映射声明的版本：{v}"
+            );
+            assert_eq!(
+                v["meta"]["mapping_version"], 3,
+                "{label}：两个版本是两个字段，⛔ 不许互相顶替：{v}"
+            );
+            let get = v["@pending"][0]["get"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{label}：按类点名必须给 get：{v}"));
+            let mut keys: Vec<&str> = get.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            let mut want = expected_keys.clone();
+            want.sort_unstable();
+            assert_eq!(
+                keys, want,
+                "{label}：`get` 的键集合不许变（版本放 meta，不放在 get 里）：{v}"
+            );
+
+            // MCP 的 `sparql_query` 走**另一处**调用来渲染（同一个值）—— 两处都要有。
+            if expected_cv == 2 {
+                let line = format!(
+                    r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"sparql_query","arguments":{q}}}}}"#
+                );
+                let (status, _, rpc) = call(build_router(Arc::clone(&svc)), post("/mcp", Some(TOKEN_A), &line)).await;
+                assert_eq!(status, StatusCode::OK, "{rpc}");
+                let v: Value = serde_json::from_str(&rpc).expect("MCP 行");
+                assert_eq!(
+                    v["result"]["structuredContent"]["meta"]["contract_version"], 2,
+                    "MCP 与 REST 必须同一份渲染（同一个前置版本字段）：{v}"
+                );
+            }
+        }
     }
 
     /// AC-003 / AC-004：本体模式下**需要库**的查询仍 503，且响应与基线**逐字节相同**。

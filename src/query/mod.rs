@@ -1018,6 +1018,11 @@ pub struct PendingAnswer {
     pub pending: Vec<source_gate::ApiPending>,
     /// 加载的映射版本（`meta.mapping_version`）。
     pub mapping_version: u64,
+    /// ⭐ REQ-154 · 映射声明的**契约版本**（`meta.contract_version`；没写 ⇒ `1`）。
+    ///
+    /// 与 [`Self::mapping_version`] 一样来自 `svc.access`，但它回答的是另一个问题：
+    /// 「这份映射会不会带取数配方」——调用方不必再靠 `get` 的键数去猜。
+    pub contract_version: u64,
 }
 
 impl PendingAnswer {
@@ -1246,10 +1251,14 @@ async fn run_sparql_event(
                 // `pending` 只可能来自加载了映射的部署 ⇒ `access` 一定在（这里仍不 unwrap：
                 // 缺了也只是 `mapping_version=0`，⛔ 不让一条只读查询 panic 成 500）。
                 let mapping_version = access.map_or(0, |a| a.mapping_version());
+                // ⭐ REQ-154 · 缺省按 1：与映射解析的默认（没写 `contract_version` ⇒ 1）同一口径。
+                // 真走到 `None` 那一支是不可能的（pending 由映射产生），只是不让它 panic。
+                let contract_version = access.map_or(1, |a| a.contract_version());
                 return Ok(SparqlAnswer::Pending(PendingAnswer {
                     receipt,
                     pending,
                     mapping_version,
+                    contract_version,
                 }));
             }
         }

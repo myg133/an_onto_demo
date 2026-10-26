@@ -124,6 +124,12 @@ x-tc-action:describeinstances
 ⚠️ 规范 header 串**自带结尾 `\n`**，拼接时后面还要再加一个 `\n` ⇒ 规范串里
 `query` 与 `content-type` 之间会看到一个空行。**少了这个换行就签不过**。
 
+⚠️ 反过来，**整串的结尾没有额外换行**：上面骨架里每一行末尾的 `\n` 都属于**它自己那一行**
+（`<HashedRequestPayload>` 是最后一行，它后面**没有** `\n`）。整串就结束在那个十六进制串的
+最后一个字符上 —— 末尾多写一个 `\n`，`SHA256` 立刻变，签名必错。
+（`tests/test_req152_auth_spec_vector.rs` 的 `CANONICAL_REQUEST` 常量就是这段字节的逐字节形态：
+以 `…8934f064` 结尾，`\n` 一个不多、一个不少。）
+
 ---
 
 ## 4 · 待签名字符串（第 2 步）
@@ -189,6 +195,12 @@ SignedHeaders=<signed_headers 用 ; 连接>, Signature=<Signature>
 | `content-type` | `application/json; charset=utf-8` |
 | `signed_headers` | `content-type;host;x-tc-action` |
 | body | `{"Limit": 1, "Filters": [{"Values": ["\u672a\u547d\u540d"], "Name": "instance-name"}]}` |
+
+> ⚠️ **body 里的 `\u672a\u547d\u540d` 是「字面的 ASCII 转义序列」**（3 组 `\uXXXX`，共 18 个
+> ASCII 字符），⛔ **不是**「先让它解码成中文再参与计算」。要签的是**实际发出去的 body 字节**：
+> 这 18 个字符原样在字节里，服务端收到 JSON 后自己会解码成中文。
+> 若按「真中文读法」（`未命名`）去算，`HashedRequestPayload` 会变成 `1e07682a…`，
+> 与 §7.2 钉住的 `35e9c5b0…` 不符 —— 这类差异不会报「转义写错了」，只会报「签名不匹配」。
 
 ### 7.2 中间值与期望结果（逐字节）
 

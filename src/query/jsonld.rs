@@ -211,6 +211,17 @@ pub struct Meta<'a> {
     /// ⭐ REQ-145 · 加载的 access 映射版本（`get.ref` 的 `@v<n>` 与它同源）。无映射 ⇒ 不出现。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mapping_version: Option<u64>,
+    /// ⭐ REQ-154 · 这份映射声明的**契约版本**（没写 ⇒ `1`；v2 映射 ⇒ `2`）。
+    ///
+    /// 为什么是 `meta` 而不是 `get` 里再加一个键：它描述的是**映射**（这份部署加载的那一份），
+    /// 不是某一条 `@pending` 的取数配方 ——
+    /// - 放 `get` 会把「v1 4 键 / v2 10 键」变成 11 键（R1），且**跨源边那种没有 `get`** 的
+    ///   pending 反而没地方说版本；
+    /// - 放 `meta` 则「没有 pending 的响应」也照样有（它描述映射，不描述某条 pending）。
+    ///
+    /// `None` = 这个部署没加载映射 ⇒ 字段不出现（与 `mapping_version` 同一条口径，R1）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_version: Option<u64>,
 }
 
 impl<'a> JsonLd<'a> {
@@ -259,19 +270,24 @@ pub fn render<'a>(
     projection: &[ProjectedColumn],
     ontology_iri: &str,
 ) -> JsonLd<'a> {
-    render_with_mapping(receipt, projection, ontology_iri, None)
+    render_with_mapping(receipt, projection, ontology_iri, None, None)
 }
 
-/// ⭐ REQ-145 · 同 [`render`]，另外告诉它**加载的映射版本**（`meta.mapping_version`）。
+/// ⭐ REQ-145 / **REQ-154** · 同 [`render`]，另外告诉它**加载的映射版本**
+/// （`meta.mapping_version`）与**契约版本**（`meta.contract_version`）。
 ///
 /// 两个入口而不是给 [`render`] 多一个必填参数：`None` 那条是**没加载映射**的老路径，
 /// 它的字节已经被一堆判据钉住（R1）——多一个参数只会让每个老调用点都要回答一个
 /// 它根本不关心的问题。
+///
+/// ⭐ REQ-154 · `contract_version` 与 `mapping_version` **同源**（都来自 `svc.access`），
+/// 但描述的是两件事：前者是**映射格式**的版本（v1 / v2），后者是**这一份映射**的修订号。
 pub fn render_with_mapping<'a>(
     receipt: &'a SparqlReceipt,
     projection: &[ProjectedColumn],
     ontology_iri: &str,
     mapping_version: Option<u64>,
+    contract_version: Option<u64>,
 ) -> JsonLd<'a> {
     let base = format!("{ontology_iri}#");
     let mut context: BTreeMap<&'static str, String> = BTreeMap::new();
@@ -299,6 +315,7 @@ pub fn render_with_mapping<'a>(
         complete: receipt.complete,
         unresolved_classes: receipt.unresolved_classes.clone(),
         mapping_version,
+        contract_version,
     };
 
     // 有聚合 ⇒ 没有任何实体可挂（R4）：全部进 summary，`@graph` 恒为 []。
@@ -398,11 +415,15 @@ pub fn render_with_mapping<'a>(
 /// - `@graph` 里没有一个节点（`graph: Vec::new()`；pending 是另一个字段，规则 2）；
 /// - `meta.complete == @pending.is_empty()`（`false == false`，AC-007）；
 /// - `meta.unresolved_classes` 与 `@pending[].@type` 是**同一批类**（都从 `pending` 取）。
+///
+/// ⭐ REQ-154 · 另外把 `meta.contract_version` 写进 meta（值为**映射声明的版本**）：
+/// 调用方看到 4 键的 `get` 时，能自己分清「映射还是 v1」与「这一类没配这一项」。
 pub fn render_pending<'a>(
     receipt: &'a SparqlReceipt,
     pending: &[super::source_gate::ApiPending],
     ontology_iri: &str,
     mapping_version: u64,
+    contract_version: u64,
 ) -> JsonLd<'a> {
     let base = format!("{ontology_iri}#");
     let mut context: BTreeMap<&'static str, String> = BTreeMap::new();
@@ -433,6 +454,9 @@ pub fn render_pending<'a>(
         complete: Some(complete),
         unresolved_classes: Some(unresolved),
         mapping_version: Some(mapping_version),
+        // ⭐ REQ-154 · 「没配这一类」与「映射没升 v2」从此**分得开**：版本在这里，
+        // `get` 的键数只表达「这一条声明了什么」。
+        contract_version: Some(contract_version),
     };
 
     let mut summary = Map::new();
@@ -1101,6 +1125,64 @@ mod tests {
         let d = v["summary"]["detached"].as_array().unwrap();
         assert_eq!(d.len(), 2);
         assert_eq!(d[0]["predicate"], "customers__customer_name");
+    }
+
+    /// ⭐ REQ-154 · `meta.contract_version` = **映射声明的版本**（不是 pending 的状态）。
+    ///
+    /// 判据覆盖三种情形，任何一种写错都会红：
+    ///
+    /// | 情形 | 期望 |
+    /// | --- | --- |
+    /// | v2 映射 | `2` |
+    /// | v1 映射 / 没写 `contract_version` | `1`（与解析默认同一条口径） |
+    /// | **没有 pending 的响应** | 照样有这个键（它描述映射，不描述某条 pending） |
+    /// | **没加载映射**（`render`） | 键**不出现**（老路径逐字节不变，R1） |
+    ///
+    /// 变异自证：把常量 `2` 写死进 `Meta` ⇒ 第一段红；把 `skip_serializing_if` 去掉
+    /// （永远给个 `null`）⇒ 最后一段红；把它挪进 `PendingGet` ⇒ 第二段（`@pending: []`）红。
+    #[test]
+    fn meta_contract_version_comes_from_the_mapping_not_from_pending() {
+        use crate::query::source_gate::AccessMapping;
+
+        let v1 = AccessMapping::parse(r#"{"mapping_version":7,"entities":[]}"#)
+            .expect("v1 映射（没写 contract_version）");
+        assert_eq!(v1.contract_version(), 1, "没写 `contract_version` ⇒ 按 1（R2）");
+        let v1b = AccessMapping::parse(r#"{"contract_version":1,"mapping_version":7,"entities":[]}"#)
+            .expect("显式 v1 映射");
+        assert_eq!(v1b.contract_version(), 1);
+        let v2 = AccessMapping::parse(r#"{"contract_version":2,"mapping_version":7,"entities":[]}"#)
+            .expect("v2 映射");
+        assert_eq!(v2.contract_version(), 2);
+
+        // ① **没有 pending** 的库源回执：`complete: true`、`@pending: []`，版本照样在，
+        //    且是 meta 的**最后一个键**（加法式：老字段的位置与形状一个都不动）。
+        let mut r = receipt(&["m"], vec![vec![Some("https://x#llm_model/1")]]);
+        r.complete = Some(true);
+        let g = render_with_mapping(&r, &[node_col("m")], ONT, Some(7), Some(v2.contract_version()));
+        let v = value_of(&g);
+        assert_eq!(v["meta"]["contract_version"], 2, "{v}");
+        assert_eq!(v["meta"]["mapping_version"], 7, "两个版本是两件事，⛔ 不许互相顶替：{v}");
+        assert_eq!(v["@pending"], json!([]), "加载了映射的库源回执 ⇒ `@pending: []`：{v}");
+        assert!(
+            g.to_text().ends_with(r#""contract_version":2}}"#),
+            "必须在 meta 末尾追加（R1：老键位置不变）：{}",
+            g.to_text()
+        );
+
+        // ② `@pending: []`（pending 路径但这次没东西可取）也照样有 —— 写常量 `false` /
+        //    从 pending 数版本都会在这里露馅。
+        let g = render_pending(&r, &[], ONT, 7, v1.contract_version());
+        let v = value_of(&g);
+        assert_eq!(v["@pending"], json!([]), "{v}");
+        assert_eq!(v["meta"]["complete"], true, "空 pending ⇒ complete 必须是 true");
+        assert_eq!(v["meta"]["contract_version"], 1, "{v}");
+
+        // ③ 没加载映射（`render` 那条老入口）⇒ 键不出现（R1：与基线逐字节相同）。
+        let v = value_of(&render(&r, &[node_col("m")], ONT));
+        assert!(
+            v["meta"].get("contract_version").is_none(),
+            "没加载映射时不许出现这个键：{v}"
+        );
     }
 }
 
