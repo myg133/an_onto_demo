@@ -99,6 +99,45 @@ category: contract
 > **自检**：如果你的关系里同一种谓词占了 1/3 以上，说明你在把「字段表」抄成关系——
 > 这时应该**减少关系、提高多样性**（谓词种类 / 关系数 应 ≥ 1/3）。
 
+### ⭐⭐ 关系动词：**从字典里选**（REQ-157）
+
+谓词不是自由发挥。抽取时按下面这张表选，**表外的词一律不许用**。
+
+| 主键（写进 `semantic`） | 中文 | 常见别名（也接受，会被归一） |
+| --- | --- | --- |
+| `belongs_to` | 归属于 | `belong_to` `owned_by` |
+| `attached_to` | 挂载于 | `attaches_to` `attached` `mounts_to` |
+| `binds_to` | 绑定到 | `binds` |
+| `references` | 关联到 | `refers_to` |
+| `notifies_via` | 通知到 | `notifies` |
+| `applies_to` | 适用于 | `applied_to` |
+| `forwards_to` | 转发到 | `forwarded_to` |
+| `targets` | 指向 | — |
+| `bills` | 计费到 | `billed_to` |
+| `based_on` | 基于 | — |
+| `deployed_to` | 部署于 | `deploys_to` |
+| `has` | 拥有 | — |
+| `depends_on` | 依赖 | `depends` |
+| `records` | 记录了 | — |
+| `derived_from` | 算自 | — |
+
+**⛔ 禁用（会被构建拒绝，不是警告）**：
+
+```
+uses · associated_with · related_to · involves · has_many · is_related
+```
+
+**三条规则**：
+
+| # | 规则 | 为什么 |
+| --- | --- | --- |
+| 1 | **只准从表里选**（或它的别名） | 表外的新词会让本体无法跨项目比较，也让"给人看的中文标签"做不出来 |
+| 2 | **同一件事只用一种动词** | 别同时出现 `attached_to` 和 `attaches_to` —— 那是同一个意思的两种写法 |
+| 3 | **选不出来的，用最接近的那条**，并在 `evidence` 里给出文档原句 | 宁可保守，也别造词；真觉得字典不够，**在回答里单独提一句"建议新增动词 X，因为……"**，由人决定 |
+
+> ⚠️ **别把「绑定」和「使用」混着用**：文档写「监听器**绑定**的证书」，就写 `binds_to`；
+> 写「**使用**」是泛动词，会被拒。
+
 **每条关系都必须两个端点都在「概念」集合里**（本块或前文已抽出的）。端点不存在 ⇒ ⛔ 不输出该条。
 
 ---
