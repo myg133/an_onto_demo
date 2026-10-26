@@ -33,6 +33,20 @@ category: scenario
 
 > 猜地址最坏的结果不是报错，而是**连到别的环境**——那会把别人的数据当成本租户的答案。
 
+### 这套服务**只有这些端点**（⛔ 别探别的）
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/health` | 模式与版本（**第一步**） |
+| GET | `/api/catalog?page=&page_size=` | 类 / 属性 / 关系（`kind` 区分） |
+| GET | `/api/describe?name=` | 单个概念详情（含 `access.kind`） |
+| GET | `/api/ontology.ttl`（`?view=model`） | 本体（**⛔ 大就别整份读**，见 §二） |
+| POST | `/api/sparql`（`?format=jsonld\|rows`） | 查询 |
+| POST/GET | `/mcp` | MCP（JSON-RPC） |
+
+**⛔ 没有** `/openapi.json`、`/docs`、`/api/access`、`/api/mappings`——实测有 Agent 连探 8 次全部 404。
+取数配方不在这套 HTTP 接口上：它在 `@pending[].get` 里（+ 找运维要已签映射，见 §4.4 ⑥）。
+
 ---
 
 ## 一 · 第 0 步：先弄清自己在**哪种模式**（决定你能做什么）
@@ -220,7 +234,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 **跨源边**：如果两个类一个在库、一个在 API，那条边**不会给你 `get`** ⇒ 拆两段：先查库拿 ID，再按 ID 调接口。
 硬走会得到 `CROSS_SOURCE_UNSUPPORTED`——**重试无效**。
 
-### 4.4 取数侧怎么落地（**实测踩过的五个坑**）
+### 4.4 取数侧怎么落地（**实测踩过的六个坑**）
 
 拿到 `get` 之后，取数由你完成。以下四条是实测总结，照做能省掉一轮返工。
 
@@ -249,10 +263,17 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 优先级：**先用包里自带的执行器** → 没有再自己写 → 写就照附录 A 抄，⛔ 别重新发明。
 
-#### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`
+#### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`；⛔ 也别每条命令都 `cd`
 
 实测：`curl -o /tmp/onto.ttl` 在 Windows 上直接失败（`系统找不到指定的文件`）。
 ✅ 用 `./onto.ttl` 或 `./.tmp/<name>`，结束时清掉临时目录。
+
+另一个实测：**56 条命令里有 56 条**以 `cd D:/Temp/cloud_res_test;` 开头——每条 shell 都是新进程，
+所以要重来一遍。这不是错，但纯浪费。
+
+✅ 二选一：
+- **用绝对路径**（`python D:/work/tc.py fetch …`），一次到位；
+- 或者把 `cd` 写进**入口脚本**里，命令只调脚本（见 ⑤）。
 
 #### ④ 翻页形态**因接口而异**，⛔ 不要假设一种就够
 
@@ -279,12 +300,37 @@ python fetch.py cvm_instance --region ap-guangzhou --limit 100
 python fetch.py cbs_disk     --region ap-beijing
 ```
 
+**分析也一样要落成文件**（实测：分析阶段 25 次 `python - <<'PY'`，每次重导 `json`/`collections`）：
+
+```bash
+# 一次写好，按"问题"分子命令
+python ana.py policies      # 告警策略：启用但零绑定
+python ana.py certs         # 证书：过期 / 临期
+python ana.py bill --class cvm_instance
+```
+
 | 反例 | 为什么坏 |
 | --- | --- |
 | 每次 `python - <<'EOF'` 重写 helper | 每次都要重新解释一遍逻辑；错一次就是一次工具调用；日志里全是重复代码 |
 | 把 helper 写在会话里、靠"记得" | 上下文一长就记错，改一次要重发全部 |
 
 > **判断标准**：同一种"取数/解析"要做第 2 次时，就该抽成文件；⛔ 不要复制粘贴改三个字符。
+
+#### ⑥ ⛔ 不要"找接口规格"，也不要翻 SDK 源码
+
+实测（同一轮里出现了三次）：
+
+| 它干的 | 为什么白干 |
+| --- | --- |
+| `curl /openapi.json`、`/api/access`、`/docs` | **这些端点不存在** ⇒ 404。可用端点见 §〇 的表 |
+| `grep -n 'class Certificate' site-packages/tencentcloud/ssl/...` | 翻 SDK 源码猜参数名 |
+| 猜接口版本（实测有人把对象的版本猜成另一个） | 能跑通，但**取回的字段可能对不上本体** |
+
+**正确顺序**：
+
+1. 参数与版本优先从 **`get`** 拿（`pushdown` / `operation` / `request`——本部署正在补齐）
+2. 拿不到 ⇒ **找运维要那份已签映射**（`ref` 就是它的编号），或者用附录 A 的实现
+3. ⛔ 最后才考虑翻文档；**⛔ 不要翻 SDK 源码，⛔ 不要探端点**
 
 
 ---
