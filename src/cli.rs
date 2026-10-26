@@ -315,6 +315,30 @@ pub enum DocCmd {
     ///
     /// 分块是确定性的（标题层级 + 段落）；抽取靠指纹缓存：
     /// 同一份输入第二次运行 **0 token**、JSONL **逐字节相同**。
+    ///
+    /// # ⭐ REQ-147 · 换个「抽取实现」：`--agent acp`
+    ///
+    /// 【可以照抄的一整条】（REQ-152 之后 `doc` 在构建面 `ontok-builder` 上）
+    ///
+    /// ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json --agent acp --agent-command "pi-acp" --agent-skill Deploy/skills/ontok-extract/SKILL.md
+    ///
+    /// | 开关 | 含义 |
+    /// | --- | --- |
+    /// | `--agent acp` | 把每一块外包给一个 **ACP 子进程**（JSON-RPC over stdio）；省略 = **内置 LLM** |
+    /// | `--agent-command` | 子进程命令行（`pi-acp` / `mcode acp` / 绝对路径）；⛔ 无默认值 |
+    /// | `--agent-skill` | 抽取契约（skill）的路径；⛔ 不写死，内容随每块下发 |
+    /// | `--agent-timeout-secs` | 单轮往返截止（默认 180 秒），超时即该块失败 |
+    /// | `--strict-deterministic` | 本轮有块失败 ⇒ **退出码非 0 且一个产物都不写** |
+    ///
+    /// ⚠️ **默认关闭**：不给 `--agent` 时，产物与 REQ-116 的路径**逐字节相同**（R1）。
+    /// ⚠️ 产物 **schema 完全一致**（同一份 JSONL 照样能被 `doc merge` 吃）。
+    /// ⚠️ 指纹缓存把 **skill 全文** 与 **agent 命令 + 握手身份** 都算进指纹
+    ///     ⇒ 改契约 / 换 agent / agent 升版本都会让缓存整体失效。
+    /// ⚠️ `quote` 仍由**机器逐字校验**：定位不到 ⇒ 该条丢弃并计数
+    ///     （`stats.rejected.no_evidence`，本通道屏幕上叫 `discarded_no_quote`）。
+    /// ⚠️ **失败要响**：连不上 / 超时 / 不报用量 / 全部块失败 / 一条都没抽到
+    ///     ⇒ **退出码非 0 且不产出断言文件**；⛔ **绝不静默回落内置 LLM**。
+    #[command(verbatim_doc_comment)]
     Ingest {
         /// 输入：一个 `.md`/`.txt` 文件，或一个目录（递归）。
         /// ⛔ `.pdf` / `.docx` / `.doc` 直接报错并点名格式。
@@ -342,6 +366,45 @@ pub enum DocCmd {
         /// 不需要 LLM 三件套、不需要预算。
         #[arg(long)]
         chunks_only: bool,
+        /// ⭐ REQ-147：用**哪个实现**做抽取。省略 = **内置 LLM**（行为与 REQ-116 逐字节相同）。
+        ///
+        /// 目前只有一个取值：`acp`（把每一块外包给一个 ACP 子进程）。
+        /// 给了 `--agent acp` 就**必须**同时给 `--agent-command` 与 `--agent-skill`。
+        #[arg(long)]
+        agent: Option<String>,
+        /// ⭐ REQ-147：ACP 子进程的命令行（如 `pi-acp`）。
+        ///
+        /// 程序名 + 参数用空格分隔（与 `ontok-propose --agent-registry` 的
+        /// `endpoint` 同一种写法）。含路径分隔符时按路径用；否则在 `PATH` 里找，
+        /// Windows 上 `.cmd` / `.bat` 会自动经 `cmd /c` 启动。
+        ///
+        /// ⛔ 没有默认值、⛔ 不回落成内置 LLM：给不出程序就报错并点名。
+        #[arg(long)]
+        agent_command: Option<String>,
+        /// ⭐ REQ-147：**抽取契约**（skill）的路径 —— 指向一份 `.md` 文件，或一个
+        /// 里面装着 `SKILL.md` 的目录。⛔ 路径不写死在代码里（R4）。
+        ///
+        /// 它的全文会作为 system 消息随每一块发给 agent；它的 `sha256` 进指纹缓存，
+        /// 所以**改契约 ⇒ 缓存整体失效**（不会回放旧契约下的回答）。
+        #[arg(long)]
+        agent_skill: Option<PathBuf>,
+        /// ⭐ REQ-147：ACP **单轮**往返的截止时间（秒）。省略 = 180。
+        ///
+        /// 超过即该块失败（不重试、不回落）；全部块失败 ⇒ 退出码非 0 且不出产物。
+        #[arg(long)]
+        agent_timeout_secs: Option<u64>,
+        /// ⭐ REQ-147 · R-2：**要么可重放，要么不出产物**。
+        ///
+        /// 本轮只要有一块失败（`stats.failed_calls > 0`）⇒ **退出码非 0 且不产出断言文件**。
+        ///
+        /// 为什么需要它：失败块**不进缓存**（一次瞬时故障不该变成永久结论），
+        /// 所以重跑会重调它们、产物可能与上一份不同 —— 那种 JSONL **不可重放**。
+        /// 加上这个开关，「有产物 ⇒ 一定可重放」变成**无条件**成立。
+        ///
+        /// 省略时：产物照出，但屏幕上会打一行
+        /// 「本轮 N 块失败，重跑会重调这 N 块 ⇒ 产物可能变化」。
+        #[arg(long)]
+        strict_deterministic: bool,
     },
     /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
     ///
@@ -2024,6 +2087,11 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
             limit_chunks,
             cache,
             chunks_only,
+            agent,
+            agent_command,
+            agent_skill,
+            agent_timeout_secs,
+            strict_deterministic,
         } => {
             return doc_ingest_cmd(
                 input,
@@ -2033,13 +2101,172 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
                 limit_chunks,
                 cache,
                 chunks_only,
+                agent,
+                agent_command,
+                agent_skill,
+                agent_timeout_secs,
+                strict_deterministic,
             )
             .await
         }
     }
 }
 
+/// ⭐ REQ-147 · 一次 `doc ingest` 用到的**传输 + 提示词 + 指纹里的 `model` 名**。
+///
+/// 把「用哪个抽取实现」收在**一处**（与 `agent::factory::build_agent` 同一条纪律）：
+/// 下游的 `ingest_all` 只看见一个 `Box<dyn LlmTransport>` 与一对 `Prompts`，
+/// 于是缓存 / 预算 / 证据校验 / 丢弃计数**不可能**按实现分叉。
+struct DocTransport {
+    transport: Box<dyn crate::agent::llm::LlmTransport>,
+    prompts: crate::extract::doc_ingest::Prompts,
+    /// 进指纹的 `model` 项：内置是模型名，ACP 是 [`crate::extract::doc_acp::model_id`]。
+    model: String,
+    /// 内置通道的输出上限（ACP 没有这个参数，恒 0，屏幕上也如实说「由对端决定」）。
+    max_tokens: u32,
+    /// ACP 侧的身份 / 契约（内置通道为 `None` —— 屏幕那几行也不打印，R1）。
+    acp: Option<AcpMeta>,
+}
+
+/// ⭐ REQ-147 · ACP 通道的元信息（屏幕报告 + 「不产出」闸的判据）。
+struct AcpMeta {
+    /// `--agent-command` 原样的那一行（报告用；**不是**握手身份）。
+    command: String,
+    /// 握手报的 agent 名。
+    agent: String,
+    /// 握手报的版本（⚠️ 驱动二进制的版本，不是模型版本）。
+    version: String,
+    model_note: Option<String>,
+    skill: PathBuf,
+    skill_sha: String,
+    timeout: std::time::Duration,
+    /// 预热发过没有（与 transport 共享同一面旗子）。
+    warmup: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// ⭐ REQ-147 · **唯一**一处决定「这次用哪个抽取实现」。
+///
+/// | 输入 | 造出来的东西 |
+/// | --- | --- |
+/// | 不给 `--agent` | 内置 LLM（`LlmSettings::from_env` + `Prompts::standard()`）—— **与 REQ-116 一字不差** |
+/// | `--agent acp` | ACP 子进程（握手过的）+ skill 全文当 system 消息 |
+///
+/// ⛔ **没有回落分支**：`--agent acp` 拉不起来 / 握手不合格 ⇒ 直接报错，
+/// 绝不悄悄换成内置 LLM（那正是 R3 点名禁止的静默降级）。
+fn build_doc_transport(
+    agent: Option<&str>,
+    agent_command: Option<&str>,
+    agent_skill: Option<&std::path::Path>,
+    agent_timeout_secs: Option<u64>,
+) -> anyhow::Result<DocTransport> {
+    use crate::extract::doc_acp as da;
+    use crate::extract::doc_ingest as di;
+
+    let name = match agent {
+        // ── 默认：内置 LLM（REQ-116 原路）──
+        None => {
+            // 三件套的校验**复用 REQ-109 的 `LlmSettings::from_env`**（不抄第二份判据）：
+            // 它缺哪个变量就点名哪个，且绝不回显凭据。
+            let settings = crate::extract::ai_semantic::LlmSettings::from_env()?;
+            let transport = settings.transport()?;
+            let model = settings.config.model.clone();
+            // 输出上限：本通道的默认值比 REQ-109 的单条判定大得多（理由见
+            // `doc_ingest::DEFAULT_MAX_TOKENS`）。运维显式设了就以它为准。
+            let max_tokens_set = std::env::var(crate::agent::llm::MAX_TOKENS_ENV)
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let max_tokens = di::resolve_max_tokens(settings.config.max_tokens, max_tokens_set);
+            return Ok(DocTransport {
+                transport,
+                prompts: di::Prompts::standard(),
+                model,
+                max_tokens,
+                acp: None,
+            });
+        }
+        Some(n) => n.trim(),
+    };
+
+    if name != da::AGENT_ACP {
+        anyhow::bail!(
+            "--agent {name:?} 没有对应实现 —— 已实现的是：{}。\n\
+             \n\
+             · 不给 `--agent` ⇒ **内置 LLM**（REQ-116 的原路，产物逐字节不变）；\n\
+             · 给 `--agent acp` ⇒ 把每一块外包给一个 ACP 子进程。\n\
+             ⛔ 不静默回落到内置 LLM：那会让「这份 JSONL 是谁抽的」变成一句\
+             没人能核的话，而屏幕上看起来一切正常。",
+            da::AGENT_ACP
+        );
+    }
+
+    // ── ACP ──
+    //
+    // 三个参数**在拉子进程之前**判完（最便宜的失败先报，不白起一个进程）。
+    let command_line = agent_command
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--agent acp 必须同时给 --agent-command（例如 \"pi-acp\"）。\n\
+                 ⛔ 没有默认值：可执行文件装在哪是**部署事实**，写死在代码里等于\
+                 「换个环境就跑不起来，而报错会指向代码而不是环境」。"
+            )
+        })?;
+    let skill_path = agent_skill.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--agent acp 必须同时给 --agent-skill（抽取契约的路径，例如 \
+             Deploy/skills/ontok-extract/SKILL.md）。\n\
+             ⛔ 不写死：契约是**可替换的文档**（R4），改它不该改代码；\
+             而且它的 sha256 要进指纹缓存 —— 写死就没有「换契约 ⇒ 缓存失效」这回事了。"
+        )
+    })?;
+    let skill = da::load_skill(skill_path)?;
+    let skill_sha = crate::extract::sample::sha256_hex(skill.as_bytes());
+    let timeout = da::resolve_timeout(agent_timeout_secs)?;
+    let (program, args) = da::resolve_command(command_line)?;
+
+    let cfg = crate::agent::acp::AcpConfig {
+        program: program.clone(),
+        args: args.clone(),
+        // cwd 沿用 `AcpConfig::default()` 的口径（当前工作目录）——
+        // 会话建在哪要看得见、说得出，而它不是 agent 身份的一部分。
+        cwd: da::session_cwd()?,
+        timeout,
+    };
+    let session = da::connect(cfg)?;
+    let model = da::model_id(&program, &args, &session.agent, &session.version);
+
+    eprintln!(
+        "· 抽取实现：acp（{command_line}）—— 握手身份 {} v{}",
+        session.agent, session.version
+    );
+
+    Ok(DocTransport {
+        transport: Box::new(session.transport),
+        // ⭐ skill 全文当 system 消息 ⇒ 它的 sha256 就是指纹里的 `prompt_sha`
+        //   ⇒ **改契约 = 缓存整体失效**（不会回放旧契约下的回答）。
+        prompts: di::Prompts::from_system(da::system_prompt(&skill)),
+        model,
+        // ACP 侧没有 `max_tokens` 这个参数（输出上限由对端决定），如实记 0。
+        max_tokens: 0,
+        acp: Some(AcpMeta {
+            command: command_line.to_string(),
+            agent: session.agent,
+            version: session.version,
+            model_note: session.model_note,
+            skill: skill_path.to_path_buf(),
+            skill_sha,
+            timeout,
+            warmup: session.warmup,
+        }),
+    })
+}
+
 /// REQ-116 · `ontok doc ingest` 的装配点（唯一一个调模型的 `doc` 子命令）。
+///
+/// ⭐ REQ-147：本函数多了一个**岔口**（`--agent acp`），但默认那一支**一行没改** ——
+/// 不给 `--agent` 时走的还是 REQ-116 的原路（三件套 / `Prompts::standard()` /
+/// `max_tokens` 口径全部不变），所以产物与基线**逐字节相同**（R1 的判据是 sha256 对拍）。
 async fn doc_ingest_cmd(
     input: PathBuf,
     out: PathBuf,
@@ -2048,6 +2275,11 @@ async fn doc_ingest_cmd(
     limit_chunks: Option<usize>,
     cache: Option<PathBuf>,
     chunks_only: bool,
+    agent: Option<String>,
+    agent_command: Option<String>,
+    agent_skill: Option<PathBuf>,
+    agent_timeout_secs: Option<u64>,
+    strict_deterministic: bool,
 ) -> anyhow::Result<()> {
     use crate::extract::doc_ingest as di;
 
@@ -2068,25 +2300,26 @@ async fn doc_ingest_cmd(
         return Ok(());
     }
 
-    // ③ 预算 + LLM 三件套（**在干活之前**判完）。
+    // ③ 预算 + **抽取实现**（**在干活之前**判完）。
     //
     // 三件套的校验**复用 REQ-109 的 `LlmSettings::from_env`**（不抄第二份判据）：
     // 它缺哪个变量就点名哪个，且绝不回显凭据。
+    //
+    // ⭐ REQ-147：这里多了一个**岔口**，但默认那一条**一行没改** ——
+    // 不给 `--agent` 时走的还是 REQ-116 的原路（三件套 / `Prompts::standard()` /
+    // `--max-tokens` 口径全部不变），所以产物逐字节相同（R1）。
     let budget = di::require_budget(budget_tokens)?;
     if budget_tokens.is_none() {
         eprintln!(
             "· 未给 --budget-tokens，用默认上限 {budget}（超过即停，且不产出断言文件）"
         );
     }
-    let settings = crate::extract::ai_semantic::LlmSettings::from_env()?;
-    let mut transport = settings.transport()?;
-    let model = settings.config.model.clone();
-    // 输出上限：本通道的默认值比 REQ-109 的单条判定大得多（理由见
-    // `doc_ingest::DEFAULT_MAX_TOKENS`）。运维显式设了 ONTOK_LLM_MAX_TOKENS 就以它为准。
-    let max_tokens_set = std::env::var(crate::agent::llm::MAX_TOKENS_ENV)
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    let max_tokens = di::resolve_max_tokens(settings.config.max_tokens, max_tokens_set);
+    let DocTransport { mut transport, prompts, model, max_tokens, acp } = build_doc_transport(
+        agent.as_deref(),
+        agent_command.as_deref(),
+        agent_skill.as_deref(),
+        agent_timeout_secs,
+    )?;
 
     // ④ 指纹缓存：**本地 JSON 文件**（⛔ 不是 `ai_cache` 表 —— 本命令不写库）。
     let cache_path = cache.unwrap_or_else(|| {
@@ -2109,7 +2342,6 @@ async fn doc_ingest_cmd(
         Some(n) if n < all_chunks.len() => all_chunks[..n].to_vec(),
         _ => all_chunks.clone(),
     };
-    let prompts = di::Prompts::standard();
     let (assertions, stats) = di::ingest_all(
         transport.as_mut(),
         &mut mem_cache,
@@ -2151,6 +2383,106 @@ async fn doc_ingest_cmd(
             stats.tokens_spent,
             budget,
             stop_where,
+            cache_path.display()
+        );
+    }
+
+    // ⑦.4 ⭐ REQ-147 · R-2/A · **确定性提示**：本轮只要有块失败，就**必须说出来**。
+    //
+    // # 为什么这句话必须印出来（不是提醒，是判据）
+    //
+    // 「同输入两次跑 ⇒ 逐字节相同」只在**每一块都有回答**时成立：
+    // 失败块**不进缓存**（`doc_ingest` 的既有纪律：传输失败要能重试，不能把一次
+    // 瞬时故障变成永久结论 —— 这正是 R-2 明确否掉的 B 方案），
+    // 于是重跑会**重新调用**那几块，而模型的第二次回答不一定与第一次相同 ⇒ 产物会变。
+    //
+    // 换言之：没有这句话，用户会以为「有缓存 ⇒ 可重放」，而他手上那份**恰好不可重放**。
+    // 实测（REQ-147，16 篇 / 95 块）：首轮 2 块失败 ⇒ 第二次重调那 2 块，
+    // 断言 2349 → 2352、sha256 变了。
+    //
+    // ⚠️ **两条路都印**：内置通道同样有这个问题（历史那次 16 篇运行 `failed_calls=5`，
+    //    意味着那份产物本来也不可重放）。只在 ACP 上印等于假装内置没这个毛病。
+    if stats.failed_calls > 0 {
+        eprintln!(
+            "⚠ 本轮 {} 块失败（共 {} 块）：重跑会**重调这 {} 块** ⇒ 产物可能变化",
+            stats.failed_calls,
+            chunks.len(),
+            stats.failed_calls
+        );
+        eprintln!(
+            "  （失败块**不进缓存**：一次瞬时故障不该被当成永久结论。\
+             要「要么可重放、要么不出产物」，加 --strict-deterministic。）"
+        );
+    }
+
+    // ⑦.45 ⭐ REQ-147 · **回答不可用的比例必须说出来**（实测踩过）。
+    //
+    // `rejected_parse` 是「这一块的回答没变成断言」的合计：对端吐的不是 JSON /
+    // 正文被截断 / 传输失败 / 不报用量 —— 全都落在这里。它**不进** `failed_calls`，
+    // 所以既不触发 ⑦.4 的提示、也不触发 `--strict-deterministic`（那些块的回答
+    // **进了缓存**，重跑逐字节相同，确定性没问题）。
+    //
+    // 但**质量**上它必须可见：REQ-147 实测同一条命令两轮之间能是 2/95 与 29/95 ——
+    // 29 块回答作废而屏幕上一切正常，是最容易被误读成「这一轮抽得少」的形态。
+    if stats.rejected_parse > 0 {
+        let pct = stats.rejected_parse as f64 / (chunks.len().max(1) as f64) * 100.0;
+        eprintln!(
+            "⚠ 本轮 {} 块**回答不可用**（共 {} 块，{:.0}%）：对端吐的不是 JSON / 被截断 / 传输失败 / 不报用量。\
+             这些块的断言**全部丢失**",
+            stats.rejected_parse,
+            chunks.len(),
+            pct
+        );
+        eprintln!(
+            "  （它们的回答**已进缓存** ⇒ 重跑不会变、也不会重试。\
+             要重试请删掉对应缓存条目或换 --cache；把这一类算成失败请用 --strict-deterministic 之外的闸。）"
+        );
+    }
+
+    // ⑦.5 ⭐ REQ-147 · **ACP 通道的出产物闸**（R3）。
+    //
+    // 内置路径没有这道闸，因为它的失败面全在预算上；ACP 多了一整类**传输级**失败
+    // （连不上 / 超时 / 对端不报用量 / 答的是空抽取），那些不体现在 token 上。
+    // 不设这道闸，会得到一份 0 字节的 `assertions.jsonl` + exit 0 ——
+    // 与「这份文档真的没有概念」长得一模一样。
+    //
+    // ⚠️ 放在**写产物之前**、**写缓存之后**：已经花掉的钱对应的回答必须留在盘上
+    //    （放宽条件重跑不重复计费），而断言文件一个字节都不写。
+    if acp.is_some() {
+        crate::extract::doc_acp::require_usable_output(&stats, chunks.len())?;
+    }
+
+    // ⑦.6 ⭐ REQ-147 · R-2/C · `--strict-deterministic`：**宁可不出产物，也不出一份
+    //     不可重放的产物**。
+    //
+    // 判据只有一条：`failed_calls > 0` ⇒ exit≠0 且一个产物文件都不写。
+    // 于是 AC-003（同输入两次跑逐字节相同 + 第二次 0 次调用）在**任何输入**下都成立 ——
+    // 因为「有失败块」这一种唯一的反例被变成了「没有产物」。
+    //
+    // 为什么是「拒绝」而不是「失败块进缓存」：后者会把一次瞬时故障（超时、对端抽风）
+    // 变成**永久结论** —— 重跑永远拿到那个 Err，而人以为「这份文档就是这样」。
+    if strict_deterministic && stats.failed_calls > 0 {
+        anyhow::bail!(
+            "--strict-deterministic：本轮有 {} 块失败（共 {} 块）—— **不产出任何断言文件**。\n\
+             \n\
+             为什么拒：失败块不进缓存（一次瞬时故障不该变成永久结论），\
+             所以重跑会重调它们、产物会变 —— 一份**不可重放**的 JSONL 违背 AC-003 的\
+             「同输入两次跑逐字节相同」。本开关把这种情形直接变成失败，\n\
+             于是「有产物 ⇒ 一定可重放」成为**无条件**成立的判据。\n\
+             \n\
+             三种出路：① 重跑（失败的块会重试，多半就过了）；\
+             ② 去掉 --strict-deterministic（接受「这一轮有块没跑到」的产物）；\
+             ③ 换更稳的对端 / 调大 --agent-timeout-secs。\n\
+             \n\
+             丢弃明细：证据对不上 {} · 模态 {} · 谓词 {} · 字段空 {} · 解析 {}。\n\
+             缓存已落盘（{}）：重跑时**成功的那些块不会重复计费**。",
+            stats.failed_calls,
+            chunks.len(),
+            stats.rejected_no_evidence,
+            stats.rejected_modality,
+            stats.rejected_predicate,
+            stats.rejected_empty,
+            stats.rejected_parse,
             cache_path.display()
         );
     }
@@ -2227,13 +2559,44 @@ async fn doc_ingest_cmd(
     for s in stats.rejection_samples.iter().take(3) {
         eprintln!("                {s}");
     }
+    // ⭐ REQ-147 · ACP 通道的**身份 / 契约 / quote 校验**（内置路径不打印这几行，
+    // 所以不给 `--agent` 时屏幕输出也与 R1 之前逐字节相同）。
+    if let Some(a) = &acp {
+        eprintln!("  抽取实现    : acp（{}）", a.command);
+        eprintln!(
+            "  agent 身份  : {} v{}（**握手报的**，不是命令行里写的那个字符串）",
+            a.agent, a.version
+        );
+        eprintln!(
+            "  契约(skill) : {}（sha256 {}…）",
+            a.skill.display(),
+            &a.skill_sha[..12.min(a.skill_sha.len())]
+        );
+        if let Some(note) = &a.model_note {
+            eprintln!("  会话配置    : {note}");
+        }
+        eprintln!(
+            "  预热        : {} · 单轮超时 {}s（会话首轮的对端前言由预热消耗掉）",
+            if a.warmup.load(std::sync::atomic::Ordering::SeqCst) {
+                "已发 1 次"
+            } else {
+                "未发（本轮 0 次调用）"
+            },
+            a.timeout.as_secs()
+        );
+        eprintln!("  quote 校验  : {}", crate::extract::doc_acp::quote_pass_line(&stats));
+    }
     eprintln!(
         "  缓存        : 命中 {} / {} 块（实际调用 {} 次 · 强制失败 {} 次）",
         stats.cache_hits, chunks.len(), stats.calls, stats.failed_calls
     );
     eprintln!(
-        "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {max_tokens}",
-        stats.tokens_spent, budget, stats.tokens_replayed
+        "  token       : 本轮 {} / 上限 {}（回放历史 {}）· 输出上限 {}",
+        stats.tokens_spent,
+        budget,
+        stats.tokens_replayed,
+        // ACP 没有 `max_tokens` 这个参数 —— 报一个数字会让人以为是我们设的。
+        if acp.is_some() { "由对端决定".to_string() } else { max_tokens.to_string() }
     );
     eprintln!("  概念（去重）: {} 个（⛔ 不合并别名 —— 实体消解留到对齐轮）", stats.distinct_concepts());
     eprintln!(
