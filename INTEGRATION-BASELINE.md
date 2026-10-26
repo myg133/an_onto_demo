@@ -1,4 +1,4 @@
-# 接入基线（**v0.2.5** · 2026-10-26）
+# 接入基线（**v0.2.6** · 2026-10-27）
 
 > 给接入方（Axon / 数字员工）与联调同学：**这套是当前冻结的接入基线**。
 > 上一版 `v0.1.8`（`get` 只有 4 个键）已被 `v0.2.0` 取代。
@@ -9,9 +9,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| **代码 tag** | `v0.2.5`（develop `22ab671`） |
-| **部署 tag** | `deploy-uat-v0.2.5` |
-| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.5`<br>digest `sha256:73ed3e14cd3aff8036cc3ed990ecf06e33b9f6c963a4d289fc953f1a8752647f` |
+| **代码 tag** | `v0.2.6`（develop `47c694f`） |
+| **部署 tag** | `deploy-uat-v0.2.6` |
+| **镜像** | `aigccontainer.azurecr.cn/an_onto/ontok:0.2.6`<br>digest `sha256:12b6a8bcec5c7eaba6eeba0072da24f38c94016b3bb398ba781515e56355d22a` |
 | **本体** | `cloud-resource` **v3**（已冻结）· 30 类 / 34 关系 / 752 属性 |
 | **TTL** | 209,429 B · sha256 `79741a7f…`（**契约升级不影响本体输出**） |
 | **access mapping** | `am-tencent.json` · **`contract_version: 2`** · 14 entity / 441 属性<br>sha256 `80fce221d5f803487983cb3afe2f9d2d…` · 已签 `michael@2026-10-26` |
@@ -22,7 +22,21 @@
 
 ---
 
-## 二 · v0.2.5 · Studio UI 定稿
+## 二 · v0.2.6 · 关系语义透出（**接入方可以读到"边是什么意思"了**）
+
+| 位置 | 变化 |
+| --- | --- |
+| `GET /api/catalog` 的 relation 项 | 新增 **`semantic`**（英文 key）+ **`semantic_label`**（中文，未知动词 ⇒ `null`） |
+| `GET /api/describe` 的 relations | 同上 |
+| 客户视图 TTL（`/api/ontology.ttl`） | 关系三元组新增 **`skos:altLabel "归属于"@zh`** —— 语义终于**机器可读**（之前只在 `rdfs:comment` 里） |
+| Studio | 边标签优先显示中文动词；未知动词退回英文 key（⛔ 不空白、⛔ 不编） |
+
+**线上实测**：34/34 条关系都有 `semantic` + 中文标签，标签含 ASCII 字母 = **0**。
+标签分布：`归属于 16 · 关联到 4 · 绑定到 3 · 挂载于 2 · 通知到 1 · 适用于 1 · 指向 1 · 使用 1 · 包含 1 · 关联 1 · 计费到 1 · 基于 1 · 部署于 1`。
+
+> ⚠️ `使用` / `包含` / `关联` 这 3 个是**泛词**，REQ-157 会清掉（届时标签分布会再变）。
+
+## 三 · v0.2.5 · Studio UI 定稿
 
 | 修了什么 | 原因 |
 | --- | --- |
@@ -36,7 +50,7 @@
 > 请在 CF 里把该 zone 的 **Browser Cache TTL 设为 "Respect Existing Headers"**（或给 `/studio/*` 加一条 Cache Rule）。
 > 内网入口（`an-onto.local.anspire.cn`）的头是**正确**的，可用于判断"是不是 CF 干的"。
 
-## 三 · v0.2.2 新增：**Studio 页面上线**
+## 四 · v0.2.2 新增：**Studio 页面上线**
 
 ```
 GET /studio                 → 200 text/html（页面壳，**零数据**，免口令）
@@ -50,7 +64,7 @@ GET /studio/studio.js       → 200 application/javascript
 - `/api/*` 的鉴权与响应**逐字节未变**（8 case 对拍）
 - ⚠️ **客户门户（portal）已删除**（REQ-155 P1）：`ontok-builder portal` 已不存在
 
-## 四 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
+## 五 · v0.2.1 相对 v0.2.0 的变化（**只有两处，都是加法**）
 
 | 项 | v0.2.0 | v0.2.1 |
 | --- | --- | --- |
@@ -60,7 +74,7 @@ GET /studio/studio.js       → 200 application/javascript
 **实测**：`04-pending` 3366 B（含 `contract_version: 2`）· `05-rows400` 1074 B。
 `get` 仍是 **10 个键**，一个不多一个不少。
 
-## 五 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
+## 六 · v0.2.0 相对 v0.1.8 的**唯一行为变化**
 
 ```diff
   GET /api/sparql  →  @pending[0].get
@@ -87,7 +101,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 六 · 实测过的部分（接入方可直接依赖）
+## 七 · 实测过的部分（接入方可直接依赖）
 
 | 类 | 结果 |
 | --- | --- |
@@ -102,7 +116,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 七 · **没验过的部分**（接入方注意）
+## 八 · **没验过的部分**（接入方注意）
 
 | 类 | 状态 |
 | --- | --- |
@@ -114,7 +128,7 @@ GET /studio/studio.js       → 200 application/javascript
 
 ---
 
-## 八 · 接入方自查（三条命令）
+## 九 · 接入方自查（三条命令）
 
 ```bash
 # ① 通不通
@@ -132,7 +146,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 九 · 冻结期间的规则
+## 十 · 冻结期间的规则
 
 | 允许 | 不允许 |
 | --- | --- |
@@ -144,7 +158,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 ---
 
-## 十 · 一句话
+## 十一 · 一句话
 
 > **v0.2.0 之后，接入方不需要懂任何云厂商 API**：
 > `get` 告诉你调什么、怎么拼、取哪个字段、怎么签名；
