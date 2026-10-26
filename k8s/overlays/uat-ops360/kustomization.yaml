@@ -18,7 +18,7 @@ resources:
 images:
   - name: ontok
     newName: aigccontainer.azurecr.cn/an_onto/ontok
-    newTag: 0.1.3
+    newTag: 0.1.7
 
 replicas:
   - { name: ontok-query, count: 1 }
@@ -63,13 +63,14 @@ patches:
           - --tokens=/etc/ontok/secrets/query-tokens.json
           - --project=$(ONTOK_PROJECT)
           - --version=$(ONTOK_VERSION)
+          - --access-mapping=/etc/ontok/am/am-tencent.json
           - --ontology-only
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
-        value: "ops360"
+        value: "cloud-resource"
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
-        value: "2"
+        value: "3"
       # 本体模式不读源库：把这个 env 去掉，避免"看起来需要它"
       - op: remove
         path: /spec/template/spec/containers/0/env/3
@@ -101,6 +102,22 @@ patches:
         value:
           - name: postgres17-wal-registry
 
+  # ④' AM 挂载：ConfigMap → /etc/ontok/am（readOnly）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: am
+          configMap:
+            name: ontok-access-mapping
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: am
+          mountPath: /etc/ontok/am
+          readOnly: true
+
   # ⑤ CF Tunnel sidecar（**token 模式**，已启用）
   #    链路：公网 → Cloudflare → cloudflared(本 Pod) → 127.0.0.1:8800
   #    ⚠️ 不过 traefik ⇒ 与内网 ingress 是两条独立入口
@@ -109,3 +126,10 @@ patches:
   #    前提：Secret cloudflared-token（已建）
   - path: sidecar-patch.yaml
     target: { kind: Deployment, name: ontok-query }
+
+# AM（access mapping）：14 个类的取数契约。**不含凭据**（只有环境变量名）。
+# 改它之后要重新 apply；`query serve --access-mapping` 会 bind 到本体，class 不在本体里就拒绝启动。
+configMapGenerator:
+  - name: ontok-access-mapping
+    files:
+      - am-tencent.json
