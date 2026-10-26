@@ -16,7 +16,12 @@
 //! | schema / R2RML 映射 | 必须有 | **`None`**（不做对账，不来自动造 schema） |
 //! | `catalog` / `describe` | 只列映射里可查的类/关系 | 直接读快照（类/关系**全列**，R3） |
 //! | `/api/ontology.ttl` | 同 CLI 导出 | 同 CLI 导出（客户视图与无 `--schema` 的导出逐字节相同） |
-//! | `sparql_query` / `sample` | 真查 | **503 `NO_DATA_SOURCE`**（R4；⛔ 不是 200 空结果、⛔ 不是 500） |
+//! | `sparql_query` / `sample` | 真查 | **需要库的查询** ⇒ 503 `NO_DATA_SOURCE`（R4；⛔ 不是 200 空结果、⛔ 不是 500）；**纯 api 类**（加载了 `--access-mapping`）⇒ 与普通模式同一份 `@pending`（jsonld 200 / rows 400 `NOT_DB_SOURCE`） |
+//!
+//! ⭐ REQ-151 · 本体模式的「恒 503」被收窄成「**需要库**才 503」：只碰 api 源的查询
+//! 本来就不需要库，它要的是「你去哪取」（`@pending` + `get`）。混合查询（库类 + api 类）
+//! 仍 503 —— 它确实需要库。判据与渲染走**同一条**路径（`source_gate` + `PendingAnswer`），
+//! ⛔ 没有第二份 `@pending` 渲染。
 //!
 //! 分叉只有两处：**数据源有没有**（[`run_sparql`] 的第一段）与
 //! **目录的过滤**（[`catalog::build_items`] 的 `mapping: Option<…>`）。
@@ -136,7 +141,7 @@ impl Protocol {
 /// | 模式 | 源库 | schema / R2RML 对账 | catalog / describe | SPARQL |
 /// | --- | --- | --- | --- | --- |
 /// | [`ServiceMode::Query`] | ✅ 必须连 | ✅ 必须 | 只列**可查**的类/关系 | 真查 |
-/// | [`ServiceMode::OntologyOnly`] | ⛔ **一处都不连** | ⛔ 不做 | 直接读快照（关系照列） | 恒 **503** `NO_DATA_SOURCE` |
+/// | [`ServiceMode::OntologyOnly`] | ⛔ **一处都不连** | ⛔ 不做 | 直接读快照（关系照列） | 需要库 ⇒ **503** `NO_DATA_SOURCE`；纯 api 类（有映射）⇒ `@pending`（REQ-151） |
 ///
 /// 类型上是**一个枚举**而不是两个 `bool`：「既接库又不接库」写不出来。
 /// 两个模式共用的部分（鉴权 / 限额 / 审计 / 错误契约 / TTL / 目录构建）是同一段代码，
@@ -171,7 +176,8 @@ impl ServiceMode {
         match self {
             ServiceMode::Query => None,
             ServiceMode::OntologyOnly => Some(
-                "· 模式：mode=ontology-only（不接业务库）· 无数据源 · SPARQL/取样恒 503 NO_DATA_SOURCE\n",
+                "· 模式：mode=ontology-only（不接业务库）· 无数据源 · SPARQL 需要库 ⇒ 503 NO_DATA_SOURCE；\
+                 纯 api 类（有 --access-mapping）⇒ @pending 取数指引 · 取样恒 503\n",
             ),
         }
     }
@@ -722,9 +728,20 @@ impl QueryService {
         }
     }
 
-    /// 本模式有没有数据源（横幅与 `run_sparql` 的唯一判据）。
-    pub fn has_source(&self) -> bool {
-        !self.mode.is_ontology_only() && self.source.is_some()
+    /// ⭐ REQ-151 · **业务查询唯一**能拿到源库连接池的入口。
+    ///
+    /// 为什么要有这个函数（而不是各处直接 `svc.source.as_ref()`）：REQ-136 的
+    /// 「本体模式绝不碰源库」原来是靠「⓪ 步早返回」这个**顺序**保证的。REQ-151 把闸门
+    /// 挪到源判定之后，顺序不再是保证 —— 于是把判据收进这里：**模式是唯一开关**，
+    /// 本体模式恒 `None`，哪怕 `source` 字段里被误塞了一个池也拿不出来。
+    ///
+    /// 类型上仍然返回 `Option`：调用方拿到 `None` 只能走 503 / pending，
+    /// ⛔ 没有「先 unwrap 再说」的位置。
+    pub fn source_pool(&self) -> Option<&PgPool> {
+        if self.mode.is_ontology_only() {
+            return None;
+        }
+        self.source.as_ref()
     }
 
     /// 查 join 证据：**涉及的表之间**的**全部**映射边（范围见模块头，⛔ 不是「实走边」）。
@@ -1013,12 +1030,17 @@ impl PendingAnswer {
 /// 一条 SPARQL 查询（**唯一**入口：REST `POST /api/sparql` 与 MCP `sparql_query`）。
 ///
 /// 顺序是刻意的（最便宜的失败先报，且**每个失败都留一条审计**）：
-/// ⓪ 有没有数据源 → ① 租户比对 → ② `max_rows` 收口 → ③ 并发名额 → ④ 规划 + 注入 + 执行 → ⑤ 回执。
+/// ⓪ 源判定 + 有没有数据源 → ① 租户比对 → ② `max_rows` 收口 → ③ 并发名额 →
+/// ④ 规划 + 注入 + 执行 → ⑤ 回执。
 ///
-/// ⭐ REQ-136 · 第 ⓪ 步是本体服务模式的**唯一**出口：在**碰任何身份 / 限额 / 连接之前**
-/// 就返回 503 `NO_DATA_SOURCE`。放在最前面是刻意的 —— 它让 R2（「该模式不许任何请求
-/// 尝试连源库」）成为一个**结构事实**：`svc.source` 是 `Option`，本函数在 `None` 分支里
-/// 直接 `return`，后面那句 `expect` 根本走不到，也没有别的路能拿到连接池。
+/// ⭐ REQ-136 · 第 ⓪ 步是本体服务模式对**需要库**的查询的出口（503 `NO_DATA_SOURCE`）；
+/// 它仍在**碰任何身份 / 限额 / 连接之前**返回，所以「该模式不许任何请求尝试连源库」是
+/// 一个**结构事实**：`svc.source` 是 `Option`，而唯一能拿到池的入口
+/// [`QueryService::source_pool`] 在模式上恒 `None`。
+///
+/// ⭐ REQ-151 · 但 ⓪ 不再「恒 503」：它先做源判定（纯函数，只读 AST + 映射），只拦
+/// **需要库**的查询。纯 api 类的查询继续往下走，在 ③.5 用**同一份判定**产出 `@pending`
+/// —— 与普通模式同一条渲染路径（R5）。
 ///
 /// ⭐ REQ-140 · `format` **不在这里**判：它只影响渲染，[`run_sparql_ex`] 把
 /// 「行回执 + 列的 RDF 身份」一起交出去，由 `http` 层按格式二选一序列化。
@@ -1080,17 +1102,40 @@ async fn run_sparql_event(
 ) -> Result<SparqlAnswer, ApiError> {
     let started = Instant::now();
 
-    // ⓪ ⭐ REQ-136 · 本体服务模式：恒 503（不是 200 空结果、不是 500）。
-    // 审计照样留一行（「谁在这个部署上试过查数据」是一个可数的事实）。
-    if svc.mode.is_ontology_only() {
-        let e = ApiError::no_data_source();
-        audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
-        return Err(e);
-    }
+    // ⓪ ⭐ REQ-151 · 本体服务模式的闸门（位置：**在源判定之后**，仍早于租户/限额/连接）。
+    //
+    // ⭐ REQ-136 的原始意图是「该模式不许任何请求碰源库」，把它落成「恒 503」是**过度拦截**：
+    // 只碰 api 源的查询本来就不需要库，它要的是「你去哪取」（`@pending` + `get`）。
+    // 于是这里先做**源判定**（纯函数：只读 AST + 映射，⛔ 不碰连接、不解析 SQL），只有
+    // **需要库**的查询（`DbOnly` / `CrossSource` / 混合 `Api{needs_db:true}` / 没有映射 /
+    // 解析失败）才保留原来的 503。判定结果留给 ③.5 —— 同一条查询**只解析一次**。
+    //
+    // 闸门仍放在 ① 之前：需要库的查询因此与 `9dfb8e7` 的响应**逐字节相同**（R2），
+    // 不会先撞上 tenant / max_rows / 并发这些更晚出现的答案。
+    let early_verdict: Option<Option<source_gate::SourceCheck>> = if svc.mode.is_ontology_only() {
+        let check = svc
+            .access
+            .as_ref()
+            .and_then(|access| source_check(svc, access, &req.query));
+        // 只有「纯 api」放行；`needs_db` 为 true 或判不出来 ⇒ 这条查询要库。
+        let pure_api = check
+            .as_ref()
+            .is_some_and(|v| matches!(v, source_gate::SourceCheck::Api { needs_db: false, .. }));
+        if !pure_api {
+            let e = ApiError::no_data_source();
+            // 审计照样留一行（「谁在这个部署上试过查数据」是一个可数的事实）。
+            audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
+            return Err(e);
+        }
+        Some(check)
+    } else {
+        None
+    };
 
     // ① 租户只能来自 token：请求体里的 tenant 只**用来核对**。
     //
-    // ⭐ REQ-137 · 走到这里租户一定 `Some`：本体模式在 ⓪ 就 503 了，而普通模式的 token
+    // ⭐ REQ-137 · 走到这里租户一定 `Some`：本体模式里只有**纯 api** 查询能下来，
+    // 而它们的 token 本身不带 tenant（`parse_for_mode` 强制缺省）；普通模式的 token
     // 解析阶段强制要求 tenant（缺失/空串都拒绝）。`unwrap_or_default()` 只是让类型闭合，
     // ⛔ 它不是「给本体模式编一个空租户」—— 那条路根本到不了这里。
     if let Some(claim) = req.tenant.as_deref() {
@@ -1142,69 +1187,82 @@ async fn run_sparql_event(
     // 位置在「拿名额之后、规划之前」：规划器会真的去解析类名 / 建 SQL，而一条只碰 api 源
     // 的查询**一行 SQL 都不该执行**（库里的那份副本不是事实源）。判据只读 AST + 映射
     // （⛔ 不做字符串匹配），见 `source_gate::AccessMapping::check`。
-    if let Some(access) = svc.access.as_ref() {
-        if let Some(check) = source_check(svc, access, &req.query) {
-            match check {
-                source_gate::SourceCheck::DbOnly => {}
-                source_gate::SourceCheck::CrossSource { predicate, from, to } => {
-                    let e = ApiError::cross_source_unsupported(&predicate, &from, &to);
-                    svc.metrics.note_denial_code(e.code);
-                    audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
-                    drop(slot);
-                    return Err(e);
-                }
-                source_gate::SourceCheck::Api { pending } => {
-                    // ⚠️ R-2：**这里不写审计**。审计的 `code` 必须是客户端实际收到的那个，
-                    // 而「客户端收到什么」只有调用方知道（rows ⇒ 400 `NOT_DB_SOURCE`，
-                    // jsonld ⇒ 200 `OK`）—— 于是 `run_sparql` / `run_sparql_ex` 各自记一行
-                    // （都带 `pending=true`）。一次调用仍然只有**一行**审计。
-                    let mut classes: Vec<String> =
-                        pending.iter().map(|p| p.class_local.clone()).collect();
-                    classes.sort();
-                    classes.dedup();
-                    let receipt = SparqlReceipt {
-                        // 一行 SQL 都没执行 ⇒ 没有列、没有行、没有 SQL 可回声。
-                        columns: Vec::new(),
-                        rows: Vec::new(),
-                        row_count: 0,
-                        truncated: false,
-                        sql_echo: String::new(),
-                        tenant_applied: Vec::new(),
-                        tables: Vec::new(),
-                        public_dimensions: Vec::new(),
-                        warnings,
-                        coverage: Vec::new(),
-                        join_states: Vec::new(),
-                        join_states_scope: JOIN_STATES_SCOPE_ALL_EDGES,
-                        join_states_scope_note: JOIN_STATES_SCOPE_NOTE,
-                        limits: LimitInfo {
-                            max_rows: effective,
-                            token_max_rows: caller.token.max_rows,
-                            timeout_ms: svc.timeout_ms,
-                        },
-                        // 契约规则 1：有 `@pending` ⇒ 必为 `false`；与 `unresolved_classes`
-                        // 同源（同一个 `pending` 切片算出来的），满足 AC-007 的不变式。
-                        complete: Some(false),
-                        unresolved_classes: Some(classes),
-                    };
-                    drop(slot);
-                    return Ok(SparqlAnswer::Pending(PendingAnswer {
-                        receipt,
-                        pending,
-                        mapping_version: access.mapping_version(),
-                    }));
-                }
+    //
+    // ⭐ REQ-151 · 本体模式下这一步**已经做过**（⓪ 的闸门），这里直接复用同一个结果：
+    // 一条查询只解析一次，闸门的放行条件与这里的分流条件不可能漂。
+    let access = svc.access.as_ref();
+    let verdict = match early_verdict {
+        // 本体模式：⓪ 已经算过（同一个纯函数的结果）—— 不重复解析。
+        Some(v) => v,
+        None => access.and_then(|access| source_check(svc, access, &req.query)),
+    };
+    if let Some(check) = verdict {
+        match check {
+            source_gate::SourceCheck::DbOnly => {}
+            source_gate::SourceCheck::CrossSource { predicate, from, to } => {
+                let e = ApiError::cross_source_unsupported(&predicate, &from, &to);
+                svc.metrics.note_denial_code(e.code);
+                audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
+                drop(slot);
+                return Err(e);
+            }
+            // ⭐ REQ-151 · 本体模式**只有纯 api** 能到这一支（⓪ 的闸门已把 `needs_db` 拦掉）。
+            // `needs_db` 在普通模式不参与判定 —— REQ-145 的「混合 ⇒ 整体 pending」不变。
+            source_gate::SourceCheck::Api { pending, .. } => {
+                // ⚠️ R-2：**这里不写审计**。审计的 `code` 必须是客户端实际收到的那个，
+                // 而「客户端收到什么」只有调用方知道（rows ⇒ 400 `NOT_DB_SOURCE`，
+                // jsonld ⇒ 200 `OK`）—— 于是 `run_sparql` / `run_sparql_ex` 各自记一行
+                // （都带 `pending=true`）。一次调用仍然只有**一行**审计。
+                let mut classes: Vec<String> =
+                    pending.iter().map(|p| p.class_local.clone()).collect();
+                classes.sort();
+                classes.dedup();
+                let receipt = SparqlReceipt {
+                    // 一行 SQL 都没执行 ⇒ 没有列、没有行、没有 SQL 可回声。
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    row_count: 0,
+                    truncated: false,
+                    sql_echo: String::new(),
+                    tenant_applied: Vec::new(),
+                    tables: Vec::new(),
+                    public_dimensions: Vec::new(),
+                    warnings,
+                    coverage: Vec::new(),
+                    join_states: Vec::new(),
+                    join_states_scope: JOIN_STATES_SCOPE_ALL_EDGES,
+                    join_states_scope_note: JOIN_STATES_SCOPE_NOTE,
+                    limits: LimitInfo {
+                        max_rows: effective,
+                        token_max_rows: caller.token.max_rows,
+                        timeout_ms: svc.timeout_ms,
+                    },
+                    // 契约规则 1：有 `@pending` ⇒ 必为 `false`；与 `unresolved_classes`
+                    // 同源（同一个 `pending` 切片算出来的），满足 AC-007 的不变式。
+                    complete: Some(false),
+                    unresolved_classes: Some(classes),
+                };
+                drop(slot);
+                // `pending` 只可能来自加载了映射的部署 ⇒ `access` 一定在（这里仍不 unwrap：
+                // 缺了也只是 `mapping_version=0`，⛔ 不让一条只读查询 panic 成 500）。
+                let mapping_version = access.map_or(0, |a| a.mapping_version());
+                return Ok(SparqlAnswer::Pending(PendingAnswer {
+                    receipt,
+                    pending,
+                    mapping_version,
+                }));
             }
         }
     }
 
     // ④ 规划 + 注入 + 只读执行（REQ-122 的**同一个** `run_query`）。
     //
-    // ⭐ REQ-136 · 到这里 `mode` 只可能是 Query（上面 ⓪ 已经分流）；
-    // 两个 `Option` 同时为 `None` 的状态**只属于本体模式**，所以这里是「不可能」而不是
-    // 「尽力而为」—— 真发生了也不 panic 成 500，而是按同一个 503 契约回答（⛔ 让调用方
-    // 看到「服务内部错误」并去重试，比说清「本部署没有数据源」更糟）。
-    let (Some(mapping), Some(source)) = (svc.mapping.as_ref(), svc.source.as_ref()) else {
+    // ⭐ REQ-151 · 源库连接池**只能**从 [`QueryService::source_pool`] 拿：它在本体模式恒
+    // `None`（判据是 `mode`，⛔ 不是「调用点记得先看 ⓪」）。于是「本体模式绝不碰源库」
+    // 不依赖闸门的位置 —— 即使将来有人改动了上面的顺序，这里也拿不到池子，只能答 503。
+    // 上面 ⓪ 已经保证纯 api 查询走 pending；两个 `Option` 同时为 `None` 的状态只属于
+    // 本体模式，真发生了也不 panic 成 500，而是按同一个 503 契约回答。
+    let (Some(mapping), Some(source)) = (svc.mapping.as_ref(), svc.source_pool()) else {
         let e = ApiError::no_data_source();
         audit_call(svc, event, caller, Some(&req.query), None, started, e.code, None);
         return Err(e);

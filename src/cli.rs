@@ -1044,14 +1044,33 @@ pub enum QueryCmd {
     /// | `GET /api/catalog` | 只列**可查**的类/关系（schema + R2RML 对账） | **直接读快照**：类/属性/关系**全列**；关系带 `evidence_level`（= `ontok:joinVerified`：`true`/`inherit`/`false`/**`unverified`**），类带 `display_name`；`counts` 里**没有** `excluded_relations` |
     /// | `GET /api/describe` | 类/属性详情（含租户口径） | 同上，另给 `display_name` / `key`；`tenant.mode = not_applicable`（没有数据源） |
     /// | `GET /api/ontology.ttl` | 同 CLI 导出 | **与 `ontok ontology export --project <p> --version <v>`（不带 `--schema`）逐字节相同**；`?view=model` 是同一份无 schema/tenancy 的建模视图 |
-    /// | `POST /api/sparql` | 真查 | **503 `NO_DATA_SOURCE`**（⛔ 不是 500、⛔ 不是 200 空结果；hint 说明「重试无效」） |
-    /// | MCP `sparql_query` / `sample` | 真查 | 同一个 `code` / `hint`（JSON-RPC 信封里 `isError:true`；HTTP 仍是 200 —— 传输没坏，是工具执行失败） |
+    /// | `POST /api/sparql` | 真查 | **需要库的查询 ⇒ 503 `NO_DATA_SOURCE`**（⛔ 不是 500、⛔ 不是 200 空结果；hint 说明「重试无效」）；**纯 api 类**（`--access-mapping` 里声明的类）⇒ 与普通模式**同一份** `@pending` 取数指引（`format=jsonld` 200 / `format=rows` 400 `NOT_DB_SOURCE`） |
+    /// | MCP `sparql_query` / `sample` | 真查 | 同一个 `code` / `hint`（JSON-RPC 信封里 `isError:true`；HTTP 仍是 200 —— 传输没坏，是工具执行失败）；`sample` 在本模式**恒 503**（取样必须真连库） |
     /// | MCP `catalog` / `describe` / `resources/read` | 正常 | 正常（与 REST 同一段代码） |
     ///
     /// ⛔ 该模式**一处都不连业务库**（启动时不连，任何请求也不会连 —— `QueryService::source`
-    /// 是 `None`，SPARQL 在碰它之前就 503）；`--include-inherit` 不生效（不做对账）。
+    /// 是 `None`，唯一取池入口 `QueryService::source_pool` 在本模式恒 `None`）；
+    /// `--include-inherit` 不生效（不做对账）。
+    ///
+    /// ⭐ REQ-151 · SPARQL 不再「恒 503」：**需要库**的查询（库源类 / 混合 / 没有
+    /// `--access-mapping`）仍然 503 `NO_DATA_SOURCE`；**纯 api 类**（映射里声明的类）
+    /// 返回取数指引 —— `format=jsonld` ⇒ 200 + `@graph:[]` + `@pending`（与普通模式同一形状）；
+    /// `format=rows` ⇒ 400 `NOT_DB_SOURCE`（表挂不住「少了一块」）。`sample` 仍 503。
     /// catalog 的类/关系由**同一个**函数从快照取（`query::catalog::build_items`），
     /// 两个模式只在**过滤**处分叉（纪律 H）。
+    ///
+    /// ⚠️ `max_rows=0` 是**参数错误（400 `BAD_REQUEST`）**，与部署模式无关。注意判定顺序：
+    /// ⓪ 模式闸（503）先于 ② 限额校验（400）—— **需要库**的查询在本体模式仍先得到
+    /// 503 `NO_DATA_SOURCE`；**纯 api 类**会通过闸门，然后才因 `max_rows=0` 得到 400。
+    /// 旧版本本体模式**一切查询**都先 503，看不到这个参数错误；这是 REQ-151 把闸门挪到
+    /// 「源判定之后」的有意结果（⛔ 不是 500，也不是 200 空结果）。
+    ///
+    /// ⚠️ 本体模式的 `@pending[].get.filter` 可能是 `{}`：那表示**平台无法替你确定取数标识**
+    /// （本体模式没有 R2RML / 库侧主键，认不出 `filter.ids`）。⛔ **不要直接全量拉取**
+    /// （账单、告警一类接口会烧钱并触发限流）：先用该类的实例标识属性（`GET /api/describe`
+    /// 看属性，如 `:cvm_instance__instance_id`）在**你自己的取数侧**拿到标识，再带
+    /// `get.filter.ids` 重新组织取数；暂时拿不到标识时，至少用 `get.pushdown` 里的字段
+    /// 收窄范围，⛔ 不要无过滤拉全量。
     ///
     /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。⛔ 放 query string / cookie **不生效**。
     /// ⚠️ 限额：`max_rows`（token 级上限，调用方只能往下压）、超时、每 token 并发、
@@ -1085,7 +1104,10 @@ pub enum QueryCmd {
         /// ⭐ **本体服务模式**：不连业务库、不做 schema / R2RML 对账。
         ///
         /// 只要 `--project` / `--version`（已冻结）+ `--tokens`；catalog/describe 直接读快照、
-        /// `/api/ontology.ttl` 与 CLI 导出逐字节相同、SPARQL/取样恒 503 `NO_DATA_SOURCE`。
+        /// `/api/ontology.ttl` 与 CLI 导出逐字节相同、
+        /// **需要库的** SPARQL/取样恒 503 `NO_DATA_SOURCE`。
+        /// ⭐ REQ-151 · 若同时给了 `--access-mapping`，**纯 api 类**的查询返回取数指引
+        /// （jsonld ⇒ 200 + `@pending`；rows ⇒ 400 `NOT_DB_SOURCE`），混合查询仍 503。
         /// ⛔ 与 `--schema` 互斥（同时给 ⇒ 拒绝启动并说明原因）。
         ///
         /// ⭐ REQ-137 · 本模式的 token 表里**不许写 `tenant`**（必须缺省）：这里没有业务库、

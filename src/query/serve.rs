@@ -249,8 +249,10 @@ pub fn banner(
             f.transaction_read_only, f.standard_conforming_strings
         )),
         // ⭐ REQ-136 · 本体模式没有会话可读回 ⇒ 明说「没有数据源」，⛔ 不编一个 on。
+        // ⭐ REQ-151 · 但要与「纯 api 类给 @pending」区分开：需要库的才恒 503。
         None => s.push_str(
-            "· 数据源：无（本体服务模式不连业务库；SPARQL / sample 恒 503 NO_DATA_SOURCE）\n",
+            "· 数据源：无（本体服务模式不连业务库；需要库的 SPARQL / sample 恒 503 NO_DATA_SOURCE；\
+             纯 api 类但加载了 --access-mapping ⇒ 给 @pending 取数指引）\n",
         ),
     }
     s.push_str("· 审计：每次调用一行（token 只记摘要、不记查询原文；stdout 恒写）\n");

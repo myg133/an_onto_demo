@@ -27,7 +27,8 @@
 //! - `token` **≥ 24 字符**（低熵口令在审计摘要面前也守不住，见 [`super::audit`]）；
 //! - `tenant` **普通模式必填**（空租户 = 没有隔离）；
 //! - ⭐ REQ-137 · **本体服务模式（`--ontology-only`）必须不填 `tenant`**；填了（任何值，
-//!   含 `null` / 空串）⇒ **拒绝启动**。那个模式没有业务库、没有租户概念，`SPARQL` 恒 503 ——
+//!   含 `null` / 空串）⇒ **拒绝启动**。那个模式没有业务库、没有租户概念，
+//!   `SPARQL` 恒 503（**需要库的查询**；纯 api 类给 `@pending`，REQ-151）——
 //!   填一个假租户（如全 0 UUID）只会让审计里出现一个**看起来真实**的租户，所以不忽略、
 //!   直接拒绝（见 [`TokenTable::parse_for_mode`]）；
 //! - `max_rows` 默认 200、上限 10000（这是**调用方永远抬不高**的那条线）；
@@ -249,7 +250,8 @@ impl TokenTable {
             if let Some((i, t)) = tokens.iter().enumerate().find(|(_, t)| t.tenant.is_some()) {
                 return Err(format!(
                     "第 {} 个 token（label={:?}）带了 tenant，但这是本体服务模式（--ontology-only）。\n  \
-                     本体模式**没有业务库、没有租户概念**，SPARQL 恒 503 —— 这里的 tenant 不表示任何数据范围。\n  \
+                     本体模式**没有业务库、没有租户概念**，SPARQL 恒 503（需要库的查询；\
+                     纯 api 类走 @pending，REQ-151）—— 这里的 tenant 不表示任何数据范围。\n  \
                      ⛔ 不要填假租户（例如全 0 UUID）：它会让审计日志里出现一个\"看起来真实\"的租户。\n  \
                      请从 token 里删掉 tenant 字段。",
                     i + 1,
