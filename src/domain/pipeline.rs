@@ -97,6 +97,10 @@
 //! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
+//! ⚠️ REQ-155 删除客户门户：REQ-126 当时新增的 I23/I24 两条出口随之移除（-2）；
+//! 本表的实际条数现为 **64（内部 34）**（见 `registry_is_the_declared_baseline`）。
+//! 编号不回填（I23/I24 成为空号），以免改动其后所有出口的 ID。
+//!
 //! ⚠️ **已知边界（⛔ 不许写成「已封堵」）**：needle 式对账抓得住「登记与源码漂移」，
 //! **抓不住**「语义等价改写」。补强在类型层（本模块 §类型层不变量）与源码否定式。
 
@@ -345,19 +349,6 @@ pub enum OutletId {
     /// 之所以仍然登记：页面壳是一条**匿名可达**的外送通道（浏览器导航带不了
     /// `Authorization`），「不登记 = 没人管」正是 REQ-107 收口的那个洞。
     I22,
-    /// ⭐ REQ-126 · 客户门户 · **页面壳**（`GET /`，`portal::page::PORTAL_HTML`）。
-    ///
-    /// 内部轨：客户看到的界面骨架（登录框 + 卡片 / 结果容器），**壳内零数据** ——
-    /// 项目名 / 版本号 / 业务对象名 / 问题标题一个都不在 HTML 里，
-    /// 全由拿到门户口令后的 `/api/questions` 与 `/q/<id>` 提供。
-    I23,
-    /// ⭐ REQ-126 · 客户门户 · **API JSON**（`/api/questions` 与 `/q/<id>` 的回答）。
-    ///
-    /// 内部轨：产物是**业务名的聚合结果**（不是客户视图投影，也不过词汇闸）——
-    /// 隔离由「租户只来自口令 + 只读 + 行数上限 + 预置问题」保证。⛔ 响应里
-    /// 没有 `sql_echo` / 表名 / 列名 / 属性 IRI：这条是**类型层**的
-    /// （`portal::PortalAnswer` 没有那些字段），不是这一行的措辞。
-    I24,
     /// ⭐ REQ-127 · 查询服务 · **整份 OWL TTL 响应**（`GET /api/ontology.ttl` 的两视图）。
     ///
     /// 内部轨（按**通道**登记，与 I19 同一条口径）：能调到它的是 query token（Agent 面），
@@ -444,8 +435,6 @@ impl OutletId {
             OutletId::I20 => "I20",
             OutletId::I21 => "I21",
             OutletId::I22 => "I22",
-            OutletId::I23 => "I23",
-            OutletId::I24 => "I24",
             OutletId::I25 => "I25",
             OutletId::I26 => "I26",
             OutletId::I27 => "I27",
@@ -549,15 +538,6 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         // 为什么是 Internal 而不是 Static：它**不是**被管线渲染的素材，而是一条
         // 匿名可达的 HTTP 外送点 —— 与 R4（审核页壳）同一条口径。
         OutletId::I22 => OutletSpec::of("I22", Track::Internal, Format::Html, Granularity::Whole),
-        // ⭐ REQ-126 · 客户门户：**内部**轨（HTML 壳 / JSON 回答）。
-        //
-        // 为什么不是客户轨：客户轨的产物是 `CustomerView` 的投影（过词汇闸、
-        // 逐节点可分离）；门户的产物是**聚合查询结果**（一个问题一张表），
-        // 它的隔离保证是「租户只来自口令 + 预置问题 + 只读 + 行数上限」，
-        // 与 I13/I14（查询回执）同一条口径。⛔ 门户响应里没有表名/列名/SQL
-        // 是类型层的（`portal::PortalAnswer` 的字段清单）。
-        OutletId::I23 => OutletSpec::of("I23", Track::Internal, Format::Html, Granularity::Whole),
-        OutletId::I24 => OutletSpec::of("I24", Track::Internal, Format::Json, Granularity::Whole),
         // ⭐ REQ-127 · 查询服务的整份 OWL（Turtle）响应：**内部**轨（Agent 面通道）。
         //
         // 内容侧：客户视图字节来自 C6 的管线（同一份 `pipeline::render`，过客户发布闸），
@@ -1199,7 +1179,7 @@ const CUSTOMER: &str = "";
 ///
 /// 分组：客户 17（C1–C7 / H1–H5 / M1–M5）+ 建模 10（D1–D8 / D9 / D10）+ 内部 18 +
 /// 静态 2（Z2,Z3）+ 错误路径 1（Z1）= **48**；REQ-116 再加内部 1 条（I10）⇒ 45；REQ-121 再加内部 2 条（I11/I12）⇒ **47**；
-/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ 52（17/10/22/2/1）；REQ-124 再加 4 条（I18–I21）⇒ 56（17/10/26/2/1）；REQ-125 再加 1 条（I22 工作台页面壳）⇒ 57（17/10/27/2/1）；REQ-126 再加 2 条（I23 门户页面壳 / I24 门户 API）⇒ **59（17/10/29/2/1）**。
+/// REQ-122 加 I13 ⇒ 48；REQ-123 再加 4 条（I14–I17，全部内部轨）⇒ 52（17/10/22/2/1）；REQ-124 再加 4 条（I18–I21）⇒ 56（17/10/26/2/1）；REQ-125 再加 1 条（I22 工作台页面壳）⇒ 57（17/10/27/2/1）；REQ-126 的 2 条（I23/I24）已由 **REQ-155 删除** ⇒ 仍 57（17/10/27/2/1）。
 ///
 /// ⚠️ Z4（`INDEX_HTML` 模板）**不占出口位**（AC §七 A1）：它不是一次「写出」，
 /// 只是被渲染函数读取的静态素材 ⇒ 单列在 [`STATIC_TEMPLATES`]。
@@ -1739,31 +1719,6 @@ pub const OUTLETS: &[Outlet] = &[
          7 个视图只消费 REQ-124 端点 + REQ-123 的三个查询端点（同源）。",
     },
     Outlet {
-        id: "I23",
-        path: "src/portal/http.rs",
-        // ⭐ REQ-126 · 门户页面壳：`GET /` 的唯一写点（静态常量原样写出去）。
-        call_site: "Html(page::PORTAL_HTML)",
-        spec: spec_of(OutletId::I23),
-        enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-126）：客户门户的**页面壳**（`GET /`）。\
-         壳内零数据（无项目名 / 版本 / 业务对象名 / 问题标题），免 token 只是为了\
-         让浏览器导航打得开；问题列表走 `/api/questions`（门户口令）。\
-         ⛔ 没有自由查询入口（没有 /api/sparql），也没有任何写操作。",
-    },
-    Outlet {
-        id: "I24",
-        path: "src/portal/http.rs",
-        // `respond` 是门户**唯一**的 JSON 写点（其它 handler 都调它）。
-        call_site: "Json(body)",
-        spec: spec_of(OutletId::I24),
-        enforcement: Enforcement::InternalOnly,
-        exemption_reason: "内部（REQ-126）：门户的 JSON 响应（问题列表 / 一次问题的回答 / \
-         错误体）共用 `portal::http::respond` 这一个写点。产物是**业务名的聚合结果**，\
-         不是客户视图投影：隔离由「租户只来自口令 + 预置问题 + 只读 + 行数上限」保证\
-         （与 I13/I14 同一条口径）。⛔ 没有 `sql_echo` / 表名 / 列名 / 属性 IRI —— \
-         那是 `portal::PortalAnswer` 的字段清单决定的（类型层，不是这一行的措辞）。",
-    },
-    Outlet {
         id: "I25",
         path: "src/query/http.rs",
         // 唯一的 Turtle 响应构造点（handler 只把缓存字节交给它）。
@@ -1810,7 +1765,7 @@ pub const OUTLETS: &[Outlet] = &[
         spec: spec_of(OutletId::I28),
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部（REQ-135）：`GET /metrics` 的 Prometheus 文本响应。\
-         三个服务（query / console / portal）共用 `metrics::Metrics::http_response` 这一个写点。\
+         两个服务（query / console）共用 `metrics::Metrics::http_response` 这一个写点。\
          正文只有**聚合计数**：标签值是 `&'static str`（service / 路由模式 / 状态码 / 拒绝原因 / view），\
          类型层传不进租户 id、表名、SQL 或查询原文；标签集合固定在 `metrics::METRICS` 一张表里\
          （R4：无维度爆炸）。它按**通道**登记为内部轨：匿名可达（与 `/api/health` 同口径免 token），\
@@ -1917,7 +1872,7 @@ mod tests {
         assert!(!Track::ErrorPath.gated(), "错误路径走 safe_error，比闸更保守");
     }
 
-    /// 登记表的口径必须**恰好**是 57，分组 17/10/27/2/1。
+    /// 登记表的口径必须**恰好**是 64，分组 17/10/34/2/1。
     ///
     /// ⚠️ REQ-107 收口时是 33（13/8/9/2/1）；REQ-110 新增 6 条 TTL 出口
     /// （C6/C7/H4/H5 客户 + D9/D10 建模）⇒ 39（17/10/9/2/1）；
@@ -1928,38 +1883,39 @@ mod tests {
     /// REQ-123 再加 I14–I17（REST / MCP / SSE / 审计，**全部内部轨**）⇒ 52（内部 22）；
     /// ⭐ REQ-124 再加 I18–I21（控制面 JSON / TTL / R2RML / 声明落盘，**全部内部轨**）
     /// ⇒ **56（内部 26）**；REQ-125 再加 I22（工作台页面壳 HTML，**内部轨、零数据**）
-    /// ⇒ 57（内部 27）；REQ-126 再加 I23/I24（客户门户的页面壳与 API，**内部轨**）
-    /// ⇒ **59（内部 29）**；REQ-127 再加 I25（查询服务的整份 OWL TTL 响应，**内部轨**）
-    /// ⇒ **60（内部 30）**；REQ-129 再加 I26（`doc merge` 的合并提案落盘点，**内部轨**）
-    /// ⇒ **61（内部 31）**；REQ-129 的签字命令再加 I27（`doc sign` 的签字产物，**内部轨**）
-    /// ⇒ **62（内部 32）**；REQ-135 再加 I28（三个服务的 `/metrics`，**内部轨**）
-    /// ⇒ **63（内部 33）**；⭐ REQ-144 再加 I29–I31（access mapping 的三条写点：
+    /// ⇒ 57（内部 27）；REQ-126 的 I23/I24（客户门户）已由 **REQ-155 删除** ⇒ 57（内部 27）；
+    /// REQ-127 再加 I25（查询服务的整份 OWL TTL 响应，**内部轨**）
+    /// ⇒ **58（内部 28）**；REQ-129 再加 I26（`doc merge` 的合并提案落盘点，**内部轨**）
+    /// ⇒ **59（内部 29）**；REQ-129 的签字命令再加 I27（`doc sign` 的签字产物，**内部轨**）
+    /// ⇒ **60（内部 30）**；REQ-135 再加 I28（两个服务的 `/metrics`，**内部轨**）
+    /// ⇒ **61（内部 31）**；⭐ REQ-144 再加 I29–I31（access mapping 的三条写点：
     /// `validate` 报告 / `fetch` JSON-LD / `publish` 发布物，**全部内部轨**）
-    /// ⇒ **66（内部 36）**。
+    /// ⇒ **64（内部 34）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            66,
+            64,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
              + 4（REQ-124 的控制面出口）+ 1（REQ-125 的工作台页面壳）\
-             + 2（REQ-126 的客户门户：页面壳 + API）\
              + 1（REQ-127 的查询服务 OWL TTL 响应）\
              + 2（REQ-129 的 doc merge 合并提案 / doc sign 签字产物）\
              + 1（REQ-135 的 /metrics 指标响应）\
-             + 3（REQ-144 的 access validate / fetch / publish）"
+             + 3（REQ-144 的 access validate / fetch / publish）\
+             - 2（REQ-155 删除客户门户：I23/I24）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            36,
+            34,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
-             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 + REQ-126 的 I23/I24 \
-             + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28 + REQ-144 的 I29–I31"
+             + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 \
+             + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28 + REQ-144 的 I29–I31 \
+             （REQ-155 删除了 REQ-126 的 I23/I24）"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");
         assert_eq!(outlet_count(Track::ErrorPath), 1);

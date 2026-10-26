@@ -9,7 +9,7 @@
 //! | `translate-names` | 表名 → 中文名翻译表 | 原 `ontok-translate-names` |
 //! | `gate-preflight` | 门禁输入前置检查 | 原 `ontok-gate-preflight` |
 //! | 其余（`project` / `version` / `import` / `review` / `proposal` / `ontology` / |
-//! `r2rml` / `sparql` / `console` / `portal` / `doc` / `name` / `exclude` / `access`） | 构建流水线 | 原 `ontok` 的构建子命令 |
+//! `r2rml` / `sparql` / `console` / `doc` / `name` / `exclude` / `access`） | 构建流水线 | 原 `ontok` 的构建子命令 |
 //!
 //! # 为什么不保留老命令名（`ontok-propose` …）
 //!
