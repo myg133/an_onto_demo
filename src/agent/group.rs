@@ -441,7 +441,10 @@ pub struct CandidateLink {
     pub to_type: String,
     /// 基数（`1:N` / `N:1`）。
     pub cardinality: String,
-    /// 语义（`has` / `belongs_to` / `references`）。
+    /// 语义 —— ⭐ REQ-157：**来自 `relation-verbs.json`**（见该文件的 `verbs` 与
+    /// `forbidden`）。⛔ 不是自由文本：字典外的词会被 `ontok-builder relation verbs
+    /// check` 判成 `unknown` 并拒绝；泛词（`uses` / `associated_with` …）判成
+    /// `forbidden` 同样拒绝；同义写法（`attaches_to` / `binds`）归一成主键。
     pub semantic: String,
     /// 证据（规则实现 = `[{"table":…, "column":…, "claim":…}]`）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

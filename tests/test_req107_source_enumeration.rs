@@ -854,6 +854,20 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
     ("src/mcp/serve.rs", "p::encode_result(id, p::empty_result())", 2, "`notifications/initialized` 与 `ping`：协议空结果，零数据"),
     ("src/mcp/serve.rs", "p::tool_call_error_result(e.message())", 1, "`tools/call` 命中发布闸 ⇒ `isError`：正文是 `PipelineError::message()`（按设计不含词条）"),
     ("src/mcp/serve.rs", "p::tool_call_error_result(&tools::safe_error", 1, "`tools/call` 的业务 NotFound ⇒ 错误结果：正文经 `safe_error`"),
+    // ── ⭐ REQ-157 · 关系动词校验的 JSON 报告（**建模/运维面**，不是客户视图）──
+    //
+    // 打的是：字典版本 · 关系所在位置（`link_types[3] key=… from=… to=…`）·
+    // 动词名 · 中文标签 · 编辑距离候选。全是 **FDE 面的词表诊断**，
+    // 客户视图的字段一个都没有（没有对象名 / 属性名 / 样例值），也不进任何客户出口。
+    // 它**不读库**也不写本体：`--snapshot` 那条只读一个本地 JSON。
+    // 人话那份走 stderr（`eprint!`，不在本表口径内）。
+    (
+        "src/cli.rs",
+        "{check_json}",
+        1,
+        "`relation verbs check` 的 JSON 报告（REQ-157）：字典版本 + 动词名 + 候选 + 位置，\
+         建模/运维面诊断，零客户视图字段，不进任何客户出口",
+    ),
 ];
 
 /// 整文件豁免：**只允许**「不承载客户视图」的文件（运维二进制 / 响应构造器）。
@@ -1854,6 +1868,39 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "access_publish",
         "子命令 handler（`access publish`：JSON → JSON-LD，RML 风格 → I31 落盘）",
     ),
+    // ⭐ REQ-157 · `ontok-builder relation verbs check`（关系动词字典校验）。
+    // 它**不连库**（`--snapshot` 那条根本不碰产品库），报告双份：
+    // JSON → stdout（非客户写点，登记在 NON_CUSTOMER_WRITES）、人话 → stderr。
+    (
+        "src/cli.rs",
+        "relation_cmd",
+        "子命令分派（REQ-157 `relation verbs check`：零库、零网络）",
+    ),
+    (
+        "src/cli.rs",
+        "relation_verbs_check",
+        "子命令 handler（REQ-157：字典 → 关系语义 → unknown/forbidden/deprecated/alias_normalized）",
+    ),
+    (
+        "src/cli.rs",
+        "load_relation_verbs",
+        "共用实现（REQ-157：默认用嵌入字典，`--verbs` 只作试新字典的覆盖项）",
+    ),
+    (
+        "src/cli.rs",
+        "semantics_from_json",
+        "运维辅助（REQ-157：从快照/提案/客户视图三种 JSON 形状里取关系语义；⛔ 不猜）",
+    ),
+    (
+        "src/cli.rs",
+        "relation_verbs_human",
+        "运维辅助（REQ-157：校验报告的人话形态，只写 stderr）",
+    ),
+    (
+        "src/cli.rs",
+        "semantics_from_project",
+        "运维辅助（REQ-157：从库内快照取关系语义；只读、不迁移、不冻结）",
+    ),
 ];
 
 /// ⭐ **纯函数**：一段源码里**重名**的函数定义（第 4 轮 B5）。
@@ -2044,6 +2091,9 @@ const MODULES: &[(&str, &str)] = &[
     ("src/domain/mod.rs", "ttl"),
     // ⭐ REQ-121 · R2RML 映射生成：纯函数、零依赖、确定性（TTL 的下游消费者）
     ("src/domain/mod.rs", "r2rml"),
+    // ⭐ REQ-157 · 关系动词字典（`relation-verbs.json` 的加载/校验/候选）。
+    // 纯函数 + 一次 `include_str!`（编译期嵌入，不是运行期读文件）；服务面与 builder 共用。
+    ("src/domain/mod.rs", "relation_verbs"),
     ("src/domain/mod.rs", "view"),
     ("src/extract/mod.rs", "cardinality"),
     // REQ-109 · AI 语义通道（指纹 / 缓存抽象 / 协议校验 / 预算）

@@ -9,6 +9,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+// ⭐ REQ-157 · 关系动词的**受控词表**（`relation-verbs.json`，`include_str!` 编进二进制）。
+// 这里只借「查表」这一个动作；词表本体、加载校验与候选提示都在
+// [`crate::domain::relation_verbs`]（服务面与 builder 共用**同一份**）。
+use crate::domain::relation_verbs::dict_label;
+
 /// 系统标识 → 客户能听懂的说法。**外键列名只出现它的目标对象名。**
 const COLUMN_LABELS: &[(&str, &str)] = &[
     ("customer_id", "所属客户"),
@@ -714,7 +719,28 @@ pub struct CustomerView {
 /// B1 修之前这里是真盲区：复审实测把真实产物 51 条 `meaning` 全改回
 /// `belongs_to`（= `_ =>` 兜底的形态）仍 exit 0 —— `belongs_to` 不被
 /// 任何守门词覆盖。
+/// ⭐ REQ-157 · **第一档改成查字典**（`relation-verbs.json`），下面那 17 条 match
+/// arm **一字不动**地保留为「字典缺席时的内置兜底」。
+///
+/// # 为什么是「追加在最前」而不是「用字典替换 match」
+///
+/// 三条守卫同时钉着这个函数体：
+///
+/// 1. `tests/test_req156_semantic_cn_invariants.rs` 要求原有 6 条映射**逐字存在**、
+///    兜底仍是 `_ => s.to_string()`、且每个 arm 的输出都不含 ASCII 字母；
+/// 2. `tests/test_req107_red_lines.rs` 要求 `view.rs` 的 diff **删除行数为 0**
+///    （REQ-156 拿到的授权是「只许追加」）；
+/// 3. `untranslated_semantic_hit` 靠「兜底原样返回英文」判定漏翻。
+///
+/// ⇒ 字典命中就返回字典的 `label`；**没命中继续走原来的 match**。于是：
+/// - 15 个真实动词的标签**一个都没变**（字典的 label 就是 REQ-156 那份的原文）；
+/// - 字典外的词照旧落进 `_ =>`，第四档守卫照旧抓得住；
+/// - 字典**坏了/缺字段**（`dict_label` 返回 `None`）时行为与 REQ-156 逐字一致 ——
+///   服务面不会因为一份静态文件起不来（加载错误由 `relation verbs check` 点名）。
 fn semantic_cn(s: &str) -> String {
+    if let Some(l) = dict_label(s) {
+        return l;
+    }
     match s {
         "has" => "拥有".to_string(),
         "belongs_to" => "归属于".to_string(),
@@ -1167,6 +1193,121 @@ fn untranslated_semantic_comment_hit(text: &str) -> Option<String> {
         .map(|v| format!("语义值含未翻译的英文：{v}"))
 }
 
+/// ⭐ REQ-157 · **`skos:altLabel "…"@zh` 的取值** —— 同一个语义的第三种形状。
+///
+/// 客户视图 TTL 给每条关系写两份：
+///
+/// ```text
+/// rdfs:comment "语义：applies_to（多对多）"@zh ;   ← 第四档-b 认这个
+/// skos:altLabel "applies_to"@zh ;                 ← 本函数认这个
+/// ```
+///
+/// # 为什么必须单独取（REQ-158 遗留，AC-010）
+///
+/// 今天 `skos:altLabel` 是**零覆盖**：`belongs_to` 之类能发布出去，靠的是
+/// 「同一份文档里 `语义：` 那一行先命中」—— **那是巧合，不是防线**。
+/// 谁把 `rdfs:comment` 那句改掉（换措辞、降级成建模视图、或上游换渲染器），
+/// altLabel 立刻变成新的 fail-open。
+///
+/// 判据与前面两档**同一条**：取出来的值里出现任何 ASCII 字母 ⇒ 命中
+/// （`view::semantic_cn` 的所有分支输出都是中文，唯一的英文来源是兜底）。
+///
+/// ⚠️ **这一档也覆盖实体别名**（`ttl.rs` 的 `skos:altLabel` 有两个来源：
+/// 关系的 `meaning` 与实体的 `aliases`）。方向是 fail-closed：别名里出现英文
+/// 同样是「英文标识符进客户视图」，拒绝发布比放它过去安全。
+///
+/// ⛔ 不要求字面量后缀一定是 `@zh`：今天渲染器写 `@zh`，但**判据不该依赖
+/// 一个装饰性后缀** —— 少了它，英文照样在文件里。
+fn altlabel_values(text: &str) -> Vec<String> {
+    const MARKER: &str = "skos:altLabel";
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while let Some(rel) = text[pos..].find(MARKER) {
+        let start = pos + rel + MARKER.len();
+        let after = &text[start..];
+        // 谓词与字面量之间的空白（`skos:altLabel "x"` 现在只有一个空格）。
+        let lead = after.len() - after.trim_start().len();
+        let rest = &after[lead..];
+        if !rest.starts_with('"') {
+            // 不是字面量（例如出现在注释里的 `skos:altLabel`）⇒ 从标记之后继续找。
+            // 进度由 `start`（≥ pos + 标记长度）保证，不会原地打转。
+            pos = start;
+            continue;
+        }
+        let body = &rest[1..];
+        let mut val = String::new();
+        let mut escaped = false;
+        let mut used = 0usize;
+        for ch in body.chars() {
+            used += ch.len_utf8();
+            if escaped {
+                val.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                break; // `used` 含收尾引号：下一轮从它之后开始
+            } else {
+                val.push(ch);
+            }
+        }
+        out.push(val);
+        pos = start + lead + 1 + used;
+    }
+    out
+}
+
+/// ⭐ REQ-157 · 第五档：**`skos:altLabel` 形状**的语义漏翻（AC-010）。
+///
+/// 判据与 [`untranslated_semantic_hit`] / [`untranslated_semantic_comment_hit`]
+/// **同一条**（值里出现任何 ASCII 字母就抓），只换取数形状；**但取数前多一道
+/// 「机器动词形态」的形状门**，理由见 [`looks_like_machine_verb`]。
+fn untranslated_semantic_altlabel_hit(text: &str) -> Option<String> {
+    altlabel_values(text)
+        .into_iter()
+        .filter(|v| looks_like_machine_verb(v))
+        .find(|v| v.chars().any(|c| c.is_ascii_alphabetic()))
+        .map(|v| format!("语义值含未翻译的英文（skos:altLabel）：{v}"))
+}
+
+/// ⭐ REQ-157 · **机器动词形态**：全小写 ASCII 字母 / 数字 / 下划线（`belongs_to`、
+/// `attaches_to`、`aggregates`、`uses`）。
+///
+/// # 为什么 `skos:altLabel` 这一档必须先过形状门（**实测过的误杀**）
+///
+/// `skos:altLabel` 在客户视图 TTL 里有**两个来源**（`domain::ttl`）：
+///
+/// | 来源 | 形态 | 例子 |
+/// | --- | --- | --- |
+/// | 关系的 `meaning`（本档要抓的） | 全小写 snake_case 标识符 | `belongs_to` / `uses` |
+/// | **实体的 `aliases`**（客户名/别名） | 中文，或**大写开头的英文名/缩写** | `NAT` / `Certificates` / `SSL 证书` |
+///
+/// 实测（真实 v3 `cloud-resource`，2026-10-27）：
+///
+/// ```text
+/// 不收窄 ⇒ 导出 exit=2：
+///   ["未翻译的关系语义 语义值含未翻译的英文（skos:altLabel）：NAT"]
+/// ```
+///
+/// `NAT` 是实体「NAT 网关」的**别名**，不是关系语义。用「含 ASCII 字母」这一条
+/// 直接套全量 `altLabel` ⇒ **真实 v3 客户视图一律拒绝发布**（`/api/ontology.ttl`
+/// 也会挂）—— 那是把「客户看得懂的名字」判成「漏翻的标识符」，正是
+/// [`MODELING_TERMS`] 里 `license_key` 那类误杀的同一个形状。
+///
+/// ⇒ **形状门**：只对「长得像内部动词」的值套那条 ASCII 判据。
+/// `NAT`（大写）、`Certificates`（驼峰）、`SSL 证书`（中文+大写）都**不进**本档；
+/// `uses` / `belongs_to` / `aggregates` 一律进。
+///
+/// ⚠️ 已知边界（如实登记）：`memberOf` / `PART_OF` 这类**驼峰或全大写**的动词
+/// 会被形状门放过 —— 但它们在 JSON 形状（第四档 `meaning`）上仍会被抓，
+/// 而关系语义在 TTL 里同时写两处（`rdfs:comment` + `altLabel`），
+/// 4 档-b 已经覆盖了关系这一侧。本档补的是「只写 altLabel」的漏点。
+fn looks_like_machine_verb(v: &str) -> bool {
+    let t = v.trim();
+    !t.is_empty()
+        && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// 把一段文本归一化成「可整体比对的词」：小写 + 非字母数字/下划线一律转下划线 + 压空白。
 ///
 /// `License Key` → `license_key`；`CARDINALITY` → `cardinality`；`  Key  ` → `key`。
@@ -1277,6 +1418,19 @@ pub fn scan_modeling_terms(json: &str) -> Vec<String> {
     // 发错数据给客户，且不会自己暴露）。报告文案与第四档**逐字同形**
     // （都是 `未翻译的关系语义 …`），所以下游不必区分是哪种形状命中的。
     if let Some(v) = untranslated_semantic_comment_hit(json) {
+        let label = format!("未翻译的关系语义 {v}");
+        if !hits.iter().any(|h| *h == label) {
+            hits.push(label);
+        }
+    }
+    // ⭐ REQ-157 · 第五档：**同一条判据，第三种形状**（`skos:altLabel "…"@zh`）。
+    //
+    // REQ-158 登记为遗留：这条形状**零覆盖**，今天靠「同一份文档里 `语义：`
+    // 先命中」遮住 —— 那是巧合。客户视图 TTL 的同一条语义写了两份
+    // （`rdfs:comment` 的整句 + `skos:altLabel` 的单个词），守卫只认前一份。
+    // 报告文案与第四档/四档-b **逐字同形**（都是 `未翻译的关系语义 …`），
+    // 下游不必区分是哪种形状命中的。
+    if let Some(v) = untranslated_semantic_altlabel_hit(json) {
         let label = format!("未翻译的关系语义 {v}");
         if !hits.iter().any(|h| *h == label) {
             hits.push(label);

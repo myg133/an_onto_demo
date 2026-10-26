@@ -157,7 +157,7 @@ const OUTPUT_CONTRACT: &str = r#"
    "from_type": "起点类型的 key",
    "to_type": "终点类型的 key",
    "cardinality": "N:1 或 1:N",
-   "semantic": "has 或 belongs_to 或 references"}
+   "semantic": "<从 relation-verbs.json 的 key 里选一个，别自己造>"}
  ]}
 
 规则：
@@ -165,6 +165,10 @@ const OUTPUT_CONTRACT: &str = r#"
 2. `is_new` 为 false 时，`key` **必须**逐字取自「已有类型」的 key；否则 `is_new` 为 true 且给一个新 key。
 3. `aliases` 与 `note` 没有内容就给空数组 / 空串。
 4. 不确定就不提：宁可少提一个属性，也不要编一个不存在的列。
+5. 关系动词（`semantic`）**必须**取自 `relation-verbs.json` 的 `verbs` 主键，**一个词都不许自己造**。
+   同义写法用字典的 `aliases`：`attaches_to` ⇒ 写 `attached_to`，`binds` ⇒ 写 `binds_to`，`belong_to` ⇒ 写 `belongs_to`。
+   ⛔ 泛词 `uses` / `associated_with` / `related_to` 在字典的 `forbidden` 清单里，**一条都不许出现**。
+   拿不准就先查字典，**不要**回头用本示例里没有的词。字典里没有 → 换一个字典里的词，或放弃这条关系。
 "#;
 
 // ──────────────────────────────────────────────────────────

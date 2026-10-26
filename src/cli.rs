@@ -211,6 +211,61 @@ pub enum Cmd {
     /// —— 包括真调用那条：它只碰**云 API**，⛔ 不碰产品库。
     #[command(verbatim_doc_comment)]
     Access { #[command(subcommand)] cmd: AccessCmd },
+    /// ⭐ REQ-157 · **关系动词校验**（受控字典 `relation-verbs.json`）
+    ///
+    /// 把本体 / 快照里的关系语义逐个对字典，输出四类结论：
+    ///
+    /// | 类别 | 含义 | 退出码 |
+    /// | --- | --- | --- |
+    /// | `unknown` | 不在字典、不是别名、也不在 `forbidden` ⇒ **拒绝**，并给最接近的 3 个候选 | 4 |
+    /// | `forbidden` | 命中泛词清单（`uses` / `associated_with` …）⇒ **拒绝** | 4 |
+    /// | `deprecated` | 主键标了 `deprecated`（今天只有 `contains`）⇒ 兼容 v3，**警告** | 0 |
+    /// | `alias_normalized` | 是别名 ⇒ 归一到主键（`attaches_to` → `attached_to`），**仅提示** | 0 |
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder relation verbs check --project cloud-resource --version 3
+    /// ontok-builder relation verbs check --snapshot out/model-view.json
+    ///
+    /// ⚠️ 报告**双份**：JSON 走 stdout（可 `| jq`），人话走 stderr —— 两种形态
+    /// **同时**产出，不是二选一。
+    /// ⚠️ `--snapshot` 是**本地文件**（快照 `link_types[]` / 提案 `links[]` /
+    /// 客户视图 `relations[]` 三种形状都认），这条路径**不连库**。
+    /// `--project` + `--version` 才连库，且只读（不迁移、不写）。
+    /// ⚠️ `--verbs <path>` 只给试新字典用（builder 面）；**服务面用的是嵌入那份**
+    /// （镜像里没有仓库文件，运行期读文件会把标签能力绑到部署目录上）。
+    /// ⚠️ 退出码 `4` 是**新增**的（`unknown`/`forbidden` ⇒ 不许冻结）；
+    /// ⛔ 不复用 `2` —— 那个码的含义是「发布闸判定泄露建模术语」，两个结论混用
+    /// 会让下游分不清「视图有毒」和「词表要改」。
+    #[command(verbatim_doc_comment)]
+    Relation { #[command(subcommand)] cmd: RelationCmd },
+}
+
+/// ⭐ REQ-157 · 关系动词字典相关子命令。
+#[derive(Subcommand)]
+pub enum RelationCmd {
+    /// 关系动词（`semantic`）与字典的关系
+    Verbs { #[command(subcommand)] cmd: RelationVerbsCmd },
+}
+
+/// ⭐ REQ-157 · `relation verbs check` 的参数。
+#[derive(Subcommand)]
+pub enum RelationVerbsCmd {
+    /// 校验一份本体 / 快照 / 客户视图里的关系动词是否都在字典内（fail-closed）
+    Check {
+        /// 项目名（与 `--version` 成对；连库只读）
+        #[arg(long)]
+        project: Option<String>,
+        /// 第几版（与 `--project` 成对）
+        #[arg(long)]
+        version: Option<i32>,
+        /// 本地 JSON（快照 / 提案 / 客户视图三种形状都认）。给了它就不连库
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+        /// 试另一份字典（默认用**编进二进制**的 `relation-verbs.json`）
+        #[arg(long)]
+        verbs: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1300,6 +1355,15 @@ pub const EXIT_LEAKED_MODELING_TERMS: i32 = 2;
 /// ⇒ 3 只承载「自检报了」，**不承载**「渲染被再加工」。
 pub const EXIT_SELF_CHECK_VIOLATION: i32 = 3;
 
+/// ⭐ REQ-157 新增：**关系动词越界** —— 字典外的词 / 泛词 ⇒ 拒绝（fail-closed）。
+///
+/// ⛔ 不复用 [`EXIT_LEAKED_MODELING_TERMS`]（2）：那个码说的是「发布闸判定
+/// 泄露建模术语」，这个码说的是「动词不在受控字典里」。两者混用一个码，
+/// 下游就分不清「视图有毒（改数据）」和「词表要改（扩字典）」。
+/// 只有 `unknown` / `forbidden` 触发它；`deprecated`（`contains`）与
+/// `alias_normalized` 都**是 0**（警告 / 提示）。
+pub const EXIT_RELATION_VERBS_VIOLATION: i32 = 4;
+
 /// REQ-078 · 退出码政策的**唯一事实源**（文字 + 码）。
 ///
 /// | 码 | 含义 |
@@ -1879,6 +1943,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 与 `doc` 同一条理由：没配库的机器上，「契约哪一行写错了」必须先于
         // 「连不上库」被报出来，否则离线体检这事根本没法在 CI 里跑。
         Cmd::Access { cmd } => return access_cmd(cmd),
+        // ⭐ REQ-157 · `relation verbs check` **在连库之前**分派：
+        // `--snapshot` 那条根本不碰产品库（输入是本地 JSON）。`--project/--version`
+        // 那条自己在 handler 里连库，而且只读（不迁移、不写）—— 校验命令不该有
+        // 「先跑一遍迁移」这种副作用。
+        Cmd::Relation { cmd } => return relation_cmd(cmd).await,
         cmd => cmd,
     };
 
@@ -1920,6 +1989,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 同上：`access` 也在连库之前返回（它连产品库都不碰）。
         Cmd::Access { .. } => anyhow::bail!(
             "内部错误：`access` 子命令应当在连库之前处理（它连产品库都不碰）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
+        // 同上：`relation verbs check` 也在连库之前返回（`--snapshot` 不碰库）。
+        Cmd::Relation { .. } => anyhow::bail!(
+            "内部错误：`relation` 子命令应当在连库之前处理。\
              请把 `run()` 开头的提前返回恢复回去。"
         ),
     }
@@ -3343,6 +3417,349 @@ fn open_proposal_llm() -> anyhow::Result<ProposalLlm> {
 /// 置信度分箱一行（三条命令同一句话 —— 唯一实现在 `proposal` 模块）。
 fn confidence_line(values: &[f64]) -> String {
     crate::extract::proposal::confidence_histogram_line(values)
+}
+
+/// ⭐ REQ-157 · **关系动词校验**（`relation verbs check`）—— 字典是受控词表，
+/// 字典外的词不许进本体，泛词一律拒绝，同义归一。
+///
+/// # 为什么这条命令**在连库之前**分派
+///
+/// `--snapshot <file>` 是**本地 JSON**：没配库的机器上也要能跑（P3 的重抽提案
+/// 就是在本地文件上反复校验的）。与 `doc` / `access` 同一条理由 ——
+/// 「词表不符」必须能在「连不上库」之前被报出来。
+///
+/// # 输出为什么是「JSON 走 stdout / 人话走 stderr」
+///
+/// 与 `access validate` 同一口径：机器要的那份（可 `| jq`）在 stdout，
+/// 人看的那份在 stderr —— **两种形态同时产出**，不是二选一。
+async fn relation_cmd(cmd: RelationCmd) -> anyhow::Result<()> {
+    match cmd {
+        RelationCmd::Verbs { cmd } => match cmd {
+            RelationVerbsCmd::Check { project, version, snapshot, verbs } => {
+                relation_verbs_check(project, version, snapshot, verbs).await
+            }
+        },
+    }
+}
+
+/// 加载字典：**默认用编进二进制的那份**，`--verbs` 只是试新字典的覆盖项。
+fn load_relation_verbs(
+    path: Option<&std::path::Path>,
+) -> anyhow::Result<(crate::domain::relation_verbs::VerbDict, String)> {
+    use crate::domain::relation_verbs as rv;
+    match path {
+        Some(p) => {
+            let raw = std::fs::read_to_string(p)
+                .with_context(|| format!("读不到字典文件：{}", p.display()))?;
+            let d = rv::load_str(&raw)
+                .map_err(|e| anyhow::anyhow!("字典 {} **拒绝加载**：{e}", p.display()))?;
+            Ok((d, p.display().to_string()))
+        }
+        None => {
+            let d = rv::embedded().map_err(|e| {
+                anyhow::anyhow!("嵌入的 {} **拒绝加载**：{e}", rv::EMBEDDED_NAME)
+            })?;
+            Ok((d.clone(), format!("{}{}", rv::EMBEDDED_NAME, "（嵌入二进制）")))
+        }
+    }
+}
+
+/// 从一份 JSON 里取「关系语义」—— 三种形状都认（都真的有人在产出）。
+///
+/// | 形状 | 出处 | 取哪个字段 |
+/// | --- | --- | --- |
+/// | `link_types[]` | 快照 / `ontology show --model-view` | `semantic` |
+/// | `links[]` | 提案（`proposal.json` / `doc merge` 的产物） | `semantic` |
+/// | `relations[]` | **客户视图**（已过 `semantic_cn`） | `meaning` |
+///
+/// ⛔ 不做「猜一个像语义的字段」：认不出就报错并点名三种形状 ——
+/// 猜出来的结果会让人以为「校验通过」，而实际上一条都没扫。
+fn semantics_from_json(
+    v: &Value,
+) -> Result<Vec<(String, crate::domain::relation_verbs::Occurrence)>, String> {
+    use crate::domain::relation_verbs::Occurrence;
+    let mut out = Vec::new();
+    if let Some(arr) = v.get("link_types").and_then(Value::as_array) {
+        for (i, l) in arr.iter().enumerate() {
+            let from = l.get("from_type").and_then(Value::as_str);
+            let to = l.get("to_type").and_then(Value::as_str);
+            let key = l.get("key").and_then(Value::as_str).unwrap_or("?");
+            out.push((
+                l.get("semantic").and_then(Value::as_str).unwrap_or("").to_string(),
+                Occurrence {
+                    location: format!(
+                        "link_types[{i}] key={key} from={} to={}",
+                        from.unwrap_or("?"),
+                        to.unwrap_or("?")
+                    ),
+                    from: from.map(str::to_string),
+                    to: to.map(str::to_string),
+                },
+            ));
+        }
+        return Ok(out);
+    }
+    if let Some(arr) = v.get("links").and_then(Value::as_array) {
+        for (i, l) in arr.iter().enumerate() {
+            let from = l
+                .get("from_type")
+                .and_then(Value::as_str)
+                .or_else(|| l.get("from").and_then(Value::as_str));
+            let to = l
+                .get("to_type")
+                .and_then(Value::as_str)
+                .or_else(|| l.get("to").and_then(Value::as_str));
+            let key = l.get("key").and_then(Value::as_str).unwrap_or("?");
+            out.push((
+                l.get("semantic").and_then(Value::as_str).unwrap_or("").to_string(),
+                Occurrence {
+                    location: format!(
+                        "links[{i}] key={key} from={} to={}",
+                        from.unwrap_or("?"),
+                        to.unwrap_or("?")
+                    ),
+                    from: from.map(str::to_string),
+                    to: to.map(str::to_string),
+                },
+            ));
+        }
+        return Ok(out);
+    }
+    if let Some(arr) = v.get("relations").and_then(Value::as_array) {
+        for (i, r) in arr.iter().enumerate() {
+            let from = r.get("from").and_then(Value::as_str);
+            let to = r.get("to").and_then(Value::as_str);
+            out.push((
+                r.get("meaning").and_then(Value::as_str).unwrap_or("").to_string(),
+                Occurrence {
+                    location: format!(
+                        "relations[{i}] {} → {}",
+                        from.unwrap_or("?"),
+                        to.unwrap_or("?")
+                    ),
+                    from: from.map(str::to_string),
+                    to: to.map(str::to_string),
+                },
+            ));
+        }
+        return Ok(out);
+    }
+    Err(
+        "认不出这份 JSON 的关系形状：需要 `link_types[]`（快照）/ `links[]`（提案）/ \
+         `relations[]`（客户视图）之一。⛔ 不猜 —— 猜出来的「校验通过」等于没校验。"
+            .to_string(),
+    )
+}
+
+/// 人话报告（stderr）。JSON 那份在 stdout。
+fn relation_verbs_human(
+    dict: &crate::domain::relation_verbs::VerbDict,
+    dict_source: &str,
+    source_desc: &str,
+    report: &crate::domain::relation_verbs::Report,
+) -> String {
+    use crate::domain::relation_verbs::IssueKind;
+    let mut s = String::new();
+    s.push_str(&format!(
+        "关系动词校验 · 字典 {dict_source} v{}（{} 主键 / {} 别名 / {} 禁词）\n",
+        dict.version,
+        dict.verbs.len(),
+        dict.alias_count(),
+        dict.forbidden.len()
+    ));
+    s.push_str(&format!("来源：{source_desc}\n"));
+    s.push_str(&format!(
+        "扫过 {} 条关系（字典内的干净词 {} 条）\n",
+        report.relations,
+        report.clean()
+    ));
+
+    const MAX_LOC: usize = 5;
+    for kind in [
+        IssueKind::Unknown,
+        IssueKind::Forbidden,
+        IssueKind::Deprecated,
+        IssueKind::AliasNormalized,
+    ] {
+        let items: Vec<_> = report.findings.iter().filter(|f| f.kind == kind).collect();
+        if items.is_empty() {
+            continue;
+        }
+        let why = match kind {
+            IssueKind::Unknown => "字典里没有 ⇒ **拒绝**（fail-closed）",
+            IssueKind::Forbidden => "命中泛词清单 ⇒ **拒绝**（抽了等于没抽）",
+            IssueKind::Deprecated => "允许但**每次构建告警**（v4 之后应清零）",
+            IssueKind::AliasNormalized => "同义归一 ⇒ 仅提示（不阻塞）",
+        };
+        s.push_str(&format!(
+            "\n{} {} · {} 种写法 / {} 条关系 —— {why}\n",
+            if kind.blocking() { "✗" } else { "·" },
+            kind.as_str(),
+            items.len(),
+            report.relation_count(kind)
+        ));
+        for f in items {
+            let mut line = format!("  `{}`", f.semantic);
+            if let Some(l) = &f.label {
+                line.push_str(&format!("（{l}）"));
+            }
+            if let Some(c) = &f.canonical {
+                line.push_str(&format!(" → `{c}`"));
+            }
+            line.push_str(&format!(" · {} 条", f.count()));
+            if let Some(d) = &f.deprecated {
+                line.push_str(&format!(" · {d}"));
+            }
+            s.push_str(&line);
+            s.push('\n');
+            if !f.candidates.is_empty() {
+                s.push_str(&format!(
+                    "      最接近的 {} 个候选：{}\n",
+                    f.candidates.len(),
+                    f.candidates.join(" / ")
+                ));
+            }
+            for o in f.occurrences.iter().take(MAX_LOC) {
+                s.push_str(&format!("      {}\n", o.location));
+            }
+            if f.count() > MAX_LOC {
+                s.push_str(&format!("      …… 另有 {} 条同写法\n", f.count() - MAX_LOC));
+            }
+        }
+    }
+
+    s.push_str("\n结论：");
+    if report.blocking() {
+        s.push_str(&format!(
+            "✗ 不通过 —— unknown {} 种 / forbidden {} 种 ⇒ **不许冻结**（exit {}）\n",
+            report.count(IssueKind::Unknown),
+            report.count(IssueKind::Forbidden),
+            EXIT_RELATION_VERBS_VIOLATION
+        ));
+    } else {
+        s.push_str("✓ 通过（没有 unknown / forbidden）");
+        let alias = report.count(IssueKind::AliasNormalized);
+        let dep = report.count(IssueKind::Deprecated);
+        if alias > 0 || dep > 0 {
+            s.push_str(&format!("；alias_normalized {alias} 种仅提示 · deprecated {dep} 种为警告"));
+        }
+        s.push('\n');
+    }
+    s
+}
+
+/// `ontok-builder relation verbs check` 的 handler。
+async fn relation_verbs_check(
+    project: Option<String>,
+    version: Option<i32>,
+    snapshot: Option<PathBuf>,
+    verbs: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use crate::domain::relation_verbs::Report;
+
+    // ① 字典（AC-001：坏字典在这里就**拒绝加载并点名**，⛔ 不静默退回空表）。
+    let (dict, dict_source) = load_relation_verbs(verbs.as_deref())?;
+
+    // ② 取关系：`--snapshot` 与 `--project/--version` **二选一**。
+    let (occurrences, source_desc, source_json) = match (snapshot, project, version) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => anyhow::bail!(
+            "`--snapshot` 与 `--project/--version` 只能选一种：\
+             `--snapshot` 是本地文件（不连库），`--project/--version` 才读库"
+        ),
+        (Some(path), None, None) => {
+            let raw = std::fs::read_to_string(&path)
+                .with_context(|| format!("读不到快照文件：{}", path.display()))?;
+            let v: Value = serde_json::from_str(&raw)
+                .with_context(|| format!("{} 不是合法 JSON", path.display()))?;
+            let occ = semantics_from_json(&v).map_err(|e| {
+                anyhow::anyhow!("{}：{e}", path.display())
+            })?;
+            let desc = format!("本地文件 {}", path.display());
+            (occ, desc, serde_json::json!({ "kind": "snapshot", "path": path.display().to_string() }))
+        }
+        (None, Some(project), Some(version)) => {
+            let occ = semantics_from_project(&project, version).await?;
+            let desc = format!("项目 {project} 第 {version} 版（库内快照）");
+            (
+                occ,
+                desc,
+                serde_json::json!({ "kind": "project", "project": project, "version": version }),
+            )
+        }
+        (None, None, None) => anyhow::bail!(
+            "要么给 `--project <p> --version <n>`（读库），要么给 `--snapshot <file>`（本地文件）"
+        ),
+        (None, Some(_), None) => anyhow::bail!("给了 `--project` 就必须同时给 `--version`"),
+        (None, None, Some(_)) => anyhow::bail!("给了 `--version` 就必须同时给 `--project`"),
+    };
+
+    // ③ 判定（纯函数：分类 + 归并 + 候选）。
+    let report = Report::build(&dict, occurrences);
+
+    // ④ 双份输出：人话 → stderr；JSON → stdout。
+    eprint!("{}", relation_verbs_human(&dict, &dict_source, &source_desc, &report));
+    let mut json = report.to_json();
+    json["dictionary"] = serde_json::json!({
+        "source": dict_source,
+        "version": dict.version,
+        "verbs": dict.verbs.len(),
+        "aliases": dict.alias_count(),
+        "forbidden": dict.forbidden.len(),
+    });
+    json["source"] = source_json;
+    json["verdict"] = serde_json::Value::String(
+        if report.blocking() { "fail" } else { "pass" }.to_string(),
+    );
+    let check_json = serde_json::to_string_pretty(&json)?;
+    println!("{check_json}");
+
+    // ⑤ 退出码：只有 unknown / forbidden 非 0（fail-closed）。
+    if report.blocking() {
+        std::process::exit(EXIT_RELATION_VERBS_VIOLATION);
+    }
+    Ok(())
+}
+
+/// 从库里取某一版的**关系语义**（只读：不迁移、不写、不冻结）。
+async fn semantics_from_project(
+    project: &str,
+    version: i32,
+) -> anyhow::Result<Vec<(String, crate::domain::relation_verbs::Occurrence)>> {
+    use crate::domain::relation_verbs::Occurrence;
+    let url = crate::config::require_env(crate::config::DATABASE_URL_ENV)
+        .or_else(|_| crate::config::require_env(crate::config::TEST_DATABASE_URL_ENV))?;
+    let pool: PgPool = crate::db::pool::connect(&url).await?;
+    let ps = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool);
+    let p = ps
+        .get_by_name(project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}（先 `ontok project new`）"))?;
+    let v = ps.version_by_seq(p.id, &p.name, version).await.map_err(|e| {
+        anyhow::anyhow!("项目 {project} 没有第 {version} 版：{e}")
+    })?;
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照（快照由 `proposal apply` 产出）"))?;
+    Ok(snap
+        .link_types
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            (
+                l.semantic.clone(),
+                Occurrence {
+                    location: format!(
+                        "link_types[{i}] key={} from={} to={}",
+                        l.key, l.from_type, l.to_type
+                    ),
+                    from: Some(l.from_type.clone()),
+                    to: Some(l.to_type.clone()),
+                },
+            )
+        })
+        .collect())
 }
 
 /// **`ontok name suggest`** —— 决策点一：中文名提案。
