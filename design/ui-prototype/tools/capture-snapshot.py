@@ -3,6 +3,11 @@
 """
 抓一份本体快照，产出 ui-prototype/snapshot.js（供 file:// 离线预览）。
 
+用法：
+    python tools/capture-snapshot.py [BASE] [TOKEN_FILE] [OUT]
+    例：python tools/capture-snapshot.py http://127.0.0.1:18800 ./partner-token.txt ./snapshot.js
+    也可用环境变量 ONTOK_SNAP_BASE / ONTOK_SNAP_TOKEN_FILE
+
 前置：
   · 能访问目标部署。推荐先端口转发：
         kubectl -n <ns> port-forward svc/ontok-query 18800:8800
@@ -14,8 +19,10 @@
 
 import json, urllib.request, urllib.error, pathlib
 
-BASE = "http://127.0.0.1:18800"
-TOK = open(r"D:\MyCodes\AI\an_onto_demo\.local\ops360-deploy\partner-token.txt", encoding="utf-8").read().strip()
+import os, sys
+BASE = os.environ.get("ONTOK_SNAP_BASE") or (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18800")
+TOK_PATH = os.environ.get("ONTOK_SNAP_TOKEN_FILE") or (sys.argv[2] if len(sys.argv) > 2 else "partner-token.txt")
+TOK = open(TOK_PATH, encoding="utf-8").read().strip()
 
 def post(path, body):
     req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(),
