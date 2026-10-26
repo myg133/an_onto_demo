@@ -40,8 +40,9 @@
                               "X-TC-Action": "{action}", "X-TC-Version": "{version}",
                               "X-TC-Region": "{region}", "X-TC-Timestamp": "{timestamp}" },
                  "vars":    { "action": "DescribeInstances", "version": "2017-03-12" } },
-  "request":   { "template": { "Region": "{region}" }, "required": ["region"],
-                 "bindings": { "region": {"source":"default"} },
+  "request":   { "template": { "InstanceIds": ["{ids}"] }, "required": ["ids"],
+                 "bindings": { "region": {"source":"default"}, "ids": {"source":"filter"} },
+                 "defaults": { "Region": "ap-guangzhou" },
                  "paging": { "offset": "Offset", "limit": "Limit", "max_limit": 100 } },
   "iterator":  "$.Response.InstanceSet[*]",
   "fields":    { "name": "InstanceName" },
@@ -56,7 +57,7 @@
 | --- | --- | --- |
 | `source.base_url` | 决定 `Host` | `host` = base_url 的主机名（**含非默认端口**） |
 | `operation.method` / `.path` | 规范请求串第 1、2 行 | API 3.0 的 `path` 恒 `/` |
-| `operation.headers` | **要发的 header** | 值是模板，`{name}` 从 `operation.vars` 取 |
+| `operation.headers` | **要发的 header** | 值是模板；`{name}` 从**值表**取（`operation.vars` + `request.defaults` + 调用方过滤值 + 时间戳，见 `docs/RECIPE.md` §二） |
 | `operation.vars` | 填模板 | 只做字符串替换，⛔ 不改 header 名 |
 | `auth.signed_headers` | 哪些 header 参与签名 | **小写**；列表里的名字必须都出现在你实际发出的 header 里 |
 | `auth.timestamp.header` / `.format` | 时间戳放哪个头、什么格式 | 本算法要 `unix-seconds`（UTC 秒） |
@@ -64,8 +65,12 @@
 | `auth.credential_env` | **环境变量名** | 只有名字，⛔ 值不在契约里；从部署环境读 |
 
 ⚠️ `request` 段是**请求体模板**：`template` 原样 POST（`{name}` 用 `bindings` 指出的来源填：
-`default` ⇒ `sources[].defaults`，`filter` ⇒ 调用方给的过滤值，`paging` ⇒ 分页器），
-`paging.offset` / `.limit` 是**写进模板的路径**，不是值。
+`default` ⇒ `request.defaults`（契约 v1 里在 `sources[].defaults`），`filter` ⇒ 调用方给的过滤值，
+`paging` ⇒ 分页器），`paging.offset` / `.limit` 是**写进模板的路径**，不是值。
+
+⚠️ `X-TC-Region` 这类参数**只走 header**：⛔ 不要同时写进 `request.template`
+（实测会报 `UnknownParameter`，离线体检也查不出来；`access validate` 现在会给
+`DUPLICATE_PLACEMENT` 警告，见 `docs/RECIPE.md` §七①）。
 
 ---
 

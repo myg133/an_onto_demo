@@ -8,6 +8,7 @@
 //! | ② | v2 ⇒ 六段配方都在，且 `headers` 里写什么就透出什么（**零厂商判断**） | AC-101 / AC-105 |
 //! | ③ | 映射没给的项 ⇒ 那个键**不存在**（⛔ 不按 `mode` 猜默认值） | AC-106 |
 //! | ④ | 单类配方 > 12 KB ⇒ **加载期报错并点名**（⛔ 不静默截断） | AC-107 |
+//! | ⑤ | `sources[].defaults` **原样**透出到 `get.request.defaults`（CP4） | —— |
 //!
 //! ⚠️ 夹具里刻意用两家云的 header 名（`X-Amz-*` / `X-TC-*`）：它们只出现在**映射**里，
 //! 产品代码（`src/query/`、`src/access/`）里一个都没有 —— 这正是 AC-105 的形态。
@@ -197,4 +198,35 @@ fn an_oversized_recipe_is_a_named_load_error() {
     assert!(err.contains("12288"), "要说清上限：{err}");
     assert!(err.contains("customers"), "要点名是哪个类：{err}");
     assert!(err.contains("fields"), "要指出多半是 fields 过肥：{err}");
+}
+
+/// ⑤ CP4 · `sources[].defaults` **原样**挂到 `get.request.defaults`。
+///
+/// 为什么必须原样：真实映射里 `{"Region": …, "module": …}` 两个键的大小写本来就不一致，
+/// 客户端按占位符名去找 —— 我们**小写化或改名就等于伪造契约**。
+#[test]
+fn source_defaults_are_passed_through_verbatim() {
+    let mut doc: serde_json::Value = serde_json::from_str(&v2_mapping(Some(2), true)).unwrap();
+    doc["sources"][0]["defaults"] =
+        serde_json::json!({ "Region": "ap-guangzhou", "module": "monitor" });
+    let get = pending_get(&serde_json::to_string(&doc).unwrap());
+    let req = get.recipe.expect("v2 有配方").request.expect("request");
+    assert_eq!(req["defaults"]["Region"], "ap-guangzhou", "键名原样：{req}");
+    assert_eq!(req["defaults"]["module"], "monitor", "键名原样：{req}");
+    assert_eq!(
+        req["template"]["Region"], "{region}",
+        "defaults 只挂在 request 下，⛔ 不合并进 template：{req}"
+    );
+}
+
+/// ⑥ 源没写 `defaults` ⇒ **整个键不出现**（⛔ 不塞 `{}`）。
+#[test]
+fn a_source_without_defaults_has_no_defaults_key() {
+    let mut doc: serde_json::Value = serde_json::from_str(&v2_mapping(Some(2), true)).unwrap();
+    doc["sources"][0].as_object_mut().unwrap().remove("defaults");
+    let get = pending_get(&serde_json::to_string(&doc).unwrap());
+    let req = get.recipe.expect("v2 有配方").request.expect("request");
+    assert!(req.get("defaults").is_none(), "源没有 defaults ⇒ 键不许出现：{req}");
+    let text = serde_json::to_string(&req).unwrap();
+    assert!(!text.contains("\"defaults\""), "{text}");
 }

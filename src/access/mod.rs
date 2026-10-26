@@ -185,6 +185,8 @@ pub const CODE_ENTITY_UNKNOWN: &str = "ENTITY_NOT_IN_MAPPING";
 pub const CODE_FIELD_PATH_NOT_CHECKED: &str = "FIELD_PATH_NOT_CHECKED";
 /// 夹具疑似（或被声明为）由映射键**反向生成** ⇒ 字段路径全过属于自证，无独立证据力。
 pub const CODE_FIXTURE_LOOKS_DERIVED: &str = "FIXTURE_LOOKS_DERIVED";
+/// 同一个占位符**既进 header 又进 body** ⇒ 通常是映射写重了（真调会报未知参数）。
+pub const CODE_DUPLICATE_PLACEMENT: &str = "DUPLICATE_PLACEMENT";
 /// `--dry-run-fixture` 需要夹具，而这条 entity 没有声明。
 pub const CODE_FIXTURE_REQUIRED: &str = "FIXTURE_REQUIRED";
 

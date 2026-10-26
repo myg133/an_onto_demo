@@ -38,6 +38,13 @@
 //! 没声明时按结构启发式判断（每行只含映射引用到的字段 ⇒ 疑似反向生成，
 //! 见 [`CODE_FIXTURE_LOOKS_DERIVED`]）。
 //!
+//! # REQ-152 · CP4 · 一条「离线看不见」的警告
+//!
+//! 同一个占位符既出现在 `operation.headers`、又出现在 `request.template` ⇒
+//! [`CODE_DUPLICATE_PLACEMENT`] **警告**（⛔ 不是错误：合法场景可能存在）。
+//! 实测教训：把只能进 header 的参数写进 body，真调报 `UnknownParameter`，
+//! 而离线体检原先一路绿灯 —— 两处各自都合法，所以只能提醒、不能判死。
+//!
 //! # 口径：**一次报全**，且每处都点名「哪条 entity / 哪个字段」
 //!
 //! ⛔ 不是「遇到第一条就退」—— 作者改一处、重跑一次、再改一处，是最劝退的体验，
@@ -49,16 +56,17 @@
 //! - 第 4 条只要求「**至少一行**里这个路径存在」；部分行缺失降级为 `warnings`
 //!   （云 API 里合法可为空的字段不该把整份映射判红）。**报出覆盖率**，⛔ 不静默。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use super::{
     expand_iri_template, expand_ttl_instance_iri, path, placeholders, Entity, Mapping, Ontology,
-    Problem, CODE_CAPABILITY_OVERLAP, CODE_CLASS_NOT_IN_ONTOLOGY, CODE_FIELD_PATH,
-    CODE_FIELD_PATH_NOT_CHECKED, CODE_FIXTURE_LOOKS_DERIVED, CODE_FIXTURE_UNREADABLE,
-    CODE_IRI_TEMPLATE, CODE_ITERATOR_EMPTY, CODE_KEY_MISSING, CODE_RELATION_ENDPOINT,
+    Problem, CODE_CAPABILITY_OVERLAP, CODE_CLASS_NOT_IN_ONTOLOGY, CODE_DUPLICATE_PLACEMENT,
+    CODE_FIELD_PATH, CODE_FIELD_PATH_NOT_CHECKED, CODE_FIXTURE_LOOKS_DERIVED,
+    CODE_FIXTURE_UNREADABLE, CODE_IRI_TEMPLATE, CODE_ITERATOR_EMPTY, CODE_KEY_MISSING,
+    CODE_RELATION_ENDPOINT,
 };
 
 /// 一条 entity 的对账面（`validate` 报告里逐条给出，AC-007 直接贴它）。
@@ -182,6 +190,7 @@ pub fn validate(mapping: &Mapping, ontology: &Ontology, mapping_dir: &Path) -> R
 
         check_iri_template(e, &loc, ontology, &mut check, &mut errors, &mut warnings);
         check_capability(e, &loc, &mut errors);
+        check_duplicate_placement(e, &mut warnings);
         check_fixture(e, &loc, mapping_dir, &mut check, &mut errors, &mut warnings);
 
         checks.push(check);
@@ -340,6 +349,46 @@ fn check_capability(e: &Entity, loc: &str, errors: &mut Vec<Problem>) {
     // 注意：`pushdown` 与 `local_only` **都为空**是合法的（有些 API 一个过滤条件都不支持）；
     // 这里刻意不把「pushdown 空」升级成错误 —— 那会逼作者编一个不存在的下推能力。
     let _ = (&e.capability.pushdown, &e.capability.local_only);
+}
+
+// ══════════════════════════════════════════════════════════════
+// 检查 2.5 · 同一个占位符不许既进 header 又进 body（CP4 · **警告**）
+// ══════════════════════════════════════════════════════════════
+
+/// 实测教训：把「只能放 header 的参数」同时写进 `request.template` ⇒ 真调报
+/// `UnknownParameter`（未知参数），而**离线体检一路绿灯** —— 因为两边各自都合法。
+///
+/// 所以这里只给**警告**（不是 error）：占位符同名出现在两处**可能**是合法的
+/// （例如服务端同时接受 header 与 body 的同一个值），要不要合并由映射作者判断。
+///
+/// ⛔ 规则是通用的：只比「占位符名」，不认识任何具体的 header / 参数名。
+fn check_duplicate_placement(e: &Entity, warnings: &mut Vec<String>) {
+    let Some(headers) = e.operation.headers.as_ref() else { return };
+    let Some(template) = e.request.template.as_ref() else { return };
+    let in_header: BTreeSet<String> =
+        headers.values().flat_map(|v| placeholders(v)).collect();
+    if in_header.is_empty() {
+        return;
+    }
+    let mut in_body: BTreeSet<String> = BTreeSet::new();
+    collect_placeholders(template, &mut in_body);
+    for name in in_header.intersection(&in_body) {
+        warnings.push(format!(
+            "{CODE_DUPLICATE_PLACEMENT} · entity {}：占位符 {{{name}}} 既进 header 又进 body，\
+             通常是错的（真调会报 UnknownParameter；离线体检原本查不出来）",
+            e.id
+        ));
+    }
+}
+
+/// 把模板里**所有**字符串值的占位符收进 `out`（数组 / 嵌套对象都下钻）。
+fn collect_placeholders(v: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match v {
+        serde_json::Value::String(s) => out.extend(placeholders(s)),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| collect_placeholders(x, out)),
+        serde_json::Value::Object(m) => m.values().for_each(|x| collect_placeholders(x, out)),
+        _ => {}
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -799,6 +848,43 @@ mod tests {
             .errors
             .iter()
             .any(|p| p.code == CODE_RELATION_ENDPOINT && p.message.contains("不存在")));
+    }
+
+    /// CP4 · 同一个占位符既进 header 又进 body ⇒ **警告**（⛔ 不是错误、exit 仍 0）。
+    ///
+    /// ⚠️ 夹具刻意用**中立名**（`placement` / `X-Api-Placement`）：这条规则是通用的，
+    /// ⛔ 产品路径里不许出现任何具体厂商的参数名 —— 真实案例见 `docs/RECIPE.md` §七①。
+    ///
+    /// 变异：把 `check_duplicate_placement` 从 `validate()` 里删掉 ⇒ 这条断言红；
+    /// 把警告改成 `errors.push` ⇒ `r.ok` 变 false，也红。
+    #[test]
+    fn duplicate_placement_is_a_warning_not_an_error() {
+        let json = mapping_json("ontok:云资源/{id}", "[]", "[]", "InstanceName").replace(
+            "\"operation\": { \"action\": \"SomeAction\" },",
+            "\"operation\": { \"action\": \"SomeAction\", \
+             \"headers\": { \"X-Api-Placement\": \"{placement}\" } },\n    \
+             \"request\": { \"template\": { \"Placement\": \"{placement}\" }, \
+             \"bindings\": { \"placement\": { \"source\": \"filter\" } } },",
+        );
+        let r = run("dup-placement", &json);
+        assert!(r.ok, "警告不许阻断体检：{:?}", r.errors);
+        let w = r
+            .warnings
+            .iter()
+            .find(|w| w.contains(CODE_DUPLICATE_PLACEMENT))
+            .unwrap_or_else(|| panic!("必须有一条 DUPLICATE_PLACEMENT：{:?}", r.warnings));
+        assert!(w.contains("cvm_instance"), "警告必须点名实体：{w}");
+        assert!(w.contains("{placement}"), "警告必须点名占位符：{w}");
+
+        // 反证：把 body 里的占位符换成常量 ⇒ 不再有这条警告（规则是通用的，不是按名字写死）。
+        let clean = json.replace("\"Placement\": \"{placement}\"", "\"Placement\": \"fixed\"");
+        let r2 = run("no-dup-placement", &clean);
+        assert!(r2.ok);
+        assert!(
+            !r2.warnings.iter().any(|w| w.contains(CODE_DUPLICATE_PLACEMENT)),
+            "没有重复占位符就不许报：{:?}",
+            r2.warnings
+        );
     }
 
     #[test]

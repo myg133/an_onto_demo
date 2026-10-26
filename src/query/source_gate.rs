@@ -213,6 +213,13 @@ struct SourceDecl {
     base_url: Option<String>,
     #[serde(default)]
     auth: Option<RawAuth>,
+    /// ⭐ REQ-152 · CP4 · 源级默认值（`source=default` 的绑定从这里取值）。
+    ///
+    /// **原样**透出到 `get.request.defaults`：键名 / 大小写 / 嵌套结构一个字符不改
+    /// （真实映射里 `{"Region":…,"module":…}` 两个键的大小写本来就不一致）。
+    /// ⛔ 这里不做任何解释 —— 哪个占位符该填哪个键，是客户端与映射作者之间的事。
+    #[serde(default)]
+    defaults: Option<serde_json::Value>,
 }
 
 /// ⭐ REQ-152 · `sources[].auth`。v1 只认前两项；v2 的三项声明**可选**
@@ -329,7 +336,7 @@ const MAX_GET_RECIPE_BYTES: usize = 12 * 1024;
 /// | --- | --- | --- |
 /// | `source` | `entities[].source` → `sources[].{base_url,auth.mode}` | 只取这两个值 |
 /// | `operation` | `entities[].operation` | **原样透出**（不认识任何 header 名） |
-/// | `request` | `entities[].request` | **原样透出**（模板 / 必填 / 绑定 / 分页路径） |
+/// | `request` | `entities[].request` + 所属源的 `sources[].defaults` | **原样透出**（模板 / 必填 / 绑定 / 分页路径；CP4 起多一个 `defaults`，仅当源写了才出现） |
 /// | `iterator` | `entities[].iterator` | 原样透出 |
 /// | `fields` | `entities[].fields` | 摊平成 `属性 → 响应字段路径` |
 /// | `auth` | `sources[].auth` 的声明 | 只透传（变量名 / 头名 / scope 段名） |
@@ -438,7 +445,7 @@ fn build_recipe(
     Recipe {
         source,
         operation: e.operation.clone(),
-        request: e.request.clone(),
+        request: with_defaults(e.request.clone(), src.and_then(|s| s.defaults.clone())),
         iterator: e.iterator.clone(),
         fields: fields.filter(|f| !f.is_empty()),
         // `credential_env` 全空且三项也没有 ⇒ 整个 `auth` 不出现。
@@ -448,6 +455,33 @@ fn build_recipe(
                 || a.timestamp.is_some()
                 || a.scope.is_some()
         }),
+    }
+}
+
+/// ⭐ REQ-152 · CP4 · `sources[].defaults` → `get.request.defaults`（**只搬不改**）。
+///
+/// 为什么挂在 `request` 下：`bindings.<名>.source = "default"` 只说「从默认值取」，
+/// 而值本身在 `sources[].defaults` 里 —— 不把它透出来，客户端拿到 `{module}` 也
+/// 不知道填什么（实测：`alarm_policy` 因此报 `MissingParameter`）。
+///
+/// 口径：
+/// - 源**没有** `defaults` ⇒ 整个键不出现（⛔ 不塞 `{}`、⛔ 不按占位符名编一个）；
+/// - 映射写了什么就透什么：键名 / 大小写 / 嵌套结构**原样**（⛔ 不合并进 `template`、
+///   ⛔ 不解释成「某个 header 的值」）；
+/// - `request` 本身就缺、但有 defaults ⇒ 给 `{"defaults": …}`；
+/// - `request` 不是对象（坏映射）⇒ 原样留着，⛔ 不静默改写（`access validate` 负责报错）。
+fn with_defaults(
+    request: Option<serde_json::Value>,
+    defaults: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let Some(defaults) = defaults else { return request };
+    match request {
+        None => Some(serde_json::json!({ "defaults": defaults })),
+        Some(serde_json::Value::Object(mut obj)) => {
+            obj.insert("defaults".to_string(), defaults);
+            Some(serde_json::Value::Object(obj))
+        }
+        other => other,
     }
 }
 
