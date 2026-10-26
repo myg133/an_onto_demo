@@ -101,42 +101,60 @@ category: contract
 
 ### ⭐⭐ 关系动词：**从字典里选**（REQ-157）
 
-谓词不是自由发挥。抽取时按下面这张表选，**表外的词一律不许用**。
+关系的谓词**不是自由文本**：它来自一张受控字典 `relation-verbs.json`（随仓库发布，`ontok-builder relation verbs check` 用同一份字典校验）。**只准从下面 16 个主键里选**：
 
-| 主键（写进 `semantic`） | 中文 | 常见别名（也接受，会被归一） |
+| 主键 | 中文标签 | 什么时候用 |
 | --- | --- | --- |
-| `belongs_to` | 归属于 | `belong_to` `owned_by` |
-| `attached_to` | 挂载于 | `attaches_to` `attached` `mounts_to` |
-| `binds_to` | 绑定到 | `binds` |
-| `references` | 关联到 | `refers_to` |
-| `notifies_via` | 通知到 | `notifies` |
-| `applies_to` | 适用于 | `applied_to` |
-| `forwards_to` | 转发到 | `forwarded_to` |
-| `targets` | 指向 | — |
-| `bills` | 计费到 | `billed_to` |
-| `based_on` | 基于 | — |
-| `deployed_to` | 部署于 | `deploys_to` |
-| `has` | 拥有 | — |
-| `depends_on` | 依赖 | `depends` |
-| `records` | 记录了 | — |
-| `derived_from` | 算自 | — |
+| `belongs_to` | 归属于 | 从属：子对象属于父对象（"X 属于 Y"） |
+| `attached_to` | 挂载于 | 挂载 / 装载（磁盘挂到实例、网卡挂到实例） |
+| `binds_to` | 绑定到 | 绑定（弹性 IP 绑到网卡、监听器绑后端、监听器绑证书） |
+| `references` | 关联到 | 引用另一份配置 / 对象 / 规则 |
+| `notifies_via` | 通知到 | 通过某个通道通知（告警策略 → 通知模板） |
+| `applies_to` | 适用于 | 策略 / 规则适用于某类对象 |
+| `forwards_to` | 转发到 | 把请求 / 流量转发到目标 |
+| `targets` | 指向 | 直接指向某个后端 / 目标 |
+| `bills` | 计费到 | 账单 / 费用记到某个资源 |
+| `based_on` | 基于 | 由某个模板 / 镜像 / 基础对象产生 |
+| `deployed_to` | 部署于 | 部署在某台实例 / 环境上 |
+| `has` | 拥有 | 真正的拥有（⛔ 不是"有个字段"） |
+| `depends_on` | 依赖 | 运行期依赖（没有它就不能工作） |
+| `records` | 记录了 | 日志 / 记录类对象记录了某件事 |
+| `derived_from` | 算自 | 由另一份数据算出来 |
+| `contains` | 包含 | ⚠️ **已弃用**（泛词）；只有确实没有更具体说法时才用，构建会告警 |
 
-**⛔ 禁用（会被构建拒绝，不是警告）**：
+**同义写法用别名，⛔ 别自己造**——写别名会被自动归一到主键：
+
+| 你可能会写 | 归一成 |
+| --- | --- |
+| `belong_to` · `owned_by` | `belongs_to` |
+| `attaches_to` · `attached` · `mounts_to` | `attached_to` |
+| `binds` | `binds_to` |
+| `refers_to` | `references` |
+| `notifies` | `notifies_via` |
+| `applied_to` | `applies_to` |
+| `forwarded_to` | `forwards_to` |
+| `billed_to` | `bills` |
+| `deploys_to` | `deployed_to` |
+| `depends` | `depends_on` |
+
+⛔ **这些词一条都不许出现**（字典 `forbidden`，构建直接拒绝、退出码 4）：
 
 ```
 uses · associated_with · related_to · involves · has_many · is_related
 ```
 
-**三条规则**：
+**拿不准时按这个顺序做**：
 
-| # | 规则 | 为什么 |
-| --- | --- | --- |
-| 1 | **只准从表里选**（或它的别名） | 表外的新词会让本体无法跨项目比较，也让"给人看的中文标签"做不出来 |
-| 2 | **同一件事只用一种动词** | 别同时出现 `attached_to` 和 `attaches_to` —— 那是同一个意思的两种写法 |
-| 3 | **选不出来的，用最接近的那条**，并在 `evidence` 里给出文档原句 | 宁可保守，也别造词；真觉得字典不够，**在回答里单独提一句"建议新增动词 X，因为……"**，由人决定 |
+1. 先在上表里找**语义最接近**的主键：「X 使用 Y」真正的意思通常是 `depends_on` / `attached_to` / `references` 中的一个；
+2. **同一件事只用一种动词** —— 别同时出现 `attached_to` 和 `attaches_to`；
+3. 找不到就**放弃这条关系**：宁可少一条，不许造词；
+4. ⛔ 不要发明 `uses_ssl_certificate` 这类复合动词 —— 动词是**词表**，具体性放在两端的**概念名**上。
 
-> ⚠️ **别把「绑定」和「使用」混着用**：文档写「监听器**绑定**的证书」，就写 `binds_to`；
-> 写「**使用**」是泛动词，会被拒。
+> ⚠️ 与下一节「结构化文档的例外」的关系：那里允许的复合谓词（`包含字段` / `取值包含`）**不在字典里**。
+> 字段表场景请用 `contains`（已弃用，会告警）或 `references`，或把「实体 → 字段」写成概念归属；
+> ⛔ 不要为了凑字段表造新谓词。
+>
+> ⛔ 本表的**唯一事实源**是仓库根的 `relation-verbs.json`；加动词要**人审**，不要在抽取时临时扩表。
 
 **每条关系都必须两个端点都在「概念」集合里**（本块或前文已抽出的）。端点不存在 ⇒ ⛔ 不输出该条。
 

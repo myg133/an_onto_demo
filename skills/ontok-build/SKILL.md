@@ -215,6 +215,23 @@ ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
 
 > 要重新测：`BA/demands/REQ-147/evidence-same-model.md` 有完整复现命令与判读。
 
+### ⭐ 冻结前必须跑：关系动词校验（REQ-157）
+
+```bash
+ontok-builder relation verbs check --project <项目> --version <版本>
+```
+
+| 退出码 | 含义 | 能不能冻结 |
+| ---: | --- | --- |
+| 0 | 干净；或用到的只是别名（自动归一） | ✅ 能 |
+| **4** | 有 `forbidden` 泛词 或 `unknown` 字典外动词 | ⛔ **不许冻结** |
+
+- `alias_normalized`（如 `attaches_to`）与 `deprecated`（如 `contains`）**只是提示**，不阻塞
+- 报告给两份：stderr 人话 + stdout JSON（带 `occurrences[].location / from / to`）
+- 动词字典是仓库根的 `relation-verbs.json`，**加动词要人审**
+
+> **为什么必须跑**：v3 实际就有 `uses` / `associated_with` 两个泛词混进了冻结版本 —— 那时还没有这道闸。
+
 ## 四 · 失败长相（**这一节最重要**）
 
 | 现象 | 真实原因 | 怎么办 |
