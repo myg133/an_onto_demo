@@ -88,14 +88,35 @@ MCP 用户也可以读资源：`ontok://ontology/customer.ttl`、`ontok://ontolo
 
 **写查询之前先扫一遍**——不然你会拿 SPARQL 去查 api 类，然后拿到空图还以为是"没数据"。
 
-### 大本体怎么读
+### 大本体怎么读（**⛔ 最常见的浪费**）
 
-TTL 可能只有几十 KB，也可能几百 KB：
+先看它多大：
 
-| 情况 | 做法 |
+```bash
+curl -sS -H "Authorization: Bearer $TOK" "$ONTOK_BASE_URL/api/ontology.ttl" -o ./onto.ttl \
+     -w 'bytes=%{size_download}\n'
+```
+
+| 大小 | 做法 |
 | --- | --- |
-| 小（几十 KB） | 直接读完 |
-| 大（几百 KB） | ⛔ 别整份塞进上下文；改用 `catalog` 分页浏览 + `describe` 看单个概念 |
+| < 50 KB | 直接读 |
+| **≥ 50 KB** | ⛔ **不要 `cat`**（实测：209 KB 的 TTL `cat` 一次，会话输入 token 直接多出十万级）；用下面三条命令**只取要的** |
+
+```bash
+# ① 有多少类、多少 api 源类
+grep -c 'a owl:Class' onto.ttl
+grep -c 'ontok:sourceKind "api"' onto.ttl
+
+# ② 列出全部 api 源类（只要名字）
+grep -B20 'ontok:sourceKind "api"' onto.ttl | grep -E '^:[A-Za-z_]' | sed 's/ .*//'
+
+# ③ 看某一个类（含它的属性与关系），只取那一段
+awk '/^:cvm_instance /{f=1} f&&/^\.$/{print;exit} f' onto.ttl
+```
+
+需要更多细节，用 `catalog` 分页 + `describe` 单个概念——**它们本来就是为"不全量读"设计的**。
+
+> **一句话**：TTL 是**地图**，不是**正文**。看地图的方式是**查索引**，不是把整张纸塞进眼睛。
 
 ---
 
@@ -199,7 +220,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 **跨源边**：如果两个类一个在库、一个在 API，那条边**不会给你 `get`** ⇒ 拆两段：先查库拿 ID，再按 ID 调接口。
 硬走会得到 `CROSS_SOURCE_UNSUPPORTED`——**重试无效**。
 
-### 4.4 取数侧怎么落地（**上一轮实测踩过的四个坑**）
+### 4.4 取数侧怎么落地（**实测踩过的五个坑**）
 
 拿到 `get` 之后，取数由你完成。以下四条是实测总结，照做能省掉一轮返工。
 
@@ -240,6 +261,31 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 ✅ 做法：**先取一页，看返回里有没有 `TotalCount`**；有 `TotalCount` 就按它算页数，
 没有就"取到空页为止"。⛔ 不要写死 `while offset < 1000` 这种假设。
+
+#### ⑤ 取数层**写成一个文件**，之后只传参数（⛔ 别每次 heredoc 重写）
+
+实测最坏的一轮：47 次 bash 调用里，**大量是重复定义同一套 helper**（写一次 `tc.py`，却几乎没复用它）。
+
+✅ 正确姿势：
+
+```bash
+# 一次性写好（签名 + 翻页 + 重试 + 收窄，都在里面）
+cat > fetch.py <<'PY'
+# … appendix A 的实现，加一个命令行入口 …
+PY
+
+# 之后每条命令只传参数
+python fetch.py cvm_instance --region ap-guangzhou --limit 100
+python fetch.py cbs_disk     --region ap-beijing
+```
+
+| 反例 | 为什么坏 |
+| --- | --- |
+| 每次 `python - <<'EOF'` 重写 helper | 每次都要重新解释一遍逻辑；错一次就是一次工具调用；日志里全是重复代码 |
+| 把 helper 写在会话里、靠"记得" | 上下文一长就记错，改一次要重发全部 |
+
+> **判断标准**：同一种"取数/解析"要做第 2 次时，就该抽成文件；⛔ 不要复制粘贴改三个字符。
+
 
 ---
 
