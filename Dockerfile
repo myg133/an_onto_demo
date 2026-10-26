@@ -49,9 +49,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 # ⚠️ 编译期 include_str! 引用的**仓库根**文件（不在 src/ 下）必须显式 COPY，
 #    否则报 `couldn't read src/.../../../xxx.json`。
-#    当前仅一处：src/sparql/policy.rs → include_str!("../../query-policy.example.json")
-#    将来若再加根目录的 include_str!，这里要同步补一行。
+#    当前两处：src/sparql/policy.rs → query-policy.example.json
+#              src/domain/relation_verbs.rs → relation-verbs.json（REQ-157）
+#    ⚠️ 这条注释**曾经预言过一次真实故障**（REQ-157）：漏 COPY ⇒ 镜像构建
+#    `couldn't read ../../relation-verbs.json`，而**本地 cargo build 是绿的**。
+#    守卫：tests/test_dockerfile_covers_include_str.rs（自动对拍，别再靠记性）。
 COPY query-policy.example.json ./
+COPY relation-verbs.json ./
 RUN cargo build --release --bins
 
 # ── 运行阶段 ─────────────────────────────────────────────
