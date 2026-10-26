@@ -62,7 +62,7 @@
 //! | `PropertyView` | `owl:DatatypeProperty` + `rdfs:domain` + `rdfs:range`（xsd） | `nullable = !required` |
 //! | `RelationView` | `owl:ObjectProperty` + `rdfs:domain` / `rdfs:range` | 见下方基数映射 |
 //! | `RelationView.how_many` | `owl:FunctionalProperty` / `owl:InverseFunctionalProperty` | **N:1 ⇒ Functional；1:N ⇒ InverseFunctional**；1:1 ⇒ 两者（B-1 已修正） |
-//! | `RelationView.meaning` | `rdfs:comment` | **降级**（AC-008 已声明有损） |
+//! | `RelationView.meaning` | `rdfs:comment` + `skos:altLabel` | **降级**（AC-008 已声明有损）；⭐ REQ-156 起同一句人话再写一份机器可读的 `skos:altLabel` |
 //! | 样例值（`sample`） | **不导出** | 那是实例面的东西（G1：只导 TBox） |
 //!
 //! # 已知限制
@@ -2062,6 +2062,10 @@ fn object_block_customer(
         "rdfs:comment {}",
         zh(&format!("语义：{}（{}）", r.meaning, r.how_many))
     ));
+    // ⭐ REQ-156 · `rdfs:comment` 是人读的整句；机器要的是**单独的标签**。
+    // 同一句 `meaning`（已由 `view::semantic_cn` 翻成中文）再写一份 `skos:altLabel`，
+    // 形状与 `EntityView.aliases` 一致（都是 `"…"@zh`）。⛔ 不改上面 comment 的形状。
+    lines.push(format!("skos:altLabel {}", zh(r.meaning)));
     lines.push(format!("rdfs:domain :{from_local}"));
     lines.push(format!("rdfs:range :{to_local}"));
     if let Some(inv) = inverse_of {
@@ -2735,6 +2739,30 @@ mod tests {
         }
         rev.relations.reverse();
         assert_eq!(a, serialize_customer(&rev, &opts()).into_doc(), "输出依赖了输入顺序");
+    }
+
+    /// ⭐ REQ-156 · 客户视图的关系三元组带**机器可读**的中文标签 `skos:altLabel`，
+    /// 与既有 `rdfs:comment` 的人话同源（⛔ 不改 comment 的形状）。
+    ///
+    /// 变异（红）：删掉 `object_block_customer` 里那行 `skos:altLabel` ⇒ 本用例红。
+    #[test]
+    fn customer_relation_carries_skos_alt_label() {
+        let d = serialize_customer(&cv(), &opts()).into_doc();
+        let forward = block_of(&d, ":订单__客户 a ");
+        assert!(
+            forward.contains(r#"rdfs:comment "语义：归属于（多对一）"@zh"#),
+            "rdfs:comment 的现有形状被改了：{forward}"
+        );
+        assert!(
+            forward.contains(r#"skos:altLabel "归属于"@zh"#),
+            "关系三元组缺机器可读的 skos:altLabel：{forward}"
+        );
+        // 反向属性没有自己的语义（`meaning` 只描述正向）⇒ ⛔ 不编一个「被归属于」。
+        let inverse = block_of(&d, ":客户__订单 a ");
+        assert!(
+            !inverse.contains("skos:altLabel"),
+            "反向属性不该编语义标签：{inverse}"
+        );
     }
 
     #[test]

@@ -378,6 +378,34 @@ mod tests {
         );
     }
 
+    /// ⭐ REQ-156 · 边标签优先中文 `semantic_label`；没有标签就退回英文 key
+    /// （`name` / `semantic`），⛔ 不许留白。
+    #[test]
+    fn relation_labels_prefer_the_chinese_semantic_label() {
+        assert!(
+            STUDIO_JS.contains("e.r.semantic_label"),
+            "边标签没有使用 catalog 的 semantic_label"
+        );
+        assert!(
+            STUDIO_JS.contains("|| String(e.r.name"),
+            "没有语义标签时应当退回关系真名（英文 key）"
+        );
+        // 抽屉的关系行：标签 + 小字英文 key；未知动词只有 key。
+        assert!(
+            STUDIO_JS.contains("r.semantic_label"),
+            "抽屉关系行没有使用 semantic_label"
+        );
+        assert!(
+            STUDIO_JS.contains("r.semantic"),
+            "抽屉关系行没有保留英文 key（无标签时要显示它）"
+        );
+        // 两条路都不许留白：标签 / key 都空时还要有占位。
+        assert!(
+            STUDIO_JS.contains("|| \"关系\""),
+            "边标签在 label/name/semantic 都空时会留白"
+        );
+    }
+
     /// ⭐ 回归守卫：**CSS 不许把边的 opacity 写死**。
     ///
     /// 真事故（v0.2.2 线上）：

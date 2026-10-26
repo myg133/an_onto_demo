@@ -458,10 +458,13 @@
       var lbl = s("text", { "class": "edge-label" });
       /* ⚠️ 这里曾经用 shortName(名字) —— 但本套 34 条关系的名字都是 `from__to`，
          shortName 取的是**后半段（目标类名）**，看起来像"关系没有名字"。
-         开关既然叫「关系名」，就显示真名。 */
-      var fullName = String(e.r.name || "");
+         ⭐ REQ-156：有关系语义时优先显示中文标签（catalog 的 `semantic_label`）；
+         认不出的动词没有标签，就退回**真名**（英文 key / `from__to`）。
+         ⛔ 两条都空时也不许留白 —— 最后用 `semantic`，再不行才给一句占位。 */
+      var labelText = String(e.r.semantic_label || "");
+      var fullName = labelText || String(e.r.name || "") || String(e.r.semantic || "") || "关系";
       lbl.textContent = fullName.length > 18 ? fullName.slice(0, 17) + "…" : fullName;
-      if (fullName) lbl.setAttribute("title", fullName);
+      lbl.setAttribute("title", fullName);
       var lbg = s("rect", { "class": "edge-label-bg", rx: "3", height: "13" });
       gEdges.appendChild(line);
       gEdges.appendChild(lbg);
@@ -817,13 +820,23 @@
           var other = r.from === key ? r.to : r.from;
           var dir = r.from === key ? "→" : "←";
           /* ⚠️ 曾经显示 shortName(name)：34 条关系名都是 `from__to`，shortName 取后半段
-                   （目标类名），看起来像"关系没有名字"。现在给：方向 + 对方类 + 完整名字 + 证据。 */
-                return h("div", { class: "rel" }, [
-                  h("span", { class: "arrow", text: dir }),
-                  h("b", { text: other }),
-                  h("span", { class: "pk", text: String(r.name || "") }),
-                  h("span", { class: "ev " + ev.cls, text: ev.label })
-                ]);
+                   （目标类名），看起来像"关系没有名字"。
+             ⭐ REQ-156：有中文标签 ⇒ `标签` + 小字英文 key；没有标签 ⇒ **只显示英文 key**
+             （⛔ 不假装是中文）。两条路都不留白。 */
+          var label = String(r.semantic_label || "");
+          var keyText = String(r.semantic || "") || String(r.name || "");
+          var kids = [
+            h("span", { class: "arrow", text: dir }),
+            h("b", { text: other })
+          ];
+          if (label) {
+            kids.push(h("span", { class: "sem", text: label }));
+            if (keyText) kids.push(h("span", { class: "pk", text: keyText }));
+          } else {
+            kids.push(h("span", { class: "pk", text: keyText || "关系名未知" }));
+          }
+          kids.push(h("span", { class: "ev " + ev.cls, text: ev.label }));
+          return h("div", { class: "rel" }, kids);
         }))
       ]));
     }
@@ -833,9 +846,8 @@
 
   /* 图例：按真实数据生成（外加"全部未验证"的诚实提示） */
   function buildLegend() {
-    /* 诚实提示：本套 34 条关系的名字都是 `from__to` 自动生成的端点对，本体没有语义动词。
-       ⛔ 别在 UI 里"编"一个好看的动词（那就是造假）。 */
-    /* 诚实提示：关系名是 from__to 自动生成，本体没有语义动词 */
+    /* ⭐ REQ-156：本体**有**语义动词了（34 条 / 15 种），边标签优先用 catalog 的
+       `semantic_label`；未知动词没有标签就退回英文 key —— ⛔ 别在 UI 里"编"一个好看的动词。 */
     var box = byId("legend");
     clear(box);
     var apiN = S.classes.filter(isApi).length;
