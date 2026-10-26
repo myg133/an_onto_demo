@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>元方本体平台 · 本体图</title>
+<link rel="stylesheet" href="studio.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ── 顶栏 ─────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 40 40" width="34" height="34">
+          <defs>
+            <radialGradient id="orb" cx="34%" cy="28%" r="72%">
+              <stop offset="0%" stop-color="#e2f2ff"/>
+              <stop offset="42%" stop-color="#5b9fd0"/>
+              <stop offset="100%" stop-color="#0e2637"/>
+            </radialGradient>
+            <radialGradient id="orbGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#6ec8ff" stop-opacity=".55"/>
+              <stop offset="100%" stop-color="#6ec8ff" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <circle cx="20" cy="20" r="17" fill="url(#orbGlow)"/>
+          <circle cx="20" cy="20" r="11.5" fill="url(#orb)"/>
+          <ellipse cx="20" cy="20" rx="16" ry="5.6" fill="none"
+                   stroke="#8fd4ff" stroke-opacity=".5" stroke-width="1.1"
+                   transform="rotate(-24 20 20)"/>
+          <ellipse cx="20" cy="20" rx="16" ry="5.6" fill="none"
+                   stroke="#8fd4ff" stroke-opacity=".26" stroke-width="1"
+                   transform="rotate(34 20 20)"/>
+          <circle cx="33.2" cy="12.6" r="1.7" fill="#cfeaff"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">元方本体平台</div>
+        <div class="brand-sub">TURING · ONTOLOGY PLATFORM</div>
+      </div>
+    </div>
+    <div class="topbar-sep"></div>
+    <div class="crumbs">
+      <b id="crumb-project">cloud-resource</b>
+      <span id="crumb-sub">第 3 版 · 已冻结</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+        <circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5L14 14" stroke-linecap="round"/>
+      </svg>
+      <input id="search" type="search" placeholder="搜索类或属性…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="badge is-live" id="badge-mode"><span class="dot"></span><span id="badge-mode-text">本体模式</span></div>
+    <div class="badge"><span class="dot"></span><span id="badge-counts">30 类 · 34 关系</span></div>
+  </header>
+
+  <!-- ── 左侧栏 ───────────────────────────────────────────── -->
+  <aside class="rail">
+    <div class="rail-head">
+      <div class="rail-title">本体资产</div>
+      <div class="rail-count" id="rail-count">30</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="s-classes">—</b><span>类</span></div>
+      <div class="stat"><b id="s-rels">—</b><span>关系</span></div>
+      <div class="stat"><b id="s-props">—</b><span>属性</span></div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="rail-list" id="rail-list"></div>
+  </aside>
+
+  <!-- ── 主舞台 ───────────────────────────────────────────── -->
+  <main class="stage">
+
+    <!-- 视图：本体图 -->
+    <section class="view is-on" id="v-graph">
+      <svg id="graph"></svg>
+      <div class="hint-bar">
+        <span><em>拖拽</em> 平移</span>
+        <span><em>滚轮</em> 缩放</span>
+        <span><em>点击</em> 看定义与证据</span>
+      </div>
+      <div class="floaters">
+        <div class="floater" id="layers">
+          <button data-layer="props" class="is-on">属性</button>
+          <button data-layer="labels" class="is-on">关系名</button>
+          <button data-layer="weak">弱证据</button>
+          <button id="motion-toggle" title="持续动效（呼吸/自转）会增加重绘">动效</button>
+        </div>
+        <div class="floater zoom">
+          <button id="zoom-out" title="缩小">−</button>
+          <button id="zoom-reset" title="缩放到适合屏幕">适应</button>
+          <button id="zoom-in" title="放大">+</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 视图：目录 -->
+    <section class="view" id="v-catalog">
+      <div class="pane">
+        <div class="pane-title">目录浏览</div>
+        <div class="pane-sub" id="catalog-sub"></div>
+        <div class="grid-cards" id="cards"></div>
+      </div>
+    </section>
+
+    <!-- 视图：查询 -->
+    <section class="view" id="v-query">
+      <div class="pane">
+        <div class="pane-title">查询台</div>
+        <div class="pane-sub">默认返回 JSON-LD 图。api 源类会给 <code style="font-family:var(--mono)">@pending</code> 取数指引，而不是空结果。</div>
+        <div class="q-wrap">
+          <div class="q-panel">
+            <div class="q-head">
+              <span>SPARQL</span><span class="spacer"></span>
+              <button class="q-btn ghost" id="q-clear">清空</button>
+              <button class="q-btn" id="q-run">执行</button>
+            </div>
+            <textarea class="q-editor" id="q-text" spellcheck="false"></textarea>
+            <div class="q-samples" id="q-samples"></div>
+          </div>
+          <div class="q-panel">
+            <div class="q-head"><span>响应</span><span class="spacer"></span><span id="q-mode-hint" style="text-transform:none;letter-spacing:0"></span></div>
+            <div class="q-out" id="q-out"></div>
+            <div class="status-line" id="q-status"><span>就绪</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 底部视图切换 -->
+    <nav class="tabs" id="tabs">
+      <button data-view="graph" class="is-on">本体图</button>
+      <button data-view="catalog">目录</button>
+      <button data-view="query">查询</button>
+    </nav>
+
+    <!-- 详情抽屉 -->
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <div>
+          <div class="drawer-title" id="d-title">—</div>
+          <div class="drawer-key" id="d-key"></div>
+        </div>
+        <button class="drawer-close" id="d-close">×</button>
+      </div>
+      <div class="drawer-body" id="d-body"></div>
+    </aside>
+  </main>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script src="snapshot.js"></script>
+<script src="studio.js"></script>
+</body>
+</html>
