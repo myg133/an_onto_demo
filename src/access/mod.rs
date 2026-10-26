@@ -114,8 +114,33 @@ pub mod publish;
 pub mod tc3;
 pub mod validate;
 
-/// 契约版本。破坏性变更 ⇒ +1（设计稿规则 10）。
+/// 契约**基线**版本（v1）。破坏性变更 ⇒ +1（设计稿规则 10）。
+///
+/// v1 的形状：`operation` 只有 `action` / `version` / `method` / `content_type`，
+/// `auth` 只有 `mode` + `credential_env`。⭐ REQ-152 的 v2 是**加法式**的 ——
+/// 新字段全部可选，所以 v1 映射照常加载、行为逐字节不变（见 [`CONTRACT_VERSION_V2`]）。
 pub const CONTRACT_VERSION: u32 = 1;
+
+/// ⭐ REQ-152 · 契约 v2：`operation` 泛化成 `headers{}` + `vars{}`
+/// （厂商概念降级为 **header 模板**，字段名里不再出现任何厂商名词），
+/// `auth` 补 `signed_headers` / `timestamp` / `scope` 三项**声明**（仍然只有变量名，⛔ 没有值）。
+///
+/// **v2 是"允许写"，不是"必须写"**：v2 映射里缺某个新字段 ⇒ 那一项就**不出现**
+/// （⛔ 不按 `mode` 猜一个默认值 —— 猜出来的签名头是错的，而错签名比没签名更难查）。
+pub const CONTRACT_VERSION_V2: u32 = 2;
+
+/// 本程序认识的契约版本。v1 是基线，v2 是加法 ⇒ **两个都收**。
+pub fn contract_version_supported(v: u32) -> bool {
+    matches!(v, CONTRACT_VERSION | CONTRACT_VERSION_V2)
+}
+
+/// 这个版本起，`@pending.get` **允许**给完整取数配方。
+///
+/// v1 / 不写版本 ⇒ 旧 4 键（`class` / `filter` / `pushdown` / `ref`），一个不多 ——
+/// 老客户端只看这 4 个键，多给的东西它也不认（AC-103 / R2）。
+pub fn contract_has_recipe(v: u32) -> bool {
+    v >= CONTRACT_VERSION_V2
+}
 
 // ══════════════════════════════════════════════════════════════
 // 错误码（Agent 要能**按码**决定怎么办 —— 设计稿 §五）
@@ -262,10 +287,40 @@ pub struct Source {
 }
 
 /// 鉴权声明（设计稿规则 1：契约会随本体分发 ⇒ 只写环境变量名）。
+///
+/// ⭐ REQ-152 · v2 补三项**声明**（全部可选，⛔ 一个都不许猜默认值）：
+///
+/// | 字段 | 给客户端什么 | 不给时 |
+/// | --- | --- | --- |
+/// | [`Self::signed_headers`] | **哪些 header 参与签名**（小写，客户端照抄） | 该键不出现（AC-106） |
+/// | [`Self::timestamp`] | 时间戳写哪个 header、什么格式 | 同上 |
+/// | [`Self::scope`] | scope 由哪几段拼出来（`date` / `service` / `tc3_request`） | 同上 |
+///
+/// ⛔ 凭据**永远**只有变量名（`credential_env`）；值不出客户边界。
 #[derive(Debug, Clone, Serialize)]
 pub struct Auth {
     pub mode: String,
     pub credential_env: Vec<String>,
+    /// ⭐ v2 · 参与签名的 header 名（**小写**；顺序即映射作者写的顺序 ——
+    /// 签名前要排序，但那是实现细节，契约不替客户端排）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_headers: Option<Vec<String>>,
+    /// ⭐ v2 · 时间戳写进哪个 header、用什么格式。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<AuthTimestamp>,
+    /// ⭐ v2 · scope 的拼法（产品代码只透传，⛔ 不解释每一段是什么意思 ——
+    /// 那是算法的事，写在 `docs/AUTH-SPEC.md` 里）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
+}
+
+/// ⭐ REQ-152 · 签名时间戳的**声明**（写哪个 header + 什么格式）。
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthTimestamp {
+    /// 放时间戳的 header 名（例：`X-TC-Timestamp`）。
+    pub header: String,
+    /// 值的格式（`unix-seconds` / `unix-millis` / `rfc3339`）。
+    pub format: String,
 }
 
 /// 一条「类 ← API 响应节点」的映射。
@@ -522,12 +577,32 @@ pub enum PagingValue {
 }
 
 /// API 动作（`ontok:apiAction` + 三个 HTTP 细节）。
+///
+/// ⭐ REQ-152 · **v2 起厂商概念降级为 header 模板**：`headers` 里写
+/// `{"X-TC-Action": "{action}"}`、`vars` 里写 `{"action": "DescribeInstances"}` ——
+/// 于是「动作名落到哪个 header」是**映射的数据**，不是产品代码里的分支。
+///
+/// ⛔ 老字段 `action` / `version` / `content_type` **原样保留**（R2）：v1 映射、
+/// 以及仍在用它们的执行器（构建面）不需要改。新字段全部可选 ⇒ 没写就不出现。
 #[derive(Debug, Clone, Serialize)]
 pub struct Operation {
+    /// v1 的动作名。⚠️ v2 起**允许缺**（这时动作名在 `vars` 里、落点由 `headers` 决定）；
+    /// v1 映射缺它仍然报错（基线行为不变）。
     pub action: String,
     pub version: Option<String>,
     pub method: String,
     pub content_type: String,
+    /// ⭐ v2 · 请求路径（`"/"`）。`None` ⇒ 该键不出现（客户端按 `base_url` 自己决定）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// ⭐ v2 · **header 模板**：名字由映射作者写，值里的 `{name}` 从 `vars` 取。
+    ///
+    /// ⛔ 产品代码不认任何具体的 header 名 —— 它只负责把这张表原样透出 / 原样填值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// ⭐ v2 · header 模板里占位符的取值（`{"action": "DescribeInstances"}`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vars: Option<BTreeMap<String, String>>,
 }
 
 /// 一个字段映射。
@@ -605,6 +680,14 @@ impl Mapping {
     pub fn source(&self, id: &str) -> Option<&Source> {
         self.sources.iter().find(|s| s.id == id)
     }
+
+    /// ⭐ REQ-152 · 这份映射**允许**给完整取数配方吗（`contract_version >= 2`）。
+    ///
+    /// v1 ⇒ `@pending.get` 只有旧 4 键（AC-103）；这是**一处判定**，
+    /// ⛔ 不在每个下游各判一次（判两次就会有一处漏掉）。
+    pub fn has_recipe(&self) -> bool {
+        contract_has_recipe(self.contract_version)
+    }
 }
 
 impl Entity {
@@ -651,16 +734,21 @@ pub fn parse_value(root: &Value, problems: &mut Vec<Problem>) -> Result<Mapping,
     };
 
     // ── contract_version（先看版本：版本不认识时，后面的字段名可能整套都变了）──
+    //
+    // ⭐ REQ-152 · v1 与 v2 **都收**（v2 是加法式：新字段全部可选）。
+    // 记下**声明的那个**版本号（⛔ 不统一写成常量）：`publish` 的 `ontok:contractVersion`
+    // 与 `@pending.get` 的配方门槛都读它 —— 把 v2 记成 v1 会让配方永远不出现。
     let mut version_ok = true;
+    let mut declared_version = CONTRACT_VERSION;
     match opt_u64(top, "contract_version") {
-        Some(v) if v as u32 == CONTRACT_VERSION => {}
+        Some(v) if contract_version_supported(v as u32) => declared_version = v as u32,
         Some(v) => {
             version_ok = false;
             problems.push(Problem::new(
                 CODE_SCHEMA,
                 "字段 contract_version",
                 format!(
-                    "契约版本 {v} 不认识（本程序只认 {CONTRACT_VERSION}）。\
+                    "契约版本 {v} 不认识（本程序只认 {CONTRACT_VERSION} / {CONTRACT_VERSION_V2}）。\
                      ⛔ 破坏性变更必须升版本号，而不是让读端去猜字段。"
                 ),
             ));
@@ -670,7 +758,9 @@ pub fn parse_value(root: &Value, problems: &mut Vec<Problem>) -> Result<Mapping,
             problems.push(Problem::new(
                 CODE_SCHEMA,
                 "字段 contract_version",
-                format!("缺必填整数字段（本程序认 {CONTRACT_VERSION}）。"),
+                format!(
+                    "缺必填整数字段（本程序认 {CONTRACT_VERSION} / {CONTRACT_VERSION_V2}）。"
+                ),
             ));
         }
     }
@@ -729,7 +819,7 @@ pub fn parse_value(root: &Value, problems: &mut Vec<Problem>) -> Result<Mapping,
     debug_assert!(version_ok);
 
     Ok(Mapping {
-        contract_version: CONTRACT_VERSION,
+        contract_version: declared_version,
         mapping_version,
         project: project.unwrap_or_default(),
         ontology_version,
@@ -737,6 +827,80 @@ pub fn parse_value(root: &Value, problems: &mut Vec<Problem>) -> Result<Mapping,
         entities,
         relations,
     })
+}
+
+/// ⭐ REQ-152 · 解析 `sources[].auth`（v1 只认 `mode` / `credential_env`；v2 的三项声明可选）。
+///
+/// ⛔ 这里**只解声明**：不读环境变量、不碰任何凭据值、不按 `mode` 推默认头。
+fn parse_auth(a: &Map<String, Value>, loc: &str, problems: &mut Vec<Problem>) -> Auth {
+    let timestamp = match a.get("timestamp") {
+        None => None,
+        Some(Value::Object(t)) => Some(AuthTimestamp {
+            header: need_str(t, "header", &format!("{loc}.timestamp"), problems)
+                .unwrap_or_default(),
+            format: need_str(t, "format", &format!("{loc}.timestamp"), problems)
+                .unwrap_or_default(),
+        }),
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc}.timestamp"),
+                "必须是对象（`{\"header\": \"…\", \"format\": \"unix-seconds\"}`）—— \
+                 一个字符串表达不了「写哪个 header + 什么格式」两件事。",
+            ));
+            None
+        }
+    };
+    Auth {
+        mode: opt_str(a, "mode").unwrap_or_else(|| "none".to_string()),
+        credential_env: opt_str_list(a, "credential_env").unwrap_or_default(),
+        signed_headers: opt_str_list(a, "signed_headers").filter(|v| !v.is_empty()),
+        timestamp,
+        scope: opt_str_list(a, "scope").filter(|v| !v.is_empty()),
+    }
+}
+
+/// ⭐ REQ-152 · 解析 `headers{}` / `vars{}` 这类「名字 → 字符串」表。
+///
+/// 空对象 / 缺省 ⇒ `None`（**整个键不出现**）；值不是字符串 ⇒ 报错点名（⛔ 不静默丢）。
+fn parse_str_map(
+    o: &Map<String, Value>,
+    key: &str,
+    loc: &str,
+    problems: &mut Vec<Problem>,
+) -> Option<BTreeMap<String, String>> {
+    match o.get(key) {
+        None => None,
+        Some(Value::Object(m)) => {
+            let mut out: BTreeMap<String, String> = BTreeMap::new();
+            for (k, v) in m {
+                match v.as_str() {
+                    Some(s) => {
+                        out.insert(k.clone(), s.to_string());
+                    }
+                    None => problems.push(Problem::new(
+                        CODE_SCHEMA,
+                        format!("{loc} 字段 {key}.{k}"),
+                        "必须是字符串。header 模板 / 变量表里每一项都是「名字 → 字符串」，\
+                         ⛔ 不支持嵌套（嵌套会让「填值规则」变成一门语言）。",
+                    )),
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc} 字段 {key}"),
+                "必须是 JSON 对象（`{\"名字\": \"值或 {占位符}\"}`）。",
+            ));
+            None
+        }
+    }
 }
 
 fn parse_source(item: &Value, idx: usize, problems: &mut Vec<Problem>) -> Option<Source> {
@@ -753,10 +917,10 @@ fn parse_source(item: &Value, idx: usize, problems: &mut Vec<Problem>) -> Option
     // 于是「没写 kind」变成硬错误 —— 而它本该是一个有默认值的可选声明）。
     let kind = opt_str(obj, "kind").unwrap_or_else(|| "http-json".to_string());
     let base_url = need_str(obj, "base_url", &loc, problems)?;
-    let auth = obj.get("auth").and_then(|a| a.as_object()).map(|a| Auth {
-        mode: opt_str(a, "mode").unwrap_or_else(|| "none".to_string()),
-        credential_env: opt_str_list(a, "credential_env").unwrap_or_default(),
-    });
+    let auth = obj
+        .get("auth")
+        .and_then(|a| a.as_object())
+        .map(|a| parse_auth(a, &format!("{loc} 字段 auth"), problems));
     let defaults = obj
         .get("defaults")
         .and_then(|d| d.as_object())
@@ -821,20 +985,32 @@ fn parse_entity(
         .get("operation")
         .and_then(|o| o.as_object())
         .and_then(|o| {
-            let action = need_str(o, "action", &format!("{loc} 字段 operation"), problems)?;
+            let o_loc = format!("{loc} 字段 operation");
+            // ⭐ REQ-152 · v2：`action` 可以缺 —— 这时动作名在 `vars` 里、落点由 `headers`
+            // 决定。但**既没有 action 也没有 headers** 时仍然报错（v1 行为不变）。
+            let headers = parse_str_map(o, "headers", &o_loc, problems);
+            let action = match opt_str(o, "action") {
+                Some(a) if !a.trim().is_empty() => a,
+                _ if headers.is_some() => String::new(),
+                _ => need_str(o, "action", &o_loc, problems)?,
+            };
             Some(Operation {
                 action,
                 version: opt_str(o, "version"),
                 method: opt_str(o, "method").unwrap_or_else(|| "POST".to_string()),
                 content_type: opt_str(o, "content_type")
                     .unwrap_or_else(|| "application/json".to_string()),
+                path: opt_str(o, "path"),
+                headers,
+                vars: parse_str_map(o, "vars", &o_loc, problems),
             })
         });
     if operation.is_none() && !obj.contains_key("operation") {
         problems.push(Problem::new(
             CODE_SCHEMA,
             format!("{loc} 字段 operation"),
-            "缺必填对象（至少要 `{\"action\":\"SomeAction\"}`）。",
+            "缺必填对象（至少要 `{\"action\":\"SomeAction\"}`；v2 也可只写 \
+             `{\"method\":\"POST\",\"headers\":{…},\"vars\":{…}}`）。",
         ));
     }
 
@@ -2325,6 +2501,114 @@ mod tests {
         let bad = minimal().replace("\"contract_version\": 1", "\"contract_version\": 9");
         let errs = parse(&bad).unwrap_err();
         assert!(errs.iter().any(|p| p.message.contains("契约版本 9")), "{errs:?}");
+    }
+
+    // ── ⭐ REQ-152 · 契约 v2（加法式）：operation 泛化 + auth 补声明 ──────────
+
+    /// 最小契约改一处再序列化（⛔ 不用字符串 replace：pretty 缩进一变锚点就静默失效）。
+    fn v2_with(f: impl FnOnce(&mut serde_json::Value)) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(&minimal()).unwrap();
+        v["contract_version"] = serde_json::json!(CONTRACT_VERSION_V2);
+        f(&mut v);
+        serde_json::to_string(&v).unwrap()
+    }
+
+    /// v2 要能加载，且**记住声明的版本**（`get` 的配方门槛读它）。
+    #[test]
+    fn contract_v2_is_accepted_and_remembered() {
+        let v2 = parse(&v2_with(|_| {})).expect("v2 是加法式：必须能加载");
+        assert_eq!(v2.contract_version, CONTRACT_VERSION_V2);
+        assert!(v2.has_recipe(), "v2 ⇒ 允许给完整配方");
+        assert!(!parse(&minimal()).expect("v1").has_recipe(), "v1 ⇒ 旧 4 键，一个不多");
+        assert!(parse(&minimal().replace("\"contract_version\": 1", "\"contract_version\": 3")).is_err());
+    }
+
+    /// `headers{}` + `vars{}`：厂商概念只是**数据**，`action` 可以缺（v2）。
+    #[test]
+    fn operation_headers_and_vars_are_data() {
+        let m = parse(&v2_with(|v| {
+            v["entities"][0]["operation"] = serde_json::json!({
+                "method": "POST", "path": "/",
+                "headers": { "X-Amz-Target": "{target}", "Content-Type": "application/json" },
+                "vars": { "target": "DescribeInstances" }
+            });
+        }))
+        .expect("v2 的 operation 只写 headers/vars 也合法");
+        let op = &m.entities[0].operation;
+        assert_eq!(op.action, "", "没有 action ⇒ 空串（⛔ 不编一个动作名）");
+        assert_eq!(op.path.as_deref(), Some("/"));
+        assert_eq!(
+            op.headers.as_ref().unwrap().get("X-Amz-Target").map(String::as_str),
+            Some("{target}"),
+            "header 名原样透出：映射写什么就是什么"
+        );
+        assert_eq!(op.vars.as_ref().unwrap()["target"], "DescribeInstances");
+
+        // v1 仍然要求 `action`（基线行为不变）。
+        let mut v: serde_json::Value = serde_json::from_str(&minimal()).unwrap();
+        v["entities"][0]["operation"] = serde_json::json!({ "method": "POST" });
+        let errs = parse(&serde_json::to_string(&v).unwrap()).unwrap_err();
+        assert!(errs.iter().any(|p| p.location.contains("operation")), "{errs:?}");
+
+        // header 模板的值不是字符串 ⇒ 点名，⛔ 不静默丢。
+        let errs = parse(&v2_with(|v| {
+            v["entities"][0]["operation"] =
+                serde_json::json!({ "action": "A", "headers": { "X": 1 } });
+        }))
+        .unwrap_err();
+        assert!(errs.iter().any(|p| p.location.contains("headers.X")), "{errs:?}");
+    }
+
+    /// `auth` 的三项 v2 声明：给了就解析，**没给就不出现**（⛔ 不按 mode 猜）。
+    #[test]
+    fn auth_declarations_are_optional_and_never_inferred() {
+        let m = parse(&v2_with(|v| {
+            v["sources"][0]["auth"] = serde_json::json!({
+                "mode": "tc3-hmac-sha256",
+                "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
+                "signed_headers": ["content-type", "host", "x-tc-action"],
+                "timestamp": { "header": "X-TC-Timestamp", "format": "unix-seconds" },
+                "scope": ["date", "service", "tc3_request"]
+            });
+        }))
+        .expect("v2 + 完整 auth 声明");
+        let a = m.sources[0].auth.as_ref().expect("auth");
+        assert_eq!(a.signed_headers.as_ref().unwrap().len(), 3);
+        let ts = a.timestamp.as_ref().expect("timestamp");
+        assert_eq!((ts.header.as_str(), ts.format.as_str()), ("X-TC-Timestamp", "unix-seconds"));
+        assert_eq!(a.scope.as_ref().unwrap().len(), 3);
+        assert_eq!(
+            a.credential_env,
+            vec!["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
+            "只有**变量名**"
+        );
+        assert!(
+            !serde_json::to_string(a).unwrap().contains("\"value\""),
+            "⛔ 凭据值字段不许出现在契约里"
+        );
+
+        // 有 auth、没有三项声明 ⇒ 三个键都不出现（AC-106 在映射层的判据）。
+        let m = parse(&v2_with(|v| {
+            v["sources"][0]["auth"] = serde_json::json!({ "mode": "m", "credential_env": ["A"] });
+        }))
+        .expect("v2 + 最小 auth");
+        let a = m.sources[0].auth.as_ref().unwrap();
+        assert!(a.signed_headers.is_none() && a.timestamp.is_none() && a.scope.is_none());
+        let text = serde_json::to_string(a).unwrap();
+        assert!(!text.contains("signed_headers") && !text.contains("timestamp"), "{text}");
+
+        // `timestamp` 缺 `header` ⇒ 点名（否则客户端不知道往哪个 header 放时间戳）。
+        let errs = parse(&v2_with(|v| {
+            v["sources"][0]["auth"] =
+                serde_json::json!({ "mode": "m", "timestamp": { "format": "unix-seconds" } });
+        }))
+        .unwrap_err();
+        assert!(
+            errs.iter().any(|p| {
+                p.location.contains("auth.timestamp") && p.location.contains("header")
+            }),
+            "{errs:?}"
+        );
     }
 
     #[test]
