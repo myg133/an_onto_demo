@@ -317,7 +317,7 @@ pub struct Auth {
 /// ⭐ REQ-152 · 签名时间戳的**声明**（写哪个 header + 什么格式）。
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthTimestamp {
-    /// 放时间戳的 header 名（例：`X-TC-Timestamp`）。
+    /// 放时间戳的 header 名（例：`X-Api-Timestamp`）。
     pub header: String,
     /// 值的格式（`unix-seconds` / `unix-millis` / `rfc3339`）。
     pub format: String,
@@ -579,7 +579,7 @@ pub enum PagingValue {
 /// API 动作（`ontok:apiAction` + 三个 HTTP 细节）。
 ///
 /// ⭐ REQ-152 · **v2 起厂商概念降级为 header 模板**：`headers` 里写
-/// `{"X-TC-Action": "{action}"}`、`vars` 里写 `{"action": "DescribeInstances"}` ——
+/// `{"X-Api-Action": "{action}"}`、`vars` 里写 `{"action": "DescribeInstances"}` ——
 /// 于是「动作名落到哪个 header」是**映射的数据**，不是产品代码里的分支。
 ///
 /// ⛔ 老字段 `action` / `version` / `content_type` **原样保留**（R2）：v1 映射、
@@ -2529,7 +2529,7 @@ mod tests {
         let m = parse(&v2_with(|v| {
             v["entities"][0]["operation"] = serde_json::json!({
                 "method": "POST", "path": "/",
-                "headers": { "X-Amz-Target": "{target}", "Content-Type": "application/json" },
+                "headers": { "X-Api-Target": "{target}", "Content-Type": "application/json" },
                 "vars": { "target": "DescribeInstances" }
             });
         }))
@@ -2538,7 +2538,7 @@ mod tests {
         assert_eq!(op.action, "", "没有 action ⇒ 空串（⛔ 不编一个动作名）");
         assert_eq!(op.path.as_deref(), Some("/"));
         assert_eq!(
-            op.headers.as_ref().unwrap().get("X-Amz-Target").map(String::as_str),
+            op.headers.as_ref().unwrap().get("X-Api-Target").map(String::as_str),
             Some("{target}"),
             "header 名原样透出：映射写什么就是什么"
         );
@@ -2565,9 +2565,9 @@ mod tests {
         let m = parse(&v2_with(|v| {
             v["sources"][0]["auth"] = serde_json::json!({
                 "mode": "tc3-hmac-sha256",
-                "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
-                "signed_headers": ["content-type", "host", "x-tc-action"],
-                "timestamp": { "header": "X-TC-Timestamp", "format": "unix-seconds" },
+                "credential_env": ["PROVIDER_ACCESS_KEY_ID", "PROVIDER_SECRET_KEY"],
+                "signed_headers": ["content-type", "host", "x-api-action"],
+                "timestamp": { "header": "X-Api-Timestamp", "format": "unix-seconds" },
                 "scope": ["date", "service", "tc3_request"]
             });
         }))
@@ -2575,11 +2575,11 @@ mod tests {
         let a = m.sources[0].auth.as_ref().expect("auth");
         assert_eq!(a.signed_headers.as_ref().unwrap().len(), 3);
         let ts = a.timestamp.as_ref().expect("timestamp");
-        assert_eq!((ts.header.as_str(), ts.format.as_str()), ("X-TC-Timestamp", "unix-seconds"));
+        assert_eq!((ts.header.as_str(), ts.format.as_str()), ("X-Api-Timestamp", "unix-seconds"));
         assert_eq!(a.scope.as_ref().unwrap().len(), 3);
         assert_eq!(
             a.credential_env,
-            vec!["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
+            vec!["PROVIDER_ACCESS_KEY_ID", "PROVIDER_SECRET_KEY"],
             "只有**变量名**"
         );
         assert!(
