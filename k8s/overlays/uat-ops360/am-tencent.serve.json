@@ -1,0 +1,163 @@
+{
+  "contract_version": 1,
+  "mapping_version": 1,
+  "entities": [
+    {
+      "id": "CvmInstance",
+      "class": "cvm_instance",
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "Vpc",
+      "class": "vpc",
+      "capability": {
+        "pushdown": [
+          "region",
+          "vpc_id"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "Subnet",
+      "class": "subnet",
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone",
+          "vpc_id"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "SecurityGroup",
+      "class": "security_group",
+      "capability": {
+        "pushdown": [
+          "region",
+          "security_group_id"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "SecurityGroupRule",
+      "class": "security_group_rule",
+      "capability": {
+        "pushdown": [
+          "region",
+          "security_group_id",
+          "protocol"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "CbsDisk",
+      "class": "cbs_disk",
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "CbsSnapshot",
+      "class": "cbs_snapshot",
+      "capability": {
+        "pushdown": [
+          "region",
+          "disk_id"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "ClbLoadBalancer",
+      "class": "clb_load_balancer",
+      "capability": {
+        "pushdown": [
+          "region",
+          "master_zone"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "ClbListener",
+      "class": "clb_listener",
+      "capability": {
+        "pushdown": [
+          "region",
+          "load_balancer_id",
+          "protocol"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "CdbInstance",
+      "class": "cdb_instance",
+      "capability": {
+        "pushdown": [
+          "region",
+          "instance_ids"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "DbBackup",
+      "class": "db_backup",
+      "capability": {
+        "pushdown": [
+          "region",
+          "instance_id",
+          "min_start_time"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "SslCertificate",
+      "class": "ssl_certificate",
+      "capability": {
+        "pushdown": [
+          "filter_source",
+          "status"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "AlarmPolicy",
+      "class": "alarm_policy",
+      "capability": {
+        "pushdown": [
+          "module",
+          "policy_name"
+        ]
+      },
+      "freshness": "realtime"
+    },
+    {
+      "id": "CostDetailBill",
+      "class": "cost_detail_bill",
+      "capability": {
+        "pushdown": [
+          "month"
+        ]
+      },
+      "freshness": "realtime"
+    }
+  ]
+}

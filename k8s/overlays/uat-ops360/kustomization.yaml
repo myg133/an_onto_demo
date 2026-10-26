@@ -63,7 +63,7 @@ patches:
           - --tokens=/etc/ontok/secrets/query-tokens.json
           - --project=$(ONTOK_PROJECT)
           - --version=$(ONTOK_VERSION)
-          - --access-mapping=/etc/ontok/am/am-tencent.json
+          - --access-mapping=/etc/ontok/am/am-tencent.serve.json
           - --ontology-only
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
@@ -132,4 +132,4 @@ patches:
 configMapGenerator:
   - name: ontok-access-mapping
     files:
-      - am-tencent.json
+      - am-tencent.serve.json
