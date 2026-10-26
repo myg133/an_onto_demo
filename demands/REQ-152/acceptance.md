@@ -45,19 +45,20 @@ grep -riE 'X-TC-|X-Amz-|X-Aliyun|tencent|aws|aliyun' \
 | 老客户端只看 4 个键 | 不报错（多余键忽略） |
 | 判据 | 三种组合各一次 |
 
-### AC-006 · 执行器移出产品（**结构性**）
+### AC-006 · 两个 bin（服务面 / 构建面），产品 bin 无签名代码
 
 | 判据 | 期望 |
 | --- | --- |
-| 产品二进制 `strings ontok \| grep -c 'X-TC-Action'` | **0** |
-| 产品二进制里 `access fetch --allow-network` | **不存在**（不认识） |
-| 独立二进制 `ontok-access-verify` | 存在，且能做真调 |
-| 生产镜像 digest 与 `v0.1.8` 相比 | 变更（少了执行器） |
-| 判据 | 四条命令实测 |
+| `target/release/ontok` 与 `ontok-build` 存在 | ✅ 两个 |
+| `ontok-introspect` / `ontok-propose` / `ontok-translate-names` / `ontok-gate-preflight` | **不再产出**（已合并为 `ontok-build` 的子命令） |
+| `strings target/release/ontok \| grep -c 'X-TC-Action'` | **0** |
+| `target/release/ontok access fetch --allow-network` | **不认识**（子命令不在服务面） |
+| `podman run --rm <image> ls /usr/local/bin` | **只有 `ontok`** |
+| 判据 | 五条实测 |
 
 ### AC-007 · 验收能力不丢（R5）
 
-- `ontok-access-verify fetch --mapping am-tencent.json --entity cvm_instance --allow-network`
+- `ontok-build access fetch --mapping am-tencent.json --entity cvm_instance --allow-network`
   用**只读凭据**真调一次，返回 ≥1 行且 `rows_returned > 0`
 - 判据：命令 + 输出行数（凭据由 BA 提供，QA 不落地）
 

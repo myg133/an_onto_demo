@@ -81,24 +81,42 @@
 - 附录 A 的 60 行参考实现作为**示例**（已用官方向量验签）
 - **判据**：一个没接过腾讯云的人照这份文档 + 附录 A，能自己实现并通过我们的对拍用例
 
-### ⑤ **执行器移出产品**
+### ⑤ **二进制合并成 2 个**（服务面 / 构建面），执行器归构建面
 
-| 项 | 目标 |
+**现状：5 个 bin，镜像里塞了 4 个**——客户镜像里带着勘查 / 提案 / 翻译表工具，这些是 FDE 本机的活。
+
+| 现状 | 归属 |
 | --- | --- |
-| 二进制品 | `net.rs` / `tc3.rs` 从**服务端与产品二进制**里摘除 |
-| 产物 | 独立二进制 `ontok-access-verify`（FDE 本机做映射验收用） |
-| 生产镜像 | **不含** `--allow-network`、不含签名代码 |
-| 验收能力 | **不丢**：`ontok-access-verify` 仍可真调（这是抓过真错的能力） |
+| `ontok`（主 CLI：serve/query/project/version/access…） | **拆开**：服务面 → `ontok`；构建面 → `ontok-build` |
+| `ontok-introspect` | → `ontok-build introspect` |
+| `ontok-propose` | → `ontok-build propose` |
+| `ontok-translate-names` | → `ontok-build translate-names` |
+| `ontok-gate-preflight` | → `ontok-build gate-preflight` |
+
+**目标：两个 bin**
+
+```
+ontok        服务面：query serve / mcp + catalog/describe/TTL 渲染      ← 唯一进镜像
+ontok-build  构建面：introspect / propose / translate-names / gate-preflight /
+                     project / version / import / review / freeze / export /
+                     access validate & fetch（含签名与凭据读取）
+```
+
+**这一刀切在 ADR-007 的 build/consume 线上**：执行器不需要单独造 bin，它天然属于构建面。
 
 **判据（能红能绿）**：
 
 ```bash
-# 生产镜像里不该有腾讯 header 字面量
-podman run --rm <image> strings /usr/local/bin/ontok | grep -c 'X-TC-Action'   # ⇒ 0
-# 产品二进制不该有真调用入口
-<image 里的> ontok access fetch --allow-network   # ⇒ 不认识的子命令/参数
-# 但验收工具仍能跑
-ontok-access-verify fetch --mapping … --allow-network   # ⇒ 正常
+# ① 只有两个 bin
+ls target/release/ontok target/release/ontok-build && ls target/release/ontok-{introspect,propose,translate-names,gate-preflight} 2>/dev/null | wc -l   # ⇒ 0
+# ② 产品 bin 里没有签名代码
+strings target/release/ontok | grep -c 'X-TC-Action'                                   # ⇒ 0
+# ③ 产品 bin 里没有真调用入口
+target/release/ontok access fetch --allow-network 2>&1 | grep -q 'unrecognized|不认识的'  # ⇒ 命中
+# ④ 构建 bin 仍能真调（验收能力不丢）
+target/release/ontok-build access fetch --mapping … --allow-network                     # ⇒ 正常
+# ⑤ 镜像里只有一个 bin
+podman run --rm <image> sh -c 'ls /usr/local/bin | grep -c ontok'                       # ⇒ 1
 ```
 
 ### ⑥ 契约 v1 → v2（加法式）
