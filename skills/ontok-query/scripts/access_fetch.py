@@ -2541,6 +2541,13 @@ def _selftest_recipe(selftest):
     selftest.check("配方缺 class ⇒ am.invalid", e1 is not None and e1.code == "am.invalid",
                    str(e1 and e1.code))
 
+    # --id-property：key_path 必须是**字符串**（不是 fields 里的 {path:...} 字典）
+    # —— agent 实测抓到的 bug：`--id-property instance_id` 报「identity.key_path 为空」
+    _v = (ent.get("fields") or {}).get("vm_id")
+    _kp = _v["path"] if isinstance(_v, dict) else _v
+    selftest.check("--id-property 取到的是路径字符串（⛔ 不是 dict）",
+                   isinstance(_kp, str) and _kp == "InstanceId", repr(_kp))
+
     # 缺 source.base_url ⇒ am.invalid，且提示「该部署可能是 v1」（v1 的 @pending.get 没有配方）
     try:
         am_from_recipe({"class": "c"})
@@ -2704,7 +2711,11 @@ def main(argv=None):
                          "--id-property=%s 不在配方的 fields 里（有：%s）"
                          % (args.id_property, ", ".join(sorted(props)[:8])),
                          "用 fields 里的属性名。")
-                am["entities"][0]["identity"] = {"key_path": props[args.id_property]}
+                # fields 归一化后是 {属性: {"path": "<记录内路径>"}} ⇒ 要取里面的 path，
+                # ⛔ 不能把整个 dict 塞进 key_path（agent 实测抓到的 bug：key_path 成 dict，
+                #    校验报「identity.key_path 为空」⇒ --id-property 这条线不可用）
+                _v = props[args.id_property]
+                am["entities"][0]["identity"] = {"key_path": _v["path"] if isinstance(_v, dict) else _v}
             elif args.format == "jsonld" and not args.check:
                 fail("recipe.no_identity", EXIT_INPUT,
                      "配方里没有 identity，jsonld 输出无法生成 @id",
