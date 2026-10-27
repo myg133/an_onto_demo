@@ -175,7 +175,20 @@ impl MultiProject {
                 "重启服务；若仍复现，请把 token 表与这份错误一起交给维护者。",
             )
         })?;
+        self.service_for_project(project).await
+    }
 
+    /// ⭐ REQ-159 P1c-1（追加）· **按项目名**取服务（admin 的 `?project=<名>` 走这条）。
+    ///
+    /// 与 [`Self::service_for`] 的区别只有一个入参：那边项目来自 **key**（数字员工），
+    /// 这边项目来自**请求参数**（admin 在 Studio 顶栏切项目）。下面这一段完全相同 ——
+    /// 「key → 项目名」只是外面的一步，⛔ 不 copy 一份解析逻辑（那会长出两套
+    /// 缓存/失效语义）。判据：AC-c8。
+    ///
+    /// ⚠️ 项目名**已经过合法性校验**（`pack::is_valid_project_name`，在
+    /// `query::http::apply_project_override` 里）—— 它只会被当成绑定参数进 SQL，
+    /// ⛔ 不会被拼进任何语句或文件路径。
+    pub async fn service_for_project(&self, project: &str) -> Result<Arc<QueryService>, ApiError> {
         // ── 一次小 SELECT：项目行 + 生效版本指针 ────────────────
         let found = self
             .projects
@@ -364,6 +377,11 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // ② token 表：**逐条必须绑项目**（AC-b4：缺一条就拒绝启动并点名）
     let tokens = serve::load_tokens(&args, mode, ProjectBinding::PerToken)?;
 
+    // ②b ⭐ REQ-159 P1c-1 · 写面的密钥（**缺了就拒绝启动**，在绑 socket 之前）。
+    // 位置与理由与单项目模式**完全一致**（见 `serve::serve` 的 ④b）：
+    // token 表之后、连库 / 绑 socket 之前。
+    let cipher = super::write_plane::load_secret_cipher()?;
+
     // ③ 部署级输入（声明 / schema / 源库 / 审计）
     let policy = serve::load_policy(&args)?;
     let (schema, schema_path) = serve::load_schema(&args)?;
@@ -410,14 +428,27 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
-    let multi = Arc::new(MultiProject::new(pool.clone(), tokens, deploy, audit));
+    let multi = Arc::new(MultiProject::new(
+        pool.clone(),
+        tokens,
+        deploy,
+        audit.clone(),
+    ));
+
+    // ⭐ REQ-159 P1c-1 · 写面：8 条管理端点（Studio 调）。密钥已在 ②b 读过。
+    let write = Arc::new(super::write_plane::WritePlane::new(
+        pool.clone(),
+        cipher,
+        audit,
+    ));
 
     eprintln!(
         "{}",
         multi_banner(addr, verdict, &multi, args.timeout_ms, args.max_concurrent_queries)
     );
+    serve::announce_write_plane(&multi.tokens, "多项目");
 
-    let app = super::http::build_router_multi(Arc::clone(&multi));
+    let app = super::http::build_router_multi_with_write(Arc::clone(&multi), write);
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
     })?;
@@ -626,17 +657,32 @@ mod tests {
     #[test]
     fn the_active_version_pointer_is_read_on_every_request() {
         let src = include_str!("multi.rs");
+        // ⭐ REQ-159 P1c-1 · 判据跟到**真正查库的那一段**：`service_for`（按 key）与
+        // `service_for_project`（admin 的 `?project=`）最后都落到同一个
+        // `active_version_by_name` 调用上 —— 两条入口，一处指针读取。
         let body = src
-            .split("pub async fn service_for")
+            .split("pub async fn service_for_project")
             .nth(1)
-            .expect("service_for 还在");
+            .expect("service_for_project 还在");
         let body = body
             .split("async fn load(")
             .next()
             .expect("截到 load 之前");
         assert!(
             body.contains("active_version_by_name"),
-            "service_for 必须在每次请求都查一次 `projects.active_version_id`：\n{body}"
+            "service_for_project 必须在每次请求都查一次 `projects.active_version_id`：\n{body}"
+        );
+        // 按 key 的那条路必须**委派**给同一个函数（⛔ 不许第二份解析 / 第二份缓存语义）。
+        let by_key = src
+            .split("pub async fn service_for(")
+            .nth(1)
+            .expect("service_for 还在")
+            .split("/// ⭐ REQ-159 P1c-1（追加）")
+            .next()
+            .expect("截到下一个函数之前");
+        assert!(
+            by_key.contains("service_for_project"),
+            "按 key 的解析必须复用 service_for_project：\n{by_key}"
         );
         // ⛔ 不许给生效指针加缓存（activate 之后会一直服务旧版本）。
         // 之所以把名字拼起来：判据源码本身也含这些字样，直写会**自己命中自己**（假红）。

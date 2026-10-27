@@ -61,12 +61,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Extension, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Extension, Path as AxumPath, Query, Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -76,6 +76,7 @@ use crate::mcp::protocol as p;
 use super::error::ApiError;
 use super::tokens::TokenEntry;
 use super::ttl::TtlView;
+use super::write_plane::WritePlane;
 use super::{
     audit_anonymous, audit_ttl, run_catalog, run_describe, run_sample, run_sparql, run_sparql_ex,
     Caller, CatalogRequest, DescribeRequest, Protocol, QueryFormat, QueryService, SampleRequest,
@@ -174,18 +175,52 @@ impl Resolved {
 /// - **未注册的 `/api/*` 也走身份门**（无 token ⇒ 401，不泄露「这个接口存不存在」）；
 ///   已授权的人问路 ⇒ 404 + 可用端点清单。
 pub fn build_router(svc: Arc<QueryService>) -> Router {
+    single_router(svc, None, None)
+}
+
+/// ⭐ REQ-159 P1c-1 · **带写面**的单项目路由（`ontok query serve --project …` 的生产路径）。
+///
+/// 与 [`build_router`] 的差别：多一层 [`inject_write_plane`]（写端点的进程级依赖）
+/// 与一层可选的 [`apply_project_override`]（admin 的 `?project=`，见上文那一节）。
+///
+/// 为什么不给 [`build_router`] 加参数：单元判据有 100+ 处 `build_router(test_service())`
+/// —— 那些用例一条写端点都不碰（写面需要真库），为了签名统一去改 100 处调用点是纯噪声。
+/// **没有写面时那 8 条路由仍然注册**（身份门与 403 照旧生效），只是到 handler 时缺扩展
+/// ⇒ 500（那是接线错误，不是「没权限」）。
+pub fn build_router_with_write(
+    svc: Arc<QueryService>,
+    write: Arc<WritePlane>,
+    overrides: Option<Arc<ProjectOverride>>,
+) -> Router {
+    single_router(svc, Some(write), overrides)
+}
+
+fn single_router(
+    svc: Arc<QueryService>,
+    write: Option<Arc<WritePlane>>,
+    overrides: Option<Arc<ProjectOverride>>,
+) -> Router {
     // ⭐ REQ-135 · 指标层挂在**最外层**：连 401 / 404 都计数（失败也是事实）。
     let metrics = svc.metrics.clone();
-    routes()
-        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+    // 层的顺序（每次 `.layer` 都把**已存在的**那层包起来）⇒ 执行顺序自上而下：
+    //   metrics → 写面注入 → 身份门（require_token）→ 项目覆盖 → body 上限 → handler
+    let mut router = routes().layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
+    if let Some(ov) = overrides {
+        router = router.layer(middleware::from_fn_with_state(ov, apply_project_override));
+    }
+    let router = router
         .layer(middleware::from_fn(require_token))
         // ⭐ REQ-159 P1b · 把「这个请求的那一个服务」放进扩展（在身份门**之前**：
         // 身份门要读它的 token 表）。单项目模式没有任何按请求的分叉。
         .layer(middleware::from_fn_with_state(
             svc.clone(),
             inject_single_service,
-        ))
-        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
+        ));
+    let router = match write {
+        Some(w) => router.layer(middleware::from_fn_with_state(w, inject_write_plane)),
+        None => router,
+    };
+    router.layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 /// ⭐ REQ-159 P1b · **多项目模式**的路由。
@@ -194,16 +229,43 @@ pub fn build_router(svc: Arc<QueryService>) -> Router {
 /// 身份门后面多了一次「按 key 找项目 → 生效版本 → 快照」的解析
 /// （[`resolve_multi`]）。于是 REST 与 MCP 仍然共用一份鉴权（AC-004 的结构前提）。
 pub fn build_router_multi(multi: Arc<super::multi::MultiProject>) -> Router {
+    multi_router(multi, None)
+}
+
+/// ⭐ REQ-159 P1c-1 · **带写面**的多项目路由（Studio 部署的实际形态）。
+///
+/// 写端点在多项目模式下**不解析项目**：admin key 不绑项目（它是运维的钥匙），
+/// 所以 `resolve_multi` 对写路径只做「是不是 admin」与「装扩展」——
+/// 见那个中间件的注释。项目覆盖（`?project=`）对 admin 的读请求走注册表（同一个
+/// [`MultiProject`]：缓存共用，激活之后**下一次请求**即生效）。
+pub fn build_router_multi_with_write(
+    multi: Arc<super::multi::MultiProject>,
+    write: Arc<WritePlane>,
+) -> Router {
+    multi_router(multi, Some(write))
+}
+
+fn multi_router(multi: Arc<super::multi::MultiProject>, write: Option<Arc<WritePlane>>) -> Router {
     // ⭐ REQ-135 · 指标仍挂最外层（进程级），计数与单项目模式同一套指标名。
     let metrics = multi.metrics.clone();
-    routes()
+    // 执行顺序：metrics → 写面注入 → 身份+项目解析 → 项目覆盖 → body 上限 → handler。
+    let router = routes()
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // ⭐ REQ-159 P1c-1（追加）· admin 的 `?project=`（没有该参数时纯转发）。
+        .layer(middleware::from_fn_with_state(
+            Arc::new(ProjectOverride::registry(Arc::clone(&multi))),
+            apply_project_override,
+        ))
         // 身份 + 项目解析是同一次中间件：先查表（401），再解析项目（503/500）。
         .layer(middleware::from_fn_with_state(
             multi.clone(),
             resolve_multi,
-        ))
-        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
+        ));
+    let router = match write {
+        Some(w) => router.layer(middleware::from_fn_with_state(w, inject_write_plane)),
+        None => router,
+    };
+    router.layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 /// 路由表（两种模式**共用**；⛔ 不各写一份 —— 那会长出两套端点清单）。
@@ -215,6 +277,30 @@ fn routes() -> Router {
         .route("/api/sparql", post(post_sparql))
         .route("/api/catalog", get(get_catalog))
         .route("/api/describe", get(get_describe))
+        // ⭐ REQ-159 P1c-1 · **写面 8 条**（ADR-013）：从 `console` 搬到这里，由 Studio 调。
+        // 语义只有一份（`console::provision_api`），这里只做 state 适配。
+        // ⚠️ 只认 `kind = admin`：身份门对 `/api/projects*` 一条路径判一次（`is_write_path`），
+        //    query key ⇒ **403 `key.not_admin`**。⛔ 读端点（catalog / describe / sparql /
+        //    ttl / mcp / studio）的路由与行为一个字节都没动。
+        .route("/api/projects", post(post_create_project))
+        // ⚠️ 上传这一格**单独**放宽 body 上限（与 console 同一个常量）：
+        // 全局 256 KiB 是给 SPARQL 的，包动辄几百 KB —— 但 ⛔ 不全局放开。
+        .route(
+            "/api/projects/:p/bundles",
+            post(post_bundle)
+                .layer(DefaultBodyLimit::max(
+                    crate::console::http::MAX_UPLOAD_BODY_BYTES,
+                )),
+        )
+        .route("/api/projects/:p/bundles/:id", get(get_bundle_status))
+        .route("/api/projects/:p/bundles/:id/import", post(post_import_bundle))
+        .route(
+            "/api/projects/:p/bundles/:id/activate",
+            post(post_activate_bundle),
+        )
+        .route("/api/projects/:p/database", put(put_database))
+        .route("/api/projects/:p/database/test", post(post_test_database))
+        .route("/api/projects/:p/key", get(get_project_key))
         // ⭐ REQ-155 · Studio 页面壳（免 token、零数据、**只读**）。
         // 三条都只注册 `get` ⇒ `POST/PUT/DELETE /studio` 由 axum 直接回 405（S1）。
         // ⛔ 不改 `/api/*` 的任何行为：这里只是把三个**编译期常量**贴到同一个源上。
@@ -331,6 +417,12 @@ async fn require_token(mut req: Request, next: Next) -> Response {
     };
     let presented = bearer(req.headers());
     match svc.tokens.find(presented) {
+        // ⭐ REQ-159 P1c-1 · 写面只认 admin（ADR-013 §三）。403 的码是契约指定的
+        // `key.not_admin`（⛔ 不是 401：这张 key 是真的，只是不是写面的钥匙）。
+        Some(entry) if is_write_path(req.uri().path()) && !entry.kind.is_admin() => {
+            super::audit_token_sink(&svc.audit, "auth", proto, entry, "key.not_admin", started);
+            deny_not_admin(entry)
+        }
         Some(entry) => {
             req.extensions_mut().insert(Auth(entry.clone()));
             next.run(req).await
@@ -380,6 +472,58 @@ async fn resolve_multi(
         super::audit_anonymous_sink(&multi.audit, "auth", proto, view, e.code, started);
         return respond(e.status, e.body());
     };
+    // ⭐ REQ-159 P1c-1 · **写面**（`/api/projects*`）：只认 admin，且**不解析项目**
+    // —— admin 不绑项目，它要操作的是路径里那个 `:p`，不是 key 的项目。
+    if is_write_path(req.uri().path()) {
+        if !entry.kind.is_admin() {
+            super::audit_token_sink(&multi.audit, "auth", proto, &entry, "key.not_admin", started);
+            return deny_not_admin(&entry);
+        }
+        req.extensions_mut().insert(Auth(entry));
+        req.extensions_mut().insert(Resolved {
+            svc: None,
+            multi: Some(Arc::clone(&multi)),
+        });
+        return next.run(req).await;
+    }
+    // ⭐ REQ-159 P1c-1（追加）· `?project=`：数字员工不许跳项目（AC-c9），
+    // admin 则**不在这里解析** —— 交给后面的 `apply_project_override`（它按项目名解析）。
+    // 顺序很关键：先判「能不能带这个参数」，再判「这个 key 的项目是什么」——
+    // 否则一张绑在「没有生效版本」项目上的 query key 会先拿到 503，而正确结果是 403。
+    if has_project_param(&req) {
+        if !entry.kind.is_admin() {
+            let wanted = project_param(&req).unwrap_or_default();
+            super::audit_token_sink(
+                &multi.audit,
+                "auth",
+                proto,
+                &entry,
+                "key.project_pinned",
+                started,
+            );
+            return deny_project_pinned(&entry, &wanted);
+        }
+        req.extensions_mut().insert(Auth(entry));
+        req.extensions_mut().insert(Resolved {
+            svc: None,
+            multi: Some(Arc::clone(&multi)),
+        });
+        return next.run(req).await;
+    }
+    // 读端点 + admin 且**没给** `?project=` ⇒ 多项目模式下没有「读哪一套」的答案。
+    // ⛔ 不猜一个项目（猜错就是串包）。单项目模式不走这条中间件（那里项目由 --project 钉死，
+    // admin 照常能读 —— AC-c3）。
+    if entry.kind.is_admin() {
+        super::audit_token_sink(
+            &multi.audit,
+            "auth",
+            proto,
+            &entry,
+            "key.admin_has_no_project",
+            started,
+        );
+        return deny_admin_without_project();
+    }
     match multi.service_for(&entry).await {
         Ok(svc) => {
             req.extensions_mut().insert(Auth(entry));
@@ -884,6 +1028,425 @@ fn ttl_view_hint(path: &str, query: Option<&str>) -> Option<&'static str> {
     } else {
         TtlView::Customer.as_str()
     })
+}
+
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-159 P1c-1（追加）· 读端点的**项目覆盖**：`?project=<项目名>`
+// ══════════════════════════════════════════════════════════════
+//
+// # 为什么需要它
+//
+// Studio 的形态是「图为主 + 顶栏项目下拉 + 切项目刷新图」，而它用的是**同一把
+// admin key**。读端点（catalog / describe / TTL / sparql）原本的项目来源只有两个：
+// 单项目模式 = `--project` 钉死；多项目模式 = **key 的 `project`**。
+// admin 不绑项目（ADR-013 §三）⇒ **切了项目，图还是旧项目的** —— 切换是假的。
+//
+// ⇒ 给这 4 条读端点加一个**可选**参数 `?project=<名>`（**只有 admin 能用**）。
+//
+// # 为什么是 query 参数，不是 `X-Ontok-Project` 头
+//
+// 二选一的理由（按重要性）：
+// 1. **它不是秘密**：项目名本来就出现在 `GET /api/catalog` 的 `project` 字段、
+//    TTL 的 `ontok:sourceProject` 里 —— 藏进头不会多保护任何东西；
+// 2. **可直接复现**：`curl '…/api/catalog?project=b'` 就能对账，头版本要多写一行
+//    `-H`，而判据/排查文档里贴的就是 URL；
+// 3. 与同一批端点的既有参数（`?view=model` / `?page=` / `?format=rows`）同一种形状 ——
+//    Studio 的 fetch 只拼 URL，不用记两套（query 选项目 + header 选视图）。
+//
+// # 三条硬规矩（AC-c8 / AC-c9）
+//
+// | 情形 | 结果 |
+// | --- | --- |
+// | `kind=admin` + `?project=B` | 返回 **B 项目**的数据（走 `projects.active_version_id` → 懒加载，与 P1b 同一条路径） |
+// | `kind=query` + `?project=B` | **403 `key.project_pinned`** —— 数字员工的租户/项目范围**只能来自 key**（跳项目 = 串包） |
+// | **不给这个参数** | 行为**完全不变**（单项目模式按 `--project`；多项目模式按 key） |
+//
+// 第三条是硬门：本中间件在**没有该参数时第一件事就是 `next.run`**，
+// 一个字节都不碰请求/响应（AC-c5 的逐字节比对就是钉这个）。
+
+/// 读端点的项目覆盖依赖（见上面那段）。
+///
+/// 两种模式都持有一个 [`MultiProject`]：
+/// - **多项目模式**：就是路由里那个（同一个对象，缓存共用）；
+/// - **单项目模式**：`serve` 额外装一个（只被 admin 的 `?project=` 用到）——
+///   于是「单项目模式钉死一套本体」这个性质不变（不带参数时仍只用启动时那份），
+///   而 admin 仍然能在同一个进程里**读**另一套已激活的本体（Studio 的切换）。
+pub struct ProjectOverride {
+    /// 单项目模式钉死的项目名（多项目模式 `None`）。
+    pinned: Option<String>,
+    /// 按项目名解析「当前生效版本」的注册表。
+    registry: Arc<super::multi::MultiProject>,
+}
+
+impl ProjectOverride {
+    /// 单项目模式：钉死的项目名 + 一个只用于覆盖的注册表。
+    pub fn pinned(project: impl Into<String>, registry: Arc<super::multi::MultiProject>) -> Self {
+        Self {
+            pinned: Some(project.into()),
+            registry,
+        }
+    }
+
+    /// 多项目模式：注册表就是路由自己那份。
+    pub fn registry(registry: Arc<super::multi::MultiProject>) -> Self {
+        Self {
+            pinned: None,
+            registry,
+        }
+    }
+}
+
+/// 这 4 条读端点支持 `?project=`（**只有**这 4 条；`/mcp` 与写面不在内）。
+///
+/// ⛔ 不要把 `/mcp` 加进来：MCP 的请求体里没有项目概念，加一个 URL 参数等于给
+/// 「同一个 `tools/call` 两种解释」—— 那是另一条需求该讨论的事。
+pub fn supports_project_override(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/catalog" | "/api/describe" | TTL_PATH | "/api/sparql"
+    )
+}
+
+/// 从 query string 取 `project=<名>`（⛔ 不读 cookie / 头）。
+///
+/// 值是**裸项目名**（允许字符集 `[a-z0-9_-]` 全都在 URL 里不需要转义），
+/// 所以这里不做百分号解码：真有人发 `%2F` 之类的值，`is_valid_project_name` 会拒 ——
+/// 「先解码再用」只会多出一条可以把 `/` 带进来的路。
+fn project_param(req: &Request) -> Option<String> {
+    req.uri().query()?.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == "project").then(|| v.trim().to_string())
+    })
+}
+
+/// 请求里有没有 `project` 参数（身份门用它决定「admin 这条读请求要不要放行给覆盖中间件」）。
+fn has_project_param(req: &Request) -> bool {
+    project_param(req).is_some()
+}
+
+/// 把 `project` 这个 kv 从 query string 里**摘掉**。
+///
+/// 为什么必须摘：下游 handler 不认识它，而 `/api/ontology.ttl` 的参数校验对
+/// **未知参数**是 400（`不认识的查询参数`）—— 不摘的话「admin + `?project=` +
+/// `?view=model`」会得到一个假 400。摘掉之后，handler 看到的就是它一直看到的那个请求
+/// （这也是 AC-c5 能逐字节成立的原因之一）。
+fn strip_project_param(uri: &Uri) -> Option<Uri> {
+    let kept: Vec<&str> = uri
+        .query()?
+        .split('&')
+        .filter(|kv| !kv.is_empty() && kv.split('=').next() != Some("project"))
+        .collect();
+    let pq = if kept.is_empty() {
+        uri.path().to_string()
+    } else {
+        format!("{}?{}", uri.path(), kept.join("&"))
+    };
+    pq.parse::<Uri>().ok()
+}
+
+/// `query` key 带 `?project=` ⇒ **403 `key.project_pinned`**。
+///
+/// 为什么不是「忽略这个参数」：忽略会让**同一个 URL** 在 admin 手里切项目、
+/// 在数字员工手里静默返回另一个项目的数据 —— 那是最坏的一种「看起来成功了」。
+/// 为什么不是 400：这不是请求写错了，是**权限边界**（租户/项目范围只能来自 key）。
+fn deny_project_pinned(entry: &TokenEntry, wanted: &str) -> Response {
+    let e = ApiError::with_code(
+        StatusCode::FORBIDDEN,
+        "key.project_pinned",
+        format!(
+            "这是一张 {} key：`?project={}` 不被接受 —— 查询 key 的项目是**钉死**的。",
+            entry.kind.as_str(),
+            wanted
+        ),
+        "数字员工的取数范围只能来自 key（`tokens.json` 里的 `\"project\"`）：\
+         能自己指定项目就等于能串包（看错项目的数据比看不到更糟）。\n\
+         ✅ 要读另一个项目：换一张绑定那个项目的查询 key（换项目 = 换 key）。\n\
+         ✅ 要在 Studio 里切项目看图：用 `kind = \"admin\"` 的 key（它不绑项目，\
+         可以带 `?project=<名>`）。\n\
+         ⛔ 服务端不会「忽略」这个参数然后按 key 返回 —— 那会让同一个 URL 在不同\
+         凭据下指向不同项目，而调用方看不出来。",
+    );
+    respond(e.status, e.body())
+}
+
+/// ⭐ REQ-159 P1c-1（追加）· 项目覆盖中间件。
+///
+/// 位置：**身份门之后**（要读 [`Auth`]）、**handler 之前**（要能换掉 [`Resolved::svc`]）。
+/// 没有该参数时它是一条纯转发（`next.run`），所以读路径的默认行为一个字节不变。
+async fn apply_project_override(
+    State(ov): State<Arc<ProjectOverride>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    // ⓪ 没有参数 ⇒ 立刻放行（**读路径零变化**的第一道保证）。
+    if !supports_project_override(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let Some(wanted) = project_param(&req) else {
+        return next.run(req).await;
+    };
+    let started = Instant::now();
+    let proto = proto_of(req.uri().path());
+    // 免 token 的路径没有身份 ⇒ 没有覆盖（这 4 条本来都要 token，走不到这里）。
+    let Some(auth) = req.extensions().get::<Auth>().cloned() else {
+        return next.run(req).await;
+    };
+
+    // ① 数字员工**不许跳项目**（AC-c9）。
+    if !auth.0.kind.is_admin() {
+        super::audit_token_sink(
+            &ov.registry.audit,
+            "auth",
+            proto,
+            &auth.0,
+            "key.project_pinned",
+            started,
+        );
+        return deny_project_pinned(&auth.0, &wanted);
+    }
+
+    // ② 名字合法性 —— 与 `manifest.project` **同一套**（`^[a-z0-9][a-z0-9_-]{1,62}$`）。
+    //    ⛔ 不拼 SQL、不拼文件路径：它只会被当成**绑定参数**进
+    //    `projects` 的那条查询（`active_version_by_name`）。
+    let name = wanted.trim();
+    if !crate::bundle::pack::is_valid_project_name(name) {
+        let e = ApiError::bad_request(
+            format!("`?project={wanted}` 不是合法的项目名。"),
+            format!(
+                "项目名必须匹配 `{}`（小写字母 / 数字开头，允许 `-` / `_`，2–63 字符）\
+                 —— 与构建包 manifest 里的 `project` 是**同一条**规则（包名对不上就串不了项目）。",
+                crate::bundle::pack::PROJECT_NAME_PATTERN
+            ),
+        );
+        super::audit_token_sink(
+            &ov.registry.audit,
+            "auth",
+            proto,
+            &auth.0,
+            "project.name.invalid",
+            started,
+        );
+        return respond(e.status, e.body());
+    }
+
+    // ③ 单项目模式下 `?project=` 就是钉死的那一个 ⇒ 不换、不多读一次库。
+    //    （同名字换一份新装的服务在字节上应当相同，但**没有必要**去赌：
+    //     单项目模式的契约是「启动时那一份」。）
+    if ov.pinned.as_deref() == Some(name) {
+        if let Some(uri) = strip_project_param(req.uri()) {
+            *req.uri_mut() = uri;
+        }
+        return next.run(req).await;
+    }
+
+    // ④ 按项目名解析（`projects.active_version_id` → 缓存 / 懒加载，与 P1b 同一条路）。
+    match ov.registry.service_for_project(name).await {
+        Ok(svc) => {
+            match req.extensions_mut().get_mut::<Resolved>() {
+                Some(res) => res.svc = Some(svc),
+                // 单项目模式恒有 `Resolved`（`inject_single_service` 装的）；没有就是接线错了。
+                None => return internal_no_service("项目覆盖"),
+            }
+            if let Some(uri) = strip_project_param(req.uri()) {
+                *req.uri_mut() = uri;
+            }
+            next.run(req).await
+        }
+        Err(e) => {
+            // 有身份、但那个项目这一侧不成立（不存在 / 没生效版本 / 装不起来）：
+            // 审计里记下是谁在问（token 摘要），code 说清是哪一类失败。
+            super::audit_token_sink(&ov.registry.audit, "auth", proto, &auth.0, e.code, started);
+            respond(e.status, e.body())
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-159 P1c-1 · 写面（8 条管理端点 · ADR-013）
+// ══════════════════════════════════════════════════════════════
+//
+// 这 8 条原来是 console 的（FDE 本地用），但 console 的 CLI 在 `ontok-builder` 里
+// —— **builder 不部署到服务器** ⇒ 那套能力部署不出去。ADR-013 把它们搬到这里，
+// 由 Studio（`/studio`，挂在 `query serve`）调用。
+//
+// 三层分工（⛔ 不要合并）：
+//
+// | 层 | 在这里做什么 | 唯一来源 |
+// | --- | --- | --- |
+// | **身份** | [`is_write_path`] + 两个身份门：`query` key ⇒ 403 `key.not_admin` | 本文件 |
+// | **语义** | 解析 body / 调领域层 / 状态码 / 审计 action | [`crate::console::provision_api`]（与 console 同一个函数） |
+// | **领域** | 项目 / 版本 / 快照 / key / DSN 的真实读写 | [`crate::console::provision`]（P1a，零引用 `ConsoleService`） |
+//
+// 于是「搬过来没丢校验」是**结构上**成立的：包解析仍是 `console::bundle`，
+// 加密仍是 `console::dsn`，写库仍是 `console::provision` —— 本文件没有第二份实现。
+
+/// 这条路径是不是**写面**（那 8 条管理端点）？
+///
+/// 判据是**前缀** `/api/projects`，⛔ 不是「把 8 条路径逐个列出来」：
+/// 列出来就会漏，而漏一条的后果不是 404，是**一张 query key 能建项目 / 传包**
+/// —— 那正是 ADR-013 §三要封死的东西。前缀判定的方向是 fail-closed：
+/// 将来往 `/api/projects` 下加端点（P1c-2/P1c-3），它**自动**要求 admin。
+///
+/// ⚠️ `needs_auth()`（只认 `/api` 与 `/mcp`）**一字未改**：这 8 条本来就落在
+/// `/api/*` 里，身份门早就覆盖它们；本函数只多判一件事 ——「哪一半 key 能过」。
+pub fn is_write_path(path: &str) -> bool {
+    path == "/api/projects" || path.starts_with("/api/projects/")
+}
+
+/// `query` key 打写面 ⇒ **403 `key.not_admin`**（契约指定的码，8 条一致）。
+///
+/// 为什么不是 401：这张 key 是**真的**，只是不是写面的钥匙。401 会让运维去查
+/// 「是不是 token 抄错了」，而真正的问题是「你拿数字员工的 key 来建项目」。
+/// 为什么不是 `TOKEN_KIND_FORBIDDEN`（console 在非 key 端点用的那个码）：
+/// ADR-013 给这 8 条指定了同一个码，两个面必须同码（否则 Studio 的前端要认两套）。
+fn deny_not_admin(entry: &TokenEntry) -> Response {
+    let e = ApiError::with_code(
+        StatusCode::FORBIDDEN,
+        "key.not_admin",
+        format!(
+            "这是一张 {} key，不能调用写端点（建项目 / 上传构建包 / 解析 / 激活 / 查看 key）。",
+            entry.kind.as_str()
+        ),
+        "写端点只接受 `kind = \"admin\"` 的 key（Studio 里那一步由 FDE 的 admin key 完成）。\
+         ⚠️ 你手上这张是**查询** key：它能读 catalog / describe / sparql / TTL / MCP，\
+         但不能改元数据库。\n\
+         ⛔ 拿自己的查询 key 去问「我的 key 是什么」（`GET /api/projects/:p/key`）永远 403 \
+         —— 那本来就没有意义：你手上那段就是它。\n\
+         需要写权限请让运维在 token 表里加一条 `\"kind\": \"admin\"`（admin **不绑项目**）。",
+    );
+    respond(e.status, e.body())
+}
+
+/// 多项目模式 + `admin` key 打**读**端点 ⇒ 403。
+///
+/// 为什么这里必须拒绝：admin **不绑项目**（ADR-013 §三），而多项目模式下读端点要回答
+/// 「读哪一套本体」—— 那个答案只能来自 key 的 `project`。⛔ 服务端不会替它猜一个
+/// （猜错就是串包，P1b 的 R6）。**单项目模式**不受影响：那里项目由 `--project` 钉死，
+/// admin 照常能读（AC-c3：admin 也能读，不额外限制）。
+///
+/// 码不是 `key.not_admin`：它**是** admin，只是这个形态下没有项目可读 ——
+/// 两个意思分开，Studio 才能给出正确的下一步（换 query key，而不是去要 admin）。
+fn deny_admin_without_project() -> Response {
+    let e = ApiError::with_code(
+        StatusCode::FORBIDDEN,
+        "key.admin_has_no_project",
+        "这是一张 admin key，而本服务是**多项目模式**：读端点必须先知道读哪一套本体。",
+        "admin key **不绑项目**（它用来建项目 / 传包 / 激活，不属于任何一个项目），\
+         所以在多项目模式下它回答不了「读哪个项目」。\n\
+         ✅ 读数据请用那个项目的 `kind = \"query\"` key（token 表里用 `\"project\": \"<项目名>\"` \
+         绑定的那张）。\n\
+         ✅ 写操作（建项目 / 上传 / 解析 / 激活 / 查看 key）继续用这张 admin key —— 它们不需要项目。\n\
+         单项目模式（`--project <名> --version <第几版>`）没有这个限制。",
+    );
+    respond(e.status, e.body())
+}
+
+/// ⭐ REQ-159 P1c-1 · 把写面的进程级依赖放进请求扩展（只有 `build_router*_with_write` 挂它）。
+///
+/// ⚠️ 它**不改任何响应**：只 `insert` 一个扩展就 `next.run`。
+/// 读路径（catalog / describe / sparql / ttl / mcp / studio）因此一个字节不变（AC-c5）。
+async fn inject_write_plane(
+    State(write): State<Arc<WritePlane>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    req.extensions_mut().insert(write);
+    next.run(req).await
+}
+
+/// `POST /api/projects` —— 建项目 + 发 key（**201**）。
+async fn post_create_project(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    body: Bytes,
+) -> Response {
+    crate::console::provision_api::create_project(&write.deps(), &auth.0.audit_digest(), &body).await
+}
+
+/// `POST /api/projects/:p/bundles` —— 上传（`application/octet-stream`，body 就是包字节）。
+async fn post_bundle(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath(project): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    crate::console::provision_api::upload_bundle(
+        &write.deps(),
+        &auth.0.audit_digest(),
+        &project,
+        &headers,
+        body,
+    )
+    .await
+}
+
+/// `GET /api/projects/:p/bundles/:id` —— 包状态（只读，不记审计行）。
+async fn get_bundle_status(
+    Extension(write): Extension<Arc<WritePlane>>,
+    AxumPath((project, id)): AxumPath<(String, String)>,
+) -> Response {
+    crate::console::provision_api::bundle_status(&write.deps(), &project, &id).await
+}
+
+/// `POST /api/projects/:p/bundles/:id/import` —— 解析入库（单事务，不冻结）。
+async fn post_import_bundle(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath((project, id)): AxumPath<(String, String)>,
+) -> Response {
+    crate::console::provision_api::import_bundle(
+        &write.deps(),
+        &auth.0.audit_digest(),
+        &project,
+        &id,
+    )
+    .await
+}
+
+/// `POST /api/projects/:p/bundles/:id/activate` —— 冻结 + 写生效指针。
+async fn post_activate_bundle(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath((project, id)): AxumPath<(String, String)>,
+) -> Response {
+    crate::console::provision_api::activate_bundle(
+        &write.deps(),
+        &auth.0.audit_digest(),
+        &project,
+        &id,
+    )
+    .await
+}
+
+/// `PUT /api/projects/:p/database` —— 存 DSN（加密列；⛔ 响应里没有 `dsn`）。
+async fn put_database(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath(project): AxumPath<String>,
+    body: Bytes,
+) -> Response {
+    crate::console::provision_api::put_database(&write.deps(), &auth.0.audit_digest(), &project, &body)
+        .await
+}
+
+/// `POST /api/projects/:p/database/test` —— 测连通（**失败也 200**，由 `ok` 区分）。
+async fn post_test_database(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    crate::console::provision_api::test_database(&write.deps(), &auth.0.audit_digest(), &project)
+        .await
+}
+
+/// `GET /api/projects/:p/key` —— 再次查看 query key（每次调用写一条审计）。
+async fn get_project_key(
+    Extension(write): Extension<Arc<WritePlane>>,
+    Extension(auth): Extension<Auth>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    crate::console::provision_api::reveal_key(&write.deps(), &auth.0.audit_digest(), &project).await
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3323,5 +3886,107 @@ pub(crate) mod tests {
             call(build_router(test_service()), get("/api/catalog", Some(TOKEN_A))).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("customers"), "带口令时目录里该有类：{body}");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-159 P1c-1 · 写面的路径判定 + `?project=` 的解析（纯函数）
+    // ══════════════════════════════════════════════════════════
+
+    /// 8 条写端点**全部**落在 `/api/projects` 前缀下；别的一律不算。
+    ///
+    /// 变异（红）：把 `is_write_path` 改成逐条列 8 个路径并漏掉一条 ⇒ 那条断言红。
+    /// 方向必须是 fail-closed：**多判**只会让一张 query key 得到 403（安全），
+    /// **漏判**会让它能建项目 / 传包（ADR-013 §三要封死的那件事）。
+    #[test]
+    fn every_write_endpoint_is_under_api_projects_and_nothing_else_is() {
+        for path in [
+            "/api/projects",
+            "/api/projects/cloud-resource/bundles",
+            "/api/projects/cloud-resource/bundles/0b0e5c3c-0000-0000-0000-000000000000",
+            "/api/projects/cloud-resource/bundles/0b0e5c3c-0000-0000-0000-000000000000/import",
+            "/api/projects/cloud-resource/bundles/0b0e5c3c-0000-0000-0000-000000000000/activate",
+            "/api/projects/cloud-resource/database",
+            "/api/projects/cloud-resource/database/test",
+            "/api/projects/cloud-resource/key",
+        ] {
+            assert!(is_write_path(path), "{path} 是写端点，必须要求 admin");
+        }
+        // 读端点与「看着像但不同」的路径都不算（⛔ 不许顺手把读面也变成 admin-only）。
+        for path in [
+            "/api/catalog",
+            "/api/describe",
+            "/api/sparql",
+            "/api/ontology.ttl",
+            "/api/health",
+            "/mcp",
+            "/studio",
+            "/api/project",
+            "/api/projectsx",
+            "/apiprojects",
+            "/x/api/projects",
+        ] {
+            assert!(!is_write_path(path), "{path} 不是写端点");
+        }
+    }
+
+    /// `?project=` 只对**那 4 条读端点**生效（`/mcp` 与写面不在内）。
+    #[test]
+    fn only_the_four_read_endpoints_support_a_project_override() {
+        for path in ["/api/catalog", "/api/describe", "/api/sparql", TTL_PATH] {
+            assert!(supports_project_override(path), "{path} 应当支持 ?project=");
+        }
+        for path in [
+            "/mcp",
+            "/api/health",
+            "/api/projects",
+            "/api/projects/a/key",
+            "/studio",
+        ] {
+            assert!(!supports_project_override(path), "{path} 不该支持 ?project=");
+        }
+    }
+
+    /// 参数解析 / 摘除：`?project=` 被认出来之后**必须**从 URI 里消失
+    /// （否则 `/api/ontology.ttl` 的「未知参数 ⇒ 400」会把它当成错误）。
+    #[test]
+    fn the_project_parameter_is_recognised_and_then_removed_from_the_uri() {
+        let req = Request::builder()
+            .uri("/api/catalog?project=cloud-resource&page=2")
+            .body(axum::body::Body::empty())
+            .expect("请求");
+        assert_eq!(project_param(&req).as_deref(), Some("cloud-resource"));
+        assert!(has_project_param(&req));
+        assert_eq!(
+            strip_project_param(req.uri()).map(|u| u.to_string()),
+            Some("/api/catalog?page=2".to_string()),
+            "摘掉 project 之后其余参数必须原样保留"
+        );
+
+        // 只有 project 一个参数 ⇒ 摘完不带 `?`（空 query 不是 `?`）。
+        let req = Request::builder()
+            .uri("/api/ontology.ttl?project=p1")
+            .body(axum::body::Body::empty())
+            .expect("请求");
+        assert_eq!(
+            strip_project_param(req.uri()).map(|u| u.to_string()),
+            Some(TTL_PATH.to_string())
+        );
+
+        // 没有这个参数 ⇒ 一个字节都不动（AC-c5 的结构前提）。
+        let req = Request::builder()
+            .uri("/api/catalog?page=2")
+            .body(axum::body::Body::empty())
+            .expect("请求");
+        assert_eq!(project_param(&req), None);
+        assert!(!has_project_param(&req));
+
+        // ⛔ 不许把**别的**参数名当成项目（`?projects=` / `?project_id=`）。
+        for uri in ["/api/catalog?projects=a", "/api/catalog?project_id=a"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .expect("请求");
+            assert_eq!(project_param(&req), None, "{uri} 不该命中");
+        }
     }
 }

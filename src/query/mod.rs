@@ -100,6 +100,9 @@ pub mod jsonld;
 pub mod multi;
 pub mod serve;
 pub mod tokens;
+/// ⭐ REQ-159 P1c-1 · 写面（建项目 / 传包 / 解析 / 激活 / 查看 key）的进程级状态：
+/// 元数据库池 + `ONTOK_SECRET_KEY` 的加密器 + 控制面审计（缺密钥 ⇒ 启动即失败）。
+pub mod write_plane;
 // ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（客户 / 建模）。
 pub mod ttl;
 
@@ -2114,6 +2117,8 @@ mod tests {
             label: None,
             // ⭐ REQ-159 P1b · 单项目模式的 token 不绑项目（跳由启动参数决定）。
             project: None,
+            // ⭐ REQ-159 P1c-1 · 这个判据用的是查询 key（缺省值就是它）。
+            kind: super::tokens::TokenKind::Query,
         };
         let receipt = receipt_of(&svc, r, 10, &token, vec![], "").0;
         assert_eq!(
