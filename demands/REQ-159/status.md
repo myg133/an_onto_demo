@@ -20,6 +20,7 @@
 | --- | --- | --- |
 | **P1a** | 表结构 + 7 端点 + 包校验（8 错误码）+ 解析入库 + 人工激活 | 🟡 已派 Dev（worktree `feature-REQ-159`） |
 | P1b | `query serve` 多项目（按 key 反查 → active_version → 按 version_id 缓存） | 🟡 已派 Dev（`feature-REQ-159b`） |
+| **P1b-2** | AM 落库 · `GET /api/projects/:p` · `key/rotate` · **版本选择三端点（列/看/激活回滚）** | ⬜ 等 P1b-1 |
 | P1c | 前端页面（**由 lion 的面**：`src/console/page.rs`，他已完成，等我端点合完联调） | 🟡 他那侧完成 |
 
 ## 现存表（已确认，不用新建）

@@ -768,3 +768,50 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 | 表数量 | 4 → **5**（`projects` 加 2 列；`project_keys` / `project_bundles` / `project_bundle_payloads` / `project_databases`） |
 | §五-6 `import` 幂等 | 409 → **200 + `already_imported:true`** |
 | AM 落库 | 标为 **P1a 不做 · P1b 必做** |
+
+
+---
+
+## 二十二 · 项目之后还要不要选版本（2026-10-27 · 定：要，但分角色）
+
+### 1 · 三角色，三种权限
+
+| 角色 | 选项目 | 选版本 | 说明 |
+| --- | --- | --- | --- |
+| **数字员工**（query key） | ❌ 不选（key 绑死项目） | ❌ **不许** | 客户端一旦能选版本，就会把旧版本绑死，服务端永远升级不了 |
+| **FDE / console** | ✅ 要 | ✅ **要，但只读** | 看历史、对比、草稿预览 |
+| **Studio**（客户面） | ✅ 要 | ⚠️ **默认只显示生效版** | 客户不该看到未冻结的草稿 |
+
+### 2 · 两个词必须分清
+
+```
+选版本（read）  = 只读视图，不影响对外服务
+上线（write）   = 动作：改 projects.active_version_id
+```
+
+⛔ **不要把"选版本"做成"切版本"** —— 那会让「看一眼 v3」变成「把生产切到 v3」。
+
+### 3 · 三个新端点（P1b-2）
+
+| # | 端点 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `GET /api/projects/:p/versions` | admin | 列出版本：`[{seq, frozen, active, created_at, counts}]` |
+| 2 | `GET /api/projects/:p/versions/:seq`（及 `/ontology.ttl`） | admin | **按该版本渲染** catalog / describe / TTL；⛔ 不改任何状态 |
+| 3 | `POST /api/projects/:p/versions/:seq/activate` | admin | **上线/回滚**：该校验"必须是已冻结版本"⇒ 写 `active_version_id` |
+
+**与 P1a 的关系**：
+
+| 端点 | 区别 |
+| --- | --- |
+| `POST …/bundles/:id/activate`（P1a 已有） | 冻结**这个包产生的新版本** + 生效 |
+| `POST …/versions/:seq/activate`（本单新增） | **把任意已冻结版本**设为生效 ⇒ 回滚走这条 |
+
+### 4 · 硬约束
+
+| # | 规则 |
+| --- | --- |
+| 1 | **只能激活已冻结版本**（未冻结 ⇒ 409 `version.not_frozen`） |
+| 2 | 激活是**幂等**的（已 active 再激活 ⇒ 200 + `already_active:true`） |
+| 3 | 回滚**不需要重新解析**（快照还在） |
+| 4 | 数字员工的 token **不加 version 字段**（⛔ 永久不加，理由见 §1） |
+| 5 | Studio 的版本选择器**只列已冻结版本**；草稿仅 console 可见 |
