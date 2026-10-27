@@ -737,7 +737,7 @@ QA 的判断（BA 采纳）：**「有没有第三层」无解，但「规则不
 | REQ-164 | **AM 取数脚本进 skill**（`access_fetch.py`，零第三方依赖）：数字员工调用而不是照 AUTH-SPEC 手写；含签名/分页/字段映射/错误码/未签拒取/截断如实报 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 | REQ-165 | **通用化**：`access_fetch.py` 改成按 AM 契约驱动（签名器注册表 + `service` 必须来自 AM，未知 mode ⇒ `auth.unsupported`）；`SKILL.md`/`AM-FIELDS.md` 业务名词清零 + 新增 §4.6 契约章 | **已完成**（`Deploy f5e1145`） | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 | REQ-166 | **AM 契约补齐**：`tc3` 模式 `auth.service` 必填（脚本 fail-closed，不猜 host 首段）· `auth` 补 `signed_headers`/`timestamp`/`scope`（显式写，不留运行时默认）· 数组参数补 `shape: array`（`instance_ids` 整串当一 ID 的坑） | **已就绪** | ba-lion-michael-workstation-49056-20261027-094244 | 2026-10-27 | **触发**：join 把 `access_fetch.py` 做成产品态（REQ-164/165）后，AM 里三处「靠猜」的缺口暴露。**归属**：AM 生成 = `ontok-builder access`（构建面，lion）。**关键裁定**：⛔ 不因「旧 AM 过不了」把 `service` 改回猜——fail-closed 是对的；缺省值也必须**显式写进 AM**，因为 AM 是声明。**不做**：改 `access_fetch.py`（join 的面）。|
-| REQ-167 | **收掉最后一处「猜」**：`paging_plan` 在 AM 未声明 `offset_param`/`limit_param` 时兜底 `Offset`/`Limit` 改为 fail-closed（`am.invalid`）；AM 契约需能声明「业务错误信封」形状 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
+| REQ-167 | **收掉最后一处「猜」**：分页参数兜底（`"Offset"`/`"Limit"`/`100`）改 fail-closed；实体级 `offset_param`/`limit_param` 与请求级 `offset`/`page`/`limit` **两层**都要显式 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 
 ## REQ-066 验收结论（2026-10-10，**PASS · 三轮 · 建议合并**）
 
