@@ -121,3 +121,34 @@ AC-005 只绑回环 · AC-006 acp 一条命令到审核台 · AC-007 不自动�
 | --- | --- | --- |
 | **F-1** | `bundle pack --project anspire_real` **失败**：项目名含下划线不符合 manifest schema 的 pattern | **历史项目都打不了包**（`anspire_real` 是真实存在的项目名）⇒ 要么放宽 schema 允许 `_`，要么给项目改名路径 |
 | F-2 | 快照里有业务列叫 `password` ⇒ `bundle.credential.suspect` 稳定误报 | 告警疲劳；建议判据收紧成「带值的 password 键」 |
+
+## QA 结论（2026-10-27，QA @efb5cac）
+
+**PASS 带非阻断，0 阻断。** 报告 `BA/.local/qa/REQ-160/REPORT.md`。
+
+| 组 | 结果 |
+| --- | --- |
+| 变异 | **8 个：7 个按预期红、1 个反空转绿、0 无效**（含 D1 加 zip / D2 删注释点行号 / D3 无关包保持绿；E0 给 build run 插入 freeze 被抓） |
+| 口令三件事 | URL 0 命中 · 全文恰 1 次 · 工作区/`%TEMP%`/`.local` 全 0 命中（**且有对照**：删掉自己的捕获文件前恰 1 命中） |
+| 绑定端口 | 非回环无 flag ⇒ exit 2（报错只讲回环、不提库）；`--allow-public` ⇒ 失败面变环境 exit 1；占端口后打印真实端口 |
+| **AC-006/007 运行期** | ✅ 用假 ACP agent + 真库跑通四段：`frozen_at IS NULL`、条目 `biz/model=pending`、`decided_at=NULL` ⇒ **运行期确认没自动签** |
+| 回归 | review_open 20/20 · req160 7/7 · req159_bundle **33/33**（本文件先前写的 32/33 已过时）· req125_page 8/8 · console::page 9/9 · check 绿 |
+
+### 一条契约偏差 → **裁定：改代码，不改 AC**
+
+QA 实测：**失败的 `build run` 会先建项目 + v1**（`get_or_create` + `new_version` 在抽取之前）。
+AC-006 原文是「失败 ⇒ 零产物（不产出断言文件、**不建版本**）」。
+
+**裁定**：把两处准备性写库挪到「① ingest 与 ② merge 都成功之后、`import` 之前」。
+⛔ 不把 AC 改宽成「文件层零产物就行」—— 那是本需求的门面。已派 Dev，并要求真库前后计数作证。
+
+### 方法论教训（QA 踩坑并自查出来，值得固化）
+
+> 变异副本与原仓**共享 `CARGO_TARGET_DIR`** 时，cargo 会复用**原仓编译好**的测试二进制
+> （二进制里嵌死 `CARGO_MANIFEST_DIR`）⇒ 判据读的是原仓未变异的文件 ⇒ **假绿**。
+> 破解：把副本 `Cargo.toml` 版本号改成别的（强制独立构建单元），或改用独立 target 目录。
+> 自查法：在测试 exe 里搜 `CARGO_MANIFEST_DIR` 字面量。
+
+### AC-008 缺口（已补，不在被测分支）
+
+`Deploy/skills/ontok-extract/SKILL.md` 头缺「适用工具版本」那行（`ontok-build` 有）—— 已在 Deploy 分支补上。
