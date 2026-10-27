@@ -76,3 +76,30 @@ Dev 4 个 commit（`8e02355` → … → `a996cc7`），只改 `src/console/page
 
 - [ ] QA（重点：端点集合、断言未被删弱、零数据、真浏览器两套）
 - [ ] 合并（待用户点头）
+
+## QA 结论（2026-10-27 13:45）
+
+**PASS，0 阻断**（P0=0 / P1=0）。报告 `BA/.local/qa/REQ-161/REPORT.md`。
+
+| 组 | 结果 |
+| --- | --- |
+| **端点集合**（QA 自抽，未复用 Dev 测试） | 基线 12 = 现在 12，逐条相同；`bundlePath` 的 7 个动态拼接两侧也相同。⚠️ 唯一差异是**可见端点标签**让字面 `/api/` 多 2 条 —— AC-004 若写成「字面集合相等」会误红，Dev 的口径（`api/…` 归一）才对 |
+| 端点变异 | 加死链 `/api/nonexistent` ⇒ 红；改 `describe`→`describes` ⇒ 红；撤回 ⇒ 绿 |
+| **删除行审计** | 257 行删除里 **0 行**含 `assert`/`#[test]`/`fn`，全部在 `CONSOLE_HTML` 内；测试函数 11→18、`removed=[]`；`tests/test_req125_page.rs` **blob 前后相同、diff 0 行** |
+| 纪律计数 | guarded 5→5（5 段**逐字节相同**）、`progress.pending` 8→8、`already_imported` 4、`reveal_key` 7、`dsnFlag` 2、ADR-013 提示 1、`localStorage/indexedDB/cookie/location.search/innerHTML` 全 0、`#tabs` 1→0、`nav-item` 0→8 |
+| 真浏览器 | 复用 `ui-check.js` **23/23**、`ui-check-structure.js` **12/12**；QA 自写：评审 **10/10**、导出 8/9、四视图+抽屉 16/16 |
+
+## 一处既有缺陷 → **裁定：并入本单修掉**
+
+**`POST /api/r2rml` 前端解析错类型**：服务端回 `text/turtle`，页面走 `post()`→`json()`→`JSON.parse` ⇒ FDE 点「生成 R2RML」**必报 `BAD_JSON`**，错误文案还甩锅服务端。
+QA 确认**基线同错**（基线 L922 与新 L1268 逐字相同），但它在本次刚重排的「导出」视图里，合并后会被误认为换皮换坏的。
+
+| 项 | 决定 |
+| --- | --- |
+| 开新单？ | **不**（一行级别的修，且在同一个文件、同一个视图） |
+| 怎么修 | 加 `postText()`（取 `r.text`），`exportR2rml` 改用它；⛔ 不动 `request()` 的返回契约、⛔ 不动 `/api/export/ttl` |
+| 判据 | 结构断言（`postText(` 在、`post("api/r2rml"` 不在）+ 真浏览器（stub 回 `text/turtle` ⇒ 显示正文且无 `BAD_JSON`） |
+
+## 另一个既有缺口（本单不修，记录在案）
+
+`access.kind` 在基线里**也是 0 次出现**（目录浏览没展示它）—— 既有缺口，**不是本单删的**，验收时别记成回归。
