@@ -582,10 +582,15 @@ pub async fn open(args: OpenArgs) -> Result<(), anyhow::Error> {
     prepare(&args)?;
     let url = crate::config::require_env(crate::config::DATABASE_URL_ENV)
         .or_else(|_| crate::config::require_env(crate::config::TEST_DATABASE_URL_ENV))
-        .map_err(|e| {
+        .map_err(|_| {
+            // ⚠️ 两个名字都点出来：`require_env` 的报错只说**最后一个**名字，
+            // 而「设哪个才对」正是这个人此刻要回答的问题。
             anyhow::anyhow!(
-                "{e}\n  审核台要读元数据库（项目 / 版本 / 提案），没有内存替身。\n  \
-                 （⛔ 本命令不连源库：它审的是元数据库里的提案与版本。）"
+                "缺少元数据库连接串：请设置 {}（或兼容名 {}）。\n  \
+                 审核台要读元数据库（项目 / 版本 / 提案），没有内存替身。\n  \
+                 （⛔ 本命令不连源库：它审的是元数据库里的提案与版本。）",
+                crate::config::DATABASE_URL_ENV,
+                crate::config::TEST_DATABASE_URL_ENV
             )
         })?;
     let pool = crate::db::pool::connect(&url).await?;
