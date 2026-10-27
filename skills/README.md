@@ -23,7 +23,7 @@
 | **`ontok-extract`** | 构建 | **通用抽取契约**：什么算概念/关系、证据怎么给、⛔ 禁泛动词。**不规定输出格式**（由调用方运行时指定） | ❌ 通用 |
 | **`ontok-query`** | 消费 | **流程**：看 `health.mode` → 取 TTL（地图）→ catalog/describe → 判断能否查 → 读回执（`@pending` / `complete`）→ 转达限制 | ❌ 通用 |
 
-> ⭐ **API 源的取数不要自己写**：AM 里的 `sources`/`entities` 已给出 action、分页、pushdown 与字段映射 —— 直接用 [`ontok-query/access_fetch.py`](ontok-query/access_fetch.py)（零第三方依赖），跑法与 9 个错误码见 [`ontok-query/SKILL.md`](ontok-query/SKILL.md) §4.5。
+> ⭐ **API 源的取数不要自己写**：AM 里的 `sources`/`entities` 已给出 action、分页、pushdown 与字段映射 —— 直接用 [`ontok-query/scripts/access_fetch.py`](ontok-query/scripts/access_fetch.py)（零第三方依赖），跑法与 9 个错误码见 [`ontok-query/SKILL.md`](ontok-query/SKILL.md) §4.5。
 
 **为什么这样分**：
 

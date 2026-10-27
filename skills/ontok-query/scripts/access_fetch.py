@@ -123,7 +123,15 @@ JSONLD_CONTEXT = {"ontok": "https://ontok.dev/ns#"}
 #: 内置夹具目录：**按脚本自身位置**解析，⛔ 不看 cwd。
 #: 数字员工常在别的目录里跑本脚本（`python <skill目录>/ontok-query/access_fetch.py …`），
 #: 用 cwd 找 `fixtures/` 会让 `--selftest` 假红。
-FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+#: 内置夹具目录。脚本可能被放在 `scripts/` 下（推荐布局）也可能与 SKILL.md 同级，
+#: 所以按「脚本旁边 → 上一级」两处找，⛔ 不看 cwd。
+FIXTURES_DIR = next(
+    (d for d in (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fixtures"),
+    ) if os.path.isdir(d)),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures"),
+)
 
 #: 码 → 退出码（**唯一一份**）。加码只加在这里；既有 9 个码的值一位不动。
 CODE_EXIT = {

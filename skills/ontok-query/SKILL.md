@@ -1,6 +1,6 @@
 ---
 name: ontok-query
-description: 用 ontok 本体服务回答业务问题。核心顺序是「先取本体（TTL）→ 定位概念 → 决定能否查数据 → 解读回执 → 转达限制」。含 v1 SPARQL 边界、两种部署模式的区别、每种错误的处置，以及 API 源的取数脚本（access_fetch.py，零依赖，别手写签名）。
+description: 用 ontok 本体服务回答业务问题。核心顺序是「先取本体（TTL）→ 定位概念 → 决定能否查数据 → 解读回执 → 转达限制」。含 v1 SPARQL 边界、两种部署模式的区别、每种错误的处置，以及 API 源的取数脚本（scripts/access_fetch.py，零依赖，别手写签名）。
 category: scenario
 ---
 
@@ -97,7 +97,7 @@ MCP 用户也可以读资源：`ontok://ontology/customer.ttl`、`ontok://ontolo
 
 | 标记 | 含义 | 你该怎么做 |
 | --- | --- | --- |
-| 有 `ontok:sourceKind "api"` | 平台**不执行**这类数据源 | 查它只会拿到 `@pending`；要**用 `access_fetch.py` 取数**（§4.5） |
+| 有 `ontok:sourceKind "api"` | 平台**不执行**这类数据源 | 查它只会拿到 `@pending`；要**用 `scripts/access_fetch.py` 取数**（§4.5） |
 | **没有**这个谓词 | 库源（平台能查） | 正常写 SPARQL |
 
 **写查询之前先扫一遍**——不然你会拿 SPARQL 去查 api 类，然后拿到空图还以为是"没数据"。
@@ -184,7 +184,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 | 你查的类 | 结果 | 你该做什么 |
 | --- | --- | --- |
 | **库源类**（`access.kind = "db"`） | `503 NO_DATA_SOURCE` | **重试无效**。转成本体回答：「这里没有数据，只有概念与口径」 |
-| **API 源类**（`access.kind = "api"`） | **200 + `@graph: []` + `@pending` + `complete: false`** | ✅ **用 `access_fetch.py` 取数**（§4.5；`get` 的字段含义见 §4.3） |
+| **API 源类**（`access.kind = "api"`） | **200 + `@graph: []` + `@pending` + `complete: false`** | ✅ **用 `scripts/access_fetch.py` 取数**（§4.5；`get` 的字段含义见 §4.3） |
 | **混合**（库类 + api 类） | `503` | 它确实需要库 ⇒ 拆开：先问本体、再按 `get` 取 |
 
 **怎么提前知道查的是哪类**：`describe` / `catalog` 的 `access.kind`（`db` 走 SPARQL、`api` 走 fetch）。
@@ -196,7 +196,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 
 ### 4.3 API 源：平台只给「取数指引」，数据**用脚本取**
 
-> ✅ **这一节只讲「指引长什么样」；真正取数用 `access_fetch.py`，命令与错误码见 §4.5。**
+> ✅ **这一节只讲「指引长什么样」；真正取数用 `scripts/access_fetch.py`，命令与错误码见 §4.5。**
 > ⛔ **不要照 `AUTH-SPEC.md` 自己实现 TC3 签名**——那份规格是脚本的来源，不是让你再抄一遍。
 
 对 `access.kind = "api"` 的类，平台返回的是**半成品**：
@@ -264,7 +264,7 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 实测一轮里 9 次错误，**6 次**都在这上面（模块名猜错、并发代码写崩、地域列表没有）。
 
-✅ 正确姿势：**调用 `access_fetch.py`**（§4.5）。签名、分页、剪枝、字段映射、10 个固定错误码（9 个既有 + `auth.unsupported`），它都实现好了。
+✅ 正确姿势：**调用 `scripts/access_fetch.py`**（§4.5）。签名、分页、剪枝、字段映射、10 个固定错误码（9 个既有 + `auth.unsupported`），它都实现好了。
 只有当包里**没有**这个脚本（例如客户环境根本没有 Python）才考虑手写，那时照附录 A 抄，⛔ 别重新发明。
 
 #### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`；⛔ 也别每条命令都 `cd`
@@ -295,8 +295,8 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 ```bash
 # 取数：用现成的（签名 / 翻页 / 剪枝 / 错误码都在里面，见 §4.5）
-python access_fetch.py --mapping <am.json> --entity <entity id> --param <名>=<值> --out ./rows.json
-python access_fetch.py --mapping <am.json> --entity <另一个 entity id> --param <名>=<值> --out ./rows2.json
+python scripts/access_fetch.py --mapping <am.json> --entity <entity id> --param <名>=<值> --out ./rows.json
+python scripts/access_fetch.py --mapping <am.json> --entity <另一个 entity id> --param <名>=<值> --out ./rows2.json
 ```
 
 **分析照样要落成文件**（实测：分析阶段 25 次 `python - <<'PY'`，每次重导 `json`/`collections`）：
@@ -319,7 +319,7 @@ python ana.py bill --class <class>
 
 | 文件 | 讲什么 |
 | --- | --- |
-| [`access_fetch.py`](access_fetch.py) | **取数脚本本体**（零依赖）。怎么跑见 §4.5 —— 这一份就够了，⛔ 不用自己写 |
+| [`scripts/access_fetch.py`](scripts/access_fetch.py) | **取数脚本本体**（零依赖）。怎么跑见 §4.5 —— 这一份就够了，⛔ 不用自己写 |
 | [`AM-FIELDS.md`](AM-FIELDS.md) | AM 每个键是什么、脚本用了哪些、哪些不用；改映射之前先看它 |
 | [`AUTH-SPEC.md`](AUTH-SPEC.md) | 签名算法：规范化、时间戳、scope、签名字符串、`Authorization` 拼法、常见坑（**规格**，脚本已实现） |
 | [`RECIPE.md`](RECIPE.md) | `get` 的 10 个键怎么用：占位符来源、**剪枝四规则**、分页 `value_type`、`required` 语义、`iterator`/`fields` |
@@ -340,7 +340,7 @@ python ana.py bill --class <class>
 **正确顺序**：
 
 1. 参数与版本优先从 **`get`** 拿（`pushdown` / `operation` / `request`——本部署正在补齐）
-2. 拿不到 ⇒ **找运维要那份已签映射**（`ref` 就是它的编号），然后交给 `access_fetch.py`（§4.5）
+2. 拿不到 ⇒ **找运维要那份已签映射**（`ref` 就是它的编号），然后交给 `scripts/access_fetch.py`（§4.5）
 3. ⛔ 最后才考虑翻文档；**⛔ 不要翻 SDK 源码，⛔ 不要探端点**
 
 ---
@@ -348,17 +348,17 @@ python ana.py bill --class <class>
 ### 4.5 API 源取数：**用脚本，别手写**
 
 > **一句话**：⛔ **不要照 `AUTH-SPEC.md` 自己实现 TC3 签名、翻页、剪枝。**
-> 直接调用 `access_fetch.py`——它就是那份参考实现，零第三方依赖（Python 3.8+ 标准库）。
+> 直接调用 `scripts/access_fetch.py`——它就是那份参考实现，零第三方依赖（Python 3.8+ 标准库）。
 >
 > 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
 > 9 次错误里 6 次出在这几件事上（§4.4②）。
 
 #### ① 取数脚本
 
-本 skill 附带 `access_fetch.py`，用法如下：
+本 skill 的取数脚本按 **skill 目录相对路径** 引用：`scripts/access_fetch.py`。用法：
 
 ```bash
-python access_fetch.py --selftest        # 离线自检（不需要 AM / 凭据 / 网络）
+python scripts/access_fetch.py --selftest        # 离线自检（不需要 AM / 凭据 / 网络）
 ```
 
 ⛔ **不要搜索、猜测或追问任何路径**。`--mapping`（AM 文件）与 `--out`（输出）**都由调用方提供**；
@@ -566,12 +566,12 @@ $FETCH --mapping <am.json> --entity <entity id> \
 
 ---
 
-## 附录 A · 参考实现（**旧·仅当拿不到 `access_fetch.py` 时**）
+## 附录 A · 参考实现（**旧·仅当拿不到 `scripts/access_fetch.py` 时**）
 
 > **示例不是规格。** 本附录（以及附录 B）里出现的具体厂商名、接口名、字段名只是**那一家的样子**，
 > 用来把「逐字节正确的签名」讲清楚；它们**不是** skill 的规定，换一家就换掉。
 >
-> ⛔ **先看 §4.5**：正常路径是调用 `access_fetch.py`，本附录只在「包里没有脚本且环境有 Python」
+> ⛔ **先看 §4.5**：正常路径是调用 `scripts/access_fetch.py`，本附录只在「包里没有脚本且环境有 Python」
 > 时作为最后兜底，且**不推荐**——它没有错误码、没有剪枝、没有截断标记，正是 §4.4② 说过的坑。
 >
 > ⚠️ **为什么附录里出现具体厂商**：这套部署的 `get` 指向某家云，签名算法必须逐字节正确，
@@ -660,8 +660,8 @@ if __name__ == "__main__":
 **命令的填法**（对应 §4.5 ② 的命令示例）：
 
 ```bash
-python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
-python access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-guangzhou --out ./cvm.json
+python scripts/access_fetch.py --mapping am.json --entity CvmInstance --dry-run
+python scripts/access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-guangzhou --out ./cvm.json
 export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM 的 auth.credential_env
 ```
 
@@ -745,7 +745,7 @@ export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM �
 8. ⛔ **把 `complete: false` 当答案** —— 那是半成品；`@pending` 必须处理完
 9. ⛔ **拿 SPARQL 反复试 api 源** —— TTL 里 `sourceKind "api"` 已经告诉你平台不执行它
 10. ⛔ **以为默认会回表格** —— 默认是 JSON-LD 图；要表必须显式传 `format="rows"`
-11. ⛔ **自己再手写一份取数脚本** —— 用 `access_fetch.py`（§4.5）；手写一份就多一份对不齐的实现
+11. ⛔ **自己再手写一份取数脚本** —— 用 `scripts/access_fetch.py`（§4.5）；手写一份就多一份对不齐的实现
 12. ⛔ **把 `meta.truncated: true` 当"取全了"** —— 那是没取全；退出码 8 就是在说这件事
 
 ---
@@ -759,7 +759,7 @@ export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM �
 ④ 用户问「X 的情况」
    ├─ 本体模式 → 用 TTL 里的定义回答，并说明没有数值
    ├─ X 是 db 源 → SELECT ?x ?v WHERE { ?x a :X . ?x :p1 ?v } LIMIT 20
-   └─ X 是 api 源 → 平台给 @pending，用 `access_fetch.py` 取（§4.5；未签的取不了）
+   └─ X 是 api 源 → 平台给 @pending，用 `scripts/access_fetch.py` 取（§4.5；未签的取不了）
 ⑤ 读回执（默认是图：看 `summary` + `meta`；要表先传 `format="rows"`）：warnings / coverage / truncated / evidence_level
 ⑥ 若 `meta.complete: false` ⇒ 先处理完 `@pending` 再答；答案里标出哪部分来自外部接口
 ⑦ 回答里带上限制；不确定的地方说「不确定」，不要补全

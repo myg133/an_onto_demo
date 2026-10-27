@@ -1,4 +1,4 @@
-# AM-FIELDS · access mapping 的每个键是什么，`access_fetch.py` 用到哪些
+# AM-FIELDS · access mapping 的每个键是什么，`scripts/access_fetch.py` 用到哪些
 
 > 读者：**要改 AM 的人**（映射作者 / 运维）和**要用脚本取数的人**（数字员工）。
 > 一句话：AM 有 30 多个键，取数只用其中一部分。这份文档逐键说清「是什么 / 脚本用不用 / 怎么用」，
@@ -261,10 +261,10 @@ AM 里**两份可以并存**，各管一件事：
 ## 七 · 30 秒自查（改完 AM 之后）
 
 ```bash
-python access_fetch.py --list-signers                          # 有哪些 auth.mode 能用
-python access_fetch.py --mapping <am.json> --check              # 结构 + 签名门禁
-python access_fetch.py --mapping <am.json> --entity <id> --dry-run   # 用夹具走一遍
-python access_fetch.py --mapping <am.json> --entity <id> --param <名>=<值> --max-rows 5  # 真取一小页
+python scripts/access_fetch.py --list-signers                          # 有哪些 auth.mode 能用
+python scripts/access_fetch.py --mapping <am.json> --check              # 结构 + 签名门禁
+python scripts/access_fetch.py --mapping <am.json> --entity <id> --dry-run   # 用夹具走一遍
+python scripts/access_fetch.py --mapping <am.json> --entity <id> --param <名>=<值> --max-rows 5  # 真取一小页
 ```
 
 `--check` 只看结构（不取数、不要凭据）；`--dry-run` 要夹具、不要凭据；真取数才要环境变量。

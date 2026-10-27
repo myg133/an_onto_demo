@@ -1,6 +1,6 @@
 # 两种运行模式：谁加载什么 · 谁起服务 · 谁签字
 
-> 两种模式下**取数都一样**：API 源用 [`ontok-query/access_fetch.py`](ontok-query/access_fetch.py)，⛔ 别按 AUTH-SPEC 自己实现 TC3 —— 跑法见 [`ontok-query/SKILL.md`](ontok-query/SKILL.md) §4.5。
+> 两种模式下**取数都一样**：API 源用 [`ontok-query/scripts/access_fetch.py`](ontok-query/scripts/access_fetch.py)，⛔ 别按 AUTH-SPEC 自己实现 TC3 —— 跑法见 [`ontok-query/SKILL.md`](ontok-query/SKILL.md) §4.5。
 > 一页说清 **ACP 模式** 与 **独立 agent 模式** 的差别。
 > 先记住三句共同点：
 >
