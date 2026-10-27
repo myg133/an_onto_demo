@@ -30,7 +30,7 @@
 //!
 //! 401 / 403 ⇒ 清掉口令 + 回登录态 + **显示服务端给的 `code` / `message` / `hint`**。
 //!
-//! # 七个视图消费的既有端点（⛔ 本文件没有、也不许有新的数据端点）
+//! # 八个视图消费的端点（⛔ 本文件没有、也不许有新的数据端点）
 //!
 //! | 视图 | 端点 |
 //! | --- | --- |
@@ -41,8 +41,9 @@
 //! | 审计 | `GET /api/audit` |
 //! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
 //! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
+//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate` · `POST /api/projects/<p>/key/rotate` |
 //!
-//! 前四组由 `console serve` 自己提供；后两组是 **REQ-123 的查询服务**
+//! 前四组由 `console serve` 自己提供；查询台与目录浏览是 **REQ-123 的查询服务**
 //! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
 //! 本页只按**同源**路径调用（`connect-src 'self'`）。⇒ 部署时把控制面与查询服务
 //! 放在**一个源**后面（反向代理按路径分流）；直连两个端口时浏览器会用同源策略拦掉，
@@ -50,6 +51,28 @@
 //! 而不是把 404/403 说成「口令不对」——那两个状态在这条拓扑下**不是口令问题**，
 //! 所以查询端点出错时页面**不清任何口令**（清掉就是死循环）；管理端点仍按 401/403
 //! 清口令回登录态。开发期用 `tests/fixtures/req125/dev_proxy.ps1`（同一个分流口径）。
+//! 最后一组（构建包）由 **REQ-159 的服务端**提供，见下一节。
+//!
+//! # 构建包 tab：端点不存在时先说「服务端未就绪」，⛔ 不把它当口令错
+//!
+//! 构建包这一组端点（`/bundles…` / `/database…` / `/key/rotate`）在页面上线时
+//! **可能还不存在**（服务端并行实现）。所以这一 tab 的每一次请求都带 `notReady`
+//! 标记：HTTP **404** ⇒ 在对应区域显示一行
+//! 「服务端未就绪：该端点还不存在（REQ-159 服务端在并行开发中）」，
+//! 并且**不登出、不清口令** —— 404 在这里是「服务端还没这个路径」，不是「口令不对」。
+//! 只有 **401 / 403** 才走既有的清口令 + 回登录态（安全语义不变）。
+//!
+//! 两条只在本 tab 成立的纪律：
+//!
+//! | 规则 | 为什么 |
+//! | --- | --- |
+//! | key **只放内存**（`LAST_KEY`），⛔ 不进 sessionStorage / 任何输入框 | 「只显示一次」的反面是不许留痕；写下来就不再是一次性 |
+//! | DSN 口令框保存成功后**只清 value**，不回显、不记录 | 页面没有回读 DSN 的端点，回显等于凭空造一份明文 |
+//!
+//! 上传走 `fetch` 的**原始字节**（`Content-Type: application/octet-stream`），
+//! ⛔ 不能用 `post()`：它会把 body `JSON.stringify` 成字符串，文件字节当场写坏。
+//! 即便如此，整页仍然**只有一个 `fetch(` 调用点**（`request()` 里的那一处，
+//! 上传只是给它传 `body` + `ctype`），`tests/test_req125_page.rs::ac004` 的数法不变。
 //!
 //! # 查询台**必须**显示四件事（AC-008）
 //!
@@ -190,6 +213,7 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
   <button id="tab-audit" data-tab="audit">审计</button>
   <button id="tab-query" data-tab="query">查询台</button>
   <button id="tab-catalog" data-tab="catalog">目录浏览</button>
+  <button id="tab-bundles" data-tab="bundles">构建包</button>
 </nav>
 
 <main>
@@ -338,6 +362,84 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
     </div>
     <div id="k-detail" class="panel" hidden></div>
   </section>
+
+  <!-- ── 8 · 构建包（REQ-159）────────────────────────────── -->
+  <section id="v-bundles" class="view" hidden>
+    <div class="bar">
+      <button id="b-refresh">刷新</button>
+      <span class="note">当前项目：</span><span id="b-project">—</span>
+      <span class="note">（GET /api/projects）—— 本服务只服务启动时指定的那一个项目，所以这里只做显示。</span>
+    </div>
+    <div id="b-msg"></div>
+
+    <div class="panel">
+      <h2>1 · 上传并校验（POST …/bundles，application/octet-stream）</h2>
+      <p class="note">包是构建端产出的 .ontokbundle 文件；页面只把**文件字节原样** POST 上去（⛔ 不套 JSON），服务端校验 sha256 与组件清单后回 state / bundle_id。</p>
+      <div class="bar">
+        <label>选包 <input id="b-file" type="file" accept=".ontokbundle"></label>
+        <button id="b-upload">上传并校验</button>
+      </div>
+      <div id="b-state" class="summary">还没有上传。</div>
+      <div id="b-components"></div>
+    </div>
+
+    <div id="b-dsn" class="panel" hidden>
+      <h2>2 · 目标库连接（requires_dsn = true 时才需要）</h2>
+      <p class="note">DSN 由本页按 postgresql 形式拼（user / password 走 encodeURIComponent）；口令**只在这一次 PUT 里出现**，保存成功后只清空口令框：不回显、不记录、不进 sessionStorage。</p>
+      <div class="bar">
+        <label>host <input id="b-dsn-host" size="18" placeholder="数据库主机"></label>
+        <label>port <input id="b-dsn-port" size="6" value="5432"></label>
+        <label>库 <input id="b-dsn-db" size="14" placeholder="库名"></label>
+      </div>
+      <div class="bar">
+        <label>user <input id="b-dsn-user" size="14" autocomplete="off"></label>
+        <label>password <input id="b-dsn-pass" type="password" autocomplete="new-password"></label>
+        <label>sslmode
+          <select id="b-dsn-ssl">
+            <option value="disable">disable</option>
+            <option value="require">require</option>
+            <option value="prefer">prefer</option>
+          </select>
+        </label>
+      </div>
+      <div class="bar">
+        <button id="b-dsn-save">保存 DSN</button>
+        <button id="b-dsn-test">测试连通</button>
+        <span class="note">PUT …/database 的回执只有 database_id / host / database / user（⛔ 响应里没有 dsn，本页也不显示）；测试打的是服务端**已保存**的那份连接。</span>
+      </div>
+      <div id="b-dsn-out"></div>
+    </div>
+
+    <div class="panel">
+      <h2>3 · 解析入库（POST …/bundles/&lt;id&gt;/import）</h2>
+      <div class="bar">
+        <button id="b-import" disabled>解析入库</button>
+        <span class="note">条件没满足时按钮是灰的：先上传拿到 bundle_id；requires_dsn 的包还要 DSN 保存 + 连通测试通过。</span>
+      </div>
+      <div id="b-import-out"></div>
+    </div>
+
+    <div class="panel">
+      <h2>4 · 待确认清单（GET /api/review?proposal=p1）</h2>
+      <p class="note">本 tab 只做**汇总与门禁**：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。只有**待确认 0 条**时「冻结并切流量」才可点。</p>
+      <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
+      <div id="b-checklist" class="summary">尚未载入。</div>
+    </div>
+
+    <div class="panel">
+      <h2>5 · 生效（冻结并切流量）· key</h2>
+      <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 只在生成它的那次回执里出现**一次**，本页只放在内存里展示，关掉页面就没了。</p>
+      <div class="bar">
+        <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
+        <button id="b-rotate" class="danger">换 key…</button>
+      </div>
+      <div id="b-key" hidden>
+        <div class="note">新 key（只显示这一次；离开页面就再也看不到）：</div>
+        <div id="b-key-val" class="mono"></div>
+        <div class="bar"><button id="b-key-copy">复制 key</button></div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <div id="modal" hidden>
@@ -366,7 +468,9 @@ var S = {
   at: "", qt: "", connected: false, tab: "projects",
   projects: null, review: null, reviewProposal: "", reviewPage: 1,
   declKind: "exclusions", audit: null, query: null,
-  catalog: null, catalogPage: 1
+  catalog: null, catalogPage: 1,
+  // 构建包（REQ-159）：bundle 是上传回执 + 入库后补的 version；pendingCount = 待确认条数
+  bundle: null, needDsn: false, dsnOk: false, checklist: null, pendingCount: null
 };
 
 function $(id) { return document.getElementById(id); }
@@ -418,17 +522,29 @@ function authHeader(useQuery) {
 var QUERY_WIRING = "查询服务未接入：这三个端点属于 query serve（另一进程）。" +
   "请把 query serve 挂到同源 /api/sparql、/api/catalog、/api/describe 下" +
   "（本机可用 tests/fixtures/req125/dev_proxy.ps1，部署指南见 BA/runbook/ontology-e2e.md §7.3）";
+// 构建包 tab 的端点（REQ-159）可能还没上线：这类请求带 `notReady`，404 说同一句话。
+// 与 QUERY_WIRING 同一条教训：**把「服务端没有这个路径」说成「口令不对」是死循环**。
+var NOT_READY_MSG = "服务端未就绪：该端点还不存在（REQ-159 服务端在并行开发中）";
+var NOT_READY_HINT = "这不是口令问题：页面**不会**清空口令、也不会退回登录态。" +
+  "等服务端把这一组端点上线后重试；在那之前本页其余七个视图照常可用。";
 function request(path, opts) {
   opts = opts || {};
   var headers = authHeader(!!opts.query);
   if (opts.json) headers["Content-Type"] = "application/json";
+  // 上传：body 是文件句柄本身（原始字节），内容类型由调用点指定 —— 仍然走下面这**唯一**一处 fetch。
+  if (opts.ctype) headers["Content-Type"] = opts.ctype;
   var init = { method: opts.method || "GET", headers: headers, cache: "no-store" };
   if (opts.body !== undefined) init.body = opts.body;
   return fetch(path, init).then(function (r) {
     return r.text().then(function (raw) {
       if (r.ok) return { status: r.status, text: raw, ctype: r.headers.get("content-type") || "" };
       var err = httpError(r.status, raw);
-      if (opts.query && (r.status === 404 || r.status === 403)) {
+      if (opts.notReady && r.status === 404) {
+        // ⛔ 不登出：404 = 服务端还没这个路径，不是口令错（清口令只会把人挡在门外）。
+        err.code = "ENDPOINT_NOT_READY";
+        err.message = NOT_READY_MSG;
+        err.hint = NOT_READY_HINT;
+      } else if (opts.query && (r.status === 404 || r.status === 403)) {
         // ⛔ **不清任何口令**：L-1 拓扑下两个口令都填了也还是 403，清掉就再也填不回来。
         err.code = "QUERY_NOT_WIRED";
         err.message = QUERY_WIRING;
@@ -1196,9 +1312,383 @@ function describeName(name) {
 }
 
 // ══════════════════════════════════════════════════════════
+// 8 · 构建包（REQ-159）—— 上传 / 目标库 / 入库 / 待确认门禁 / 生效
+// ══════════════════════════════════════════════════════════
+// 这一组的端点在服务端是**并行开发**的：本 tab 的每次请求都带 notReady，
+// 404 ⇒ 「服务端未就绪」并且**不登出**（见上面的 request 层）。
+var LAST_KEY = null;   // ⭐ key 只在内存：⛔ 不进 sessionStorage、不回填任何输入框
+
+function bundleProject() { return (S.projects && S.projects.project) ? S.projects.project : ""; }
+function bundlePath(suffix) {
+  var p = bundleProject();
+  return p ? ("api/projects/" + encodeURIComponent(p) + suffix) : "";
+}
+// 本 tab 的统一发包口：一律带 notReady（404 ⇒ 服务端未就绪）。
+function bjson(path, method, body) {
+  var opts = { method: method || "GET", notReady: true };
+  if (body !== undefined) { opts.json = true; opts.body = JSON.stringify(body); }
+  return json(path, opts);
+}
+// 组件清单的「计数」字段名没有统一口径（服务端按组件给），这里只认几个常见键，
+// 一个都没有就显示 —（比猜一个数字更诚实）。
+function countOf(c) {
+  if (!c) return "—";
+  if (typeof c.count === "number") return c.count;
+  if (typeof c.item_count === "number") return c.item_count;
+  if (typeof c.total === "number") return c.total;
+  if (c.items && c.items.length !== undefined) return c.items.length;
+  if (c.entries && c.entries.length !== undefined) return c.entries.length;
+  return "—";
+}
+function flagOf(v) { return (v === true || v === "true") ? "是" : "否"; }
+
+function loadBundles() {
+  txt($("b-project"), "载入中…");
+  return json("api/projects").then(function (d) {
+    S.projects = d;
+    txt($("b-project"), d.project || "—");
+    clear($("b-msg"));
+    loadChecklist().catch(function () {});
+    return d;
+  }).catch(function (e) {
+    txt($("b-project"), "—");
+    showErr($("b-msg"), e);
+    throw e;
+  });
+}
+
+// 上传：⛔ 不能走 post()（它 JSON.stringify 后 body 变成字符串，文件字节当场坏掉）。
+// 走 request 层唯一的那处 fetch，body 直接给文件句柄 + octet-stream。
+function uploadBundle() {
+  var p = bundleProject();
+  var input = $("b-file");
+  var f = (input.files && input.files[0]) ? input.files[0] : null;
+  var state = $("b-state");
+  if (!p) { setMsg("先载入项目（点「刷新」）。", "bad"); return; }
+  if (!f) { setMsg("先选一个 .ontokbundle 文件。", "bad"); return; }
+  clear($("b-components"));
+  clear(state);
+  txt(state, "上传中…（" + fmtBytes(f.size) + "，原始字节，不套 JSON）");
+  return json(bundlePath("/bundles"), {
+    method: "POST", body: f, ctype: "application/octet-stream", notReady: true
+  }).then(function (res) {
+    showBundle(res || {});
+    setMsg("已上传：" + ((res && res.bundle_id) || "（回执里没有 bundle_id）"), "ok");
+    return res;
+  }).catch(function (e) {
+    showErr(state, e);
+    setMsg("上传失败：" + e.message, "bad");
+  });
+}
+
+function showBundle(res) {
+  S.bundle = res || null;
+  var state = $("b-state"), box = $("b-components");
+  clear(state);
+  clear(box);
+  if (!res) { txt(state, "还没有上传。"); renderBundleGates(); return; }
+  state.appendChild(kvList([
+    ["state", res.state ? badge(res.state, res.state === "active" ? "ok" : (res.state === "validated" ? "acc" : "warn")) : "—"],
+    ["bundle_id", res.bundle_id || "—"],
+    ["sha256_verified", res.sha256_verified === true ? badge("已校验", "ok")
+      : (res.sha256_verified === false ? badge("校验未通过", "bad") : "—")],
+    ["requires_db", flagOf(res.requires_db)]
+  ]));
+  var comps = res.components || {};
+  box.appendChild(makeTable(["组件", "计数", "requires_dsn", "dialect"], ["ontology", "am", "db"].map(function (k) {
+    var c = comps[k] || null;
+    return [k, c ? countOf(c) : "—", c ? flagOf(c.requires_dsn) : "—", c ? (c.dialect || "—") : "—"];
+  }), "组件清单为空。"));
+  needDsn(res);
+  renderBundleGates();
+}
+
+// requires_dsn ⇒ 自动展开 DSN 面板（不是让用户自己猜要不要填）。
+function needDsn(res) {
+  var db = (res && res.components) ? res.components.db : null;
+  var need = !!(res && (res.requires_db === true ||
+    (db && (db.requires_dsn === true || db.requires_dsn === "true"))));
+  S.needDsn = need;
+  $("b-dsn").hidden = !need;
+  if (!need) S.dsnOk = true;   // 不需要库 ⇒ DSN 这道门禁不参与
+  return need;
+}
+
+// DSN 由前端拼：user / password 必须 encodeURIComponent，host / port / db 原样。
+function dsnValue() {
+  var host = $("b-dsn-host").value.trim();
+  var port = $("b-dsn-port").value.trim() || "5432";
+  var db = $("b-dsn-db").value.trim();
+  var user = $("b-dsn-user").value.trim();
+  var pass = $("b-dsn-pass").value;
+  var ssl = $("b-dsn-ssl").value || "prefer";
+  if (!host || !db || !user) return "";
+  return "postgresql://" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) +
+    "@" + host + ":" + port + "/" + db + "?sslmode=" + ssl;
+}
+
+function saveDsn() {
+  var p = bundleProject();
+  var out = $("b-dsn-out");
+  if (!p) { setMsg("先载入项目（点「刷新」）。", "bad"); return; }
+  var dsn = dsnValue();
+  if (!dsn) { setMsg("host / 库 / user 都要填（DSN 由本页拼）。", "bad"); return; }
+  clear(out);
+  return bjson(bundlePath("/database"), "PUT", { dsn: dsn, dialect: "postgres" }).then(function (r) {
+    r = r || {};
+    clear(out);
+    out.appendChild(okBox([
+      "DSN 已保存：database_id " + (r.database_id || "—"),
+      "host " + (r.host || "—") + " · database " + (r.database || "—") + " · user " + (r.user || "—"),
+      "回执里没有 dsn（服务端本来就不回），本页也不显示；口令框已清空，不回填。"
+    ]));
+    $("b-dsn-pass").value = "";   // ⭐ 只清口令框
+    S.dsnOk = false;              // 保存 ≠ 连通：还要「测试连通」过了才放行入库
+    out.appendChild(el("div", "note", "下一步点「测试连通」：通过后「解析入库」才会亮。"));
+    renderBundleGates();
+    setMsg("DSN 已保存（还没验证连通）。", "ok");
+    return r;
+  }).catch(function (e) {
+    showErr(out, e);
+    setMsg("保存 DSN 失败：" + e.message, "bad");
+  });
+}
+
+function testDsn() {
+  var p = bundleProject();
+  var out = $("b-dsn-out");
+  if (!p) { setMsg("先载入项目（点「刷新」）。", "bad"); return; }
+  clear(out);
+  out.appendChild(el("div", "note", "测试中…（打的是服务端已保存的那份连接）"));
+  return bjson(bundlePath("/database/test"), "POST", {}).then(function (r) {
+    r = r || {};
+    clear(out);
+    if (r.ok === true) {
+      out.appendChild(okBox([
+        "连通成功 · 延迟 " + (r.latency_ms === undefined ? "—" : (r.latency_ms + " ms")),
+        "server_version：" + (r.server_version || "—")
+      ]));
+      S.dsnOk = true;
+      setMsg("目标库连通。", "ok");
+    } else {
+      // ⚠️ 连通失败也是 HTTP 200：回执里是 ok=false + error{code,message}，
+      // 所以这里**自己**造一个三段式错误框，而不是等 request 抛（否则看起来像网络断了）。
+      var err = r.error || {};
+      S.dsnOk = false;
+      out.appendChild(errBox(wbError(200, err.code || "DSN_TEST_FAILED",
+        err.message || "连通测试失败（服务端回 ok=false，但没给原因）。",
+        err.hint || "查库账号 / 网络 / sslmode；这一条 HTTP 是 200，不是断网。")));
+      setMsg("目标库连不通：" + (err.message || "服务端没给原因"), "bad");
+    }
+    renderBundleGates();
+    return r;
+  }).catch(function (e) {
+    S.dsnOk = false;
+    showErr(out, e);
+    renderBundleGates();
+    setMsg("测试失败：" + e.message, "bad");
+  });
+}
+
+function importBundle() {
+  var p = bundleProject();
+  var b = S.bundle || {};
+  var out = $("b-import-out");
+  if (!p || !b.bundle_id) { setMsg("先上传一个包，拿到 bundle_id。", "bad"); return; }
+  if (S.needDsn && S.dsnOk !== true) { setMsg("这个包要目标库：先把 DSN 保存并让「测试连通」通过。", "bad"); return; }
+  clear(out);
+  out.appendChild(el("div", "note", "解析入库中…"));
+  return bjson(bundlePath("/bundles/" + encodeURIComponent(b.bundle_id) + "/import"), "POST", {}).then(function (r) {
+    r = r || {};
+    clear(out);
+    if (r.version !== undefined) b.version = r.version;
+    if (r.state) b.state = r.state;
+    S.bundle = b;
+    out.appendChild(okBox([
+      "版本：" + (r.version === undefined ? "—" : ("第 " + r.version + " 版")),
+      "state：" + (r.state || "—")
+    ]));
+    var counts = r.counts || {};
+    out.appendChild(el("div", "note", "counts："));
+    var keys = Object.keys(counts);
+    if (keys.length) out.appendChild(kvList(keys.map(function (k) { return [k, counts[k]]; })));
+    else out.appendChild(el("div", "note", "（服务端没给 counts）"));
+    var warns = r.warnings || [];
+    if (warns.length) {
+      var ul = el("ul", "warns");
+      warns.forEach(function (w) { ul.appendChild(el("li", null, w)); });
+      out.appendChild(ul);
+    } else out.appendChild(el("div", "note", "warnings：0 条。"));
+    setMsg("已解析入库。", "ok");
+    renderBundleGates();
+    return r;
+  }).catch(function (e) {
+    showErr(out, e);
+    setMsg("解析入库失败：" + e.message, "bad");
+  });
+}
+
+// 待确认：`decision` 为空 / pending 的都算未决；阻断 = 服务端标了 blocking，
+// 或者带了阻断原因，或者建议是 conflict / reject（这三种都不该放行生效）。
+function isPendingItem(it) {
+  if (!it) return false;
+  var d = it.decision;
+  return d === undefined || d === null || d === "" || d === "pending";
+}
+function isBlockingItem(it) {
+  if (!it) return false;
+  if (it.blocking === true) return true;
+  if (it.reason && String(it.reason).trim()) return true;
+  var kind = suggOf(it).kind;
+  return kind === "conflict" || kind === "reject";
+}
+function loadChecklist() {
+  var box = $("b-checklist");
+  return json("api/review?proposal=p1", { notReady: true }).then(function (d) {
+    S.checklist = d || null;
+    renderChecklist();
+    return d;
+  }).catch(function (e) {
+    S.checklist = null;
+    S.pendingCount = null;
+    clear(box);
+    showErr(box, e);
+    renderBundleGates();
+    throw e;
+  });
+}
+function renderChecklist() {
+  var box = $("b-checklist");
+  clear(box);
+  var d = S.checklist;
+  if (!d) { txt(box, "尚未载入。"); S.pendingCount = null; renderBundleGates(); return; }
+  var items = (d.items || []).filter(isPendingItem);
+  var blocking = items.filter(isBlockingItem);
+  S.pendingCount = items.length;
+  box.appendChild(el("b", null, "待确认 " + items.length + " 条（其中阻断 " + blocking.length + " 条）"));
+  box.appendChild(el("span", null, " · 提案 " + (d.proposal || "—") +
+    " · 基于第 " + (d.base_version === undefined ? "—" : d.base_version) + " 版"));
+  if (!items.length) {
+    box.appendChild(el("div", "note", "待确认 0 条：门禁已放开，可以「冻结并切流量」。"));
+    renderBundleGates();
+    return;
+  }
+  box.appendChild(el("div", "note", "本 tab 只汇总与门禁：逐条裁决在「评审」tab 做（点「去评审」）。"));
+  var list = el("div");
+  items.forEach(function (it) {
+    var row = el("div", "hd");
+    row.appendChild(el("span", "target", it.target || "—"));
+    row.appendChild(el("span", "kind", suggOf(it).kind || "none"));
+    if (isBlockingItem(it)) row.appendChild(badge("阻断", "bad"));
+    var go = el("button", null, "去评审");
+    go.onclick = function () { gotoReview(it.proposal || d.proposal || "p1"); };
+    row.appendChild(go);
+    list.appendChild(row);
+  });
+  box.appendChild(list);
+  renderBundleGates();
+}
+function gotoReview(proposal) {
+  $("r-proposal").value = proposal || "p1";
+  S.review = null;          // 让 switchTab 按新别名重新载入，而不是复用上一次的
+  switchTab("review");
+}
+
+// 门禁：入库要看 bundle_id（+ 需要库时 DSN 连通）；生效还要「待确认 0 条」。
+function renderBundleGates() {
+  var b = S.bundle || {};
+  var imported = !!(b.version || b.state === "imported");
+  var dsnOk = (!S.needDsn) || (S.dsnOk === true);
+  $("b-import").disabled = !(b.bundle_id && dsnOk);
+  $("b-activate").disabled = !(imported && S.pendingCount === 0);
+}
+
+function activateBundle() {
+  var p = bundleProject();
+  var b = S.bundle || {};
+  if (!p || !b.bundle_id) { setMsg("先上传并解析入库。", "bad"); return; }
+  if (S.pendingCount !== 0) {
+    setMsg("门禁：待确认清单" + (S.pendingCount === null || S.pendingCount === undefined
+      ? "还没载入" : ("还有 " + S.pendingCount + " 条")) + "，不能激活。", "bad");
+    return;
+  }
+  return guarded({
+    title: "冻结并切流量：第 " + (b.version === undefined ? "—" : b.version) + " 版",
+    rows: [
+      ["目标", "项目 " + p + " · 构建包 " + b.bundle_id + (b.version === undefined ? "" : (" · 第 " + b.version + " 版"))],
+      ["后果", "这一版会被冻结、查询服务随即切过去：之后不能再 apply、不能再签条目；切换不可撤销（回退要另走一次发布）。"]
+    ],
+    ok: "冻结并切流量"
+  }, function () {
+    return bjson(bundlePath("/bundles/" + encodeURIComponent(b.bundle_id) + "/activate"), "POST", {});
+  }).then(function (r) {
+    if (r === null) { setMsg("已取消：没有发出任何请求。", ""); return; }
+    r = r || {};
+    var out = $("b-import-out");
+    out.appendChild(okBox([
+      "已生效：state " + (r.state || "—") +
+      " · 版本 " + (r.version === undefined ? "—" : r.version) +
+      " · ontology_version " + (r.ontology_version === undefined ? "—" : r.ontology_version)
+    ]));
+    b.state = r.state || "active";
+    S.bundle = b;
+    if (r.key) showKey(r.key);   // 回执里带 key 就按「只显示一次」处理
+    setMsg("已冻结并切流量。", "ok");
+    renderBundleGates();
+  }).catch(function (e) {
+    showErr($("b-import-out"), e);
+    setMsg("激活失败：" + e.message, "bad");
+  });
+}
+
+// key 只进内存变量 + 一个只读展示块：⛔ 不写 sessionStorage、不回填输入框。
+function showKey(k) {
+  LAST_KEY = k || "";
+  $("b-key").hidden = !LAST_KEY;
+  txt($("b-key-val"), LAST_KEY || "（这一次回执里没有 key）");
+  return LAST_KEY;
+}
+function copyKey() {
+  if (!LAST_KEY) { setMsg("还没有可复制的 key（先在「换 key」里生成）。", "bad"); return; }
+  if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(LAST_KEY).then(function () {
+      setMsg("key 已复制到剪贴板（仍然只在内存里）。", "ok");
+    }).catch(function () {
+      setMsg("复制被浏览器拒绝：请手动选中 key 那一行复制；离开页面就没了。", "bad");
+    });
+  } else {
+    setMsg("这个浏览器不给剪贴板权限：请手动选中 key 那一行复制。", "bad");
+  }
+}
+function rotateKey() {
+  var p = bundleProject();
+  if (!p) { setMsg("先载入项目（点「刷新」）。", "bad"); return; }
+  return guarded({
+    title: "换 key（项目 " + p + "）",
+    rows: [
+      ["目标", "项目 " + p + " 的访问 key（key/rotate）"],
+      ["后果", "旧 key **立刻失效**：还在用旧 key 的调用方会 401；新 key 只在这一次回执里出现，关掉页面就再也拿不到（只能再换一次）。"]
+    ],
+    ok: "换 key"
+  }, function () {
+    return bjson(bundlePath("/key/rotate"), "POST", {});
+  }).then(function (r) {
+    if (r === null) { setMsg("已取消：没有发出任何请求。", ""); return; }
+    r = r || {};
+    showKey(r.key);
+    var out = $("b-import-out");
+    if (r.key_digest) out.appendChild(el("div", "note", "key_digest：" + r.key_digest + "（摘要可以留档；key 本身只显示一次）"));
+    setMsg("已换 key：新 key 只显示这一次。", "ok");
+  }).catch(function (e) {
+    showErr($("b-import-out"), e);
+    setMsg("换 key 失败：" + e.message, "bad");
+  });
+}
+
+// ══════════════════════════════════════════════════════════
 // tab 切换（无 URL 状态：地址栏永远不带口令）
 // ══════════════════════════════════════════════════════════
-var TABS = ["projects", "review", "export", "config", "audit", "query", "catalog"];
+var TABS = ["projects", "review", "export", "config", "audit", "query", "catalog", "bundles"];
 function switchTab(name) {
   S.tab = name;
   TABS.forEach(function (t) {
@@ -1210,6 +1700,7 @@ function switchTab(name) {
   if (name === "audit" && !S.audit) loadAudit().catch(function () {});
   if (name === "export" && !S.projects) loadProjects().catch(function () {});
   if (name === "catalog" && !S.catalog) loadCatalog(1).catch(function () {});
+  if (name === "bundles") loadBundles().catch(function () {});
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1234,6 +1725,15 @@ $("q-go").onclick = runQuery;
 $("k-load").onclick = function () { loadCatalog(parseInt($("k-page").value, 10) || 1).catch(function () {}); };
 $("k-prev").onclick = function () { loadCatalog(Math.max(1, S.catalogPage - 1)).catch(function () {}); };
 $("k-next").onclick = function () { if (S.catalog && S.catalog.has_more) loadCatalog(S.catalogPage + 1).catch(function () {}); };
+$("b-refresh").onclick = function () { loadBundles().catch(function () {}); };
+$("b-upload").onclick = uploadBundle;
+$("b-dsn-save").onclick = saveDsn;
+$("b-dsn-test").onclick = testDsn;
+$("b-import").onclick = importBundle;
+$("b-checklist-refresh").onclick = function () { loadChecklist().catch(function () {}); };
+$("b-activate").onclick = activateBundle;
+$("b-rotate").onclick = rotateKey;
+$("b-key-copy").onclick = copyKey;
 
 restore();
 
@@ -1265,7 +1765,7 @@ if (typeof window !== "undefined") {
 /// **为什么需要**：本页是**单文件内联页** —— HTML / CSS / JS 全部写死在
 /// [`CONSOLE_HTML`] 里，一个外部资源都不引（AC-002 的「零外部依赖」）。
 /// 内联 `<style>` / `<script>` 在 CSP 里属于 *inline* 资源，不放 `'unsafe-inline'`
-/// 浏览器会**整段拒执行** ⇒ 页面只剩一张静态骨架，登录、七个视图、危险操作确认
+/// 浏览器会**整段拒执行** ⇒ 页面只剩一张静态骨架，登录、八个视图、危险操作确认
 /// 全部失效。也就是说：这两处 `'unsafe-inline'` 不是「图省事」，而是
 /// 「单文件 + 零外链」这条纪律在 CSP 上的**必然代价**；拿掉它就必须先把脚本/样式
 /// 拆成外部文件，而那等于改需求边界。
@@ -1392,9 +1892,9 @@ mod tests {
         }
     }
 
-    /// 七个视图都在（AC-004）。
+    /// 八个视图都在（AC-004）。
     #[test]
-    fn the_shell_has_the_seven_views() {
+    fn the_shell_has_all_views() {
         for needle in [
             "项目与版本",
             "评审",
@@ -1403,15 +1903,107 @@ mod tests {
             "审计",
             "查询台",
             "目录浏览",
+            "构建包",
         ] {
             assert!(CONSOLE_HTML.contains(needle), "页面缺视图 {needle:?}");
         }
-        for tab in ["projects", "review", "export", "config", "audit", "query", "catalog"] {
+        for tab in [
+            "projects", "review", "export", "config", "audit", "query", "catalog", "bundles",
+        ] {
             assert!(
                 CONSOLE_HTML.contains(&format!("id=\"v-{tab}\"")),
                 "缺视图容器 v-{tab}"
             );
+            assert!(
+                CONSOLE_HTML.contains(&format!("id=\"tab-{tab}\"")),
+                "缺 tab 按钮 tab-{tab}"
+            );
         }
+    }
+
+    /// 构建包 tab 的 DOM 契约 + 请求契约（REQ-159）。
+    ///
+    /// 这些 id / 函数名是**对外契约**（QA 按 id 写测试、简报按函数名 grep），
+    /// 改名字等于改接口，必须同时改这里。
+    #[test]
+    fn the_bundles_view_declares_its_contract() {
+        for needle in [
+            // 端点（逐字：服务端并行实现的就是这几条）
+            "/bundles",
+            "/database/test",
+            "key/rotate",
+            // 上传必须是原始字节，不能走会 JSON 化的 post()
+            "application/octet-stream",
+            "ctype",
+            // 目标库面板：口令框只支持新密码、不回填
+            "b-dsn-pass",
+            "new-password",
+            // 门禁与一次性 key
+            "id=\"b-import\"",
+            "id=\"b-activate\"",
+            "id=\"b-rotate\"",
+            "id=\"b-key-copy\"",
+            "待确认 ",
+            "其中阻断 ",
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(needle),
+                "构建包视图缺少 {needle:?}（REQ-159 的契约）"
+            );
+        }
+        for fun in [
+            "loadBundles()",
+            "uploadBundle()",
+            "showBundle(",
+            "needDsn(",
+            "testDsn()",
+            "saveDsn()",
+            "importBundle()",
+            "loadChecklist()",
+            "activateBundle()",
+            "showKey(",
+            "rotateKey()",
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(fun),
+                "缺函数 {fun:?}（简报按函数名 grep，名字不许改）"
+            );
+        }
+        // 待确认清单只汇总 + 门禁：⛔ 这个 tab 里不许出现裁决请求，
+        // 否则「评审」tab 与「构建包」tab 会有两套裁决入口。
+        let bundles_at = CONSOLE_HTML.find("// 8 · 构建包").expect("缺构建包 JS 段");
+        assert!(
+            !CONSOLE_HTML[bundles_at..].contains("api/decide"),
+            "构建包 tab 不许自己调 /api/decide（裁决留在评审 tab）"
+        );
+    }
+
+    /// 端点还不存在时的防御线：404 ⇒ 「服务端未就绪」，且**不当口令错**（REQ-159）。
+    #[test]
+    fn the_bundles_endpoints_fail_soft_when_the_server_is_not_ready() {
+        assert!(
+            CONSOLE_HTML.contains("服务端未就绪"),
+            "404 必须显示一行「服务端未就绪」的人话"
+        );
+        assert!(
+            CONSOLE_HTML.contains("ENDPOINT_NOT_READY"),
+            "404 要有一个可辨认的错误码（便于与口令错区分）"
+        );
+        let not_ready = CONSOLE_HTML
+            .find("opts.notReady && r.status === 404")
+            .expect("缺 notReady 的 404 分支");
+        let logout_call = CONSOLE_HTML
+            .find("logout(\"口令无效")
+            .expect("缺 401/403 的登出点");
+        assert!(
+            not_ready < logout_call,
+            "404 分支必须排在「401/403 清口令」之前：两者互斥，404 绝不登出"
+        );
+        // 上传发的是文件句柄（原始字节），不是 JSON 字符串。
+        assert!(
+            CONSOLE_HTML.contains("body: f, ctype: \"application/octet-stream\""),
+            "上传必须把文件句柄直接当 body 发（⛔ 不走 post()）"
+        );
     }
 
     /// 查询台的四段元信息由同一处产出（AC-008）。
@@ -1425,16 +2017,27 @@ mod tests {
         }
     }
 
-    /// 三个危险动作都过 `guarded`，且确认框写明**目标 + 后果**（AC-006）。
+    /// 五个危险动作都过 `guarded`，且确认框写明**目标 + 后果**（AC-006）。
+    ///
+    /// 现在是 5 处：apply / freeze / 声明保存（REQ-125 的三处）
+    /// + 构建包激活 / 换 key（REQ-159 的两处）。
     #[test]
-    fn the_three_dangerous_actions_are_guarded() {
-        // `function guarded(spec, run)` 不命中 `guarded({` ⇒ 恰好 3 处调用。
+    fn the_five_dangerous_actions_are_guarded() {
+        // `function guarded(spec, run)` 不命中 `guarded({` ⇒ 恰好 5 处调用。
         assert_eq!(
             CONSOLE_HTML.matches("guarded({").count(),
-            3,
-            "只有 apply / freeze / 声明保存三处危险动作（多了少了都要重看）"
+            5,
+            "只有 apply / freeze / 声明保存 / 激活 / 换 key 五处危险动作（多了少了都要重看）"
         );
-        assert_eq!(CONSOLE_HTML.matches("[\"目标\"").count(), 3, "每个确认框都要写目标");
-        assert_eq!(CONSOLE_HTML.matches("[\"后果\"").count(), 3, "每个确认框都要写后果");
+        assert_eq!(
+            CONSOLE_HTML.matches("[\"目标\"").count(),
+            5,
+            "每个确认框都要写目标"
+        );
+        assert_eq!(
+            CONSOLE_HTML.matches("[\"后果\"").count(),
+            5,
+            "每个确认框都要写后果"
+        );
     }
 }
