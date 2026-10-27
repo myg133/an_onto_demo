@@ -838,6 +838,13 @@ function json(path, opts) {
 function post(path, body, useQuery) {
   return json(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery });
 }
+// 文本端点（REQ-161 追加修复）：`POST /api/r2rml` 走 `respond_text`，回的是 **text/turtle**，
+// 不是 JSON。⛔ 别用 post()：它会 JSON.parse 一份 Turtle ⇒ 必抛 BAD_JSON，还把
+// 「服务端返回了 Turtle」说成「去看服务端日志」。正文由 request() 的 {text} 直接给。
+function postText(path, body, useQuery) {
+  return request(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery })
+    .then(function (r) { return r.text; });
+}
 
 // ══════════════════════════════════════════════════════════
 // 错误 / 回执渲染（code / message / hint 三件都显示）
@@ -1265,8 +1272,9 @@ function exportR2rml() {
   var body = { project: project, version: version, schema: schema, include_inherit: $("e2-inherit").checked };
   var ex = $("e2-exclude").value.trim();
   if (ex) body.exclude = ex;
-  post("api/r2rml", body).then(function (r) {
+  postText("api/r2rml", body).then(function (r) {
     clear(out);
+    // 服务端回的是 text/turtle 原文（与 `ontok r2rml generate` 逐字节相同）：⛔ 页面不加工。
     var text = typeof r === "string" ? r : JSON.stringify(r);
     var name = project + "-v" + version + ".r2rml.ttl";
     out.appendChild(okBox(["R2RML 已生成：" + fmtBytes(text.length)]));
@@ -2939,6 +2947,59 @@ mod tests {
         assert!(
             CONSOLE_HTML.contains("id=\"v-bundles\""),
             "构建包视图本身也要留着（ADR-013 只标已迁，不删代码）"
+        );
+    }
+
+    /// `POST /api/r2rml` 回的是 **text/turtle**，页面必须按文本取正文（REQ-161 追加修复）。
+    ///
+    /// 基线缺陷（不是换皮引入，但长在「导出」视图里）：`exportR2rml()` 当时走 `post()`
+    /// ⇒ `json()` ⇒ `JSON.parse` 一份 Turtle ⇒ **必抛 `BAD_JSON`**，还把「服务端返回的
+    /// 是 Turtle」说成「去看服务端日志」—— FDE 点一次「生成 R2RML」就永远失败。
+    ///
+    /// 钉四件事：
+    /// 1. `postText()` 存在**且真被调用**（写了没人调 = 没修）；
+    /// 2. `exportR2rml()` 里**不再**出现 `post("api/r2rml"`（回退即红）；
+    /// 3. `postText` 别用过头：apply / decide / sparql 仍是 JSON 端点；
+    /// 4. 别顺手把 TTL 也改了（它本来就是文本路径，走 `request()` 的 `r.text`）。
+    #[test]
+    fn r2rml_is_read_as_text_not_parsed_as_json() {
+        assert!(
+            CONSOLE_HTML.contains("function postText(path, body, useQuery)"),
+            "缺 postText()：文本端点要有一个不走 JSON.parse 的发包口"
+        );
+        let at = CONSOLE_HTML
+            .find("function exportR2rml()")
+            .expect("缺 exportR2rml()");
+        // 取到这个函数体结尾（按行首的 `}` 切）—— 别用固定字节数：中文注释会切在字符中间。
+        let tail = &CONSOLE_HTML[at..];
+        let end = tail
+            .find("\n}")
+            .map(|n| n + 2)
+            .expect("exportR2rml 没有函数体结尾");
+        let body = &tail[..end];
+        assert!(
+            body.contains("postText(\"api/r2rml\""),
+            "exportR2rml() 必须走 postText()：服务端回的是 text/turtle"
+        );
+        assert!(
+            !body.contains("post(\"api/r2rml\""),
+            "⛔ 别再走 post()：它会把 Turtle 当 JSON 解析 ⇒ 必抛 BAD_JSON"
+        );
+        // ⛔ postText 不许用过头：这三个端点回的确实是 JSON。
+        for needle in [
+            "post(\"api/apply\"",
+            "post(\"api/decide\"",
+            "post(\"api/sparql\"",
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(needle),
+                "JSON 端点 {needle:?} 必须继续走 post()/json()"
+            );
+        }
+        // ⛔ TTL 本来就是文本路径，别顺手改。
+        assert!(
+            CONSOLE_HTML.contains("request(q).then(function (r) {"),
+            "TTL 走 request() 取正文（不经 postText / json）"
         );
     }
 }
