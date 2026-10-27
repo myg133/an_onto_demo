@@ -1,15 +1,28 @@
 //! REQ-123 · **启动与绑定闸门** —— 默认只给内网/本机；`0.0.0.0` 要显式 `--allow-public`。
 //!
+//! # 两种模式（⭐ REQ-159 P1b · 判据只有一个：`--project` 给没给）
+//!
+//! | 启动参数 | 模式 | 快照什么时候加载 |
+//! | --- | --- | --- |
+//! | `--project` + `--version` | **单项目** | 启动时一份（与 REQ-123 起**逐字节一致**，R6） |
+//! | 两者都不给 | **多项目** | **不加载**；每次请求按 key → `active_version_id` → 按 version_id 缓存（见 [`super::multi`]） |
+//! | 只给一个 | — | **拒绝启动**（`--version` 只在单项目模式下有意义） |
+//!
+//! 两种模式共用下面这张表的 ①（参数闸）、绑定闸门、声明 / schema / 源库 / 审计这几步，
+//! 也共用 [`prepare_project`] + [`assemble`] 这一对「快照 → 可服务状态」的构造器 ——
+//! 两条路各写一份的话，`GET /api/ontology.ttl` 的「与 CLI 逐字节相同」迟早会漂。
+//!
 //! # 启动顺序（每一条失败都要**在绑 socket 之前**报出来）
 //!
 //! | # | 步骤 | 为什么在这个位置 |
 //! | --- | --- | --- |
+//! | ⓪ | 单/多项目判定 | 参数自相矛盾时先报参数问题 |
 //! | ① | 参数闸（超时 / SSE / 并发） | 最便宜的失败先报 |
 //! | ② | 绑定地址 + 闸门 | 绑错了根本不该读库 |
-//! | ③ | `tokens.json` | 没有 token 表就没有租户 |
+//! | ③ | `tokens.json` | 没有 token 表就没有租户（多项目模式：还必须逐条绑项目） |
 //! | ④ | `query-policy.json` | 没有声明 ⇒ 所有表不可查（ADR-006） |
 //! | ⑤ | `schema.json` | 列存在性 / 类型只能来自真实 schema |
-//! | ⑥ | 元数据库：项目 / 版本 / 快照（**必须已冻结**，与 `serve` / `mcp-server` 同一条） | 对外服务只服务定稿 |
+//! | ⑥ | 元数据库：项目 / 版本 / 快照（**必须已冻结**，与 `serve` / `mcp-server` 同一条） | 对外服务只服务定稿（**多项目模式把这一步推迟到请求期**） |
 //! | ⑦ | **映射**（`r2rml::build_mapping`，与 `ontok r2rml generate` 同一个函数） | ⛔ 不解析 TTL |
 //! | ⑧ | **源库只读**池（`connect_read_only`，读回两个会话值） | 客户资产：只读不成立就一条都不查 |
 //! | ⑨ | 启动横幅 → 绑 socket | 横幅里打印绑定地址 / 项目版本 / token 数 / 租户范围 |
@@ -33,7 +46,8 @@ use sqlx::postgres::PgPool;
 use crate::sparql::policy::QueryPolicy;
 
 use super::audit::AuditSink;
-use super::tokens::TokenTable;
+use super::source_gate;
+use super::tokens::{ProjectBinding, TokenTable};
 use super::{QueryService, ServiceMode, ServiceParts};
 
 /// `ontok query serve` 的参数（与 clap 的定义分开：本模块不认识 clap）。
@@ -41,8 +55,17 @@ use super::{QueryService, ServiceMode, ServiceParts};
 pub struct ServeArgs {
     pub bind: String,
     pub tokens: PathBuf,
-    pub project: String,
-    pub version: i32,
+    /// ⭐ REQ-159 P1b · **项目名**。
+    ///
+    /// | `project` | `version` | 模式 |
+    /// | --- | --- | --- |
+    /// | `Some` | `Some` | **单项目模式**：启动时钉死项目与版本，**与 REQ-137 之前逐字节一致**（R6） |
+    /// | `None` | `None` | **多项目模式**：每次请求按 key 反查项目 → `active_version_id` → 快照 |
+    /// | 只给一个 | — | 拒绝启动（两者必须成对） |
+    pub project: Option<String>,
+    /// ⭐ REQ-159 P1b · 第几版（与 [`Self::project`] **成对**；多项目模式下它由
+    /// `projects.active_version_id` 决定，⛔ 不再有启动参数）。
+    pub version: Option<i32>,
     /// ⭐ REQ-136 · `None` = 本体服务模式（那里**没有** schema，也不读它）。
     /// 普通模式下**必填**（闸门在 [`serve`] 里：缺 ⇒ 拒绝启动，消息说明为什么）。
     pub schema: Option<PathBuf>,
@@ -110,7 +133,7 @@ const NO_TENANT_POLICY: &str = r#"{"version":"1.0.0","tenantSubject":"__no_tenan
 ///
 /// ⭐ REQ-136 · `policy` 变成 `Option`（本体模式可以不给）：没有 `--policy` 就没有
 /// 「同目录」可推，只剩显式 `--tenancy`。
-fn resolve_tenancy(
+pub(crate) fn resolve_tenancy(
     policy: Option<&std::path::Path>,
     explicit: Option<&std::path::Path>,
 ) -> Option<PathBuf> {
@@ -271,6 +294,14 @@ pub fn banner(
 }
 
 /// 载入 → 起服务。
+///
+/// ⭐ REQ-159 P1b · **一个入口两种模式**，判据只有一个 —— `--project` 给没给：
+///
+/// ```text
+/// --project + --version  ⇒ 单项目模式（启动时钉死一份快照；与基线逐字节一致，R6）
+/// 两者都没有             ⇒ 多项目模式（query::multi：按 key → active_version_id → 快照）
+/// 只给一个               ⇒ 拒绝启动（不允许「给了项目但版本随便」这种半吊子）
+/// ```
 pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // ── ① 参数闸 ────────────────────────────────────────────
     if args.timeout_ms == 0 {
@@ -328,11 +359,153 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         );
     }
 
-    // ── ② 绑定 + 闸门 ───────────────────────────────────────
+    // ── ② 单项目 / 多项目（**唯一**判据：`--project` 给没给）──────
+    //
+    // 位置在「绑 socket / 读文件 / 连库」之前：这两个参数自相矛盾时报的是参数问题，
+    // 不该先看到「token 表读不出来」这种下游错误。
+    let single = match (args.project.clone(), args.version) {
+        (Some(project), Some(version)) => Some((project, version)),
+        (Some(_), None) => anyhow::bail!(
+            "给了 `--project` 就必须同时给 `--version`：单项目模式要把**一个**版本的快照钉死。\n  \
+             想让服务自己按 key 找每个项目当前生效的版本（多项目模式），请**两个都不给**\
+             —— 那时版本来自 `projects.active_version_id`。"
+        ),
+        (None, Some(_)) => anyhow::bail!(
+            "给了 `--version` 就必须同时给 `--project`：版本号只在单项目模式下有意义。\n  \
+             多项目模式（两个都不给）的版本由每个项目的 `active_version_id` 决定\
+             —— ⛔ 一个 `--version` 套到所有项目上会服务到错的版本。"
+        ),
+        (None, None) => None,
+    };
+    if single.is_none() {
+        // ⭐ REQ-159 P1b · 多项目模式：启动时**一份快照都不加载**（懒加载），
+        // 只做闸门（token 必须逐条绑项目）与部署级输入（声明 / schema / 源库 / 审计）。
+        return super::multi::serve(pool, args).await;
+    }
+    let (project, version) = single.expect("上面已判：单项目模式");
+
+    // ── ③ 绑定 + 闸门 ───────────────────────────────────────
+    let (addr, verdict) = bind_gate(&args)?;
+
+    // ── ④ token 表 ──────────────────────────────────────────
+    let tokens = load_tokens(&args, mode, ProjectBinding::StartupPinned)?;
+
+    // ── ⑤ 声明 / schema ─────────────────────────────────────
+    let policy = load_policy(&args)?;
+    let (schema, schema_path) = load_schema(&args)?;
+
+    // ── ⑥ 项目 / 版本 / 快照（必须已冻结）───────────────────
+    let projects = crate::db::project::PgProjectStore::new(pool.clone());
+    let store = crate::db::snapshot_store::PgStore::new(pool.clone());
+    let p = projects
+        .get_by_name(&project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目 {project:?} 不存在"))?;
+    let v = projects
+        .version_by_seq(p.id, &p.name, version)
+        .await
+        .map_err(|e| anyhow::anyhow!("项目 {:?} 没有第 {} 版：{e}", project, version))?;
+    if v.frozen_at.is_none() {
+        anyhow::bail!(
+            "项目 {:?} 的第 {} 版**尚未冻结**，拒绝对外服务 —— \
+             查询服务只服务定稿版本（与 `serve` / `mcp-server` 同一条闸门）。\n  \
+             先执行：`ontok version freeze --project {} --version {}`",
+            project,
+            version,
+            project,
+            version
+        );
+    }
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目 {project:?} 第 {version} 版没有快照"))?;
+
+    // ── ⑦ 快照 → 服务状态（模型 / access 映射 / 两视图 TTL / R2RML）──
+    //
+    // ⚠️ 这一段与多项目模式的**每一次懒加载**走的是**同一段**代码
+    // （[`prepare_project`] / [`assemble`]）：两套实现会长出两份字节漂移，
+    // 而 `GET /api/ontology.ttl` 的契约是「与 CLI 同参数逐字节相同」。
+    let tenancy_path = resolve_tenancy(args.policy.as_deref(), args.tenancy.as_deref());
+    let dep = Deployment {
+        mode,
+        schema,
+        schema_path,
+        policy,
+        base: args.base.clone(),
+        include_inherit: args.include_inherit,
+        access_raw: read_access_mapping(&args)?,
+        access_path: args.access_mapping.clone(),
+        tenancy: tenancy_path,
+        timeout_ms: args.timeout_ms,
+        sse_idle_timeout_ms: args.sse_idle_timeout_ms,
+        sse_max_connections: args.sse_max_connections,
+        max_concurrent_queries: args.max_concurrent_queries,
+        source: None,
+        facts: None,
+    };
+    let prepared = prepare_project(pool, &dep, &project, version, &snap).await?;
+
+    // ── ⑧ 源库（只读；读回校验）──────────────────────────────
+    let (source, facts) = connect_source(&dep).await?;
+
+    // ── ⑨ 审计落点 + 服务状态 ───────────────────────────────
+    let audit = open_audit(&args)?;
+    let svc = std::sync::Arc::new(assemble(
+        &Deployment {
+            source: source.clone(),
+            facts: facts.clone(),
+            ..dep
+        },
+        prepared,
+        tokens,
+        audit,
+    ));
+
+    let tenants = svc.tokens.tenants();
+    eprintln!(
+        "{}",
+        banner(
+            addr,
+            verdict,
+            &svc.project,
+            svc.version,
+            svc.tokens.len(),
+            &tenants,
+            svc.tokens.max_rows_cap(),
+            svc.timeout_ms,
+            svc.max_concurrent_queries,
+            svc.facts.as_ref(),
+            svc.mode,
+        )
+    );
+
+    let app = super::http::build_router(std::sync::Arc::clone(&svc));
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
+    })?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| anyhow::anyhow!("查询服务退出：{e}"))
+}
+
+// ══════════════════════════════════════════════════════════════
+// 两种模式**共用**的启动步骤
+// ══════════════════════════════════════════════════════════════
+
+/// 绑定地址 + 闸门（两种模式都要，且在读文件 / 连库之前）。
+pub(crate) fn bind_gate(args: &ServeArgs) -> anyhow::Result<(SocketAddr, BindVerdict)> {
     let addr = parse_bind(&args.bind).map_err(|e| anyhow::anyhow!("{e}"))?;
     let verdict = check_bind(addr, args.allow_public).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok((addr, verdict))
+}
 
-    // ── ③ token 表 ──────────────────────────────────────────
+/// 读 + 校验 token 表（`binding` 决定「每条都要绑项目」是不是硬要求）。
+pub(crate) fn load_tokens(
+    args: &ServeArgs,
+    mode: ServiceMode,
+    binding: ProjectBinding,
+) -> anyhow::Result<TokenTable> {
     let raw = std::fs::read_to_string(&args.tokens).map_err(|e| {
         anyhow::anyhow!(
             "读不出 token 表 {:?}：{e}\n  格式见 `query serve --help`（示例里的 token 是假值，\
@@ -342,31 +515,33 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     })?;
     // ⭐ REQ-137 · token 表**按模式**校验：普通模式 `tenant` 必填（原样）；本体模式
     // `tenant` 必须缺省（填了 ⇒ 这里就拒绝启动，⛔ 不带着假租户起来）。
-    let tokens = TokenTable::parse_for_mode(&raw, mode)
-        .map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))?;
+    // ⭐ REQ-159 P1b · 再按 `binding` 校验 `project`（多项目模式逐条必填）。
+    let parsed = match binding {
+        ProjectBinding::StartupPinned => TokenTable::parse_for_mode(&raw, mode),
+        ProjectBinding::PerToken => TokenTable::parse_multi(&raw, mode),
+    };
+    parsed.map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))
+}
 
-    // ── ④ 声明 ──────────────────────────────────────────────
-    //
-    // ⭐ REQ-136 · 本体模式可以不给 `--policy`：那份声明的作用是「哪张表按哪一列过滤」，
-    // 而本模式没有数据可查。不给时用一份**无租户**声明（每张表都没登记；对外说法见
-    // `describe` 的 `tenant.mode = not_applicable`）。
-    let policy = match &args.policy {
+/// 读租户声明（本体模式可省 ⇒ 用无租户占位声明）。
+pub(crate) fn load_policy(args: &ServeArgs) -> anyhow::Result<QueryPolicy> {
+    match &args.policy {
         Some(path) => {
             let raw = std::fs::read_to_string(path)
                 .map_err(|e| anyhow::anyhow!("读不出租户声明 {path:?}：{e}"))?;
-            QueryPolicy::parse(&raw)
-                .map_err(|e| anyhow::anyhow!("租户声明 {path:?} 不合法：{e}"))?
+            QueryPolicy::parse(&raw).map_err(|e| anyhow::anyhow!("租户声明 {path:?} 不合法：{e}"))
         }
         None => QueryPolicy::parse(NO_TENANT_POLICY).map_err(|e| {
             anyhow::anyhow!("内部错误：本体服务模式的占位租户声明不合法（{e}）—— 这是 bug")
-        })?,
-    };
+        }),
+    }
+}
 
-    // ── ⑤ schema ────────────────────────────────────────────
-    //
-    // ⭐ REQ-136 · 本体模式**不读** schema（`SchemaTypes::default()`：空表 = 没有真实
-    // 列类型可用）。空 schema 在这里是**事实**而不是错误：本模式结构上不对账。
-    let schema = match &args.schema {
+/// 读 schema（本体模式不读：空 schema 是**事实**，不是错误）。
+pub(crate) fn load_schema(
+    args: &ServeArgs,
+) -> anyhow::Result<(crate::domain::ttl::SchemaTypes, Option<PathBuf>)> {
+    match &args.schema {
         Some(path) => {
             let raw = std::fs::read_to_string(path)
                 .map_err(|e| anyhow::anyhow!("读不出 schema 文件 {path:?}：{e}"))?;
@@ -375,38 +550,113 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             if schema.is_empty() {
                 anyhow::bail!("--schema 里一列都没读到 —— 这份 schema 无法对账（⛔ 不猜列类型）");
             }
-            schema
+            Ok((schema, Some(path.clone())))
         }
-        None => crate::domain::ttl::SchemaTypes::default(),
-    };
-
-    // ── ⑥ 项目 / 版本 / 快照（必须已冻结）───────────────────
-    let projects = crate::db::project::PgProjectStore::new(pool.clone());
-    let store = crate::db::snapshot_store::PgStore::new(pool.clone());
-    let p = projects
-        .get_by_name(&args.project)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("项目 {:?} 不存在", args.project))?;
-    let v = projects
-        .version_by_seq(p.id, &p.name, args.version)
-        .await
-        .map_err(|e| anyhow::anyhow!("项目 {:?} 没有第 {} 版：{e}", args.project, args.version))?;
-    if v.frozen_at.is_none() {
-        anyhow::bail!(
-            "项目 {:?} 的第 {} 版**尚未冻结**，拒绝对外服务 —— \
-             查询服务只服务定稿版本（与 `serve` / `mcp-server` 同一条闸门）。\n  \
-             先执行：`ontok version freeze --project {} --version {}`",
-            args.project,
-            args.version,
-            args.project,
-            args.version
-        );
+        None => Ok((crate::domain::ttl::SchemaTypes::default(), None)),
     }
-    let snap = store
-        .get_snapshot(v.id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("项目 {:?} 第 {} 版没有快照", args.project, args.version))?;
+}
 
+/// 读 `--access-mapping` 的**原文**（解析与对账在 [`prepare_project`] 里按**那一版本体**做）。
+///
+/// 为什么不在这里解析：多项目模式下**每一版本体**都要与同一份映射对账（`bind`），
+/// 而「类必须在这一版里存在」是**逐版本**的判据。
+pub(crate) fn read_access_mapping(args: &ServeArgs) -> anyhow::Result<Option<String>> {
+    let Some(path) = &args.access_mapping else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        anyhow::anyhow!(
+            "读不出 access 映射 {path:?}：{e}\n  \
+             形状见 `ontok query serve --help` 的 `--access-mapping`；\
+             ⛔ 读不出来就**当作没给**会静默退回「全是库源」，那不是你要的。"
+        )
+    })?;
+    Ok(Some(raw))
+}
+
+/// 源库（只读；读回会话事实）。本体模式**整段跳过**。
+pub(crate) async fn connect_source(
+    dep: &Deployment,
+) -> anyhow::Result<(Option<PgPool>, Option<crate::sparql::exec::SessionFacts>)> {
+    if dep.mode.is_ontology_only() {
+        return Ok((None, None));
+    }
+    let url = crate::config::require_env(crate::extract::introspect::SOURCE_DATABASE_URL_ENV)
+        .map_err(|e| anyhow::anyhow!("{e}（查询服务查的是源库，不是元数据库）"))?;
+    let src = crate::sparql::exec::connect_read_only(&url)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok((Some(src.pool), Some(src.facts)))
+}
+
+/// 审计落点（`--audit-out` 打不开 ⇒ 拒绝启动，⛔ 不静默降级）。
+pub(crate) fn open_audit(args: &ServeArgs) -> anyhow::Result<AuditSink> {
+    match &args.audit_out {
+        Some(path) => AuditSink::open(path).map_err(|e| {
+            anyhow::anyhow!(
+                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，
+                 请换一个可写的路径或去掉 --audit-out"
+            )
+        }),
+        None => Ok(AuditSink::stdout_only()),
+    }
+}
+
+/// ⭐ REQ-159 P1b · **部署级**输入（一个进程只算一次；不随项目变）。
+///
+/// 两种模式共用同一份：单项目模式在启动时把所有字段填满；多项目模式填同样的字段，
+/// 只是把「哪一份快照」推迟到**每一次缓存未命中**时再决定。
+///
+/// ⛔ 这里**没有 token、没有 DSN**：token 属于身份门（[`MultiProject::tokens`]），
+/// 源库只留**连接池**（`source`），连接串在 [`connect_source`] 里读完就丢 ——
+/// 于是「缓存里不许放 DSN / token」在类型上就成立（缓存装的是 `Arc<QueryService>`，
+/// 而它拿不到连接串）。
+pub struct Deployment {
+    pub mode: ServiceMode,
+    pub schema: crate::domain::ttl::SchemaTypes,
+    /// `--schema` 的**路径**（`OntologyTtl::prepare` 按 CLI 的参数语义要再读一次）。
+    pub schema_path: Option<PathBuf>,
+    pub policy: QueryPolicy,
+    pub base: String,
+    pub include_inherit: bool,
+    /// `--access-mapping` 的原文（`None` = 没给 ⇒ 两视图 / catalog 逐字节不变）。
+    pub access_raw: Option<String>,
+    /// 只用于报错时点名（⛔ 不参与任何逻辑）。
+    pub access_path: Option<PathBuf>,
+    pub tenancy: Option<PathBuf>,
+    pub timeout_ms: u64,
+    pub sse_idle_timeout_ms: u64,
+    pub sse_max_connections: usize,
+    pub max_concurrent_queries: usize,
+    /// 源库只读连接池（本体模式恒 `None`）。
+    pub source: Option<PgPool>,
+    pub facts: Option<crate::sparql::exec::SessionFacts>,
+}
+
+/// 一份快照「装起来」之后、还没接上审计 / token 的那一半（[`assemble`] 的入参）。
+pub(crate) struct Prepared {
+    pub project: String,
+    pub version: i32,
+    pub model: crate::domain::model_view::ModelTrackView,
+    pub access: Option<source_gate::AccessMapping>,
+    pub ttl: crate::query::ttl::OntologyTtl,
+    pub ontology_iri: String,
+    pub mapping: Option<crate::domain::r2rml::R2rmlMapping>,
+}
+
+/// ⭐ REQ-159 P1b · **一份快照 → 一份可服务的状态**（不含 token / 审计）。
+///
+/// 顺序与 REQ-145 起的老路径**逐字一致**（模型 → access 映射 → 两视图 TTL → R2RML）：
+/// 三处 `eprintln!` 也在这一段里，于是单项目模式的启动输出与基线一致，
+/// 多项目模式下每次加载会打一条（运维据它知道「刚加载了哪一套本体」）。
+pub(crate) async fn prepare_project(
+    pool: &PgPool,
+    dep: &Deployment,
+    project: &str,
+    version: i32,
+    snap: &crate::domain::snapshot::Snapshot,
+) -> anyhow::Result<Prepared> {
+    let mode = dep.mode;
     // ── ⑥.4 ⭐ REQ-145 · access 映射（`--access-mapping`）──
     //
     // 位置在 TTL 之前：两视图都要写 `ontok:sourceKind "api"`，而「哪些类是 api」只在
@@ -415,20 +665,20 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     //
     // ⚠️ 本段**不读任何凭据 / 端点**，也不执行任何调用：文件里那些字段读进来就丢
     // （见 `query::source_gate` 模块头）。
-    let model = crate::domain::model_view::project_model_track(&snap);
-    let access = match &args.access_mapping {
-        Some(path) => {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
+    let model = crate::domain::model_view::project_model_track(snap);
+    let access = match &dep.access_raw {
+        Some(raw) => {
+            let parsed = crate::query::source_gate::AccessMapping::parse(raw).map_err(|e| {
                 anyhow::anyhow!(
-                    "读不出 access 映射 {path:?}：{e}\n  \
-                     形状见 `ontok query serve --help` 的 `--access-mapping`；\
-                     ⛔ 读不出来就**当作没给**会静默退回「全是库源」，那不是你要的。"
+                    "access 映射 {:?} 不合法：{e}",
+                    dep.access_path.as_deref().unwrap_or_else(|| std::path::Path::new(""))
                 )
             })?;
-            let parsed = crate::query::source_gate::AccessMapping::parse(&raw)
-                .map_err(|e| anyhow::anyhow!("access 映射 {path:?} 不合法：{e}"))?;
             Some(parsed.bind(&model).map_err(|e| {
-                anyhow::anyhow!("access 映射 {path:?} 与本体 v{} 对不上：{e}", args.version)
+                anyhow::anyhow!(
+                    "access 映射 {:?} 与本体 v{version} 对不上：{e}",
+                    dep.access_path.as_deref().unwrap_or_else(|| std::path::Path::new(""))
+                )
             })?)
         }
         None => None,
@@ -436,7 +686,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     match &access {
         Some(a) if a.api_classes().is_empty() => eprintln!(
             "⚠ access 映射 {} 里一条 api 类都没有 ⇒ 全部类按库源处理（这多半不是你要的）",
-            args.access_mapping
+            dep.access_path
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default()
@@ -459,7 +709,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         None => {}
     }
 
-    // ── ⑥.5 ⭐ REQ-127 · 两视图 TTL（启动时算一次；版本冻结 ⇒ 内容不变）──
+    // ── ⑥.5 ⭐ REQ-127 · 两视图 TTL（版本冻结 ⇒ 内容不变；多项目模式按版本懒算一次）──
     //
     // 读/投影走 `cli::prepare_ttl_export`（与 `ontology export` **同一段**），
     // 渲染走 `console::ops::render_ttl_export`（同一个 `pipeline::render`）——
@@ -470,16 +720,15 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // ⇒ 客户视图与 `ontok ontology export --project <p> --version <v>` 逐字节相同（AC-005）。
     //
     // ⭐ REQ-145 · `api_classes` 只有在加载了映射时才是 `Some` —— 没加载 ⇒ 两视图逐字节不变（R1）。
-    let tenancy_path = resolve_tenancy(args.policy.as_deref(), args.tenancy.as_deref());
     let ttl = crate::query::ttl::OntologyTtl::prepare(
         pool,
         &crate::query::ttl::TtlSource {
-            project: &args.project,
-            version: args.version,
-            base: &args.base,
+            project,
+            version,
+            base: &dep.base,
             // 客户视图在 `prepare` 里固定用 None（结构上不含列名）；这里只影响建模视图。
-            schema: args.schema.as_deref(),
-            tenancy: tenancy_path.as_deref(),
+            schema: dep.schema_path.as_deref(),
+            tenancy: dep.tenancy.as_deref(),
             api_classes: access.as_ref().map(|a| a.api_classes()),
         },
     )
@@ -491,7 +740,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
              产不出来就不该起服务（否则调用方会拿到一份与 CLI 不同的本体）。"
         )
     })?;
-    match &tenancy_path {
+    match &dep.tenancy {
         Some(path) => eprintln!(
             "· TTL 租户标注：{}（只在 `?view=model` 生效；客户视图结构上不含租户信息）",
             path.display()
@@ -519,9 +768,9 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // ⭐ REQ-136 · 本体模式**不建映射**：`build_mapping` 要求 schema（主键 / 列存在性都只能
     // 来自它），而本模式结构上没有 schema。`None` 也正是「不许自动造 schema」的形状。
     let ontology_iri = crate::domain::ttl::TtlOptions {
-        project: args.project.as_str(),
-        version: args.version,
-        base: args.base.as_str(),
+        project,
+        version,
+        base: dep.base.as_str(),
         action_type_count: snap.action_types.len(),
         tenancy: None,
         schema: None,
@@ -532,12 +781,12 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         None
     } else {
         let opts = crate::domain::ttl::TtlOptions {
-            project: args.project.as_str(),
-            version: args.version,
-            base: args.base.as_str(),
+            project,
+            version,
+            base: dep.base.as_str(),
             action_type_count: snap.action_types.len(),
             tenancy: None,
-            schema: Some(&schema),
+            schema: Some(&dep.schema),
             // ⚠️ R2RML 是**库源**的映射：它的生成与 access 映射无关（⛔ api 类不生成
             // TriplesMap）。这里给 `None`，让 R2RML 的字节与没加载 access 时完全一致。
             api_classes: None,
@@ -546,7 +795,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             crate::domain::r2rml::build_mapping(
                 &model,
                 &opts,
-                args.include_inherit,
+                dep.include_inherit,
                 crate::domain::r2rml::R2rmlAudit::default(),
             )
             .map_err(|e| {
@@ -557,79 +806,45 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         )
     };
 
-    // ── ⑧ 源库（只读；读回校验）──────────────────────────────
-    //
-    // ⭐ REQ-136 · 本体模式**整段跳过**：不读 `ONTOK_SOURCE_DATABASE_URL`、不建连接池、
-    // 不读回会话值（R2：「该模式 ⛔ 不许任何请求尝试连源库」—— 启动时也不连）。
-    let source = if mode.is_ontology_only() {
-        None
-    } else {
-        let url = crate::config::require_env(crate::extract::introspect::SOURCE_DATABASE_URL_ENV)
-            .map_err(|e| anyhow::anyhow!("{e}（查询服务查的是源库，不是元数据库）"))?;
-        let src = crate::sparql::exec::connect_read_only(&url)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Some(src)
-    };
-
-    // ── ⑨ 审计落点 + 服务状态 ───────────────────────────────
-    let audit = match &args.audit_out {
-        Some(path) => AuditSink::open(path).map_err(|e| {
-            anyhow::anyhow!(
-                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，
-                 请换一个可写的路径或去掉 --audit-out"
-            )
-        })?,
-        None => AuditSink::stdout_only(),
-    };
-
-    let svc = std::sync::Arc::new(QueryService::new(ServiceParts {
-        mode,
-        source: source.as_ref().map(|s| s.pool.clone()),
-        facts: source.as_ref().map(|s| s.facts.clone()),
-        mapping,
+    Ok(Prepared {
+        project: project.to_string(),
+        version,
         model,
-        schema,
-        policy,
+        access,
+        ttl,
         ontology_iri,
-        project: args.project.clone(),
-        version: args.version,
-        timeout_ms: args.timeout_ms,
-        sse_idle_timeout_ms: args.sse_idle_timeout_ms,
-        sse_max_connections: args.sse_max_connections,
-        max_concurrent_queries: args.max_concurrent_queries,
+        mapping,
+    })
+}
+
+/// 把 [`Prepared`] + token 表 + 审计落点装成一个可服务的 [`QueryService`]。
+pub(crate) fn assemble(
+    dep: &Deployment,
+    p: Prepared,
+    tokens: TokenTable,
+    audit: AuditSink,
+) -> QueryService {
+    QueryService::new(ServiceParts {
+        mode: dep.mode,
+        source: dep.source.clone(),
+        facts: dep.facts.clone(),
+        mapping: p.mapping,
+        model: p.model,
+        schema: dep.schema.clone(),
+        policy: dep.policy.clone(),
+        ontology_iri: p.ontology_iri,
+        project: p.project,
+        version: p.version,
+        timeout_ms: dep.timeout_ms,
+        sse_idle_timeout_ms: dep.sse_idle_timeout_ms,
+        sse_max_connections: dep.sse_max_connections,
+        max_concurrent_queries: dep.max_concurrent_queries,
         tokens,
         audit,
-        ttl,
+        ttl: p.ttl,
         // ⭐ REQ-145 · `None` = 没加载映射 ⇒ 运行期一切照旧（R1）。
-        access,
-    }));
-
-    let tenants = svc.tokens.tenants();
-    eprintln!(
-        "{}",
-        banner(
-            addr,
-            verdict,
-            &svc.project,
-            svc.version,
-            svc.tokens.len(),
-            &tenants,
-            svc.tokens.max_rows_cap(),
-            svc.timeout_ms,
-            svc.max_concurrent_queries,
-            svc.facts.as_ref(),
-            svc.mode,
-        )
-    );
-
-    let app = super::http::build_router(std::sync::Arc::clone(&svc));
-    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-        anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
-    })?;
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| anyhow::anyhow!("查询服务退出：{e}"))
+        access: p.access,
+    })
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -800,5 +1015,70 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-159 P1b · 单/多项目模式闸门
+    // ══════════════════════════════════════════════════════════
+
+    /// 一个**够用就好**的参数集（单项目模式）：闸门只读 `project` / `version`，
+    /// 但 `serve` 的签名要整套字段。⛔ 不连库 —— 闸门在碰库之前。
+    fn args(project: Option<&str>, version: Option<i32>) -> ServeArgs {
+        ServeArgs {
+            bind: "127.0.0.1:8800".into(),
+            tokens: std::path::PathBuf::from("tokens.json"),
+            project: project.map(str::to_string),
+            version,
+            schema: None,
+            policy: None,
+            ontology_only: true,
+            tenancy: None,
+            allow_public: false,
+            timeout_ms: 10_000,
+            sse_idle_timeout_ms: 60_000,
+            sse_max_connections: 4,
+            max_concurrent_queries: 2,
+            audit_out: None,
+            base: "https://ontok.local/".into(),
+            include_inherit: false,
+            access_mapping: None,
+        }
+    }
+
+    /// **`--project` 与 `--version` 必须成对**：只给一个 ⇒ **拒绝启动**，
+    /// 且消息要说清「另一个怎么给 / 两个都不给是多项目模式」。
+    ///
+    /// 变异：把两条 `bail!` 改成「缺的那个按默认值补」⇒ 本测试红
+    /// （那会让一个「想开多项目模式却手滑写了 `--version`」的部署**静默**退回单项目）。
+    #[tokio::test]
+    async fn project_and_version_must_come_in_pairs() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            // lazy：闸门必须在**连库之前**就报错（连不上也测得到）。
+            .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+            .expect("lazy pool");
+
+        let e = serve(&pool, args(Some("cloud-resource"), None))
+            .await
+            .expect_err("只给 --project 必须拒绝启动");
+        let text = e.to_string();
+        assert!(text.contains("--version"), "{text}");
+        assert!(text.contains("两个都不给"), "要说清多项目模式怎么开：{text}");
+
+        let e = serve(&pool, args(None, Some(5)))
+            .await
+            .expect_err("只给 --version 必须拒绝启动");
+        let text = e.to_string();
+        assert!(text.contains("--project"), "{text}");
+        assert!(text.contains("active_version_id"), "要说清多项目模式的版本从哪来：{text}");
+    }
+
+    /// ⭐ 单/多项目模式的**判据唯一**：`project.is_some() && version.is_some()`。
+    /// 这条钉住「两个都给 = 单项目；两个都不给 = 多项目」这件事本身。
+    #[test]
+    fn the_mode_is_decided_by_the_presence_of_project_and_version() {
+        let single = args(Some("p"), Some(1));
+        assert!(single.project.is_some() && single.version.is_some());
+        let multi = args(None, None);
+        assert!(multi.project.is_none() && multi.version.is_none());
     }
 }

@@ -96,6 +96,8 @@ pub mod error;
 pub mod http;
 // ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；零 I/O、零依赖）。
 pub mod jsonld;
+/// ⭐ REQ-159 P1b · **多项目模式**（一套部署 · 多套本体；按 key → active_version → 快照）。
+pub mod multi;
 pub mod serve;
 pub mod tokens;
 // ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（客户 / 建模）。
@@ -1686,6 +1688,43 @@ pub fn audit_ttl(
     svc.audit.record(&rec);
 }
 
+/// ⭐ REQ-159 P1b · **有身份、但这一请求没走成**的那一行（多项目模式的 503 / 500 用它）。
+///
+/// 与 [`audit_call`] 的差别：此刻**还没有 `QueryService`**（项目没装起来 / 没生效版本），
+/// 所以入参是审计落点 + 那一行 token。`code` 直接说清是哪一类失败
+/// （`project.no_active_version` / `project.snapshot_missing` / …），`token` 写摘要
+/// —— 于是「谁一直在打一个没 activate 的项目」是查得出来的。
+///
+/// ⚠️ 项目名**不进审计行**：`AuditRecord::note` 只收**代码里写死的短语**
+/// （`idle_timeout` / `client_gone`），项目名是运行时字符串 —— 想写它就得改审计格式，
+/// 那是另一条需求。项目名在**响应正文**里（客户端与排查者都看得到）。
+pub fn audit_token_sink(
+    sink: &AuditSink,
+    event: &'static str,
+    proto: Protocol,
+    entry: &tokens::TokenEntry,
+    code: &'static str,
+    started: Instant,
+) {
+    let rec = AuditRecord {
+        ts: AuditRecord::now_ts(),
+        event,
+        proto: proto.as_str(),
+        token_digest: Some(entry.audit_digest()),
+        tenant: entry.tenant.clone(),
+        query_digest: None,
+        rows: None,
+        elapsed_ms: started.elapsed().as_millis(),
+        code,
+        view: None,
+        bytes: None,
+        note: None,
+        // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
+        pending: false,
+    };
+    sink.record(&rec);
+}
+
 /// 没有身份时的那一条审计（`/api/health` 与鉴权失败）。
 ///
 /// 字段里没有 token / tenant / query —— 它们**此刻不存在**。事件名仍然记录，
@@ -1694,6 +1733,23 @@ pub fn audit_ttl(
 /// `view` 只有 TTL 端点会传（401/400 也记「你要的是哪个视图」）。
 pub fn audit_anonymous(
     svc: &QueryService,
+    event: &'static str,
+    proto: Protocol,
+    view: Option<&'static str>,
+    code: &'static str,
+    started: Instant,
+) {
+    audit_anonymous_sink(&svc.audit, event, proto, view, code, started);
+}
+
+/// ⭐ REQ-159 P1b · 与 [`audit_anonymous`] **同一条记录**，但入参是审计落点本身。
+///
+/// 为什么需要它：多项目模式下**401 那一刻还没有项目**（token 没命中 ⇒ 解析不出 key 绑的
+/// 项目），所以手上没有 `QueryService`（审计 sink 长在服务上）。这个函数让「401 也要有
+/// 一行审计」在多项目模式同样成立 —— ⛔ 不是为了少写一个 `QueryService` 而分裂第二份格式：
+/// 两个入口写的是**同一段** `AuditRecord` 构造。
+pub fn audit_anonymous_sink(
+    sink: &AuditSink,
     event: &'static str,
     proto: Protocol,
     view: Option<&'static str>,
@@ -1716,7 +1772,7 @@ pub fn audit_anonymous(
         // ⭐ REQ-145 · 不是半个答案（那个事实由 audit_pending 写 pending=true）。
         pending: false,
     };
-    svc.audit.record(&rec);
+    sink.record(&rec);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2056,6 +2112,8 @@ mod tests {
             max_rows: 10,
             max_concurrency: 1,
             label: None,
+            // ⭐ REQ-159 P1b · 单项目模式的 token 不绑项目（跳由启动参数决定）。
+            project: None,
         };
         let receipt = receipt_of(&svc, r, 10, &token, vec![], "").0;
         assert_eq!(

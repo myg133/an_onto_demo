@@ -26,6 +26,10 @@
 //!
 //! - `token` **≥ 24 字符**（低熵口令在审计摘要面前也守不住，见 [`super::audit`]）；
 //! - `tenant` **普通模式必填**（空租户 = 没有隔离）；
+//! - ⭐ REQ-159 P1b · `project`（**version 2 起**）：把这张查询 token 绑到一个项目上。
+//!   **多项目模式**（`query serve` 不带 `--project`）下**必填** —— 一个进程服务多套本体，
+//!   「你是谁」只能由 key 决定（见 [`TokenTable::parse_multi`]）；**单项目模式**下可省，
+//!   给了也**不生效**（项目与版本由启动参数钉死，⛔ 不按 token 切项目）。
 //! - ⭐ REQ-137 · **本体服务模式（`--ontology-only`）必须不填 `tenant`**；填了（任何值，
 //!   含 `null` / 空串）⇒ **拒绝启动**。那个模式没有业务库、没有租户概念，
 //!   `SPARQL` 恒 503（**需要库的查询**；纯 api 类给 `@pending`，REQ-151）——
@@ -62,8 +66,31 @@ pub const MAX_CONCURRENCY_CEILING: usize = 64;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenFile {
+    /// ⭐ REQ-159 P1b · **`2` 与 `"2.0.0"` 都收**（见 [`version_field`]）。
+    #[serde(deserialize_with = "version_field")]
     pub version: String,
     pub tokens: Vec<TokenSpec>,
+}
+
+/// ⭐ REQ-159 P1b · `version` 的**两种写法**都能读。
+///
+/// 旧文件写 `"version": "1.0.0"`（字符串），而 P1b 的样例写 `"version": 2`（数字）。
+/// 只认一种的后果很具体：运维照着文档抄一份 `2`，服务端回一句 serde 的类型错误
+/// —— 那不是「格式不对」，那是**文档与实现对不上**。两种都收，规范化成字符串后
+/// 再按主版本判定，错误消息里就只剩下「认不认这个主版本」这一件事。
+fn version_field<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(D::Error::custom(format!(
+            "version 只认字符串或整数（如 \"2.0.0\" / 2），收到 {other}"
+        ))),
+    }
 }
 
 /// 一条 token 登记（**普通模式**的形状：`tenant` 必填）。
@@ -80,6 +107,9 @@ pub struct TokenSpec {
     /// 人读的标签（进审计**不**出现原文；只进启动横幅的计数）。
     #[serde(default)]
     pub label: Option<String>,
+    /// ⭐ REQ-159 P1b · 这张 key 绑哪个项目（多项目模式必填；单项目模式可省）。
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// ⭐ REQ-137 · **本体服务模式**的 token 登记：`tenant` **必须缺省**。
@@ -105,12 +135,16 @@ struct OntologyTokenSpec {
     label: Option<String>,
     #[serde(default, deserialize_with = "present_tenant")]
     tenant: Option<String>,
+    /// ⭐ REQ-159 P1b · 同 [`TokenSpec::project`]（本体模式也可以多项目）。
+    #[serde(default)]
+    project: Option<String>,
 }
 
 /// 本体模式的 `tokens.json` 顶层形状（与 [`TokenFile`] 只差在 spec）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OntologyTokenFile {
+    #[serde(deserialize_with = "version_field")]
     version: String,
     tokens: Vec<OntologyTokenSpec>,
 }
@@ -144,6 +178,8 @@ struct RawTokenSpec {
     max_rows: u64,
     max_concurrency: usize,
     label: Option<String>,
+    /// ⭐ REQ-159 P1b · 绑定的项目（多项目模式必填；单项目模式可省/不生效）。
+    project: Option<String>,
 }
 
 impl From<TokenSpec> for RawTokenSpec {
@@ -154,6 +190,7 @@ impl From<TokenSpec> for RawTokenSpec {
             max_rows: t.max_rows,
             max_concurrency: t.max_concurrency,
             label: t.label,
+            project: t.project,
         }
     }
 }
@@ -166,6 +203,7 @@ impl From<OntologyTokenSpec> for RawTokenSpec {
             max_rows: t.max_rows,
             max_concurrency: t.max_concurrency,
             label: t.label,
+            project: t.project,
         }
     }
 }
@@ -190,6 +228,12 @@ pub struct TokenEntry {
     pub max_rows: u64,
     pub max_concurrency: usize,
     pub label: Option<String>,
+    /// ⭐ REQ-159 P1b · 这张 key 绑哪个项目。
+    ///
+    /// - **多项目模式**：恒 `Some`（启动闸门保证；缺一条就拒绝启动，见 [`TokenTable::parse_multi`]）；
+    /// - **单项目模式**：可以 `None`；即使写了也**不参与路由**（项目由 `--project` 决定，
+    ///   ⛔ 不按 token 切项目 —— R6）。
+    pub project: Option<String>,
 }
 
 impl TokenEntry {
@@ -197,6 +241,20 @@ impl TokenEntry {
     pub fn audit_digest(&self) -> String {
         format!("sha256:{}", digest_prefix(&self.digest, 12))
     }
+}
+
+/// ⭐ REQ-159 P1b · 这张表要不要**每一条都绑定项目**（也就是「这个进程是不是多项目模式」）。
+///
+/// 为什么不做成 `bool` 参数：两个取值的**后果完全不同** ——
+/// [`StartupPinned`](Self::StartupPinned) 是「项目由启动参数钉死」（缺 `project` 不算问题），
+/// [`PerToken`](Self::PerToken) 是「一个进程服务多套本体」（缺 `project` ⇒ 拒绝启动）。
+/// 起个名字，调用点读起来就是一句判决（`parse_multi` / `parse_for_mode`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectBinding {
+    /// **单项目模式**（给了 `--project` + `--version`）：`project` 可省，省了也不报错。
+    StartupPinned,
+    /// **多项目模式**（没给 `--project`）：每一条都必须绑定项目。
+    PerToken,
 }
 
 /// 已加载的 token 表。
@@ -224,24 +282,53 @@ impl TokenTable {
     /// 为什么本体模式「填了就拒绝」而不是忽略：忽略会留下一个**声明了数据范围、
     /// 但那个范围根本不存在**的凭证，而审计里会多出一个看起来真实的租户 —— 那正是
     /// 本需求要防的「假数据冒充事实」。拒绝会逼人在 token 里写实话（R2 / R4）。
+    ///
+    /// ⭐ REQ-159 P1b · 本入口是**单项目模式**的口径（[`ProjectBinding::StartupPinned`]）：
+    /// `project` 可省，写了也不改变路由（项目由 `--project` 决定）。多项目模式用
+    /// [`Self::parse_multi`]。
     pub fn parse_for_mode(json: &str, mode: ServiceMode) -> Result<Self, String> {
+        Self::parse_with(json, mode, ProjectBinding::StartupPinned)
+    }
+
+    /// ⭐ REQ-159 P1b · **多项目模式**：每一条 token 都必须绑定一个项目。
+    ///
+    /// 「必须」放在**启动**而不是请求期：一个没绑项目的 query token 在请求期
+    /// 只能二选一 —— 要么猜一个项目（那是串包），要么每次 401（那张 key 从发出去那
+    /// 一刻就是废的）。两者都不该等到线上才发现：**启动即拒绝，并点名第几条**。
+    pub fn parse_multi(json: &str, mode: ServiceMode) -> Result<Self, String> {
+        Self::parse_with(json, mode, ProjectBinding::PerToken)
+    }
+
+    fn parse_with(
+        json: &str,
+        mode: ServiceMode,
+        binding: ProjectBinding,
+    ) -> Result<Self, String> {
         if mode.is_ontology_only() {
             let doc: OntologyTokenFile = serde_json::from_str(json)
                 .map_err(|e| format!("tokens.json 不是合法形状：{e}"))?;
             let specs: Vec<RawTokenSpec> = doc.tokens.into_iter().map(RawTokenSpec::from).collect();
-            return Self::validate(&doc.version, specs, mode);
+            return Self::validate(&doc.version, specs, mode, binding);
         }
         let doc: TokenFile =
             serde_json::from_str(json).map_err(|e| format!("tokens.json 不是合法形状：{e}"))?;
         let specs: Vec<RawTokenSpec> = doc.tokens.into_iter().map(RawTokenSpec::from).collect();
-        Self::validate(&doc.version, specs, mode)
+        Self::validate(&doc.version, specs, mode, binding)
     }
 
-    fn validate(version: &str, tokens: Vec<RawTokenSpec>, mode: ServiceMode) -> Result<Self, String> {
+    fn validate(
+        version: &str,
+        tokens: Vec<RawTokenSpec>,
+        mode: ServiceMode,
+        binding: ProjectBinding,
+    ) -> Result<Self, String> {
         let major = version.trim().split('.').next().unwrap_or("");
-        if major != "1" {
+        // ⭐ REQ-159 P1b · `2` 起：多一个 `project`。**`1` 仍然收**（老部署一个字节不用改，
+        // AC-b5）；差别只在「`project` 是不是必填」，而那由**模式**决定（见 `binding`），
+        // 不由 version 决定 —— 老表 + 多项目模式在下面按「缺 project」逐条点名。
+        if major != "1" && major != "2" {
             return Err(format!(
-                "tokens.json 的 version = {version:?}：本实现只认 1.x（升级格式要配一次迁移）"
+                "tokens.json 的 version = {version:?}：本实现只认 1.x / 2.x（升级格式要配一次迁移）"
             ));
         }
         if tokens.is_empty() {
@@ -308,6 +395,27 @@ impl TokenTable {
             if entries.iter().any(|e| e.token == token) {
                 problems.push(format!("{at} 的 token 与前面的重复 —— 两条登记会互相覆盖限额"));
             }
+            // ⭐ REQ-159 P1b · `project`：多项目模式下必填，且必须是个像项目名的东西。
+            let project = t
+                .project
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            match (binding, &project) {
+                (ProjectBinding::PerToken, None) => problems.push(format!(
+                    "{at} 没有 project —— 这是**多项目模式**（启动时没给 `--project`）：\
+                     一个进程服务多套本体，每张查询 key 必须用 `\"project\": \"<项目名>\"` 绑定一个项目。\n    \
+                     数字员工换项目 = 换 key，⛔ 服务端不会替你猜一个项目（猜错就是串包）。\n    \
+                     只服务一个项目的部署请用单项目模式启动：`--project <项目名> --version <第几版>`。"
+                )),
+                (_, Some(p)) => {
+                    if p.chars().any(char::is_whitespace) {
+                        problems.push(format!("{at} 的 project = {p:?} 里含空白字符 —— 项目名不含空格"));
+                    }
+                }
+                (ProjectBinding::StartupPinned, None) => {}
+            }
             if !token.is_empty() {
                 entries.push(TokenEntry {
                     token: token.to_string(),
@@ -317,6 +425,7 @@ impl TokenTable {
                     max_rows: t.max_rows,
                     max_concurrency: t.max_concurrency,
                     label: t.label.clone(),
+                    project,
                 });
             }
         }
@@ -375,6 +484,26 @@ impl TokenTable {
         ts.sort_unstable();
         ts.dedup();
         ts
+    }
+
+    /// ⭐ REQ-159 P1b · 全部被 key 绑定的项目名（排序去重）。
+    ///
+    /// **多项目模式的启动横幅印它**：运维要知道「这一个进程到底在服务哪几套本体」。
+    /// ⛔ 不打印 token、不打印租户之外的任何数据；项目名本来就在 `/api/catalog` 里。
+    pub fn projects(&self) -> Vec<&str> {
+        let mut ps: Vec<&str> = self
+            .entries
+            .iter()
+            .filter_map(|e| e.project.as_deref())
+            .collect();
+        ps.sort_unstable();
+        ps.dedup();
+        ps
+    }
+
+    /// 被绑定的项目个数（多项目模式横幅用）。
+    pub fn project_count(&self) -> usize {
+        self.projects().len()
     }
 
     /// 表里最大的 `max_rows`（横幅用；每次调用仍按**各自** token 的上限执行）。
@@ -495,8 +624,33 @@ mod tests {
 
     #[test]
     fn an_empty_or_wrong_version_table_is_rejected() {
-        let raw = good().replace("\"version\": \"1.0.0\"", "\"version\": \"2.0.0\"");
-        assert!(TokenTable::parse(&raw).unwrap_err().contains("只认 1.x"));
+        // ⭐ REQ-159 P1b · **1.x 与 2.x 都收**；3.x 才拦（且消息里要给可用的版本）。
+        for ok in ["1.0.0", "2.0.0", "2"] {
+            let raw = format!(
+                r#"{{"version":"{ok}","tokens":[
+                    {{"token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001"}}]}}"#
+            );
+            assert!(
+                TokenTable::parse(&raw).is_ok(),
+                "version {ok} 应当被接受（1.x 向后兼容 + 2.x 起有 project）"
+            );
+        }
+        // `"version": 2`（**数字**，与需求样例同形）也要能读。
+        let numeric = r#"{"version":2,"tokens":[
+            {"token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+             "project":"cloud-resource"}]}"#;
+        assert_eq!(
+            TokenTable::parse(numeric)
+                .expect("数字 version 必须被接受")
+                .find("FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa")
+                .and_then(|e| e.project.as_deref()),
+            Some("cloud-resource")
+        );
+
+        let raw = good().replace("\"version\": \"1.0.0\"", "\"version\": \"3.0.0\"");
+        let err = TokenTable::parse(&raw).unwrap_err();
+        assert!(err.contains("只认 1.x"), "{err}");
+        assert!(err.contains("2.x"), "拒绝时要说清能用的版本：{err}");
 
         let empty = r#"{"version":"1.0.0","tokens":[]}"#;
         assert!(TokenTable::parse(empty).unwrap_err().contains("一条 token 都没有"));
@@ -592,5 +746,72 @@ mod tests {
         assert!(TokenTable::parse_for_mode(absurd, ServiceMode::OntologyOnly)
             .unwrap_err()
             .contains("硬上限"));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-159 P1b · `project`：多项目模式必填、单项目模式可省
+    // ══════════════════════════════════════════════════════════
+
+    /// **AC-b4** · 多项目模式下没有 `project` 的 token ⇒ **整份拒绝**，且**点名第几条**，
+    /// 并说清「怎么修」（绑项目 / 回单项目模式）。
+    ///
+    /// 变异：把 `PerToken` 判成 `StartupPinned`（= 缺 project 也放行）⇒ 本测试立刻红；
+    /// 把点名去掉（只报一句「有 token 缺 project」）⇒ 「第 2 条」那条断言红。
+    #[test]
+    fn multi_mode_rejects_every_token_without_a_project_and_names_it() {
+        let raw = r#"{"version":2,"tokens":[
+            {"label":"ops-assistant","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa",
+             "tenant":"C0001","project":"cloud-resource"},
+            {"label":"orphan","token":"FAKE-TOKEN-bbbbbbbbbbbbbbbbbbbb","tenant":"C0002"}
+        ]}"#;
+        let err = TokenTable::parse_multi(raw, ServiceMode::Query)
+            .expect_err("多项目模式下缺 project 必须拒绝启动");
+        assert!(err.contains("第 2 条"), "要点名是第几条：{err}");
+        assert!(err.contains("orphan"), "要点名是哪个 label：{err}");
+        assert!(err.contains("多项目模式"), "{err}");
+        assert!(err.contains("--project"), "要给出两条修法：{err}");
+        // 第 1 条是合法的 —— 报错只说第 2 条，不牵连别人。
+        assert!(!err.contains("第 1 条"), "合法的条目不该被点名：{err}");
+    }
+
+    /// **AC-b5** · `version: 1`（老表）+ **单项目模式** ⇒ 照旧启动，行为一个字节不变。
+    /// 同一份老表进**多项目模式** ⇒ 拒绝（每一条都缺 project）。
+    #[test]
+    fn a_version_one_table_still_parses_in_single_project_mode() {
+        let t = TokenTable::parse(&good()).expect("v1 老表在单项目模式仍要能起来");
+        assert_eq!(t.len(), 2);
+        assert!(t.find("FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa").unwrap().project.is_none());
+        assert_eq!(t.project_count(), 0);
+
+        let err = TokenTable::parse_multi(&good(), ServiceMode::Query).unwrap_err();
+        assert!(err.contains("没有 project"), "{err}");
+        assert!(err.contains("第 1 条") && err.contains("第 2 条"), "{err}");
+    }
+
+    /// 单项目模式**接受**带 `project` 的 token（老部署升级到 v2 不该被拦），
+    /// 并且把项目名记下来 —— 但它**不参与路由**（判据在多项目那边）。
+    #[test]
+    fn single_project_mode_accepts_project_but_does_not_need_it() {
+        let raw = r#"{"version":2,"tokens":[
+            {"label":"a","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+             "project":"cloud-resource"}]}"#;
+        let t = TokenTable::parse(raw).expect("单项目模式允许带 project");
+        assert_eq!(t.projects(), vec!["cloud-resource"]);
+        assert_eq!(t.project_count(), 1);
+    }
+
+    /// 多项目模式下 `project` 写成空白 / 含空格 ⇒ 拒绝（那不是项目名，是错字）。
+    #[test]
+    fn a_blank_or_spaced_project_is_rejected() {
+        for project in [r#""   ""#, r#""cloud resource""#] {
+            let raw = format!(
+                r#"{{"version":2,"tokens":[
+                    {{"label":"a","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+                     "project":{project}}}]}}"#
+            );
+            let err = TokenTable::parse_multi(&raw, ServiceMode::Query)
+                .expect_err(&format!("project={project} 必须拒绝"));
+            assert!(err.contains("project"), "{err}");
+        }
     }
 }

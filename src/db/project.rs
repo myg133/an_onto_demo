@@ -289,4 +289,48 @@ impl PgProjectStore {
             seq: -1,
         })
     }
+
+    /// ⭐ REQ-159 P1b · **多项目模式的那一次小 SELECT**：项目名 → `(项目行, 生效版本 id)`。
+    ///
+    /// 一次查询取两件东西（而不是「先 `get_by_name` 再 `active_version_id`」）：
+    /// 这条 SQL 在**每次请求**上都要跑（见 `query::multi` 模块头），少一次往返就是少 1 ms。
+    ///
+    /// `Ok(None)` = 库里没有这个项目名（token 绑的项目被删/改名）；
+    /// `Ok(Some((row, None)))` = 项目在、但**还没有生效版本**（⇒ 请求期 503
+    /// `project.no_active_version`，⛔ 不是 404、不是空结果）。
+    pub async fn active_version_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<(ProjectRow, Option<Uuid>)>, ProjectError> {
+        let row: Option<(Uuid, String, DateTime<Utc>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, name, created_at, active_version_id FROM projects WHERE name = $1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(id, name, created_at, active)| {
+            (
+                ProjectRow {
+                    id,
+                    name,
+                    created_at,
+                },
+                active,
+            )
+        }))
+    }
+
+    /// ⭐ REQ-159 P1b · 按**版本 id** 取版本行。
+    ///
+    /// 多项目模式的入参只有 `active_version_id`（一个 UUID），而冻结状态 / `seq`
+    /// （`/api/health` 与 TTL 导出要用）都在版本行上 —— 所以必须能按 id 反查。
+    pub async fn version_by_id(&self, version_id: Uuid) -> Result<Option<VersionRow>, ProjectError> {
+        let row = sqlx::query_as(
+            "SELECT id, project_id, seq, frozen_at, created_at FROM ontology_versions WHERE id = $1",
+        )
+        .bind(version_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
 }
