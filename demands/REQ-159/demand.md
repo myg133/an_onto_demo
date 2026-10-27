@@ -815,3 +815,32 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 | 3 | 回滚**不需要重新解析**（快照还在） |
 | 4 | 数字员工的 token **不加 version 字段**（⛔ 永久不加，理由见 §1） |
 | 5 | Studio 的版本选择器**只列已冻结版本**；草稿仅 console 可见 |
+
+
+---
+
+## 二十三 · 真库 e2e：**「解析回库 == 现有 v5」判据已过**（2026-10-27 11:2x）
+
+### 不是 UAT，是**本地真元数据库**（等价，且更快）
+
+| 步 | 命令 / 动作 | 结果 |
+| --- | --- | --- |
+| 1 | `ontok-builder bundle pack --project cloud-resource --version 5` | ✅ `ok=true` · 2 entries · **180 KB** · sha256 `8ec983f3…` |
+| 2 | `ontok-builder console serve --project cloud-resource` | ✅ 起在 127.0.0.1:18931（`ONTOK_SECRET_KEY` 已设） |
+| 3 | `POST /api/projects/cloud-resource/bundles`（octet-stream） | ✅ **201** · `sha256_verified=true` · `requires_db=false` · 30 类/34 关系/752 属性 |
+| 4 | `POST …/bundles/bdl_4ba82691…/import` | ✅ **200** · `version=6` · `frozen=false` · `warnings=[]` |
+| 5 | 导出 v5 / v6 建模视图 TTL 并**逐行 diff** | ✅ **只差 4 行**（`rdfs:label` 版本号 + `ontok:version`） |
+
+### 这条意味着什么
+
+**v6（来自包）与 v5（原始）在 30 类 / 34 关系 / 752 属性 / 全部证据 / 全部语义上逐字节相同**，
+唯一差异是版本标识本身。
+
+⇒ **包格式无损、构建端与服务端对 `Snapshot` 的理解一致、`files[]`/sha256/manifest 全链路正确。**
+
+### 遗留（刻意不做）
+
+| 项 | 状态 |
+| --- | --- |
+| v6 未冻结、未激活 | 刻意。它是**测试产物**，对外不可见（`query serve` 仍 `--version 5`） |
+| 只带本体、未带 `am/` / `db/schema.json` | 包 2 entries。AM/DB 两件需另打一次包（lion 已提醒） |
