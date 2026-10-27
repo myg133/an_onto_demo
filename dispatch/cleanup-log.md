@@ -429,3 +429,14 @@
 | QA 依据 | 复审 PASS 带非阻断（0 阻断），报告 docs/reports/2026-10-27-REQ-159构建端QA*.md |
 | 回收 | worktree eature-REQ-159-builder 已移除（--force，仅因未跟踪的 `.feature/`）；分支先 merge-base --is-ancestor … develop 确认已并入，再 -D 删除 |
 | 未回收（有意） | eature/REQ-159（join 服务端，a127f52）与 eature/REQ-159-console（页面，477e06d）仍在进行 |
+
+## 2026-10-27 11:10 · REQ-159 页面合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | develop **e7c29aa**（`--no-ff`）← `feature/REQ-159-console` **22fee19** |
+| 合并前 develop | `a4faf2d`（join 的服务端 P1a；他已把构建端 `cc8cc97` 一起 push） |
+| 冲突 | **零冲突**（合前用 `git merge-tree --write-tree` 预演过；`tests/test_req125_page.rs` 里 `secret_cipher` 那 2 行由 git 自动合入） |
+| 合并后验证（在 code/ 上） | `cargo check --lib` 绿 · `cargo test --lib console::page` **9/9** · `cargo test --test test_req125_page` **8/8** |
+| 回收 | worktree `feature-REQ-159-console` 移除、分支删除（先 `merge-base --is-ancestor … develop` 确认） |
+| 仍在跑 | `feature-REQ-159b`（join 的 P1b：多项目 serve / AM 落库 / key rotate），**不动** |
