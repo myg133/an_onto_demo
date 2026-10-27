@@ -562,3 +562,15 @@
 | QA | **0 阻断**（7 个契约变体、e2e 签名 /cvm/、max_limit 往返、真 AM 两端对照、无删弱） |
 | 回收 | worktree + 分支已删；`cargo-166` 已删 |
 | 遗留（跨边） | `access_fetch.py` 仍只认 `contract_version=1`（join REQ-168）；真 AM 的 service 落回已做 |
+
+## 2026-10-27 20:40 · REQ-163 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **f87d036**（`--no-ff`）← `feature/REQ-163` **a7491d0**（已 rebase 到 ca54477 = v0.3.0） |
+| 冲突 | **零** |
+| 改动 | 7 文件 **+1812/−603**（`build_run.rs` 重写、`cli.rs`、`console/local.rs` 抽唯一打包点、新增 `test_req163_local_chain.rs` 721 行） |
+| 合并后复跑 | `req163_local_chain` **8/8** · `review_open::build_run` 11 · `req160_review_open` 9 · `req162_console` 12 · `req159_bundle` 38 · `source_enumeration` 10 · `anchor_guard` 3 · `check` 绿（v0.3.0） |
+| QA | **0 阻断**（9 条非阻断：F1/F3/F4 修、F6/F7 不改、F2 由我改 changelog） |
+| 回收 | worktree + 分支已删；`cargo-163` 已删（D 盘 124.5 GB） |
+| 附带 | skills 删掉「尾步可能落到旧 review open」的过期提示 + 补 `bundle pack --dir`（Deploy 8b15675） |

@@ -2,7 +2,7 @@
 
 ## 当前
 
-**待验证**（Dev 3 commits：`f888100` 打包点统一 / `3ea7d41` build run 纯本地 + `bundle pack --dir` / `d341bae` 判据；未 push；待 QA）
+**已完成**（合并 `f87d036`）（Dev 3 commits：`f888100` 打包点统一 / `3ea7d41` build run 纯本地 + `bundle pack --dir` / `d341bae` 判据；未 push；待 QA）
 
 ## 我复核过的（lion 亲跑）
 
@@ -52,3 +52,4 @@
 | F6 | `--base-version` 只校验 `> 最新` | **不改**（允许更大值是给"从别的分支接续"留的口子；记档即可） |
 | F7 | R2 只有行为面判据，无"必须调 `pack_version`"的结构守卫 | **不改**（忠实复刻不改变产物 ⇒ 不红是对的；塞 `builder_host` 才会红，那才是真实漂移） |
 | F2 | changelog 说 `import --file` 一步进库 | **我改了**（实测需两步：先 `version new`，否则报「版本不存在」**并留下空壳项目**） |
+
