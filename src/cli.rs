@@ -239,6 +239,25 @@ pub enum Cmd {
     /// 会让下游分不清「视图有毒」和「词表要改」。
     #[command(verbatim_doc_comment)]
     Relation { #[command(subcommand)] cmd: RelationCmd },
+    /// ⭐ REQ-159 · **构建包**（`.ontokbundle`：本体 + AM + 源库描述 → 一个可上传的包）
+    ///
+    /// | 子命令 | 做什么 | 连库？ | 发网络？ | 调模型？ |
+    /// | --- | --- | --- | --- | --- |
+    /// | `bundle pack` | 读**元数据库**里的快照 → 打 store-only zip + 生成 manifest | **是**（只读，不迁移不写） | 否 | 否 |
+    /// | `bundle verify` | 包自检（9 条判据 + 8 个拒绝码） | **否**（纯本地） | 否 | 否 |
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder bundle pack --project cloud-resource --version 5 --out out/cloud-resource-v5.ontokbundle --built-at 2026-10-27T02:30:00Z
+    /// ontok-builder bundle verify --file out/cloud-resource-v5.ontokbundle
+    ///
+    /// ⚠️ `ontology/snapshot.json` 是 `PgStore::get_snapshot` 读出的 `Snapshot` **原文**
+    /// （`serde_json::to_vec` 直出）—— ⛔ 不是 `ontology show` 的视图：`LinkTypeView`
+    /// 只有 5 个字段，拿它当包内容会让**关系证据静默消失**（见 `src/bundle/mod.rs`）。
+    /// ⚠️ 退出码 `2` 是**新增**的：包不合规 / 自检失败（见 [`EXIT_BUNDLE_REJECTED`]）。
+    /// ⚠️ 报告**双份**：JSON 走 stdout（可 `| jq`），人话走 stderr —— 两种同时产出。
+    #[command(verbatim_doc_comment)]
+    Bundle { #[command(subcommand)] cmd: BundleCmd },
 }
 
 /// ⭐ REQ-157 · 关系动词字典相关子命令。
@@ -268,9 +287,56 @@ pub enum RelationVerbsCmd {
     },
 }
 
+/// ⭐ REQ-159 · 构建包子命令。
+///
+/// 包内四件（可选按需）：`manifest.json` / `ontology/snapshot.json` /
+/// `am/access-mapping.json` / `db/schema.json` / `declarations/<filename>`。
 #[derive(Subcommand)]
-pub enum ConceptCmd {
-    /// 把一份**概念声明**导入成提案（走双轨审核，不直接生效）
+pub enum BundleCmd {
+    /// 打包（读元数据库；⛔ 不读源库、⛔ 不调模型、⛔ 不发网络）
+    ///
+    /// `files[]` 覆盖包内**除 `manifest.json` 自身以外**的每一个文件（按 path 升序），
+    /// 每个文件带 `sha256` 与 `bytes` —— 服务端会逐个核，任一不符即整包拒。
+    Pack {
+        /// 项目名（必须符合 `^[a-z0-9][a-z0-9-]{1,62}$`，且与接收项目同名）
+        #[arg(long)]
+        project: String,
+        /// 第几版（喂 `manifest.ontology_seq`；服务端入库时会重新分配版本号）
+        #[arg(long)]
+        version: i32,
+        /// 产物路径（约定扩展名 `.ontokbundle`；内部是 store-only zip）
+        #[arg(long)]
+        out: PathBuf,
+        /// 访问映射（可重复；第一个落 `am/access-mapping.json`，其余落 `am/<原文件名>`）
+        #[arg(long = "am")]
+        am: Vec<PathBuf>,
+        /// 源库描述（表/列/关系映射，⛔ 不含 DSN、不含数据行）
+        #[arg(long)]
+        db_schema: Option<PathBuf>,
+        /// 包内含源库且**必须**配 DSN 才能解析 ⇒ 置位（服务端据此弹 DSN）
+        #[arg(long)]
+        requires_dsn: bool,
+        /// 源库方言（`postgresql` / `mysql` / `sqlserver` / `oracle`；
+        /// `--requires-dsn` 时缺省 `postgresql`）
+        #[arg(long)]
+        db_dialect: Option<String>,
+        /// 声明目录（policy / tenancy / exclusions / recipe；只取**该目录下的普通文件**）
+        #[arg(long)]
+        declarations: Option<PathBuf>,
+        /// 打包时间（RFC3339）。给定它 + 同一份输入 ⇒ **两次打包逐字节相同**
+        #[arg(long)]
+        built_at: Option<String>,
+    },
+    /// 自检（纯本地：不连库、不发网络）—— 上传之前先自己拒一遍
+    Verify {
+        /// 要自检的包
+        #[arg(long)]
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConceptCmd {    /// 把一份**概念声明**导入成提案（走双轨审核，不直接生效）
     Import {
         #[arg(long)]
         file: PathBuf,
@@ -1364,6 +1430,27 @@ pub const EXIT_SELF_CHECK_VIOLATION: i32 = 3;
 /// `alias_normalized` 都**是 0**（警告 / 提示）。
 pub const EXIT_RELATION_VERBS_VIOLATION: i32 = 4;
 
+/// ⭐ REQ-159 新增：**构建包不合规 / 自检失败** —— 包会被服务端整包拒。
+///
+/// 两个来源共用这一个码，因为对下游（CI、上传脚本）是同一件事：
+/// 「这一份别上传，改了再来」。
+///
+/// | 命令 | 何时非 0 |
+/// | --- | --- |
+/// | `bundle verify` | 报告里 `problems` 非空（8 个拒绝码里的任一；`warnings` 不算） |
+/// | `bundle pack` | 打完的包**自己过不了**自检（说明是打包端的 bug，不是数据问题） |
+///
+/// ⚠️ **数值 2 与 [`EXIT_LEAKED_MODELING_TERMS`] 撞码**（如实登记，不是疏忽）：
+/// REQ-159 派单 §2 明确要求 `EXIT_BUNDLE_REJECTED: i32 = 2`，而 2 早已被
+/// 「守门器判定泄露建模术语」占用。两者都由**产物闸**触发，下游拿到的
+/// 都是「这一份别用」，真正区分靠的是**报告内容**：
+/// `bundle verify` 的 stdout JSON 里 `problems[].code` 精确到码
+/// （`bundle.sha256.mismatch` …），`ontology show` 那条闸则打建模术语清单。
+/// ⇒ 脚本要分支就判 `code`，⛔ 不要只判退出码。
+/// ⛔ 也不复用 [`EXIT_SELF_CHECK_VIOLATION`]（3）：那个码钉的是
+/// 「三道自检在渲染串上报出了东西」这件事本身。
+pub const EXIT_BUNDLE_REJECTED: i32 = 2;
+
 /// REQ-078 · 退出码政策的**唯一事实源**（文字 + 码）。
 ///
 /// | 码 | 含义 |
@@ -1948,6 +2035,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 那条自己在 handler 里连库，而且只读（不迁移、不写）—— 校验命令不该有
         // 「先跑一遍迁移」这种副作用。
         Cmd::Relation { cmd } => return relation_cmd(cmd).await,
+        // ⭐ REQ-159 · `bundle` 也在**连库之前**分派：`verify` 是纯本地自检
+        // （输入是包字节，产物是报告），必须在没有库的机器上跑 —— CI 与 FDE 笔记本
+        // 才是它最常见的执行环境。`pack` 要读元数据库，但**连库只发生在它的支路里**
+        // （`bundle_pack` 自己 `connect`，与 `relation verbs check` 的
+        // `--project/--version` 那条同一种写法，见 `relation_verbs_check`）。
+        // ⇒ 若把这条挪到下面那个 match（连库之后），`bundle verify` 会先被
+        // 「连不上库」挡住，报错指向的原因就错了。
+        Cmd::Bundle { cmd } => return bundle_cmd(cmd).await,
         cmd => cmd,
     };
 
@@ -1994,6 +2089,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // 同上：`relation verbs check` 也在连库之前返回（`--snapshot` 不碰库）。
         Cmd::Relation { .. } => anyhow::bail!(
             "内部错误：`relation` 子命令应当在连库之前处理。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
+        // 同上：`bundle` 也在连库之前返回（`verify` 连产品库都不碰）。
+        Cmd::Bundle { .. } => anyhow::bail!(
+            "内部错误：`bundle` 子命令应当在连库之前处理（`verify` 连产品库都不碰）。\
              请把 `run()` 开头的提前返回恢复回去。"
         ),
     }
@@ -3720,6 +3820,280 @@ async fn relation_verbs_check(
     Ok(())
 }
 
+// ══════════════════════════════════════════════════════════════
+// ⭐ REQ-159 · 构建包（`bundle pack` / `bundle verify`）
+//
+// 两个 handler 的分工是刻意的，也是这一单最重要的结构判据：
+//
+// | handler | 连库 | 干活的部分 |
+// | --- | --- | --- |
+// | `bundle_verify` | ⛔ 不连 | `crate::bundle::verify(&bytes)` —— **纯函数** |
+// | `bundle_pack`   | 是（只读） | 读文件 + 取快照在**这一层**；组装是 `crate::bundle::assemble(&input)` —— **纯函数** |
+//
+// ⇒ `bundle::{assemble, verify}` 里一个 `sqlx` 都没有（守卫见
+// `tests/test_req159_bundle.rs` 的 `assemble_and_verify_are_pure_functions`）。
+// ══════════════════════════════════════════════════════════════
+
+/// `bundle pack` 的参数（clap 拆完原样递进来；收成一个结构体只是为了让
+/// `bundle_pack` 的签名不出现九个位置参数）。
+struct PackOpts {
+    project: String,
+    version: i32,
+    out: PathBuf,
+    am: Vec<PathBuf>,
+    db_schema: Option<PathBuf>,
+    requires_dsn: bool,
+    db_dialect: Option<String>,
+    declarations: Option<PathBuf>,
+    built_at: Option<String>,
+}
+
+/// `ontok-builder bundle <…>` 的分派。
+async fn bundle_cmd(cmd: BundleCmd) -> anyhow::Result<()> {
+    match cmd {
+        BundleCmd::Verify { file } => bundle_verify(&file),
+        BundleCmd::Pack {
+            project,
+            version,
+            out,
+            am,
+            db_schema,
+            requires_dsn,
+            db_dialect,
+            declarations,
+            built_at,
+        } => {
+            bundle_pack(PackOpts {
+                project,
+                version,
+                out,
+                am,
+                db_schema,
+                requires_dsn,
+                db_dialect,
+                declarations,
+                built_at,
+            })
+            .await
+        }
+    }
+}
+
+/// `ontok-builder bundle verify` —— **纯本地**：读包字节 → 纯函数自检 → 双份报告。
+///
+/// 退出码：`0` 通过；[`EXIT_BUNDLE_REJECTED`]（2）= 有问题（`problems` 非空）；
+/// `1` = 连文件都读不到（那是环境错误，不是包不合规 —— 两者不能混）。
+fn bundle_verify(file: &std::path::Path) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file)
+        .with_context(|| format!("读不到包：{}（路径 / 权限问题）", file.display()))?;
+    let report = crate::bundle::verify(&bytes);
+    eprint!("{}", report.human());
+    println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+    if !report.ok {
+        std::process::exit(EXIT_BUNDLE_REJECTED);
+    }
+    Ok(())
+}
+
+/// `ontok-builder bundle pack` —— 读文件 + **只读**元数据库 → 纯函数组装 → 自检 → 落盘。
+///
+/// 顺序（每条都在防一种具体的错）：
+///
+/// | 步 | 为什么在这个位置 |
+/// | --- | --- |
+/// | 本地输入先读齐 | 「`--am` 路径写错」不该拖到连库之后才报（与 `doc` / `access` 同一条理由） |
+/// | `--requires-dsn` 与 `--db-schema` 配对校验 | 置了它却没有 schema 描述，服务端会拿到一个「要 DSN 但没有 db 组件」的包 |
+/// | 连库取快照 | **只读**（不迁移、不写、不冻结）；查询形状照抄 `relation_verbs_check` |
+/// | `assemble` | 纯函数；⚠️ 快照在这一层是**结构体**，不受任何 view 影响 |
+/// | 打完**立刻自检** | 打出一个自己都要拒的包等于没打；这一档是打包端的 bug |
+/// | 落盘 | 写不进去 ⇒ 退出 1（`problems` 一个字都没写进盘就不算「拒了」） |
+async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
+    use crate::bundle::zip;
+
+    // ① 时间：钉死才能保证「同一输入 ⇒ 同一输出」。
+    //    缺省 = 当前 UTC（秒级、带 Z）—— 这个默认值**由调用方**算，
+    //    纯函数 `assemble` 自己不碰时钟（否则它就不纯了）。
+    let built_at = match o.built_at {
+        Some(t) => t,
+        None => chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+
+    // ② 本地输入（读不到就别去连库：报错要指向真原因）。
+    let mut am: Vec<(String, Vec<u8>)> = Vec::new();
+    for p in &o.am {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("`--am` 的文件名不是 UTF-8：{}", p.display()))?
+            .to_string();
+        let bytes = std::fs::read(p)
+            .with_context(|| format!("读不到 `--am` 文件：{}", p.display()))?;
+        am.push((name, bytes));
+    }
+    let db = match &o.db_schema {
+        Some(p) => Some(crate::bundle::pack::DbInput {
+            bytes: std::fs::read(p)
+                .with_context(|| format!("读不到 `--db-schema` 文件：{}", p.display()))?,
+            requires_dsn: o.requires_dsn,
+            dialect: o.db_dialect.clone(),
+        }),
+        None => {
+            if o.requires_dsn {
+                anyhow::bail!(
+                    "`--requires-dsn` 只对**含源库描述**的包有意义：请同时给 `--db-schema <schema.json>`。\
+                     （服务端按 `components.db.requires_dsn` 决定要不要弹 DSN —— 没有 db 组件就没有这一格）"
+                );
+            }
+            if o.db_dialect.is_some() {
+                anyhow::bail!(
+                    "`--db-dialect` 只能跟 `--db-schema` 一起用（没有 db 组件，方言无处可写）"
+                );
+            }
+            None
+        }
+    };
+    let declarations = match &o.declarations {
+        Some(dir) => read_declarations(dir)?,
+        None => Vec::new(),
+    };
+
+    // ③ 快照（**只读**；⚠️ 直接拿结构体，不掉进 `--model-view` 那种视图）。
+    let snapshot = snapshot_for_pack(&o.project, o.version).await?;
+
+    // ④ 组装（纯函数）。
+    let mut input =
+        crate::bundle::PackInput::new(o.project.clone(), o.version, built_at.clone(), snapshot);
+    input.builder_host = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok();
+    input.am = am;
+    input.db = db;
+    input.declarations = declarations;
+    let bytes = crate::bundle::assemble(&input)
+        .map_err(|e| anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}"))?;
+
+    // ⑤ 自检（打出来的包必须过得了自己的闸）。
+    let report = crate::bundle::verify(&bytes);
+    if !report.ok {
+        eprint!("{}", report.human());
+        println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+        anyhow::bail!(
+            "打包产物**过不了自己的自检**（应当以退出码 {EXIT_BUNDLE_REJECTED} 结束）—— \
+             这是打包端的 bug（`pack` 与 `verify` 对同一份契约的两处实现打架），请报给维护者"
+        );
+    }
+
+    // ⑥ 落盘后把同一份自检报告打出来（人话 stderr / JSON stdout，与 `verify` 同口径）。
+    write_local(&o.out, &bytes)?;
+    eprint!(
+        "✓ 已写出 {}（{} 字节 · {} 个 entry · 包格式 {}{}）\n",
+        o.out.display(),
+        bytes.len(),
+        report.summary.entries,
+        crate::bundle::BUNDLE_VERSION,
+        if o.am.is_empty() && o.db_schema.is_none() {
+            " · 只带本体"
+        } else {
+            ""
+        }
+    );
+    eprint!("{}", report.human());
+    let out_json = serde_json::json!({
+        "ok": true,
+        "out": o.out.display().to_string(),
+        "bytes": bytes.len(),
+        "entries": report.summary.entries,
+        "files": report.summary.files_in_manifest,
+        "project": o.project,
+        "ontology_seq": o.version,
+        "built_at": built_at,
+        "zip": {
+            "method": zip::METHOD_STORE,
+            "dos_date": format!("{:#06x}", zip::DOS_DATE_1980_01_01),
+            "dos_time": format!("{:#06x}", zip::DOS_TIME_MIDNIGHT),
+        },
+    });
+    println!("{}", serde_json::to_string_pretty(&out_json)?);
+    Ok(())
+}
+
+/// 读 `--declarations <dir>`：**只取该目录下的普通文件**（不递归、不跟随符号链接）。
+///
+/// ⛔ 不静默跳过任何东西：取到哪些、跳过哪些都打到 stderr。
+/// 声明文件漏进包里是「服务端少了 policy / tenancy」这种很难查的错，
+/// 而多打进来一个 `.DS_Store` 只是难看 —— 所以宁可多打，也不要静默少打。
+fn read_declarations(dir: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let rd = std::fs::read_dir(dir)
+        .with_context(|| format!("读不到 `--declarations` 目录：{}", dir.display()))?;
+    for entry in rd {
+        let entry = entry.with_context(|| format!("遍历 {} 失败", dir.display()))?;
+        let path = entry.path();
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => {
+                skipped.push(format!("{}（文件名不是 UTF-8）", path.display()));
+                continue;
+            }
+        };
+        // `file_type()` 不跟随符号链接：包里不该出现「看起来是文件、其实指向别处」的条目。
+        let ft = entry
+            .file_type()
+            .with_context(|| format!("取不到 {} 的类型", path.display()))?;
+        if !ft.is_file() {
+            skipped.push(format!("{name}（不是普通文件）"));
+            continue;
+        }
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("读不到声明文件：{}", path.display()))?;
+        out.push((name, bytes));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    if !skipped.is_empty() {
+        eprintln!(
+            "  （--declarations 跳过 {} 项：{}）",
+            skipped.len(),
+            skipped.join("、")
+        );
+    }
+    eprintln!("  （--declarations 收进 {} 个文件）", out.len());
+    Ok(out)
+}
+
+/// 取某项目某版本的快照 —— **结构体原文**。
+///
+/// ⚠️ 这个函数的返回值类型就是这条纪律的守卫：`Snapshot`，不是 `Value`、
+/// 更不是 `SnapshotView` / `ModelView`。`LinkTypeView` 只有 5 个字段
+/// （无 `evidence` / `table` / `column` / `joinVerified`），把它当包内容
+/// 会让服务端入库后的关系**证据静默丢失**（需求 §十一-2）。
+///
+/// 连库写法与 `relation_verbs_check` 的 `--project/--version` 那条**逐字同构**
+/// （只读：不迁移、不写、不冻结）。
+async fn snapshot_for_pack(
+    project: &str,
+    version: i32,
+) -> anyhow::Result<crate::domain::snapshot::Snapshot> {
+    let url = crate::config::require_env(crate::config::DATABASE_URL_ENV)
+        .or_else(|_| crate::config::require_env(crate::config::TEST_DATABASE_URL_ENV))?;
+    let pool: PgPool = crate::db::pool::connect(&url).await?;
+    let ps = PgProjectStore::new(pool.clone());
+    let store = PgStore::new(pool);
+    let p = ps
+        .get_by_name(project)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("项目不存在：{project}（先 `ontok project new`）"))?;
+    let v = ps
+        .version_by_seq(p.id, &p.name, version)
+        .await
+        .map_err(|e| anyhow::anyhow!("项目 {project} 没有第 {version} 版：{e}"))?;
+    // ⚠️ 这一行是「证据不丢」的**唯一**保证：`get_snapshot` 返回结构体，直接序列化。
+    let snap = store
+        .get_snapshot(v.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("v{version} 没有快照（快照由 `proposal apply` 产出）"))?;
+    Ok(snap)
+}
 /// 从库里取某一版的**关系语义**（只读：不迁移、不写、不冻结）。
 async fn semantics_from_project(
     project: &str,
