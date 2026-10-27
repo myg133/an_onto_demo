@@ -68,6 +68,7 @@
 //! （⛔ 不写第二份「什么算回环」），但**文案是 `build run` 自己的**：本命令没有放行开关，
 //! ⛔ 不许在报错里教人「加 `--allow-public`」（那个开关 REQ-163 已从本命令删掉）。
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::console::local::{self, DRAFT_REL};
@@ -119,6 +120,17 @@ pub struct Options {
     pub allow_doc_only: bool,
     /// 基版本序号覆盖。`None` ⇒ `1` 或「最新定版 + 1」（[`plan_base_seq`]）。
     pub base_version: Option<i32>,
+    /// ⭐ REQ-172 · `propose` 打底：`None` = **自动**（给了 `--dsn` 就开）。
+    ///
+    /// 为什么自动：库驱动打底的意义是**96 张全覆盖** —— 不给 `--dsn` 时它无事可做，
+    /// 所以默认关（纯文档路径逐字节不变）；给了 `--dsn` 却不开，R2RML 仍然只有文档
+    /// 命中的那 7 个类，那等于把本需求的目的关掉了。
+    pub propose: Option<bool>,
+    /// ⭐ REQ-172 · 关系判定契约（`Deploy/skills/ontok-relate/SKILL.md`）。
+    ///
+    /// 给了它才跑 AI 两轮（A 判定 + B 补漏）；⛔ 路径不写死在代码里。
+    /// 省略 ⇒ 只做「规则 + 值域」候选（零 token），并在屏幕上说明「AI 两轮未启用」。
+    pub relate_skill: Option<PathBuf>,
     /// 评审台的监听地址（与 `console serve` 同一条语义；默认内核分配端口）。
     pub bind: String,
     pub no_browser: bool,
@@ -157,6 +169,14 @@ pub struct Artifacts {
     /// ② 的产物：合并结果（与 `proposal.json` 同形状）。
     pub merged: PathBuf,
     pub merged_stats: PathBuf,
+    /// ⭐ REQ-172 · `propose` 打底后的提案（`<work-dir>/proposal.proposed.json`）。
+    pub proposed: PathBuf,
+    /// ⭐ REQ-172 · 关系候选（`<work-dir>/relation-candidates.json`）。
+    pub candidates: PathBuf,
+    /// ⭐ REQ-172 · AI 判定结果（`<work-dir>/relations.json`）。
+    pub relations: PathBuf,
+    /// ⭐ REQ-172 · 合并了实体打底 + 关系条目的提案（第 ② 段的**实际输入**）。
+    pub proposal_final: PathBuf,
     /// ③ 的产物：**草稿**（评审台读的那一份）。
     pub draft: PathBuf,
 }
@@ -175,6 +195,10 @@ pub fn artifacts(o: &Options) -> Artifacts {
         proposal_in,
         merged: work.join("merged.json"),
         merged_stats: work.join("merge.stats.json"),
+        proposed: work.join("proposal.proposed.json"),
+        candidates: work.join("relation-candidates.json"),
+        relations: work.join("relations.json"),
+        proposal_final: work.join("proposal.final.json"),
         draft: work.join(DRAFT_REL),
         work_dir: work,
     }
@@ -291,9 +315,31 @@ pub fn validate(o: &Options) -> anyhow::Result<()> {
             ));
         }
     }
+    // ── ⭐ REQ-172 · 关系探索的两个参数闸（都在烧 token 之前）────────
+    if o.propose == Some(true) && o.dsn.is_none() && o.schema.is_none() {
+        return Err(bad(
+            "`--with-propose` 需要 `--dsn` 或 `--schema`：propose 打底要读一份真实的库结构。\n  \
+             两个都没给时没有「拿什么打底」的答案 —— ⛔ 不猜。",
+        ));
+    }
+    if let Some(skill) = &o.relate_skill {
+        if o.dsn.is_none() {
+            return Err(bad(
+                "`--relate-skill` 需要 `--dsn`：判定轮要给两端取样本、判完还要落库对账。\n  \
+                 只给 `--schema` 时没有库可读 —— 请改用 `relation judge --candidates ... --dsn ...`。",
+            ));
+        }
+        let ok = skill.is_file() || (skill.is_dir() && skill.join("SKILL.md").is_file());
+        if !ok {
+            return Err(bad(format!(
+                "读不到 `--relate-skill` {}：它必须是存在的 `.md` 文件，或里面装着 `SKILL.md` 的目录。\n  \
+                 ⛔ 判定契约不写死在代码里 —— 它是 BA 维护的文档，也是缓存指纹的一部分。",
+                skill.display()
+            )));
+        }
+    }
     Ok(())
 }
-
 /// ⭐ REQ-170 · 第 0 段：**勘查**（只有给了 `--dsn` 才跑）→ `<work-dir>/schema.json`。
 ///
 /// # 为什么是「第 0 段」而不是塞进 ①
@@ -343,9 +389,8 @@ pub async fn resolve_schema(o: &Options) -> anyhow::Result<Option<PathBuf>> {
     }
 
     // 产物形状与 `ontok-builder introspect --out` **同一份**（SchemaReport + 键字段）。
-    let mut product = serde_json::to_value(&report).map_err(|e| {
-        anyhow::anyhow!("内部错误：SchemaReport 序列化失败：{e}")
-    })?;
+    let mut product = serde_json::to_value(&report)
+        .map_err(|e| anyhow::anyhow!("内部错误：SchemaReport 序列化失败：{e}"))?;
     keys.inject_into_product(&mut product);
     let text = serde_json::to_string_pretty(&product)
         .map_err(|e| anyhow::anyhow!("内部错误：schema.json 序列化失败：{e}"))?;
@@ -371,7 +416,11 @@ pub async fn resolve_schema(o: &Options) -> anyhow::Result<Option<PathBuf>> {
     let single_pk = report
         .tables
         .iter()
-        .filter(|t| keys.get(&t.name).and_then(|k| k.primary_key.as_ref()).is_some())
+        .filter(|t| {
+            keys.get(&t.name)
+                .and_then(|k| k.primary_key.as_ref())
+                .is_some()
+        })
         .count();
     println!(
         "源库勘查完成（只读）：{} 张表 / {} 列 · 单列主键 {} / {} · 真实外键 {} 条 → {}",
@@ -477,6 +526,259 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
         eprintln!("· 基础提案：{}（人给的）", art.proposal_in.display());
     }
 
+    // ── ⭐ REQ-172 · 库驱动打底 + 关系探索（只有 schema 路径存在时才跑）──
+    //
+    // 顺序是**判据**：先 `propose` 打底（96 张全覆盖）→ probe（零 token 值域）
+    // → judge（可选，AI 两轮）→ 把关系条目并进同一份提案 → 第 ② 段。
+    // 任何一步失败 ⇒ 整条链失败（R1），⛔ 不写草稿、不起评审台。
+    let mut merge_input = art.proposal_in.clone();
+    if let Some(sp) = schema_path.as_deref() {
+        let schema_file = crate::extract::relation::load_schema(sp).map_err(|e| {
+            anyhow::anyhow!(
+                "第 0.5/4 段（读 schema）失败：{e:#}\n\
+                 ⛔ 后面的段一个都不会跑 —— 本轮不产出提案、不写草稿。"
+            )
+        })?;
+        let base_text = std::fs::read_to_string(&art.proposal_in).map_err(|e| {
+            anyhow::anyhow!(
+                "读不到基础提案 {}：{e}（第 ② 段的输入）",
+                art.proposal_in.display()
+            )
+        })?;
+        let mut proposal_doc: serde_json::Value =
+            serde_json::from_str(&base_text).map_err(|e| {
+                anyhow::anyhow!("基础提案 {} 不是合法 JSON：{e}", art.proposal_in.display())
+            })?;
+        let project = project_name(o);
+        let with_propose = match o.propose {
+            Some(v) => v,
+            None => o.dsn.is_some(),
+        };
+
+        // ── 0.5 段：propose 打底（纯本地，零 token）──
+        if with_propose {
+            eprintln!("── 第 0.5/4 段：propose 打底（把schema变成实体/属性/命名关系）────────");
+            let names = crate::extract::relation::names_from_comments(&schema_file.report);
+            let outcome = crate::extract::propose::extract(
+                &schema_file.report,
+                &names,
+                &project,
+                "rule:propose",
+                env!("CARGO_PKG_VERSION"),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "第 0.5/4 段（propose 打底）失败：{e:#}\n\
+                     ⛔ 不写草稿。可用 `--without-propose` 跳过打底（但那样 R2RML 仍只映射文档命中的表）。"
+                )
+            })?;
+            let mut typed = serde_json::to_value(&outcome.proposal)
+                .map_err(|e| anyhow::anyhow!("内部错误：propose 产物序列化失败：{e}"))?;
+            typed["base_version"] = serde_json::json!(base_version as u32);
+            let added = merge_proposal_docs(&mut proposal_doc, &typed)?;
+            let text = format!(
+                "{}\n",
+                serde_json::to_string_pretty(&proposal_doc)
+                    .map_err(|e| anyhow::anyhow!("内部错误：提案序列化失败：{e}"))?
+            );
+            local::write_atomic(&art.proposed, text.as_bytes()).map_err(|e| {
+                anyhow::anyhow!(
+                    "写不出打底提案 {}：{}（改法：{}）",
+                    art.proposed.display(),
+                    e.message,
+                    e.hint
+                )
+            })?;
+            merge_input = art.proposed.clone();
+            eprintln!(
+                "· propose 打底：并入 {} 条（门面 {} 张表；提案现共 {} 条）→ {}",
+                added,
+                outcome.stats.tables_extracted,
+                proposal_doc
+                    .get("items")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
+                art.proposed.display()
+            );
+        }
+
+        // ── 0.6 段：关系探索（probe 一定跑；judge 只在给了 --relate-skill 时）──
+        if let Some(dsn) = o.dsn.as_deref() {
+            eprintln!("── 第 0.6/4 段：relation probe（只读值域验证，零 token）──────");
+            let pool = crate::extract::sample::sample_pool(dsn)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "第 0.6/4 段（relation probe）连不上源库：{e:#}\n\
+                         ⛔ 不退化只做命名。"
+                    )
+                })?;
+            let probe_opts = crate::extract::relation::ProbeOptions {
+                sample_rows: crate::extract::relation::DEFAULT_SAMPLE_ROWS,
+                max_pairs: crate::extract::relation::DEFAULT_MAX_PAIRS,
+                max_targets_per_column: crate::extract::relation::MAX_TARGETS_PER_COLUMN,
+                schema_file: sp.display().to_string(),
+                schema_sha256: schema_file.sha256.clone(),
+                dsn: dsn.to_string(),
+            };
+            let probe = crate::extract::relation::probe(&pool, &schema_file, &probe_opts)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "第 0.6/4 段（relation probe）失败：{e:#}\n\
+                         ⛔ 不写草稿。"
+                    )
+                })?;
+            let cand_text = probe.render()?;
+            local::write_atomic(&art.candidates, cand_text.as_bytes()).map_err(|e| {
+                anyhow::anyhow!(
+                    "写不出关系候选 {}：{}（改法：{}）",
+                    art.candidates.display(),
+                    e.message,
+                    e.hint
+                )
+            })?;
+            eprintln!(
+                "· 值域验证：{} 条候选（值域确认 {} · 否定 {} · 未测 {}）→ {}",
+                probe.stats.candidates_kept,
+                probe.stats.domain_confirmed,
+                probe.stats.domain_rejected,
+                probe.stats.domain_tested
+                    - probe.stats.domain_confirmed
+                    - probe.stats.domain_rejected,
+                art.candidates.display()
+            );
+
+            let items = if let Some(skill_path) = &o.relate_skill {
+                eprintln!("── 第 0.7/4 段：relation judge（AI 两轮：判定 + 补漏）──────────");
+                let skill = crate::extract::doc_acp::load_skill(skill_path)?;
+                let skill_sha = crate::extract::sample::sha256_hex(skill.as_bytes());
+                let (program, args) = crate::extract::doc_acp::resolve_command(&o.agent_command)?;
+                let cfg = crate::agent::acp::AcpConfig {
+                    program: program.clone(),
+                    args: args.clone(),
+                    cwd: crate::extract::doc_acp::session_cwd()?,
+                    timeout: crate::extract::doc_acp::resolve_timeout(o.agent_timeout_secs)?,
+                };
+                let mut session = crate::extract::doc_acp::connect(cfg)?;
+                eprintln!(
+                    "· 判定实现：acp（{}）—— 握手身份 {} v{}",
+                    o.agent_command, session.agent, session.version
+                );
+                let mut extra: std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeSet<String>,
+                > = std::collections::BTreeMap::new();
+                for c in &probe.candidates {
+                    extra
+                        .entry(c.child_table.clone())
+                        .or_default()
+                        .insert(c.child_column.clone());
+                    extra
+                        .entry(c.parent_table.clone())
+                        .or_default()
+                        .insert(c.parent_column.clone());
+                }
+                let (samples, failures) = crate::extract::relation_judge::fetch_samples(
+                    &pool,
+                    &probe.source.schema,
+                    &probe.tables,
+                    &extra,
+                    crate::extract::relation_judge::DEFAULT_SAMPLE_ROWS,
+                )
+                .await;
+                if !probe.tables.is_empty() && failures == probe.tables.len() {
+                    anyhow::bail!(
+                        "第 0.7/4 段（relation judge）名片样本一张表都取不到 —— \
+                         ⛔ 不空跑模型（白烧 token）。"
+                    );
+                }
+                let model = crate::extract::doc_acp::model_id(
+                    &program,
+                    &args,
+                    &session.agent,
+                    &session.version,
+                );
+                let meta = crate::extract::relation_judge::JudgeOptions {
+                    sample_rows: crate::extract::relation_judge::DEFAULT_SAMPLE_ROWS,
+                    cache: art.relations.with_file_name("relations.json.cache.json"),
+                    out: art.relations.clone(),
+                    candidates_file: art.candidates.display().to_string(),
+                    candidates_sha256: crate::extract::sample::sha256_hex(cand_text.as_bytes()),
+                    skill_file: skill_path.display().to_string(),
+                    skill_sha256: skill_sha,
+                };
+                let mut judged = crate::extract::relation_judge::run(
+                    &probe,
+                    &skill,
+                    &model,
+                    &meta,
+                    samples,
+                    failures,
+                    &mut session.transport,
+                )
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "第 0.7/4 段（relation judge）失败：{e:#}\n\
+                         ⛔ 不写草稿、不起评审台；可用 `--relate-skill` 去掉这一轮（只做规则+值域）。"
+                    )
+                })?;
+                judged.source.agent = session.agent.clone();
+                judged.source.agent_version = session.version.clone();
+                let text = judged.render()?;
+                local::write_atomic(&art.relations, text.as_bytes()).map_err(|e| {
+                    anyhow::anyhow!(
+                        "写不出关系判定 {}：{}（改法：{}）",
+                        art.relations.display(),
+                        e.message,
+                        e.hint
+                    )
+                })?;
+                eprintln!(
+                    "· AI 判定：{} 条关系（A {} 批 / B {} 批 · token A {} + B {}）→ {}",
+                    judged.stats.relations,
+                    judged.round_a.batches,
+                    judged.round_b.batches,
+                    judged.round_a.tokens,
+                    judged.round_b.tokens,
+                    art.relations.display()
+                );
+                judged.link_items(&probe)
+            } else {
+                eprintln!(
+                    "· AI 两轮：**未启用**（没给 --relate-skill）—— 只落规则 + 值域候选；\
+                     这**不是**模型失败后的降级，是显式参数缺席。"
+                );
+                crate::extract::relation::probe_link_items(&probe)
+            };
+            pool.close().await;
+
+            let (added, replaced) =
+                crate::extract::relation::merge_into_proposal(&mut proposal_doc, items)?;
+            let text = format!(
+                "{}\n",
+                serde_json::to_string_pretty(&proposal_doc)
+                    .map_err(|e| anyhow::anyhow!("内部错误：提案序列化失败：{e}"))?
+            );
+            local::write_atomic(&art.proposal_final, text.as_bytes()).map_err(|e| {
+                anyhow::anyhow!(
+                    "写不出关系提案 {}：{}（改法：{}）",
+                    art.proposal_final.display(),
+                    e.message,
+                    e.hint
+                )
+            })?;
+            merge_input = art.proposal_final.clone();
+            eprintln!(
+                "· 关系落提案：并入 {} 条 / 替换同名 {} 条 → {}",
+                added,
+                replaced,
+                art.proposal_final.display()
+            );
+        }
+    }
+
     // ── ② 合并（机械对齐，不调模型）──────────────────────────
     eprintln!("── 第 2/4 段：doc merge ────────────────────────────────────────");
     let doc_only = o.allow_doc_only || art.proposal_generated;
@@ -488,7 +790,7 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     }
     crate::cli::doc_merge_cmd(
         &art.assertions,
-        &art.proposal_in,
+        &merge_input,
         &art.merged,
         Some(&art.merged_stats),
         schema_path.as_deref(),
@@ -504,6 +806,41 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     })?;
 
     Ok(art)
+}
+
+/// ⭐ REQ-172 · 把 `add` 提案里的条目并进 `base`：**按 `kind + payload.key` 去重**。
+///
+/// ⛔ 不覆盖人给的条目：`--proposal` 是人的输入，打底只补它没提到的表/边。
+/// 返回并入的条数（屏幕上要看得见「补了多少」）。
+fn merge_proposal_docs(
+    base: &mut serde_json::Value,
+    add: &serde_json::Value,
+) -> anyhow::Result<usize> {
+    fn key_of(it: &serde_json::Value) -> Option<String> {
+        let kind = it.get("kind").and_then(|v| v.as_str())?;
+        let key = it.pointer("/payload/key").and_then(|v| v.as_str())?;
+        Some(format!("{kind}:{key}"))
+    }
+    let base_items = base
+        .get_mut("items")
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| anyhow::anyhow!("基础提案缺少 `items` 数组"))?;
+    let existing: BTreeSet<String> = base_items.iter().filter_map(key_of).collect();
+    let add_items = add
+        .get("items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("合并源缺少 `items` 数组"))?;
+    let mut added = 0usize;
+    for it in add_items {
+        if let Some(k) = key_of(it) {
+            if existing.contains(&k) {
+                continue;
+            }
+        }
+        base_items.push(it.clone());
+        added += 1;
+    }
+    Ok(added)
 }
 
 /// **只读**地算「这一轮草稿标哪一版」—— 读工作目录，⛔ 一个字节都不写、不连库。
@@ -575,16 +912,13 @@ pub fn write_draft(art: &Artifacts) -> anyhow::Result<Draft> {
             art.merged.display()
         )
     })?;
-    let items = doc
-        .get("items")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "合并结果 {} 里没有 `items` 数组 —— 评审台读不懂这样的草稿\
+    let items = doc.get("items").and_then(|v| v.as_array()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "合并结果 {} 里没有 `items` 数组 —— 评审台读不懂这样的草稿\
                  （草稿形状是 `{{project, base_version?, items:[{{kind,target,payload}}]}}`）",
-                art.merged.display()
-            )
-        })?;
+            art.merged.display()
+        )
+    })?;
     local::write_atomic(&art.draft, text.as_bytes()).map_err(|e| {
         anyhow::anyhow!(
             "写不出草稿 {}：{}（改法：{}）",
@@ -726,6 +1060,8 @@ mod tests {
             proposal: None,
             allow_doc_only: false,
             base_version: None,
+            propose: None,
+            relate_skill: None,
             bind: super::super::DEFAULT_BIND.into(),
             no_browser: true,
         }
@@ -815,7 +1151,9 @@ mod tests {
         // --input 不存在 ⇒ exit 2，且一个文件都不写（连 work-dir 都不该建）。
         let mut o = options(&dir);
         o.input = dir.join("no-such-docs");
-        let e = build_artifacts(&o, 1).await.expect_err("输入不存在必须失败");
+        let e = build_artifacts(&o, 1)
+            .await
+            .expect_err("输入不存在必须失败");
         assert_eq!(
             super::super::exit_code_for(&e),
             super::super::EXIT_BAD_INPUT,
@@ -825,21 +1163,34 @@ mod tests {
         // --agent 不是 acp ⇒ exit 2（R5：只做文档路径）。
         let mut o = options(&dir);
         o.agent = "library".into();
-        let e = build_artifacts(&o, 1).await.expect_err("库路径不在本命令里");
-        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        let e = build_artifacts(&o, 1)
+            .await
+            .expect_err("库路径不在本命令里");
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT
+        );
         assert!(format!("{e:#}").contains("acp"), "{e:#}");
 
         // --agent-command 为空 ⇒ exit 2（⛔ 没有默认值）。
         let mut o = options(&dir);
         o.agent_command = "  ".into();
         let e = build_artifacts(&o, 1).await.expect_err("空命令必须失败");
-        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT
+        );
 
         // --agent-skill 不存在 ⇒ exit 2。
         let mut o = options(&dir);
         o.agent_skill = dir.join("nope.md");
-        let e = build_artifacts(&o, 1).await.expect_err("skill 不存在必须失败");
-        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        let e = build_artifacts(&o, 1)
+            .await
+            .expect_err("skill 不存在必须失败");
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT
+        );
 
         // ⭐ `--bind` 非回环 ⇒ **入参错**（exit 2），而且**在 ①② 之前**：
         // 地址写错时不该先烧一遍 ACP token（QA 退回项 F3）。
@@ -879,7 +1230,11 @@ mod tests {
             msg.contains("第 1/4 段"),
             "回环地址必须过闸、走到 ① 段：{msg}"
         );
-        assert_eq!(super::super::exit_code_for(&e), 1, "① 段的失败是环境错（1）");
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            1,
+            "① 段的失败是环境错（1）"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1021,7 +1376,10 @@ mod tests {
                 ..options(&dir)
             };
             let e = plan_base_seq(&o2).expect_err("不能低于已定版的最新版本");
-            assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+            assert_eq!(
+                super::super::exit_code_for(&e),
+                super::super::EXIT_BAD_INPUT
+            );
             let msg = format!("{e:#}");
             assert!(msg.contains("v2"), "要点名最新定版号：{msg}");
             assert!(msg.contains("base_version"), "要解释这个字段的含义：{msg}");
@@ -1032,7 +1390,10 @@ mod tests {
             ..options(&dir)
         };
         let e = plan_base_seq(&zero).expect_err("0 不是定版号");
-        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT
+        );
 
         // ⛔ 一个字节都没写（这条函数只读目录）。
         assert!(!dir.join(".ontok/versions/v3").exists());
@@ -1193,7 +1554,10 @@ mod tests {
         let mut o = options(&dir);
         o.dsn = Some("   ".into());
         let e = validate(&o).expect_err("空 dsn 必须失败");
-        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT
+        );
         assert!(format!("{e:#}").contains("--dsn"), "{e:#}");
         std::fs::remove_dir_all(&dir).ok();
     }
