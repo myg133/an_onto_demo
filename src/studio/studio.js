@@ -29,7 +29,9 @@
     health: "/api/health",
     catalog: "/api/catalog",
     describe: "/api/describe",
-    sparql: "/api/sparql"
+    sparql: "/api/sparql",
+    /* ⭐ REQ-159 P1c-2 · 管理端点（ADR-013：8 条写在 query serve 上，Studio 调） */
+    projects: "/api/projects"
   };
 
   /* 分页粒度（服务端上限 200） */
@@ -175,29 +177,46 @@
   function readJson(res) {
     if (res.status === 401) throw unauthorized();
     return res.text().then(function (text) {
+      /* ⚠️ 先解析再判 ok：错误体里的 `code` 是**降级依据**
+         （`key.not_admin` ⇒ 提示「需要 admin key」；404 ⇒「服务端未就绪」）。
+         不解析就只能看 HTTP 状态码，而 403 有两种完全不同的意思。 */
+      var parsed = null;
+      try { parsed = JSON.parse(text); } catch (e) {}
       if (!res.ok) {
-        var msg = text;
-        try {
-          var v = JSON.parse(text);
-          msg = (v && (v.message || v.code)) ? (v.code + "：" + v.message + (v.hint ? "（" + v.hint + "）" : "")) : text;
-        } catch (e) {}
+        var msg = (parsed && (parsed.message || parsed.code))
+          ? (parsed.code + "：" + parsed.message + (parsed.hint ? "（" + parsed.hint + "）" : ""))
+          : text;
         var err = new Error("HTTP " + res.status + " — " + String(msg).slice(0, 400));
         err.status = res.status;
+        err.code = (parsed && parsed.code) || "";
         throw err;
       }
-      try { return JSON.parse(text); } catch (e) {
-        throw new Error("响应不是 JSON（HTTP " + res.status + "）");
-      }
+      if (!parsed) throw new Error("响应不是 JSON（HTTP " + res.status + "）");
+      return parsed;
     });
   }
 
-  /* 目录：一页一页翻到 has_more = false（⛔ 不假设一次就够） */
-  function fetchCatalog(onPage) {
+  /* 写请求（POST / PUT）：body 既可以是 JSON 字符串，也可以是**原始字节**
+     （上传构建包就是 `File.arrayBuffer()` 出来的那一份） */
+  function apiSend(method, path, body, contentType) {
+    var headers = {
+      "Authorization": "Bearer " + S.token,
+      "Accept": "application/json"
+    };
+    if (contentType) headers["Content-Type"] = contentType;
+    return fetch(path, { method: method, headers: headers, body: body }).then(readJson);
+  }
+
+  /* 目录：一页一页翻到 has_more = false（⛔ 不假设一次就够）
+     ⭐ REQ-159 P1c-2：`project` 非空时带 `?project=<名>`（admin 切项目看图；服务端
+     只对 `kind=admin` 生效，query key 给了这个参数会是 403 `key.project_pinned`）。 */
+  function fetchCatalog(onPage, project) {
     var acc = [];
     var counts = null;
+    var suffix = project ? ("&project=" + encodeURIComponent(project)) : "";
 
     function one(page) {
-      return apiGet(API.catalog + "?page=" + page + "&page_size=" + PAGE_SIZE).then(function (p) {
+      return apiGet(API.catalog + "?page=" + page + "&page_size=" + PAGE_SIZE + suffix).then(function (p) {
         if (!p || !Array.isArray(p.items)) throw new Error("catalog 响应形状不认识（缺 items）");
         acc = acc.concat(p.items);
         if (!counts) counts = p.counts || null;
@@ -215,31 +234,67 @@
   function boot() {
     var stored = "";
     try { stored = window.sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
-    if (!stored) { showAuthNeeded(); return; }
+    if (!stored) {
+      /* 没口令：图看不到（服务端 401），但顶栏那几个入口**存在且禁用**，
+         并明确说是「需要 admin key」——⛔ 不是悄悄消失（用户会以为功能没做）。 */
+      OPS.admin = false;
+      OPS.reason = "unauthorized";
+      showAuthNeeded();
+      applyOpsGate();
+      renderProjectPick();
+      return;
+    }
     S.token = stored;
     authBadge("", "连接中…");
-    showBoot("加载中…", "正在读取本体目录（分页到 has_more=false）…");
+    showBoot("加载中…", "正在读取项目列表与本体目录…");
+    applyOpsGate();
 
     // health 免口令；失败不致命（页面仍可用目录与查询）。
     var health = apiGet(API.health).catch(function () { return null; });
 
-    Promise.all([fetchCatalog(function (n, page) {
-      setText("boot-sub", "已读取 " + n + " 条目录（第 " + page + " 页）…");
-    }), health]).then(function (out) {
-      S.items = out[0].items;
-      S.counts = out[0].counts;
-      S.health = out[1] || {};
-      try { window.sessionStorage.setItem(TOKEN_KEY, stored); } catch (e) {}
-      S.token = stored;
-      buildModel();
-      S.loaded = true;
-      authBadge("is-live", "已连接");
-      var forget = byId("token-forget");
-      if (forget) forget.hidden = false;
-      renderAll();
+    Promise.all([fetchProjects(), health]).then(function (out) {
+      var h0 = out[1] || {};
+      /* ⭐ admin：**先定看哪个项目**，再带 `?project=` 拉目录。
+         多项目模式下 admin 不带这个参数会得到 403 `key.admin_has_no_project` ——
+         那不是错误，是「你还没说看哪一个」（P1c-1 的契约）。 */
+      var project = null;
+      if (OPS.admin) {
+        project = pickInitialProject(h0.project);
+        if (!project) {
+          S.health = h0;
+          showBoot("还没有项目", "这台服务上还没有任何项目。用顶栏 ＋ 建一个，再上传构建包。");
+          renderProjectPick();
+          applyOpsGate();
+          return null;
+        }
+        OPS.current = project;
+      }
+      return fetchCatalog(function (n, page) {
+        setText("boot-sub", "已读取 " + n + " 条目录（第 " + page + " 页）…");
+      }, project ? project.name : null).then(function (cat) {
+        S.items = cat.items;
+        S.counts = cat.counts;
+        S.health = h0;
+        S.loaded = true;
+        authBadge("is-live", OPS.admin ? "已连接 · admin" : "已连接");
+        var forget = byId("token-forget");
+        if (forget) forget.hidden = false;
+        buildModel();
+        renderAll();
+        applyOpsGate();
+        if (!OPS.admin) {
+          /* ⭐ AC-d8 / AC-d9：不是 admin 也**照常看图**，只把写操作禁用并说清原因；
+             ⛔ 不登出（口令是真的）、⛔ 不白屏（图已经画出来了）。 */
+          showBanner(OPS.reason === "not_ready" ? "err" : "info",
+            OPS.reason === "not_ready"
+              ? "服务端未就绪：项目接口不在（404）。图可以看，建项目 / 上传 / 解析 / 激活已禁用。"
+              : "需要 admin key：图可以看，但建项目 / 上传 / 解析 / 激活 / 查看 key 已禁用（当前口令不是 admin）。");
+        }
+      });
     }).catch(function (e) {
-      if (e && e.unauthorized) { showAuthInvalid(); return; }
+      if (e && e.unauthorized) { showAuthInvalid(); applyOpsGate(); return; }
       showLoadError(e && e.message ? e.message : String(e));
+      applyOpsGate();
     });
   }
 
@@ -745,7 +800,7 @@
     document.body.classList.add("drawer-open");
     var seq = ++drawerSeq;
     renderDrawer(key, null);
-    apiGet(API.describe + "?name=" + encodeURIComponent(iri(key))).then(function (d) {
+    apiGet(API.describe + "?name=" + encodeURIComponent(iri(key)) + projectArg("&")).then(function (d) {
       if (seq !== drawerSeq || ui.focus !== key) return;
       renderDrawer(key, d && d.kind === "class" ? d : null);
     }).catch(function () { /* 详情取不到就保留目录事实，⛔ 不编数据 */ });
@@ -1124,7 +1179,7 @@
     setStatus([h("span", { text: "执行中…" })]);
     clear(qOut);
     var started = Date.now();
-    fetch(API.sparql, {
+    fetch(API.sparql + projectQs(), {
       method: "POST",
       headers: {
         "Authorization": "Bearer " + S.token,
@@ -1369,19 +1424,962 @@
   function hideTip() { tip.classList.remove("is-on"); }
 
   /* ══════════════════════════════════════════════════════════════
+     ⭐ REQ-159 P1c-2 · 项目 / 构建包（admin 写面，ADR-013）
+     ──────────────────────────────────────────────────────────────
+     顶栏项目下拉（GET /api/projects；切换 ⇒ 带 ?project= 重拉 catalog 并**局部重绘**）
+     ＋ 建项目（POST /api/projects → 一次性 key → 直接进上传向导）
+     上传（POST …/bundles，Content-Type: application/octet-stream，body = 原始字节）
+     配 DSN（只有 requires_db 才出现；PUT …/database + POST …/database/test）
+     解析（POST …/import；already_imported:true 当**成功**）
+     激活（POST …/activate；二次确认，文案写明「会影响对外服务」）
+     查看 key（GET …/key；固定一行「本次查看会记录一条审计」）
+
+     降级：404 ⇒「服务端未就绪」；403 `key.not_admin` ⇒「需要 admin key」。
+     ⛔ 不登出、⛔ 不白屏 —— 图是读路径，写操作才是 admin 的。
+     口令仍只进 sessionStorage（⛔ URL、⛔ 长期存储、⛔ 回填 DOM）。
+     ══════════════════════════════════════════════════════════════ */
+
+  var OPS = {
+    admin: false,        // 真的拿到过项目列表 ⇒「是 admin」
+    checked: false,      // 判过了（避免 UI 在「还没问」时就说没权限）
+    reason: "",          // not_admin | not_ready | unauthorized | forbidden | error:NNN
+    projects: [],
+    current: null        // 当前看的项目（含 active_version / 计数）
+  };
+
+  /* 构建包向导的状态（一个弹窗，五步） */
+  var W = {
+    open: false, step: 2, startStep: 2,
+    name: "", label: "", keyLabel: "", key: "",
+    created: false, err: "",
+    uploaded: null, uploading: false, uploadError: "",
+    bundleId: "", requiresDb: false,
+    dsn: "", dbSaving: false, dbTested: false, dbOk: false, dbResult: null, dbError: "",
+    imported: null, importing: false, importError: "", importNote: "",
+    activating: false, confirmActivate: false, activated: null, activateError: ""
+  };
+
+  var KEYM = { open: false, loading: false, data: null, error: "" };
+
+  var WIZ_STEPS = [
+    { n: 1, t: "建项目" },
+    { n: 2, t: "上传包" },
+    { n: 3, t: "配置 DB" },
+    { n: 4, t: "解析" },
+    { n: 5, t: "激活" }
+  ];
+  var WIZ_TITLES = ["", "新建项目", "上传构建包", "配置源数据库", "解析构建包", "冻结并激活"];
+  var WIZ_SUBS = ["",
+    "一个项目 = 一套本体；部署只有一份。key 只显示这一次。",
+    "包是构建端产出的 .ontokbundle。上传只做校验，不解析。",
+    "包里含 db（requires_dsn = true）⇒ 必须先配通（没测通不许解析）。",
+    "单事务：中途失败一个字节都不落。解析 ≠ 生效。",
+    "解析 ≠ 生效：激活才对外可见。"];
+
+  function num(v) { return (v === null || v === undefined) ? 0 : v; }
+  function projBase(name) { return API.projects + "/" + encodeURIComponent(name); }
+
+  function findProject(name) {
+    for (var i = 0; i < OPS.projects.length; i++) {
+      if (OPS.projects[i].name === name) return OPS.projects[i];
+    }
+    return null;
+  }
+
+  function projectMeta(p) {
+    if (!p) return "未连接";
+    if (p.active_version === null || p.active_version === undefined) {
+      return "未激活 · " + num(p.entity_types) + " 类（先上传包并激活）";
+    }
+    return "第 " + p.active_version + " 版 · " + (p.frozen ? "已冻结" : "未冻结")
+      + " · " + num(p.entity_types) + " 类 / " + num(p.link_types) + " 关系";
+  }
+
+  function projectMetaShort(p) {
+    if (p.active_version === null || p.active_version === undefined) return "未激活";
+    return "v" + p.active_version + " · " + num(p.entity_types) + " 类";
+  }
+
+  function errText(e) {
+    if (!e) return "未知错误";
+    if (e.code) return e.code + "：" + String(e.message || "").slice(0, 300);
+    return String(e.message || e).slice(0, 300);
+  }
+
+  /* ── 顶栏提示（一行文本；admin 正常时是空的） ─────────────────── */
+  function setOpsHint(text, isErr) {
+    var n = byId("ops-hint");
+    if (!n) return;
+    n.textContent = text || "";
+    n.className = "proj-hint" + (isErr ? " is-err" : "");
+  }
+
+  /* ── 图上的提示条（结果 / 降级原因） ──────────────────────────── */
+  function showBanner(kind, text) {
+    var b = byId("ops-banner");
+    if (!b) return;
+    clear(b);
+    b.className = "ops-banner is-on" + (kind === "err" ? " is-err" : (kind === "ok" ? " is-ok" : ""));
+    b.appendChild(h("b", { text: kind === "err" ? "✕" : (kind === "ok" ? "✓" : "·") }));
+    b.appendChild(h("span", { text: text }));
+    var close = h("button", { class: "btn btn-sm btn-ghost", text: "关闭" });
+    close.style.marginLeft = "auto";
+    close.addEventListener("click", hideBanner);
+    b.appendChild(close);
+  }
+  function hideBanner() {
+    var b = byId("ops-banner");
+    if (!b) return;
+    clear(b);
+    b.className = "ops-banner";
+  }
+
+  /* ── admin 判定：/api/projects 是**唯一**的探针 ─────────────────── */
+  function classifyOps(e) {
+    OPS.checked = true;
+    OPS.admin = false;
+    OPS.projects = [];
+    if (!e) { OPS.reason = "error"; return; }
+    if (e.unauthorized) { OPS.reason = "unauthorized"; return; }
+    if (e.status === 403) {
+      /* 契约码 `key.not_admin`：这张 key 是真的，只是不是写面的钥匙。
+         ⛔ 不登出（401 才清口令）—— 它还能读自己绑定的项目。 */
+      OPS.reason = (e.code === "key.not_admin") ? "not_admin" : "forbidden";
+      return;
+    }
+    if (e.status === 404) { OPS.reason = "not_ready"; return; }
+    OPS.reason = "error:" + (e.status || "?");
+  }
+
+  function fetchProjects() {
+    return apiGet(API.projects).then(function (v) {
+      OPS.checked = true;
+      OPS.admin = true;
+      OPS.reason = "";
+      OPS.projects = (v && Array.isArray(v.projects)) ? v.projects : [];
+      if (OPS.current) OPS.current = findProject(OPS.current.name) || OPS.current;
+      return OPS.projects;
+    }, function (e) {
+      classifyOps(e);
+      return null;
+    });
+  }
+
+  function pickInitialProject(healthProject) {
+    var list = OPS.projects;
+    if (!list.length) return null;
+    if (healthProject) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].name === healthProject) return list[i];
+      }
+    }
+    /* 多项目模式下 health 的 project 是 null ⇒ 优先挑一个已有生效版本的 */
+    for (var j = 0; j < list.length; j++) {
+      if (list[j].active_version !== null && list[j].active_version !== undefined) return list[j];
+    }
+    return list[0];
+  }
+
+  function opsHintText() {
+    if (OPS.admin) return "";
+    if (OPS.reason === "not_ready") return "服务端未就绪（404）：项目接口不在，写操作已禁用";
+    if (OPS.reason === "not_admin") return "需要 admin key：当前口令只能看图";
+    if (OPS.reason === "unauthorized") return "需要 admin key：输入后可用";
+    if (OPS.reason === "forbidden") return "需要 admin key：当前口令无权列项目";
+    return "项目列表不可用，写操作已禁用";
+  }
+
+  function setBtnDisabled(id, off) {
+    var b = byId(id);
+    if (b) b.disabled = !!off;
+  }
+
+  /* AC-d8：没 admin 口令 ⇒ 这些按钮**禁用**并提示；有 ⇒ 可用 */
+  function applyOpsGate() {
+    var on = !!OPS.admin;
+    setBtnDisabled("proj-add", !on);
+    setBtnDisabled("bundle-open", !on);
+    setBtnDisabled("key-view", !on);
+    var pick = byId("proj-pick");
+    if (pick) pick.disabled = !on || OPS.projects.length === 0;
+    setOpsHint(opsHintText(), !on);
+  }
+
+  function renderProjectPick() {
+    var cur = OPS.current;
+    var h0 = S.health || {};
+    if (cur) {
+      setText("crumb-project", cur.name);
+      setText("crumb-sub", projectMeta(cur));
+    } else {
+      /* 没有项目列表时（非 admin）退回 health 说的那一个 —— 与改造前显示同一句话 */
+      setText("crumb-project", h0.project || "—");
+      setText("crumb-sub", (h0.ontology_version !== undefined && h0.ontology_version !== null)
+        ? ("第 " + h0.ontology_version + " 版 · 已冻结") : "—");
+    }
+    renderProjectMenu();
+  }
+
+  function renderProjectMenu() {
+    var box = byId("proj-menu");
+    if (!box) return;
+    clear(box);
+    box.appendChild(h("div", { class: "proj-menu-hd", text: "切换项目（一套部署 · 多套本体）" }));
+    if (!OPS.projects.length) {
+      box.appendChild(h("div", {
+        class: "proj-menu-hd",
+        text: OPS.admin ? "还没有项目 —— 用顶栏 ＋ 建一个" : "需要 admin key 才能列出项目"
+      }));
+      return;
+    }
+    OPS.projects.forEach(function (p) {
+      var it = h("div", {
+        class: "proj-item" + ((OPS.current && OPS.current.name === p.name) ? " is-cur" : "")
+      }, [
+        h("div", { class: "proj-item-name", text: p.name }),
+        h("div", { class: "proj-item-meta", text: projectMetaShort(p) })
+      ]);
+      it.addEventListener("click", function () { switchProject(p.name); });
+      box.appendChild(it);
+    });
+  }
+
+  function projectMenuOpen() {
+    var m = byId("proj-menu");
+    return !!(m && m.classList.contains("is-open"));
+  }
+  function openProjectMenu() {
+    var m = byId("proj-menu");
+    if (m) m.classList.add("is-open");
+  }
+  function closeProjectMenu() {
+    var m = byId("proj-menu");
+    if (m) m.classList.remove("is-open");
+  }
+  function toggleProjectMenu() {
+    if (projectMenuOpen()) { closeProjectMenu(); return; }
+    renderProjectMenu();
+    openProjectMenu();
+  }
+
+  /* ⭐ AC-d2 · 切项目 ⇒ 重拉 catalog（带 ?project=）⇒ 重绘本体图。
+     ⛔ 不整页刷新（那是另一套状态机，且会丢掉口令以外的所有上下文）。 */
+  function reloadCatalog(name, done) {
+    var pick = byId("proj-pick");
+    if (pick) pick.disabled = true;
+    return fetchCatalog(function (n, page) {
+      setText("ops-hint", "正在读取 " + name + " 的目录（" + n + " 条 · 第 " + page + " 页）…");
+    }, name).then(function (out) {
+      S.items = out.items;
+      S.counts = out.counts;
+      OPS.current = findProject(name) || OPS.current
+        || { name: name, label: null, active_version: null, frozen: false, entity_types: 0, link_types: 0 };
+      buildModel();
+      renderAll();
+      applyOpsGate();
+      if (done) done();
+    });
+  }
+
+  function switchProject(name) {
+    closeProjectMenu();
+    if (!OPS.admin) { showBanner("err", "需要 admin key：切项目要带 `?project=`，而那只对 admin 生效。"); return; }
+    if (OPS.current && OPS.current.name === name) return;
+    setOpsHint("正在切换到 " + name + " …");
+    reloadCatalog(name, function () {
+      setOpsHint("");
+      showBanner("ok", "已切到项目 " + name + "：本体图已重绘（" + S.classes.length + " 个类）");
+    }).catch(function (e) {
+      var pick = byId("proj-pick");
+      if (pick) pick.disabled = false;
+      if (e && e.unauthorized) { showAuthInvalid(); applyOpsGate(); return; }
+      if (e && e.status === 404) {
+        OPS.reason = "not_ready";
+        applyOpsGate();
+        showBanner("err", "服务端未就绪：切换项目需要的读端点不在（404）。");
+        return;
+      }
+      if (e && e.status === 503) {
+        showBanner("err", "项目 " + name + " 还没有生效版本（" + (e.code || "503")
+          + "）—— 先上传构建包并激活，再切过来。");
+        return;
+      }
+      showBanner("err", "切换到 " + name + " 失败：" + errText(e));
+    });
+  }
+
+  /* 读端点带项目（admin 在多项目模式下**必须**带：否则 403 key.admin_has_no_project）。
+     `sep` 是 `?` 或 `&`（`/api/describe?name=…` 已经有参数了）。 */
+  function projectArg(sep) {
+    return (OPS.admin && OPS.current && OPS.current.name)
+      ? (sep + "project=" + encodeURIComponent(OPS.current.name)) : "";
+  }
+  function projectQs() { return projectArg("?"); }
+
+  /* ══════════════════════════════════════════════════════════════
+     向导弹窗（JS 构建：index.html 里没有一行 `style=`，CSP 才能生效）
+     ══════════════════════════════════════════════════════════════ */
+
+  function ensureWizard() {
+    var m = byId("wiz-modal");
+    if (m) return m;
+    m = h("div", { class: "modal", id: "wiz-modal" }, [
+      h("div", { class: "modal-card" }, [
+        h("div", { class: "modal-head" }, [
+          h("h2", { class: "modal-title", id: "wiz-title", text: "新建项目" }),
+          h("div", { class: "modal-sub", id: "wiz-sub" })
+        ]),
+        h("div", { class: "wiz-steps", id: "wiz-steps" }),
+        h("div", { class: "modal-body", id: "wiz-body" }),
+        h("div", { class: "modal-foot", id: "wiz-foot" })
+      ])
+    ]);
+    document.body.appendChild(m);
+    /* ⭐ 只能通过「取消」关闭：遮罩点击 / ESC 都不关（样机 v2 的第 1 条）。
+       这里不绑 click 处理，等于点了没反应 —— 比「点了会关」诚实。 */
+    return m;
+  }
+
+  function openWizard(startStep) {
+    if (!OPS.admin) {
+      showBanner("err", "需要 admin key：建项目 / 上传 / 解析 / 激活都要求 admin。");
+      return;
+    }
+    /* 每次打开都是**干净**的一次向导：上一次的包 id / 解析结果 / DSN 结论不能漏进来
+       （否则「取消后再点上传」会看到上一轮的回执，甚至带着旧 bundleId 去激活）。 */
+    W.open = true;
+    W.startStep = startStep;
+    W.step = startStep;
+    W.name = "";
+    W.label = "";
+    W.keyLabel = "";
+    W.key = "";
+    W.created = false;
+    W.err = "";
+    W.uploaded = null;
+    W.uploading = false;
+    W.uploadError = "";
+    W.bundleId = "";
+    W.requiresDb = false;
+    W.dsn = "";
+    W.dbSaving = false;
+    W.dbTested = false;
+    W.dbOk = false;
+    W.dbResult = null;
+    W.dbError = "";
+    W.imported = null;
+    W.importing = false;
+    W.importError = "";
+    W.activating = false;
+    W.confirmActivate = false;
+    W.activated = null;
+    W.activateError = "";
+    if (startStep >= 2) {
+      /* 从顶栏「上传构建包」进来：项目已经有了（OPS.current） */
+      W.name = (OPS.current && OPS.current.name) || "";
+      W.created = true;
+    }
+    var m = ensureWizard();
+    m.classList.add("is-open");
+    renderWizard();
+  }
+
+  function closeWizard(force) {
+    if (!force) {
+      var mid = W.created || !!W.bundleId || W.step > W.startStep;
+      if (mid && !W.activated) {
+        var yes = window.confirm("确定取消？已填的内容会丢掉，项目/包可能需要重来。");
+        if (!yes) return;
+      }
+    }
+    W.open = false;
+    var m = byId("wiz-modal");
+    if (m) m.classList.remove("is-open");
+    if (W.activated) refreshProjectsQuiet();
+  }
+
+  function refreshProjectsQuiet() {
+    return apiGet(API.projects).then(function (v) {
+      if (v && Array.isArray(v.projects)) {
+        OPS.projects = v.projects;
+        if (OPS.current) OPS.current = findProject(OPS.current.name) || OPS.current;
+        renderProjectPick();
+      }
+      return OPS.projects;
+    }, function () { return null; });
+  }
+
+  function renderWizard() {
+    var title = byId("wiz-title"), sub = byId("wiz-sub");
+    if (title) title.textContent = WIZ_TITLES[W.step] || "构建包";
+    if (sub) sub.textContent = WIZ_SUBS[W.step] || "";
+
+    /* 步骤条：< 当前步 ⇒ done；= ⇒ now */
+    var st = byId("wiz-steps");
+    if (st) {
+      clear(st);
+      WIZ_STEPS.forEach(function (s) {
+        /* 包不要 DSN 时，第 3 步是**跳过**的（已上传 ⇒ 标成 done，别让用户以为漏了一步） */
+        var skipped = (s.n === 3) && !!W.bundleId && !W.requiresDb;
+        var done = s.n < W.step || skipped;
+        var cls = "wiz-step" + (done ? " is-done" : (s.n === W.step ? " is-now" : ""));
+        st.appendChild(h("div", { class: cls }, [
+          h("i", { text: done ? "✓" : String(s.n) }),
+          h("span", { text: s.t + (skipped ? "（跳过）" : "") })
+        ]));
+      });
+    }
+
+    var body = byId("wiz-body");
+    if (body) {
+      clear(body);
+      if (W.step === 1) body.appendChild(wizStepCreate());
+      else if (W.step === 2) body.appendChild(wizStepUpload());
+      else if (W.step === 3) body.appendChild(wizStepDsn());
+      else if (W.step === 4) body.appendChild(wizStepImport());
+      else body.appendChild(wizStepActivate());
+    }
+
+    var foot = byId("wiz-foot");
+    if (foot) {
+      clear(foot);
+      var cancel = h("button", { class: "btn btn-ghost", text: W.activated ? "关闭" : "取消" });
+      cancel.addEventListener("click", function () { closeWizard(!!W.activated); });
+      foot.appendChild(cancel);
+      foot.appendChild(h("div", { class: "spacer" }));
+
+      if (W.step > 2 && !W.activated) {
+        var prev = h("button", { class: "btn", text: "上一步" });
+        prev.addEventListener("click", function () { W.step = W.step - 1; renderWizard(); });
+        foot.appendChild(prev);
+      }
+      var p = wizPrimary();
+      var next = h("button", { class: "btn btn-primary", id: "wiz-next", text: p.text });
+      next.disabled = !!p.disabled;
+      next.addEventListener("click", p.fn);
+      foot.appendChild(next);
+    }
+  }
+
+  /* footer 的主按钮：文字 / 是否禁用 / 点了做什么 */
+  function wizPrimary() {
+    if (W.step === 1) {
+      return { text: "创建并生成 key", disabled: false, fn: doCreate };
+    }
+    if (W.step === 2) {
+      return { text: "下一步", disabled: !W.bundleId, fn: function () { W.step = W.requiresDb ? 3 : 4; renderWizard(); } };
+    }
+    if (W.step === 3) {
+      /* 不在这里禁用：DSN 没测通也可以去第 4 步看，但**解析按钮**是禁用的（AC-d5 的门在那里） */
+      return { text: "下一步", disabled: false, fn: function () { W.step = 4; renderWizard(); } };
+    }
+    if (W.step === 4) {
+      return { text: "下一步", disabled: !W.imported, fn: function () { W.step = 5; renderWizard(); } };
+    }
+    if (W.activated) {
+      return { text: "完成", disabled: false, fn: function () { closeWizard(true); } };
+    }
+    return { text: "完成", disabled: true, fn: function () {} };
+  }
+
+  function field(label, id, tip, value, type) {
+    var input = h("input", { class: "fld-input", id: id, type: type || "text", autocomplete: "off", spellcheck: "false" });
+    input.value = value || "";
+    var box = h("label", { class: "fld" }, [h("span", { class: "fld-label", text: label }), input]);
+    if (tip) box.appendChild(h("div", { class: "fld-tip", text: tip }));
+    return box;
+  }
+
+  function alertBox(kind, text) {
+    return h("div", { class: "alert alert-" + kind, text: text });
+  }
+
+  function keyBox(key, label, note) {
+    var box = h("div", { class: "keybox" });
+    var row = h("div", { class: "keyrow" }, [h("div", { class: "keyval", id: "wiz-key", text: key })]);
+    var cp = h("button", { class: "btn btn-sm", text: "复制" });
+    cp.addEventListener("click", function () { copyText(key, cp); });
+    row.appendChild(cp);
+    box.appendChild(row);
+    box.appendChild(h("div", { class: "keybox-w", text: "给「" + (label || "未命名") + "」用 · 一项目一把 · 要换就 rotate" }));
+    if (note) box.appendChild(h("div", { class: "auditnote", text: note }));
+    return box;
+  }
+
+  function copyText(text, btn) {
+    function done() {
+      if (!btn) return;
+      var old = btn.textContent;
+      btn.textContent = "已复制 ✓";
+      setTimeout(function () { btn.textContent = old; }, 1200);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+      return;
+    }
+    fallback();
+    function fallback() {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      } catch (e) {
+        if (btn) btn.textContent = "复制失败，请手动选中";
+      }
+    }
+  }
+
+  /* ── 第 1 步：建项目（key_label 必填 —— 空 ⇒ 前端拦住，⛔ 不发请求） ── */
+  function wizStepCreate() {
+    var w = h("div");
+    w.appendChild(field("项目名 *", "wiz-name",
+      "小写字母 / 数字 / 连字符 / 下划线，2–63 位。⛔ 建好不可改名。", W.name));
+    w.appendChild(field("备注", "wiz-label", "可选，例如：生产资源本体", W.label));
+    w.appendChild(field("这把 key 给谁用 *", "wiz-keylabel",
+      "一项目一把 key。写清用途，审计才追得到人（必填）。", W.keyLabel));
+    if (W.err) w.appendChild(alertBox("err", W.err));
+    return w;
+  }
+
+  function doCreate() {
+    var n = byId("wiz-name"), l = byId("wiz-label"), k = byId("wiz-keylabel");
+    W.name = String(n ? n.value : "").trim();
+    W.label = String(l ? l.value : "").trim();
+    W.keyLabel = String(k ? k.value : "").trim();
+    W.err = "";
+    if (!/^[a-z0-9][a-z0-9_-]{1,62}$/.test(W.name)) {
+      W.err = "项目名不合法：小写字母 / 数字 / 连字符 / 下划线，2–63 位（不能以 - 或 _ 开头）。";
+      renderWizard();
+      return;
+    }
+    if (!W.keyLabel) {
+      /* ⭐ AC-d3：这里返回 ⇒ 一次 fetch 都不发（探针数的是请求条数） */
+      W.err = "「这把 key 给谁用」必填 —— 它是审计归属，不填就不创建。";
+      renderWizard();
+      return;
+    }
+    var payload = { project: W.name, key_label: W.keyLabel };
+    if (W.label) payload.label = W.label;
+    setOpsHint("正在创建项目 " + W.name + " …");
+    apiSend("POST", API.projects, JSON.stringify(payload), "application/json").then(function (out) {
+      W.created = true;
+      W.key = out.key || "";
+      W.keyLabel = out.key_label || W.keyLabel;
+      W.step = 2;
+      setOpsHint("");
+      refreshProjectsQuiet().then(function () {
+        OPS.current = findProject(W.name) || OPS.current;
+        renderProjectPick();
+      });
+      renderWizard();
+    }).catch(function (e) {
+      setOpsHint("");
+      W.err = errText(e);
+      renderWizard();
+    });
+  }
+
+  /* ── 第 2 步：上传（octet-stream，body = File.arrayBuffer()） ───── */
+  function wizStepUpload() {
+    var w = h("div");
+    if (W.key) {
+      w.appendChild(alertBox("ok", "项目 " + W.name + " 已创建。这是它的一次性 key（只显示这一次）："));
+      w.appendChild(keyBox(W.key, W.keyLabel, "之后可在顶栏「查看 key」再拿（每次写一条审计）。"));
+    } else {
+      w.appendChild(alertBox("info", "向项目 " + (W.name || "—") + " 上传构建包。"));
+    }
+    var file = h("input", { class: "fld-input", id: "wiz-file", type: "file", accept: ".ontokbundle,application/octet-stream" });
+    w.appendChild(h("label", { class: "fld" }, [h("span", { class: "fld-label", text: "构建包（.ontokbundle）*" }), file]));
+    var up = h("button", { class: "btn btn-primary", id: "wiz-upload", text: W.uploading ? "上传中…" : "选择并上传" });
+    up.disabled = !!W.uploading;
+    up.addEventListener("click", doUpload);
+    w.appendChild(h("div", { class: "btn-row" }, [up]));
+    if (W.uploadError) w.appendChild(alertBox("err", W.uploadError));
+    if (W.uploaded) {
+      w.appendChild(alertBox("ok", "✓ 上传完成：manifest 校验通过、files[] 的 sha256 全部匹配、project 与接收项目一致。"
+        + " bundle_id=" + W.bundleId));
+      var t = h("table", { class: "tbl" });
+      t.appendChild(h("tr", {}, [
+        h("th", { text: "项" }), h("th", { text: "值" })
+      ]));
+      [
+        ["体积", num(W.uploaded.bytes) + " 字节"],
+        ["整包 sha256", String(W.uploaded.bundle_sha256 || "").slice(0, 16) + "…"],
+        ["要不要 DSN", W.requiresDb ? "要（requires_db = true）" : "不要"],
+        ["类 / 关系", num((W.uploaded.counts || {}).entity_types) + " 类 / " + num((W.uploaded.counts || {}).link_types) + " 关系"]
+      ].forEach(function (r) {
+        t.appendChild(h("tr", {}, [h("th", { text: r[0] }), h("td", { class: "mono", text: r[1] })]));
+      });
+      w.appendChild(t);
+    }
+    return w;
+  }
+
+  function doUpload() {
+    var input = byId("wiz-file");
+    var f = (input && input.files && input.files[0]) ? input.files[0] : null;
+    W.uploadError = "";
+    if (!f) { W.uploadError = "先选一个 .ontokbundle 文件。"; renderWizard(); return; }
+    W.uploading = true;
+    setOpsHint("正在上传 " + (f.name || "构建包") + " …");
+    renderWizard();
+    readFileBytes(f).then(function (buf) {
+      /* ⭐ AC-d4：Content-Type 是 octet-stream，body 是**原始字节**（⛔ 不是 multipart） */
+      return apiSend("POST", projBase(W.name) + "/bundles", buf, "application/octet-stream");
+    }).then(function (out) {
+      W.uploading = false;
+      W.uploaded = out || {};
+      W.bundleId = String((out && out.bundle_id) || "");
+      W.requiresDb = !!(out && out.requires_db);
+      setOpsHint("");
+      /* ⛔ 不自动跳到下一步：上传的回执（体积 / sha256 / 要不要 DSN / 计数）要留在眼前，
+         由用户点「下一步」再走。跳过去等于把刚做完那一步的证据藏了。 */
+      renderWizard();
+    }).catch(function (e) {
+      W.uploading = false;
+      setOpsHint("");
+      W.uploadError = errText(e);
+      renderWizard();
+    });
+  }
+
+  /* File → 原始字节（ArrayBuffer）。`fetch` 直接接受它当 body。 */
+  function readFileBytes(f) {
+    if (f && typeof f.arrayBuffer === "function") return f.arrayBuffer();
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(r.result); };
+      r.onerror = function () { reject(new Error("读文件失败")); };
+      r.readAsArrayBuffer(f);
+    });
+  }
+
+  /* ── 第 3 步：DSN（只有 requires_db 才来这一步） ────────────────── */
+  function wizStepDsn() {
+    var w = h("div");
+    w.appendChild(alertBox("warn", "包里 db.requires_dsn = true ⇒ 不配通**不允许解析**（服务端也会拒）。"));
+    var sel = h("select", { class: "fld-input", id: "wiz-dialect" }, [
+      h("option", { value: "postgresql", text: "PostgreSQL（v1 只支持这一种）" })
+    ]);
+    w.appendChild(h("label", { class: "fld" }, [h("span", { class: "fld-label", text: "类型" }), sel]));
+    w.appendChild(field("DSN *", "wiz-dsn",
+      "加密存元数据库。⛔ 保存后不再回显，日志里也没有。", W.dsn, "password"));
+    var save = h("button", { class: "btn btn-primary", id: "wiz-dsn-save", text: W.dbSaving ? "连接中…" : "保存并测试连通性" });
+    save.disabled = !!W.dbSaving;
+    save.addEventListener("click", doSaveAndTest);
+    w.appendChild(h("div", { class: "btn-row" }, [save]));
+    if (W.dbSaving) w.appendChild(h("div", { class: "fld-tip", text: "正在连一次性探测（只读、只 SELECT version()）…" }));
+    if (W.dbTested) {
+      if (W.dbOk) {
+        var r = W.dbResult || {};
+        w.appendChild(alertBox("ok", "✓ 连通性通过：" + num(r.latency_ms) + " ms · "
+          + (r.server_version || "PostgreSQL") + " —— 现在可以解析了。"));
+      } else {
+        var er = (W.dbResult && W.dbResult.error) || null;
+        w.appendChild(alertBox("err", "✕ 连通性没通过：" + (er ? (er.code + "：" + er.message) : W.dbError)
+          + " —— 解析按钮仍然是灰的。"));
+      }
+    }
+    return w;
+  }
+
+  function doSaveAndTest() {
+    var d = byId("wiz-dsn");
+    W.dsn = String(d ? d.value : "").trim();
+    if (!W.dsn) { W.dbError = "先填 DSN。"; renderWizard(); return; }
+    W.dbSaving = true;
+    W.dbTested = false;
+    W.dbOk = false;
+    renderWizard();
+    setOpsHint("正在保存 DSN 并测试连通性…");
+    apiSend("PUT", projBase(W.name) + "/database",
+      JSON.stringify({ dsn: W.dsn, dialect: "postgresql" }), "application/json")
+      .then(function () {
+        return apiSend("POST", projBase(W.name) + "/database/test", null, null);
+      })
+      .then(function (t) {
+        W.dbSaving = false;
+        W.dbTested = true;
+        /* 测连通**失败也 200**：结论在 `ok` 上，不在状态码上 */
+        W.dbResult = t || {};
+        W.dbOk = !!(t && t.ok === true);
+        W.dbError = W.dbOk ? "" : "服务端说没通过（ok=false）";
+        setOpsHint("");
+        renderWizard();
+      })
+      .catch(function (e) {
+        W.dbSaving = false;
+        W.dbTested = true;
+        W.dbOk = false;
+        W.dbError = errText(e);
+        setOpsHint("");
+        renderWizard();
+      });
+  }
+
+  /* ── 第 4 步：解析（already_imported:true 是**成功**） ─────────── */
+  function wizStepImport() {
+    var w = h("div");
+    w.appendChild(alertBox("info", "单事务：中途失败一个字节都不落。解析成功 ≠ 对外生效（激活才生效）。"));
+    if (W.requiresDb && !W.dbOk) {
+      w.appendChild(alertBox("warn", "这个包 requires_db = true，而 DSN 还没测通 ⇒ 解析按钮是灰的。先在「配置 DB」测通。"));
+    }
+    var bar = h("div", { class: "bar" }, [
+      h("i", { class: "bar-fill" + (W.imported ? " is-full" : "") })
+    ]);
+    w.appendChild(bar);
+    var btn = h("button", { class: "btn btn-primary", id: "wiz-import", text: W.importing ? "解析中…" : (W.imported ? "再解析一次" : "开始解析") });
+    /* ⭐ AC-d5 的那道门：requires_db 且没测通 ⇒ **disabled** */
+    btn.disabled = !!W.importing || (W.requiresDb && !W.dbOk);
+    btn.addEventListener("click", doImport);
+    w.appendChild(h("div", { class: "btn-row" }, [btn]));
+    if (W.importing) w.appendChild(h("div", { class: "fld-tip", text: "正在解析入库（单事务）…" }));
+    if (W.importError) w.appendChild(alertBox("err", W.importError));
+    if (W.imported) {
+      var im = W.imported;
+      var c = im.counts || {};
+      /* ⭐ AC-d6：already_imported 是**幂等成功** —— 同一个分支、同一句「成功」，
+         ⛔ 不进错误分支、⛔ 不清状态、⛔ 不禁用下一步 */
+      w.appendChild(alertBox("ok", im.already_imported
+        ? ("✓ 这个包已经解析过（幂等成功）：沿用版本 v" + im.version + "，没有重复建版本。")
+        : ("✓ 解析成功 → 新版本 v" + im.version + "（未冻结，对外还不可见）。")));
+      var t = h("table", { class: "tbl" });
+      t.appendChild(h("tr", {}, [h("th", { text: "计数" }), h("th", { text: "值" })]));
+      [
+        ["对象类型", num(c.entity_types)],
+        ["关系类型", num(c.link_types)],
+        ["属性", num(c.properties)],
+        ["动作 / 函数", num(c.action_types) + " / " + num(c.functions)],
+        ["概念组", num(c.concept_groups)]
+      ].forEach(function (r) {
+        t.appendChild(h("tr", {}, [h("th", { text: r[0] }), h("td", { class: "mono", text: String(r[1]) })]));
+      });
+      w.appendChild(t);
+      if (im.warnings && im.warnings.length) {
+        w.appendChild(alertBox("warn", "warnings（" + im.warnings.length + " 条）：" + im.warnings.join(" / ")));
+      }
+    }
+    return w;
+  }
+
+  function doImport() {
+    if (W.requiresDb && !W.dbOk) return;   /* 按钮已经 disabled；这里是第二道保险 */
+    W.importing = true;
+    W.importError = "";
+    renderWizard();
+    setOpsHint("正在解析 " + W.bundleId + " …");
+    apiSend("POST", projBase(W.name) + "/bundles/" + encodeURIComponent(W.bundleId) + "/import", null, null)
+      .then(function (out) {
+        W.importing = false;
+        W.imported = out || {};
+        setOpsHint("");
+        renderWizard();
+      })
+      .catch(function (e) {
+        W.importing = false;
+        setOpsHint("");
+        W.importError = errText(e);
+        renderWizard();
+      });
+  }
+
+  /* ── 第 5 步：激活（二次确认，文案写明「会影响对外服务」） ────── */
+  function wizStepActivate() {
+    var w = h("div");
+    var cur = OPS.current || {};
+    var t = h("table", { class: "tbl" });
+    [
+      ["项目", W.name || "—"],
+      ["新版本", W.imported ? ("v" + W.imported.version) : "—"],
+      ["当前生效", (cur.active_version === null || cur.active_version === undefined)
+        ? "无（还没有生效版本）" : ("v" + cur.active_version)],
+      ["冻结", W.imported && W.imported.frozen ? "已冻结" : "未冻结"]
+    ].forEach(function (r) {
+      t.appendChild(h("tr", {}, [h("th", { text: r[0] }), h("td", { class: "mono", text: r[1] })]));
+    });
+    w.appendChild(t);
+
+    if (W.activated) {
+      w.appendChild(alertBox("ok", "✓ 已激活：项目 " + W.name + " 现在对外服务的是 v" + W.activated.version + "。"));
+      w.appendChild(h("div", { class: "auditnote", text: "旧版本仍然冻结可查（回滚是 P1c-3 的事）。" }));
+      return w;
+    }
+    w.appendChild(alertBox("info", "解析 ≠ 生效：点「冻结并激活」才会把项目指针指到这一版。旧版本仍冻结可查。"));
+    var ask = h("button", { class: "btn btn-danger", id: "wiz-ask-activate", text: W.activating ? "激活中…" : "冻结并激活" });
+    ask.disabled = !!W.activating || !W.imported;
+    ask.addEventListener("click", function () { W.confirmActivate = true; renderWizard(); });
+    w.appendChild(h("div", { class: "btn-row" }, [ask]));
+
+    if (W.confirmActivate) {
+      var box = h("div", { class: "confirm", id: "wiz-confirm" });
+      box.appendChild(h("p", { text: "⚠️ 再确认一次：激活会**影响对外服务** —— 数字员工的下一次请求就会读到 v"
+        + (W.imported ? W.imported.version : "?") + "。确认冻结并激活？" }));
+      var row = h("div", { class: "btn-row" });
+      var yes = h("button", { class: "btn btn-danger", id: "wiz-do-activate", text: "确认激活（会影响对外服务）" });
+      yes.addEventListener("click", doActivate);
+      var no = h("button", { class: "btn btn-ghost", id: "wiz-cancel-activate", text: "再想想" });
+      no.addEventListener("click", function () { W.confirmActivate = false; renderWizard(); });
+      row.appendChild(yes);
+      row.appendChild(no);
+      box.appendChild(row);
+      w.appendChild(box);
+    }
+    if (W.activateError) w.appendChild(alertBox("err", W.activateError));
+    return w;
+  }
+
+  function doActivate() {
+    W.confirmActivate = false;
+    W.activating = true;
+    W.activateError = "";
+    renderWizard();
+    setOpsHint("正在激活 v…（会改对外服务）");
+    apiSend("POST", projBase(W.name) + "/bundles/" + encodeURIComponent(W.bundleId) + "/activate", null, null)
+      .then(function (out) {
+        W.activating = false;
+        W.activated = out || {};
+        setOpsHint("");
+        renderWizard();
+        /* 激活之后**立刻**把图换成新版本（否则用户看到的还是旧的一版） */
+        return refreshProjectsQuiet().then(function () {
+          return reloadCatalog(W.name, function () {
+            showBanner("ok", "项目 " + W.name + " 已激活 v" + (W.activated ? W.activated.version : "?")
+              + "：图已刷新为这一版。");
+          });
+        });
+      })
+      .catch(function (e) {
+        W.activating = false;
+        setOpsHint("");
+        W.activateError = errText(e);
+        renderWizard();
+      });
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+     查看 key（独立弹窗；固定一行「本次查看会记录一条审计」）
+     ══════════════════════════════════════════════════════════════ */
+
+  function ensureKeyModal() {
+    var m = byId("key-modal");
+    if (m) return m;
+    m = h("div", { class: "modal", id: "key-modal" }, [
+      h("div", { class: "modal-card is-narrow" }, [
+        h("div", { class: "modal-head" }, [
+          h("h2", { class: "modal-title", text: "查看 key" }),
+          h("div", { class: "modal-sub", text: "admin 才能看；每次查看都会写一条审计。" })
+        ]),
+        h("div", { class: "modal-body", id: "key-body" }),
+        h("div", { class: "modal-foot", id: "key-foot" })
+      ])
+    ]);
+    document.body.appendChild(m);
+    return m;
+  }
+
+  function openKeyModal() {
+    if (!OPS.admin) {
+      showBanner("err", "需要 admin key：查看 key 也要求 admin（每次查看写一条审计）。");
+      return;
+    }
+    KEYM.open = true;
+    KEYM.loading = true;
+    KEYM.data = null;
+    KEYM.error = "";
+    var m = ensureKeyModal();
+    m.classList.add("is-open");
+    renderKeyModal();
+    doRevealKey();
+  }
+
+  function closeKeyModal() {
+    KEYM.open = false;
+    var m = byId("key-modal");
+    if (m) m.classList.remove("is-open");
+  }
+
+  function renderKeyModal() {
+    var body = byId("key-body");
+    var foot = byId("key-foot");
+    if (!body || !foot) return;
+    clear(body);
+    clear(foot);
+
+    var name = (OPS.current && OPS.current.name) || "—";
+    if (KEYM.loading) {
+      body.appendChild(alertBox("info", "正在读取项目 " + name + " 的 key…"));
+    } else if (KEYM.error) {
+      body.appendChild(alertBox("err", KEYM.error));
+    } else if (KEYM.data) {
+      body.appendChild(alertBox("info", "项目 " + KEYM.data.project + " · 用途 "
+        + (KEYM.data.label || "（没写）")));
+      body.appendChild(keyBox(KEYM.data.key, KEYM.data.label,
+        "创建于 " + String(KEYM.data.created_at || "—")));
+    }
+    /* 固定一行（有没有 key 都显示）：这是「可查看」的唯一补偿 */
+    body.appendChild(h("div", {
+      class: "auditnote",
+      id: "key-audit-note",
+      text: "本次查看会记录一条审计（action=reveal_key）。"
+    }));
+
+    var close = h("button", { class: "btn btn-ghost", text: "关闭" });
+    close.addEventListener("click", closeKeyModal);
+    foot.appendChild(close);
+    foot.appendChild(h("div", { class: "spacer" }));
+    var cp = h("button", { class: "btn btn-primary", id: "key-copy", text: "复制" });
+    cp.disabled = !(KEYM.data && KEYM.data.key);
+    cp.addEventListener("click", function () {
+      if (KEYM.data && KEYM.data.key) copyText(KEYM.data.key, cp);
+    });
+    foot.appendChild(cp);
+  }
+
+  function doRevealKey() {
+    var name = (OPS.current && OPS.current.name) || "";
+    if (!name) {
+      KEYM.loading = false;
+      KEYM.error = "先选一个项目。";
+      renderKeyModal();
+      return;
+    }
+    apiSend("GET", projBase(name) + "/key", null, null).then(function (v) {
+      KEYM.loading = false;
+      KEYM.data = v || null;
+      renderKeyModal();
+    }).catch(function (e) {
+      KEYM.loading = false;
+      if (e && e.status === 404) {
+        KEYM.error = "服务端未就绪：查看 key 的接口不在（404）。";
+      } else if (e && e.status === 403) {
+        KEYM.error = "需要 admin key：" + (e.code || "403") + "（当前口令没有写面权限）。";
+      } else if (e && e.unauthorized) {
+        KEYM.error = "口令无效或已过期（401）—— 重新输入口令后再试。";
+      } else {
+        KEYM.error = "读取 key 失败：" + errText(e);
+      }
+      renderKeyModal();
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════
      装配
      ══════════════════════════════════════════════════════════════ */
 
   function renderAll() {
-    /* 顶部 */
     var h0 = S.health || {};
     /* 加载态期间 tab 是 disabled 的（壳里没有数据可切）；数据到了才打开。 */
     Array.prototype.slice.call(document.querySelectorAll("#tabs button")).forEach(function (b) {
       b.disabled = false;
     });
-    setText("crumb-project", h0.project || "—");
-    setText("crumb-sub", h0.ontology_version !== undefined && h0.ontology_version !== null
-      ? "第 " + h0.ontology_version + " 版 · 已冻结" : "—");
+    /* 顶部（项目名/版本由顶栏那个下拉显示：OPS.current 优先，其次 health） */
+    renderProjectPick();
     var modeBox = byId("badge-mode");
     if (modeBox) {
       modeBox.hidden = false;
@@ -1424,6 +2422,43 @@
       if (e.key === "Enter") { e.preventDefault(); byId("token-connect").click(); }
     });
     byId("token-forget").addEventListener("click", forgetToken);
+
+    /* ⭐ REQ-159 P1c-2 · 顶栏入口（默认全 disabled，admin 判定通过后才打开） */
+    byId("proj-pick").addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (!OPS.admin) return;
+      toggleProjectMenu();
+    });
+    byId("proj-add").addEventListener("click", function () { openWizard(1); });
+    byId("bundle-open").addEventListener("click", function () {
+      if (!OPS.admin) return;
+      if (!OPS.current) { showBanner("err", "先建一个项目（顶栏 ＋），再上传构建包。"); return; }
+      openWizard(2);
+    });
+    byId("key-view").addEventListener("click", openKeyModal);
+
+    /* 点别处收起项目菜单（菜单本身的事件 stopPropagation） */
+    document.addEventListener("click", function (e) {
+      if (e && e.target && e.target.closest && e.target.closest(".projsel")) return;
+      closeProjectMenu();
+    });
+    var menu = byId("proj-menu");
+    if (menu) menu.addEventListener("click", function (e) { e.stopPropagation(); });
+
+    /* ⛔ 向导/查看 key **只能通过「取消」或「关闭」退出**：ESC 明确不生效
+       （与样机 v2 同一口径 —— 用户点过一次才发现「咦，填的都丢了」）。 */
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" && e.key !== "Esc") return;
+      if (!W.open && !KEYM.open) return;
+      e.preventDefault();
+      if (W.open) {
+        var sub = byId("wiz-sub");
+        if (sub) sub.textContent = "按「取消」关闭这个向导（ESC 与点遮罩都不生效）。";
+      }
+    });
+
+    applyOpsGate();
+    renderProjectPick();
 
     [byId("v-graph"), byId("v-catalog"), byId("v-query")].forEach(function (el) {
       if (el) el.classList.remove("is-on");

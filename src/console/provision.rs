@@ -182,6 +182,85 @@ fn clean_label(raw: Option<&str>, what: &'static str, required: bool) -> Result<
     Ok(Some(t.to_string()))
 }
 
+// ══════════════════════════════════════════════════════════════
+// ⓪ GET /api/projects —— 列表（Studio 顶栏的项目下拉）
+// ══════════════════════════════════════════════════════════════
+
+/// 列表里的一行 —— **Studio 顶栏直接吃这个形状**（REQ-159 P1c-2）。
+///
+/// ⛔ 这里没有 DSN、没有 key、没有密文，也没有项目 `id`：
+/// 下拉只需要「叫什么 / 给谁看 / 第几版 / 多大」，多一个字段就是多一条泄漏面。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectListEntry {
+    /// 项目名（Studio 切换时作为 `?project=` 的值）。
+    pub name: String,
+    /// 项目备注（`POST /api/projects` 的 `label`）；没写 ⇒ `null`。
+    pub label: Option<String>,
+    /// 生效版本的 `seq`；**还没激活过任何一版 ⇒ `null`**（⛔ 不是 0、不是报错）。
+    pub active_version: Option<i32>,
+    /// 生效版本是否已冻结（激活必然冻结；没有生效版本 ⇒ `false`）。
+    pub frozen: bool,
+    /// 生效版本快照里的对象类型数（没有生效版本 ⇒ 0）。
+    pub entity_types: i64,
+    /// 生效版本快照里的关系类型数（没有生效版本 ⇒ 0）。
+    pub link_types: i64,
+}
+
+/// `GET /api/projects` 的回执（只包一层 `projects`：形状定死，前端不许再猜）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectListOutcome {
+    pub projects: Vec<ProjectListEntry>,
+}
+
+/// `GET /api/projects` —— 全部项目（**admin 才能调**，门在 [`crate::query::http`]）。
+///
+/// # 三条实现约束（都是判据）
+///
+/// 1. **一条 SQL**：`projects LEFT JOIN ontology_versions` + 两个 `count(*)` 子查询。
+///    ⛔ 不逐个项目调 [`PgStore::get_snapshot`] —— 那会对每个项目跑 5 条查询并把整份
+///    快照反序列化一遍，只为拿两个数字。
+/// 2. **没有生效版本不报错**：`active_version_id IS NULL` ⇒ `seq` 为 `null`、
+///    `frozen` 为 `false`，两个计数子查询自然为 0（`version_id = NULL` 匹配不到行）。
+///    ⛔ 不返回 503 `project.no_active_version` —— 那会让「刚建好的项目」在下拉里消失。
+/// 3. **计数取生效版本的快照**（`object_types` / `link_types` 的**行**），
+///    不是包里 `manifest` 的声明：要么是这一版真在服务的内容，要么是 0。
+pub async fn list_projects(pool: &PgPool) -> Result<ProjectListOutcome, OpError> {
+    let rows: Vec<(String, Option<String>, Option<i32>, bool, i64, i64)> = sqlx::query_as(
+        "SELECT p.name,
+                p.label,
+                v.seq,
+                (v.frozen_at IS NOT NULL) AS frozen,
+                (SELECT count(*) FROM object_types o
+                  WHERE o.version_id = p.active_version_id) AS entity_types,
+                (SELECT count(*) FROM link_types l
+                  WHERE l.version_id = p.active_version_id) AS link_types
+           FROM projects p
+           LEFT JOIN ontology_versions v ON v.id = p.active_version_id
+          ORDER BY p.name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(OpError::db)?;
+
+    Ok(ProjectListOutcome {
+        projects: rows
+            .into_iter()
+            .map(
+                |(name, label, active_version, frozen, entity_types, link_types)| {
+                    ProjectListEntry {
+                        name,
+                        label,
+                        active_version,
+                        frozen,
+                        entity_types,
+                        link_types,
+                    }
+                },
+            )
+            .collect(),
+    })
+}
+
 /// `POST /api/projects`。
 pub async fn create_project(
     pool: &PgPool,
@@ -972,4 +1051,82 @@ pub async fn activate_bundle(
         active_version_id: version_id,
         state: State::Activated.as_str(),
     })
+}
+
+// ══════════════════════════════════════════════════════════════
+// 判据（纯函数：不连库）
+// ══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⭐ **AC-d1 的形状判据**：`GET /api/projects` 的一行**只有那 6 个字段**
+    /// （`name` / `label` / `active_version` / `frozen` / `entity_types` / `link_types`）。
+    ///
+    /// 为什么要在**序列化**这一层钉：这个回执是 Studio 顶栏下拉的数据源，而它同时
+    /// 经过 admin 门。多一个字段（`dsn_ciphertext` / `token_sha256` / 项目 `id`）不会
+    /// 让任何用例变红 —— 只有「逐键比对」会。
+    ///
+    /// 变异（红）：给 [`ProjectListEntry`] 加 `pub dsn: Option<String>` ⇒ 本用例红。
+    #[test]
+    fn a_project_list_row_carries_exactly_six_fields_and_no_secret() {
+        let v = serde_json::to_value(ProjectListEntry {
+            name: "cloud-resource".into(),
+            label: Some("腾讯云资源本体".into()),
+            active_version: Some(5),
+            frozen: true,
+            entity_types: 30,
+            link_types: 34,
+        })
+        .expect("序列化");
+        let mut keys: Vec<&str> = v
+            .as_object()
+            .expect("对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "active_version",
+                "entity_types",
+                "frozen",
+                "label",
+                "link_types",
+                "name"
+            ],
+            "回执字段变了 —— Studio 的下拉会把多出来的东西一起显示 / 或漏读"
+        );
+        let text = v.to_string();
+        for absent in ["dsn", "cipher", "token", "sha256", "secret"] {
+            assert!(
+                !text.to_ascii_lowercase().contains(absent),
+                "列表回执里出现了 {absent:?}：{text}"
+            );
+        }
+    }
+
+    /// ⭐ **AC-d1 的「没有生效版本」判据**：`active_version` 是 **`null`**、不是 0，
+    /// 计数是 0、`frozen` 是 `false` —— 前端据此显示「未激活」，而不是把 v0 当真。
+    ///
+    /// 变异（红）：把 `active_version: Option<i32>` 改成 `i32`（默认 0）⇒ 本用例红。
+    #[test]
+    fn a_project_without_an_active_version_serialises_as_null_not_zero() {
+        let v = serde_json::to_value(ProjectListEntry {
+            name: "my-ontology".into(),
+            label: None,
+            active_version: None,
+            frozen: false,
+            entity_types: 0,
+            link_types: 0,
+        })
+        .expect("序列化");
+        assert!(v["active_version"].is_null(), "{v}");
+        assert_eq!(v["frozen"], serde_json::json!(false));
+        assert_eq!(v["entity_types"], serde_json::json!(0));
+        assert_eq!(v["link_types"], serde_json::json!(0));
+        assert!(v["label"].is_null(), "没写备注 ⇒ null（不是空串）");
+    }
 }

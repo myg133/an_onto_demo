@@ -251,7 +251,11 @@ mod tests {
         assert!(!STUDIO_JS.contains("?token=") && !STUDIO_JS.contains("&token="));
     }
 
-    /// 页面**只**调既有端点（零新增接口）——把这条写成常量表，改一处就红。
+    /// 页面**只**调既有端点 —— 把这条写成常量表，改一处就红。
+    ///
+    /// ⭐ REQ-159 P1c-2 起 `/api/projects` **是**真端点了（ADR-013：8 条写面 + 这条
+    /// `GET` 挂在 `query serve` 上，Studio 调）。于是它从「⛔ 不许出现」挪到了
+    /// 「✅ 必须出现」，并补上 8 条写端点的拼装尾巴 —— 少一条就红。
     #[test]
     fn the_script_only_calls_the_existing_endpoints() {
         for path in [
@@ -259,13 +263,117 @@ mod tests {
             "/api/catalog",
             "/api/describe",
             "/api/sparql",
+            /* ⭐ REQ-159 P1c-2 · 顶栏项目下拉的数据源（GET，admin 才 200） */
+            "/api/projects",
         ] {
             assert!(STUDIO_JS.contains(path), "页面没有用到 {path}");
         }
+        /* 8 条写端点：`:p` 是运行时拼的，所以钉「前缀 + 尾巴」这一段拼装 */
+        for tail in [
+            "/bundles",
+            "/import",
+            "/activate",
+            "/database",
+            "/database/test",
+            "/key",
+        ] {
+            assert!(
+                STUDIO_JS.contains(tail),
+                "页面没有拼出写端点 {tail}（ADR-013 的 8 条里少了一条）"
+            );
+        }
         // ⛔ 没有 /api/graph 一类的新端点（ADR-010-A：图由前端从 catalog 自己算）。
-        for absent in ["/api/graph", "/api/portal", "/api/projects"] {
+        for absent in ["/api/graph", "/api/portal"] {
             assert!(!STUDIO_JS.contains(absent), "页面引用了不存在的端点 {absent}");
         }
+    }
+
+    /// ⭐ REQ-159 P1c-2 · **AC-d8 的静态那一半**：四个管理入口在壳里就是 `disabled` 的
+    /// 初始态 —— 页面**先**渲染出「存在但不可用」，admin 判定通过后才由 JS 打开。
+    ///
+    /// 为什么这条不能只靠 JS 保证：`index.html` 是首屏。如果按钮在 HTML 里是可点的、
+    /// 只等 JS 去禁用，那么「JS 还没跑完 / 报错」那一瞬间它就是**可点**的，
+    /// 而点下去会发一个必然 403 的请求。
+    ///
+    /// 变异（红）：把任一 `disabled` 从壳里删掉 ⇒ 本用例红。
+    #[test]
+    fn the_ops_entrypoints_are_disabled_in_the_shell_until_admin() {
+        for id in ["proj-pick", "proj-add", "bundle-open", "key-view"] {
+            let tag = INDEX_HTML
+                .lines()
+                .find(|l| l.contains(&format!("id=\"{id}\"")))
+                .unwrap_or_else(|| panic!("壳里没有 #{id}（顶栏入口丢了？）"));
+            assert!(
+                tag.contains("disabled"),
+                "#{id} 在壳里必须是 disabled（JS 还没判定 admin 之前不许点）：`{}`",
+                tag.trim()
+            );
+        }
+        /* 反空转：JS 里确实有「打开」的那一步（否则 disabled 永远不会解除 = 功能没做） */
+        assert!(
+            STUDIO_JS.contains("function applyOpsGate"),
+            "applyOpsGate 不见了：按钮永远不会被打开"
+        );
+        assert!(
+            STUDIO_JS.contains("setBtnDisabled(\"proj-add\", !on)"),
+            "applyOpsGate 没有管 proj-add"
+        );
+    }
+
+    /// ⭐ REQ-159 P1c-2 · **上传必须是原始字节**（AC-d4）：octet-stream + `arrayBuffer()`，
+    /// ⛔ 没有 `FormData` / `multipart`（那会让服务端在 zip 那一步报一个看不懂的错）。
+    #[test]
+    fn the_bundle_upload_sends_raw_bytes_not_multipart() {
+        assert!(
+            STUDIO_JS.contains("application/octet-stream"),
+            "上传没有用 octet-stream"
+        );
+        assert!(
+            STUDIO_JS.contains("arrayBuffer"),
+            "上传没有读文件的原始字节（File.arrayBuffer）"
+        );
+        for bad in ["FormData", "multipart/form-data"] {
+            assert!(!STUDIO_JS.contains(bad), "上传里出现了 {bad}（契约要求原始字节）");
+        }
+    }
+
+    /// ⭐ REQ-159 P1c-2 · **AC-d5 / d6 / d7 的三句话必须在页面上**（文案即判据）。
+    ///
+    /// - 解析按钮的门：`requiresDb && !dbOk` ⇒ disabled（少一个变量这道门就漏）
+    /// - 重复解析：`already_imported` 走**成功**文案（「幂等成功」）
+    /// - 激活二次确认：写明「会影响对外服务」
+    ///
+    /// 变异（红）：把 `W.requiresDb && !W.dbOk` 改成 `false` ⇒ 本用例红。
+    #[test]
+    fn the_irreversible_steps_carry_their_warning_texts() {
+        /* ⚠️ 这里钉的是**按钮那一行的完整表达式**，不是散落的 `W.requiresDb && !W.dbOk`
+           —— 后者在别处（doImport 的保险 + 提示文案）也出现，用松散的子串会让
+           「门禁被去掉」照样绿（实测过一次：去掉 disabled 上的门禁，松散断言仍通过）。 */
+        assert!(
+            STUDIO_JS.contains("btn.disabled = !!W.importing || (W.requiresDb && !W.dbOk)"),
+            "解析按钮没有再受 requires_db × 测通 的双门控（AC-d5）"
+        );
+        assert!(
+            STUDIO_JS.contains("already_imported") && STUDIO_JS.contains("幂等成功"),
+            "重复解析没有按「幂等成功」渲染（AC-d6）"
+        );
+        assert!(
+            STUDIO_JS.contains("会影响对外服务"),
+            "激活的二次确认没有写明「会影响对外服务」（AC-d7）"
+        );
+        assert!(
+            STUDIO_JS.contains("本次查看会记录一条审计"),
+            "查看 key 的固定提示丢了（每次查看都写审计）"
+        );
+        /* 反空转：这三句话必须真的渲染进 DOM（h(…text…) / alertBox），不是只躺在注释里 */
+        assert!(
+            STUDIO_JS.contains("alertBox(\"ok\""),
+            "没有成功提示的渲染点（幂等成功那句话会无处可去）"
+        );
+        assert!(
+            STUDIO_JS.contains("wiz-confirm"),
+            "二次确认的容器不在（确认框可能只在注释里）"
+        );
     }
 
     /// 三个文件都是**真内容**（空文件 / 被截断会让上面那些 grep 判据变成空转）。
