@@ -70,6 +70,11 @@ body::before {
 /* ── 顶栏 ─────────────────────────────────────────────────────────────── */
 .topbar {
   grid-area: top;
+  /* ⚠️ 必须显式抬层：`.topbar` 与 `.rail` 都有 backdrop-filter（各自形成层叠上下文），
+     而 `.rail` 在 DOM 里靠后 ⇒ 会画在顶栏之上，把项目下拉的左半边盖住
+     （2026-10-27 实测：下拉里的项目名看起来"前几个字被吃掉"）。 */
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 18px;
@@ -497,6 +502,9 @@ body.drawer-open .floaters { right: 408px; }
 }
 .q-head .spacer { flex: 1; }
 .q-btn {
+  /* 顶栏很挤时 flex 会把按钮压扁 ⇒ 文字换行（实测「上传构建包」被压成两行）。
+     按钮宽度只由内容决定，不许压缩、不许换行。 */
+  flex: none; white-space: nowrap;
   height: 26px; padding: 0 12px; border-radius: 7px; cursor: pointer;
   border: 1px solid rgba(110,200,255,0.4); background: var(--accent-soft);
   color: var(--accent); font-size: 12px; font-family: inherit;
@@ -601,6 +609,9 @@ body.drawer-open .floaters { right: 408px; }
 /* ── 顶栏：项目选择器 + ＋ + 操作提示 ─────────────────────────────────── */
 .projsel { display: flex; align-items: center; gap: 8px; position: relative; min-width: 0; }
 .proj-pick {
+  /* ⚠️ 必须 min-width:0 + overflow:hidden：两个子元素都是 nowrap，
+     不裁剪就会溢出按钮盒子，被右边的「＋」按钮盖住（2026-10-27 实测截图）。 */
+  min-width: 0; overflow: hidden;
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
   padding: 4px 26px 4px 10px; border: 1px solid transparent; border-radius: 8px;
   background: transparent; color: inherit; cursor: pointer; position: relative;
@@ -609,11 +620,11 @@ body.drawer-open .floaters { right: 408px; }
 .proj-pick:hover:not(:disabled) { border-color: var(--line-soft); background: var(--panel-2); }
 .proj-pick:disabled { cursor: default; opacity: 0.8; }
 .proj-pick-name {
-  font-size: 13px; font-weight: 600; max-width: 220px;
+  font-size: 13px; font-weight: 600; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .proj-pick-meta {
-  font-size: 11px; color: var(--text-3); max-width: 280px;
+  font-size: 11px; color: var(--text-3); max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .proj-pick-caret {
@@ -630,7 +641,10 @@ body.drawer-open .floaters { right: 408px; }
 }
 .proj-add:disabled { opacity: 0.4; cursor: not-allowed; }
 .proj-menu {
-  display: none; position: absolute; top: 44px; left: 0; min-width: 300px; z-index: 55;
+  display: none; position: absolute; top: 44px; left: 0; min-width: 300px;
+  /* 项目可能上千个 ⇒ 必须限高可滚动，否则下拉会超出视口底部（实测 2601 个项目） */
+  max-height: 62vh; overflow-y: auto; overscroll-behavior: contain;
+  z-index: 55;
   padding: 6px; border: 1px solid var(--line); border-radius: 12px;
   background: linear-gradient(180deg, #0d121b, #0a0e16);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
@@ -638,12 +652,13 @@ body.drawer-open .floaters { right: 408px; }
 .proj-menu.is-open { display: block; }
 .proj-menu-hd { font-size: 11px; color: var(--text-3); padding: 6px 9px 4px; }
 .proj-item {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
   padding: 7px 9px; border-radius: 7px; cursor: pointer;
 }
 .proj-item:hover { background: var(--panel-2); }
 .proj-item.is-cur { background: rgba(110, 200, 255, 0.14); }
-.proj-item-name { font-size: 12.5px; font-weight: 600; }
+.proj-item-name { font-size: 12.5px; font-weight: 600;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-item-meta { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
 .proj-hint {
   font-size: 11.5px; color: var(--warn); max-width: 340px; min-width: 0;

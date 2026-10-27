@@ -1700,7 +1700,7 @@
   function projectMeta(p) {
     if (!p) return "未连接";
     if (p.active_version === null || p.active_version === undefined) {
-      return "未激活 · " + num(p.entity_types) + " 类（先上传包并激活）";
+      return "未激活 · " + num(p.entity_types) + " 类 · 待上传";
     }
     return "第 " + p.active_version + " 版 · " + (p.frozen ? "已冻结" : "未冻结")
       + " · " + num(p.entity_types) + " 类 / " + num(p.link_types) + " 关系";
