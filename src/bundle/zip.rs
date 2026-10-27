@@ -84,6 +84,12 @@ pub enum ZipError {
     /// 名字写成 1 —— 读回来是另一个文件名，而 CRC 仍对得上，于是得到一个
     /// 「结构合法但内容错位」的容器，比直接拒难查得多。
     NameTooLong { path: String, bytes: usize },
+    /// entry 的压缩方法不是 store（method 0）。
+    ///
+    /// ⚠️ 单独一个变体（不是 [`ZipError::BadFormat`]）：这是「容器**不被支持**」，
+    /// 与「容器坏了」是两件事，下游要按 [`crate::bundle::code::UNSUPPORTED_COMPRESSION`]
+    /// 报（服务端同名码）。报成 manifest 不合规会让用户去改 manifest —— 改一百遍也没用。
+    UnsupportedCompression { index: usize, method: u16 },
     /// 容器结构坏（截断 / 签名不对 / 字段组合不受支持）。
     BadFormat(String),
 }
@@ -104,6 +110,11 @@ impl fmt::Display for ZipError {
                 "文件名有 {bytes} 字节，超过 65535（zip 的 name length 字段是 u16；\
                  本实现不做 zip64 扩展）：`{}…`",
                 path.chars().take(60).collect::<String>()
+            ),
+            ZipError::UnsupportedCompression { index, method } => write!(
+                f,
+                "第 {index} 个 entry 的压缩方法是 {method}，只认 0（store）\
+                 —— 本实现不写也不解 deflate / 其他压缩（契约要求 store-only）"
             ),
             ZipError::BadFormat(m) => write!(f, "容器结构不合规：{m}"),
         }
@@ -397,9 +408,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Entry>, ZipError> {
             )));
         }
         if method != METHOD_STORE {
-            return Err(ZipError::BadFormat(format!(
-                "第 {i} 个 entry 的压缩方法是 {method}，只认 0（store）"
-            )));
+            // ⚠️ 报**专门的**变体（不是 BadFormat）：下游要把它翻成
+            // `bundle.unsupported.compression`，而不是 `bundle.manifest.invalid`。
+            return Err(ZipError::UnsupportedCompression { index: i, method });
         }
         if csize != usize_ {
             return Err(ZipError::BadFormat(format!(
@@ -570,5 +581,31 @@ mod tests {
         let zip = write(&[(edge.clone(), b"x".to_vec())]).expect("65535 字节的名字应当能写");
         let back = read(&zip).expect("读不回来");
         assert_eq!(back[0].path, edge, "读回来的名字必须与被写的一字不差");
+    }
+
+    /// 「被压缩过」的 entry ⇒ [`ZipError::UnsupportedCompression`]（**不是** BadFormat）。
+    ///
+    /// 这条钉的是**码的来源**：下游要把它翻成 `bundle.unsupported.compression`，
+    /// 而 BadFormat 会被翻成 `bundle.manifest.invalid`（让人去改 manifest —— 没用）。
+    #[test]
+    fn a_deflated_entry_is_unsupported_compression_not_bad_format() {
+        let mut zip = write(&[("a.json".to_string(), b"1234567890".to_vec())]).unwrap();
+        // central directory 的 method 字段在固定部分的 +10（读的时候以它为准）。
+        let cd = zip
+            .windows(4)
+            .position(|w| w == &CENTRAL_SIG.to_le_bytes()[..])
+            .expect("找不到 central directory");
+        zip[cd + 10..cd + 12].copy_from_slice(&8u16.to_le_bytes()); // 8 = deflate
+        match read(&zip) {
+            Err(ZipError::UnsupportedCompression { index, method }) => {
+                assert_eq!(index, 0, "要点名是第几个 entry");
+                assert_eq!(method, 8, "要点名实际的 method");
+            }
+            other => panic!("压缩过的 entry 应当报 UnsupportedCompression，实际 {other:?}"),
+        }
+        // 文案必须说清「只认 0（store）」—— 用户照着它才知道该重新打包。
+        let msg = ZipError::UnsupportedCompression { index: 0, method: 8 }.to_string();
+        assert!(msg.contains("只认 0（store）"), "文案没点明 store：{msg}");
+        assert!(msg.contains('8'), "文案没点明实际 method：{msg}");
     }
 }

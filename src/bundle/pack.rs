@@ -102,7 +102,7 @@ impl DbInput {
 /// 打包输入 —— **全部已读好**（本模块不做任何 I/O）。
 #[derive(Debug, Clone)]
 pub struct PackInput {
-    /// 项目名（schema pattern `^[a-z0-9][a-z0-9-]{1,62}$`）。
+    /// 项目名（schema pattern [`PROJECT_NAME_PATTERN`] = `^[a-z0-9][a-z0-9_-]{1,62}$`）。
     pub project: String,
     /// 构建端这份本体的序号（`--version`）。
     pub ontology_seq: i32,
@@ -139,10 +139,16 @@ impl PackInput {
     }
 }
 
-/// 项目名是否符合 `manifest.schema.json` 的 pattern（`^[a-z0-9][a-z0-9-]{1,62}$`）。
+/// 项目名是否符合 `manifest.schema.json` 的 pattern（[`PROJECT_NAME_PATTERN`]）。
 ///
 /// 手写而不是用 regex crate（⛔ 不新增依赖），规则只有三条：
-/// 长度 2..=63、首字符是小写字母或数字、其余是小写字母 / 数字 / `-`。
+/// 长度 2..=63、首字符是小写字母或数字、其余是小写字母 / 数字 / `-` / `_`。
+///
+/// # ⚠️ 下划线是**后加的**（REQ-159 · 用户 + join 拍板 A）
+///
+/// 真实项目名里有 `anspire_real` 这种写法。只放宽 `_` 这一格，
+/// 其余照旧禁：大写（防与 URL 路径大小写规则打架）、空格、`/`、`.`、`..`、非 ASCII。
+/// ⛔ 别再往这张白名单里加字符 —— 项目名会进 manifest、URL 路径与审计日志。
 pub fn is_valid_project_name(p: &str) -> bool {
     let b = p.as_bytes();
     if b.len() < 2 || b.len() > 63 {
@@ -152,7 +158,7 @@ pub fn is_valid_project_name(p: &str) -> bool {
         return false;
     }
     b.iter()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_'))
 }
 
 /// 支持的数据源方言（与 `manifest.schema.json` 的 `dbComponent.dialect.enum` 一致）。
@@ -160,6 +166,15 @@ pub fn is_valid_project_name(p: &str) -> bool {
 /// ⚠️ **唯一一份**：打包端（拒绝非法的 `--db-dialect`）与自检端（校验 manifest）
 /// 读的是同一个常量 —— 两处各写一份迟早会漂移成「打得出来但过不了自检」。
 pub const DIALECTS: &[&str] = &["postgresql", "mysql", "sqlserver", "oracle"];
+
+/// 项目名的 pattern **原文** —— 报错文案里印的就是这一串。
+///
+/// ⚠️ 为什么要一个常量（REQ-159 · join 定位）：原来 pattern 在
+/// 「实现」和「两条错误文案」里各写一遍，改一处忘两处就成了
+/// **消息写旧 pattern、代码用新 pattern** —— 比不改更坏（用户照着旧 pattern
+/// 改名字，改完还是被拒）。现在文案直接引用它，想漂都漂不了。
+/// `cargo test` 里有用例钉着「代码接受/拒绝的集合」与这串 pattern 一致。
+pub const PROJECT_NAME_PATTERN: &str = "^[a-z0-9][a-z0-9_-]{1,62}$";
 
 // ───────────────── 源文件名 → 包内路径（**唯一**一份映射） ─────────────────
 
@@ -208,9 +223,9 @@ pub fn assemble(input: &PackInput) -> Result<Vec<u8>, PackError> {
     // ① 参数先拒 —— 打出来一个「自己都要拒」的包是最坏的交付物。
     if !is_valid_project_name(&input.project) {
         return Err(PackError::Invalid(format!(
-            "项目名 `{}` 不符合 schema 的 pattern `^[a-z0-9][a-z0-9-]{{1,62}}$`\
-             （小写字母/数字开头，允许小写字母/数字/连字符，总长 2..=63）",
-            input.project
+            "项目名 `{}` 不符合 schema 的 pattern `{}`\
+             （小写字母/数字开头，允许小写字母/数字/连字符/下划线，总长 2..=63）",
+            input.project, PROJECT_NAME_PATTERN
         )));
     }
     if input.ontology_seq < 1 {
@@ -397,17 +412,46 @@ fn count_am(bytes: &[u8]) -> Result<(usize, usize), PackError> {
 mod tests {
     use super::*;
 
-    /// 反空转：项目名 pattern 的三条规则各有一条正例与一条反例。
+    /// 反空转：项目名 pattern 的每条规则都各有一条正例与一条反例。
+    ///
+    /// ⚠️ REQ-159 · 用户 + join 拍板 A：`_` 从「拒绝」改成「允许」
+    /// （真实项目名 `anspire_real`）。本用例改成「先拒后放」的那一格也在册，
+    /// 免得下次有人凭印象把它改回去。
     #[test]
     fn project_name_pattern_matches_the_schema() {
-        for ok in ["ab", "cloud-resource", "a1", "x-9"] {
+        for ok in [
+            "ab",
+            "cloud-resource",
+            "a1",
+            "x-9",
+            "anspire_real", // ← 拍板 A 的动机：带下划线的真实项目名
+            "a_b",
+            "demo_3-x",
+        ] {
             assert!(is_valid_project_name(ok), "`{ok}` 应当合法");
         }
-        for bad in ["", "a", "Cloud-Resource", "1", "-abc", "a b", "cloud_resource", "中文"] {
+        for bad in [
+            "",             // 太短
+            "a",            // pattern 要求首字符 + 至少 1 个
+            "1",            // 同上
+            "-abc",         // 首字符不许是 `-`
+            "_abc",         // 首字符不许是 `_`
+            "A_bad",        // 大写
+            "a b",          // 空格
+            "a/b",          // 斜杠
+            "a.b",          // 点
+            "a..b",         // 双点
+            "中文",         // 非 ASCII
+            "anspire real", // 空格（用户口径的反例）
+            "anspire/real", // 斜杠（用户口径的反例）
+        ] {
             assert!(!is_valid_project_name(bad), "`{bad}` 应当被拒");
         }
-        // 63 = 合法上限；64 = 越界
+        // 63 = 合法上限；64 = 越界（下划线也走同一条长度规则）
         assert!(is_valid_project_name(&"a".repeat(63)));
         assert!(!is_valid_project_name(&"a".repeat(64)));
+        assert!(is_valid_project_name(&format!("a{}", "_".repeat(62))));
+        // pattern 原文必须与实现同步（文案里印的就是它）。
+        assert_eq!(PROJECT_NAME_PATTERN, "^[a-z0-9][a-z0-9_-]{1,62}$");
     }
 }

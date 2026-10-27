@@ -910,18 +910,56 @@ fn cli_wires_bundle_after_the_pre_connect_dispatch() {
     );
 }
 
+/// 构建端的 ZIP 是**手写**的：⛔ 不许为此引 `zip` crate、⛔ 不许用 `flate2` 压/解。
+///
+/// # ⚠️ 为什么这条判据从「Cargo.toml 里不许出现 flate2」改成了「构建端源码不许碰 flate2」
+///
+/// develop 上 `Cargo.toml` 已经有 `flate2 = "1"` / `ring = "0.17"` —— 那是**服务端
+/// 读包**（`src/console/bundle.rs`：第三方包可能是 deflate 的，必须能解）与
+/// DSN 加密列用的，有它们自己的登记说明（`Cargo.toml:89-105`）。
+/// 「构建端写包」与「服务端读包」是两条不同的纪律：
+///
+/// | 一侧 | 要求 | 判据 |
+/// | --- | --- | --- |
+/// | 构建端（本文件的 `src/bundle/`） | **store-only、手写、零压缩依赖** | 本用例扫源码 |
+/// | 服务端（`src/console/bundle.rs`） | 必须能读别人的 deflate 包 | 不在本单范围 |
+///
+/// ⇒ 判据换成更准的那一条：**`src/bundle/` 的代码里一行 flate2 都不许有**。
+/// 这比原来那条更贴题 —— 原来那条只能证明「没加依赖」，不能证明「没用压缩」。
 #[test]
 fn no_zip_crate_was_added() {
     let toml = repo_file("Cargo.toml");
-    for forbidden in ["zip =", "zip_rs", "flate2 =", "async_zip"] {
+    // ① 没有任何 zip crate（这才是「手写容器」的反面）。
+    for forbidden in ["zip =", "zip_rs", "async_zip"] {
         assert!(
             !toml.contains(forbidden),
-            "⛔ `Cargo.toml` 里出现了 `{forbidden}` —— 本单不许新增 crate（ZIP 是手写的）"
+            "⛔ `Cargo.toml` 里出现了 `{forbidden}` —— 构建端的 ZIP 是手写的"
         );
     }
     // 反空转：确认我们读到的确实是那份依赖段。
     assert!(toml.contains("[dependencies]"));
     assert!(toml.contains("serde_json = \"1\""));
+
+    // ② 构建端源码（去掉注释后）不许出现任何压缩 / 解压**实现**。
+    //
+    // ⚠️ 判据用**crate/类型符号**而不是 `deflate` / `Compression` 这种词：
+    // 本模块自己就有 `ZipError::UnsupportedCompression` 这个**拒绝压缩**的变体，
+    // 按词判会把「拒绝 deflate」判成「用了 deflate」—— 判据要盯**用了谁**，不是**提了谁**。
+    for file in [
+        "src/bundle/mod.rs",
+        "src/bundle/zip.rs",
+        "src/bundle/pack.rs",
+        "src/bundle/verify.rs",
+    ] {
+        let src = code_only(&repo_file(file));
+        for forbidden in ["flate2", "miniz_oxide", "ZipWriter", "ZipArchive"] {
+            assert!(
+                !src.contains(forbidden),
+                "⛔ `{file}` 的代码里出现了 `{forbidden}` —— 构建端只许 store（method 0），\
+                 压缩/解压是服务端读包的活"
+            );
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1073,5 +1111,187 @@ fn evidence_null_counts_as_missing() {
     assert!(
         verify(&bytes).ok,
         "`evidence: []` 必须放行（契约原文「存在（哪怕空数组）」）"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// F-1 · 项目名允许下划线（用户 + join 拍板 A）；F-2 · 凭据判据收紧
+// ══════════════════════════════════════════════════════════════
+
+/// **F-1**（正例）：`anspire_real` 带下划线 ⇒ pack 成功、verify 通过。
+///
+/// 动机是真实项目名里就有下划线；拍板 A 只放宽 `_` 这一格。
+#[test]
+fn project_name_with_underscore_packs_and_verifies() {
+    let mut i = input();
+    i.project = "anspire_real".to_string();
+    let bytes = assemble(&i).expect("`anspire_real` 应当打得出来");
+
+    let m = manifest_of(&bytes);
+    assert_eq!(m["project"], Value::from("anspire_real"));
+    // 项目名逐字进 manifest —— 服务端按它防串包，改一个字符都是另一件事。
+    let report = verify(&bytes);
+    assert!(report.ok, "带下划线的项目名必须过自检：{:?}", report.problems);
+    assert_eq!(report.summary.project.as_deref(), Some("anspire_real"));
+
+    // 只是允许 `_`，**不是**放开一切：首字符仍不许是 `_`。
+    let mut lead_underscore = input();
+    lead_underscore.project = "_anspire".to_string();
+    assert!(
+        assemble(&lead_underscore).is_err(),
+        "首字符是 `_` 仍应被拒（pattern 的第一个字符类没有 `_`）"
+    );
+}
+
+/// **F-1**（反例）：大写 / 空格 / 斜杠 —— 用户口径点名要仍拒的三种。
+#[test]
+fn project_name_still_rejects_uppercase_space_and_slash() {
+    for bad in ["Anspire_Real", "anspire real", "anspire/real"] {
+        let mut i = input();
+        i.project = bad.to_string();
+        let e = assemble(&i).expect_err(&format!("`{bad}` 应当打得出来才是错的"));
+        let msg = format!("{e}");
+        assert!(msg.contains("pattern"), "错误要点名 pattern：{msg}");
+        // 文案里的 pattern 必须是**新**的那一串（消息写旧 pattern 比不改更坏）。
+        assert!(
+            msg.contains("^[a-z0-9][a-z0-9_-]{1,62}$"),
+            "错误文案里的 pattern 不是新的：{msg}"
+        );
+        // 同样的名字塞进 manifest 也必须被 verify 拒（两端判据一致）。
+        let bytes = edit_manifest(&packed(), |m| {
+            m["project"] = Value::from(bad);
+        });
+        let report = verify(&bytes);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| p.code == code::MANIFEST_INVALID && p.path == "manifest.json.project"),
+            "`{bad}` 的 manifest 应当被 verify 拒：{:?}",
+            report.problems
+        );
+        let p = report
+            .problems
+            .iter()
+            .find(|p| p.path == "manifest.json.project")
+            .unwrap();
+        assert!(
+            p.message.contains("^[a-z0-9][a-z0-9_-]{1,62}$"),
+            "verify 文案里的 pattern 不是新的：{}",
+            p.message
+        );
+    }
+}
+
+/// **F-2 ①**：业务列名叫 `password` ⇒ **不告警**（这是 join 要消掉的稳定误报）。
+#[test]
+fn password_as_a_column_name_no_longer_warns() {
+    let schema = br#"{"tables":[{"name":"t_account","columns":[{"name":"password","type":"text"}]}]}"#.to_vec();
+    let bytes = replace_file(&packed(), "db/schema.json", schema);
+    let report = verify(&bytes);
+    assert!(report.ok, "只是列名叫 password，不该拒：{:?}", report.problems);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .all(|w| w.code != code::CREDENTIAL_SUSPECT),
+        "列名叫 `password` 不该报凭据：{:?}",
+        report.warnings
+    );
+}
+
+/// **F-2 ②**：真塞一个 `"password": "hunter2"` ⇒ **仍然告警**（哨兵没被撤掉）。
+///
+/// ⚠️ 仍是**警告级**：`ok` 必须为 `true`（v1 只告警不拒，契约 §三-5），
+/// 所以「exit 0」这件事在这里落成 `report.ok == true` + `warnings` 非空。
+#[test]
+fn password_with_a_value_still_warns() {
+    let leaky = br#"{"tables":[{"name":"t","password":"hunter2"}]}"#.to_vec();
+    let bytes = replace_file(&packed(), "db/schema.json", leaky);
+    let report = verify(&bytes);
+    assert!(report.ok, "警告不该让包变红（exit 0）：{:?}", report.problems);
+    let w = report
+        .warnings
+        .iter()
+        .find(|w| w.code == code::CREDENTIAL_SUSPECT)
+        .expect("`\"password\": \"hunter2\"` 必须仍然告警 —— 否则就是为消噪把哨兵撤了");
+    assert_eq!(w.path, "db/schema.json");
+    assert!(
+        w.message.contains("password"),
+        "要点名是哪个键：{}",
+        w.message
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// 容器码 · 压缩方法（服务端同名码 `bundle.unsupported.compression`）
+// ══════════════════════════════════════════════════════════════
+
+/// 被 deflate 重压过的包（method=8）⇒ `bundle.unsupported.compression`，**不是** manifest 不合规。
+///
+/// 复现路径与 BA 的实验一致：Python `zipfile` 用 `ZIP_DEFLATED` 重压一遍，
+/// 或 `zip -r` 再打一次 —— 容器还在、`manifest.json` 也完好，变的是 method 字节。
+/// 拒绝是**对**的（store-only 是契约），但码要说清「容器不被支持」：
+/// 报 `bundle.manifest.invalid` 会让人去改 manifest，改一百遍也没用。
+#[test]
+fn reject_unsupported_compression() {
+    const EOCD_LEN: usize = 22;
+
+    let mut bytes = packed();
+    // ① 从 EOCD 找到 central directory 起点（⛔ 不靠搜签名：内容里可能碰巧有那 4 个字节）。
+    let eocd = bytes.len() - EOCD_LEN;
+    assert_eq!(
+        u32::from_le_bytes([bytes[eocd], bytes[eocd + 1], bytes[eocd + 2], bytes[eocd + 3]]),
+        zip::EOCD_SIG,
+        "夹具不是一个以 EOCD 结尾的 zip"
+    );
+    let cd = u32::from_le_bytes([
+        bytes[eocd + 16],
+        bytes[eocd + 17],
+        bytes[eocd + 18],
+        bytes[eocd + 19],
+    ]) as usize;
+    assert_eq!(
+        u32::from_le_bytes([bytes[cd], bytes[cd + 1], bytes[cd + 2], bytes[cd + 3]]),
+        zip::CENTRAL_SIG
+    );
+
+    // ② 改 method：central entry 的 +10（读的时候以它为准），local header 的 +8 一起改更像真包。
+    bytes[cd + 10..cd + 12].copy_from_slice(&8u16.to_le_bytes());
+    bytes[8..10].copy_from_slice(&8u16.to_le_bytes());
+
+    // ③ 仍然是**拒**（exit 2），只是码换了。
+    let report = verify(&bytes);
+    assert!(!report.ok, "压缩过的包必须拒（⛔ 不许因为换码就放宽）");
+    let p = report
+        .problems
+        .iter()
+        .find(|p| p.code == code::UNSUPPORTED_COMPRESSION)
+        .unwrap_or_else(|| {
+            panic!(
+                "应当报 `bundle.unsupported.compression`，实际：{:?}",
+                report.problems.iter().map(|p| p.code).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(p.path, "(package)", "这是包级问题，不该指向某个包内文件");
+    assert!(
+        p.message.contains("只认 0（store）"),
+        "文案要点明只认 0（store）：{}",
+        p.message
+    );
+    assert!(p.message.contains('8'), "文案要点名实际的 method：{}", p.message);
+    assert!(
+        p.hint.contains("bundle pack"),
+        "改法要指向重新打包：{}",
+        p.hint
+    );
+    // ④ 码不能新旧混报：容器都没读进去，谈不上「manifest 不合规」。
+    assert!(
+        !report
+            .problems
+            .iter()
+            .any(|p| p.code == code::MANIFEST_INVALID),
+        "⛔ 同一个原因不该同时报成 manifest.invalid：{:?}",
+        report.problems
     );
 }

@@ -54,6 +54,13 @@
 //! | 7 | [`code::DSN_MISSING`] | `requires_dsn=true` 但服务端没配到可用 DSN | ⛔ **只有服务端**（构建端永远不该有 DSN） |
 //! | 8 | [`code::TOO_LARGE`] | 包体积超上限（默认 100 MB） | 构建端（提前避开）+ 服务端 |
 //!
+//! # 容器码（第 9 个，服务端同名）
+//!
+//! [`code::UNSUPPORTED_COMPRESSION`] —— entry 的**压缩方法不是 0（store）**。
+//! 这是「容器不被支持」，⛔ 不是 [`code::MANIFEST_INVALID`]：manifest 一个字节都还没读，
+//! 报 `manifest.invalid` 只会让人去改 manifest（改一百遍也没用）。
+//! 服务端（join）对同一场景用**同名码**，两边口径一致。
+//!
 //! 另有**三条构建端补充**的码（服务端也有它们的对应物）：
 //! [`code::EVIDENCE_MISSING`]（快照里的关系证据被视图吞了，**拒绝**）、
 //! [`code::CREDENTIAL_SUSPECT`]（**警告级**：v1 只告警不拒，见 demand §三-5）与
@@ -128,11 +135,22 @@ pub mod code {
     /// 8 · 包体积超上限。
     pub const TOO_LARGE: &str = "bundle.too_large";
 
-    /// 9（构建端补充）· 快照的关系证据缺失 —— 视图当快照用的那个坑。
+    /// 9 · **容器的压缩方法不是 store（method 0）**。
+    ///
+    /// store-only 是**契约**（demand §三：包内是原样字节，`bundle pack` 恒写 method 0），
+    /// 不是「本工具的偏好」。第三方重压成 deflate 的包 ⇒ 拒，但码要说清是
+    /// **容器不被支持**，而不是 [`MANIFEST_INVALID`]（那是「目录本身不合规」，
+    /// 一个字节都没读进去，混用会让下游去改 manifest —— 改一百遍也没用）。
+    ///
+    /// ⚠️ 服务端（join）在同一场景用**同名码**，两边口径一致；
+    /// 别在服务端改叫 `bundle.zip.method` 之类的名字。
+    pub const UNSUPPORTED_COMPRESSION: &str = "bundle.unsupported.compression";
+
+    /// 10（构建端补充）· 快照的关系证据缺失 —— 视图当快照用的那个坑。
     pub const EVIDENCE_MISSING: &str = "bundle.snapshot.evidence_missing";
-    /// 10（构建端补充）· 包内疑似凭据 —— **警告级**，v1 只告警不拒。
+    /// 11（构建端补充）· 包内疑似凭据 —— **警告级**，v1 只告警不拒。
     pub const CREDENTIAL_SUSPECT: &str = "bundle.credential.suspect";
-    /// 11（构建端补充）· `manifest.json` 不是第一个 entry —— **警告级**。
+    /// 12（构建端补充）· `manifest.json` 不是第一个 entry —— **警告级**。
     ///
     /// 契约只把「manifest 第一个」写成**打包端**的产出规范，**没**把它列为
     /// 服务端的硬拒绝条件 ⇒ 这里只提示。⛔ 别把它升成拒绝：那会因为一条
@@ -149,6 +167,7 @@ pub mod code {
         PATH_ILLEGAL,
         DSN_MISSING,
         TOO_LARGE,
+        UNSUPPORTED_COMPRESSION,
         EVIDENCE_MISSING,
         CREDENTIAL_SUSPECT,
         MANIFEST_NOT_FIRST,
