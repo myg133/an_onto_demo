@@ -23,3 +23,20 @@ QA 实测：`console::http::build_router` **还在**、**仍被 `review open` �
 ### 另一条要记的（非阻断）
 
 `page.rs` 内嵌单测 **19 → 0**：11 条因视图删除合理移除、6 条有等价替代、**2 条曾被弱化**（端点集合冻结→子串；guarded→只断言 `confirm(`）⇒ 已要求补回强度。
+
+## 整改复验（lion 亲跑，2026-10-27 16:05）
+
+Dev 2 个 commit（`d390308` 页面侧 + `0f5d9c9` 测试侧），已 rebase 到 `develop ab98422`。
+
+| 判据 | 结果 |
+| --- | --- |
+| `cargo check --lib` | 绿 |
+| **`test_req159_bundles`（恢复的 25 条，跑在**新建空库** `req162_lion2`）** | **25 / 25** |
+| `test_req162_console` | **12 / 12** |
+| `test_req125_page`（4 → **7**） | **7 / 7** |
+| `test_req160_review_open`（带库） | **9 / 9** |
+| 守卫：`source_enumeration` / `anchor` / `test_req159_bundle` / `req124_console` / `outlet_pipeline` | 10 / 3 / 38 / 16 / 12 全绿 |
+| 恢复文件与 `ac99dc7` 的删行审计 | **删掉的 `assert` 行 = 0**；88 行差异只有两类：`migrate_once()` 串行化迁移、`ac005` 的认证输入（错口令→不存在角色） |
+| 真浏览器（12 项 + 批量确认） | **12 / 12** + 批量确认**弹框文案含「全部 135 条」与后果**、**取消后已签仍为 0** |
+
+⇒ 我这边判定整改到位，已派 QA 定点复验（要求它**自己建空库**跑、并核 `pg_hba` 是否 trust）。
