@@ -129,3 +129,64 @@ ontok-builder relation verbs check --proposal proposal-v4-naming.json   # 期望
 | 同义并存 | `attaches_to`+`attached_to` · `binds`+`binds_to` | **无** |
 
 > 15 → 10 不是"丢信息"：**消失的 5 种是别名和泛词**，语义都落到有证据的主键上了。
+
+
+---
+
+## 七 · 已落地（2026-10-27）· **实际是 v5，不是 v4**
+
+用户签了（`reviewed_by = michael@2026-10-27`）后执行：
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 建版本 | `version new` | v4（**空草稿**） |
+| 导入 | `import --file <修正版 v3 提案>` | 提案 `p1`，64 条 |
+| 审核 | `review decide --p1 --accept-all` | 64 条 × 2 轨 accepted |
+| 应用 | `proposal apply --p1` | **→ v5**（apply 在 base 之上**再建一版**） |
+| 校验 | `relation verbs check --version 5` | **exit 0**，34/34 干净 |
+| 冻结 | `version freeze --version 5` | **已冻结**（跑过发布闸） |
+| 部署 | `ONTOK_VERSION 3 → 5` | 线上 `ontology_version=5` |
+
+### 落地后的实测
+
+```
+relation 34 · 中文标签 34 · ASCII 标签 0
+泛词：uses=0  associated_with=0  contains=0
+标签分布：归属于 16 · 绑定到 5 · 关联到 5 · 挂载于 2 · 通知到 1
+         · 适用于 1 · 指向 1 · 计费到 1 · 基于 1 · 部署于 1
+TTL 210,610 B（v3 是 209,429）
+```
+
+### 我用来证明"改动面只有这 5 条"的方法
+
+导出 v3 / v5 的**建模视图 TTL**，逐行 diff：
+
+```
+24 行差异 = 版本头 4 行（label + ontok:version）
+          + 5 条语义 × 4 行（ontok:semantic ±  /  rdfs:comment 语义 ±）
+非语义差异: 4 行（只有版本头）
+```
+
+⇒ **v5 = v3 + 恰好那 5 条**，没有顺手改到别的东西。
+
+### 过程中的三个坑（记下来）
+
+| # | 坑 | 教训 |
+| --- | --- | --- |
+| 1 | `base_version` 必须是**未冻结**的草稿（填 3 被拒：「v3 已冻结，不能在其上提案」） | 提案是"在某版**之上**改"，不是"改某版" |
+| 2 | `apply` **不是填进交进去的那版**，而是**再建一版** | 所以 v4 成了空草稿，真身是 v5 |
+| 3 | 本地 `ontok-builder` 是**旧二进制**（比 REQ-157 早），`relation` 子命令不存在 | 清 target 缓存后必须重建，否则拿旧工具验新代码 |
+
+### 一个仍然存在的缺口（建议单独立单）
+
+**"签字"在流水线里没有被强制**：
+
+```rust
+review decide --proposal p1 --accept-all      // 没有 --by
+```
+
+`apply` 的门是"**已决策**"，不是"**有人签过**"。而我签的那份命名提案
+（`reviewed_by = michael@…`）**并不参与**这条机器路径 —— 它是给人看的依据文件。
+
+⇒ 建议：`review decide` 加 `--by <人>` 写进 `decided_by/reviewed_by`，`apply` 校验非空。
+否则"AI 自己 accept-all 再 apply"与"人签过"在库里**长得一模一样**。

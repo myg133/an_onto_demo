@@ -2,8 +2,8 @@
   "project": "cloud-resource",
   "base_version": 3,
   "target_version": 4,
-  "note": "关系动词治理提案：只改 semantic（不动拓扑/方向/基数）；5 条有证据的改动，其余 29 条保持。⛔ 未签 reviewed_by —— 待人审。",
-  "reviewed_by": null,
+  "note": "关系动词治理提案：只改 semantic（不动拓扑/方向/基数）；5 条有证据的改动，其余 29 条保持。已签：michael@2026-10-27",
+  "reviewed_by": "michael@2026-10-27",
   "items": [
     {
       "relation": "alarm_policy__alarm_notice",
@@ -341,5 +341,6 @@
       "action": "keep",
       "semantic_after": "belongs_to"
     }
-  ]
+  ],
+  "reviewed_at": "2026-10-27"
 }
