@@ -358,3 +358,36 @@
    这是"共享集群连接治理"（REQ-031/079）同一族的债。
 3. **删除前先做只读统计**救了一次：那 5 条 `SELECT 1` 连接差点被我当成残留强踢，
    查出是用户本地客户端的连接池健康检查。
+
+
+## 2026-10-27 09:40 · join 入场巡检（session ba-join-michael-workstation-1340-20261027-093836）
+
+### ✅ 已清理
+
+| 项 | 处置 |
+| --- | --- |
+| `feature/REQ-147-salvage` / `feature/REQ-152` / `feature/REQ-154` | 均已合并进 develop，本地分支已删（`git branch -d`） |
+| worktree | 只剩 `an_onto_demo`(workspace) / `BA` / `code` / `Deploy` 四个，**无遗留 feature/hotfix** |
+| agent-registry | 上个会话 `ba-michael-worksta-14864-…`（最后活动 2026-10-21）按 30 分钟规则降 **stale**；本会话注册为 online |
+| req-registry 漂移 | REQ-151 实为**已完成**（`6682621`）；REQ-155 实为 **P1+P2 已完成、P3 待做**（原写"已就绪"） |
+
+### ⚠️ 未清理 · 需人裁定：**workspace 分支违规**
+
+规范要求 `git ls-files` **只有 `README.md` + `.gitignore`** 两个文件，实际 **26 个**：
+
+| 目录/文件 | 数量 | 性质 |
+| --- | ---: | --- |
+| `.agents/agents/*.md` | 5 | Agent 角色定义 |
+| `.agents/skills/agent-workspace/**` | 15 | 本 skill 本体（含模板与参考） |
+| `AGENTS.md` | 1 | 项目级 Agent 规范 |
+| `skills/**` | 7 | 产品 skill（ontok-build / extract / query） |
+
+**⛔ 没有擅自删除** —— 这些都是**真实内容**，删掉等于丢 `skills/` 与 Agent 规范。
+
+**三个选项（待定）**：
+
+| 选项 | 做法 | 代价 |
+| --- | --- | --- |
+| **A** | 迁移到独立分支（如 `docs`），workspace 回归 2 文件 | 要改 README 引用、CI/编辑习惯 |
+| **B** | 承认例外，在 `workspace/README.md` 与规范里写清"本项目允许这 4 类文件" | 规范与实现不一致，但不动内容 |
+| **C** | 保持现状、不记录 | ❌ 不推荐 —— 下次巡检还会报 |

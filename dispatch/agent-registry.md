@@ -5,7 +5,8 @@
 
 | session-id | 角色 | 状态 | 最后活动 | 当前任务 |
 | --- | --- | --- | --- | --- |
-| ba-michael-worksta-14864-20261020-151752 | ba | **online** | 2026-10-21 18:20 | REQ-108 已完成（合并 `a8a51ed`）；REQ-109 AI 接入开工 |
+| ba-join-michael-workstation-1340-20261027-093836 | ba | **online** | 2026-10-27 09:40 | join · 服务端（与 lion 分工：lion=本地抽取端）|
+| ba-michael-worksta-14864-20261020-151752 | ba | **stale** | 2026-10-21 18:20 | REQ-108 已完成（合并 `a8a51ed`）；REQ-109 AI 接入开工 |
 | ba-bogon-112089-20261002-165609 | ba | **stale** | 2026-10-02 16:56 | REQ-002 独立 QA 审核（已派出 verifier） |
 | ba-mavis-0243-20260930-2220 | ba | **stale** | 2026-09-30 22:45 | REQ-002 实施（已交付，worktree 未合并） |
 | ba-local-145007-20260930-175512 | ba | **stale** | 2026-09-30 18:00 | REQ-002 范围确认与实施文档 |
@@ -32,3 +33,11 @@ origin  git@github.com:myg133/an_onto_demo.git
 `[同步] …（本地 demand 的脱敏快照）`），**全部不含 `[session: …]` 尾注** ——
 所以规范里「用 `git log --grep` 追溯 session 活动」在本仓库**当前得不到任何结果**
 （实测三条历史 session 的 `--grep` 命中均为 0）。本表的时间戳是目前唯一的活动依据。
+
+
+## 2026-10-27 · 双 BA 分工（join + lion）
+
+| BA | 负责面 | 边界 |
+| --- | --- | --- |
+| **join**（本会话 `ba-join-michael-workstation-1340-20261027-093836`） | **服务端**：`ontok` 服务面（query serve / Studio / REST+MCP / 契约）、`Deploy`、本体冻结与发布、接入基线 | ⛔ 不改抽取链路（doc ingest / propose / AM 生成） |
+| **lion** | **本地抽取端**：`ontok-builder` 的抽取/提案/本体构建、AM 生成、REQ-153 覆盖盘点 | ⛔ 不改服务面与部署 |
