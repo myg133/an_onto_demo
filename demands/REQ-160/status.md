@@ -43,7 +43,21 @@ AC-005 只绑回环 · AC-006 acp 一条命令到审核台 · AC-007 不自动�
 
 ## 待办
 
-- [ ] **等 REQ-159 两条支线落地再派**（用户 11:50 拍板：不并行开第三路，避免三路冷编译挤一台机器）
+- [x] **skill 部分**（用户 11:20 直接点出「skill 里需要一个审核的流程或操作项」）—— 已做，见下
+- [ ] **等 REQ-159 两条支线落地再派**（用户拍板：不并行开第三路，避免三路冷编译挤一台机器）
 - [ ] 派 Dev：`review open` + `build run`
-      （`skill export` **已取消** —— 用户口径：skill 就在 `skills/` 目录里、由人分发；改成在 `skills/ontok-extract` 与 `skills/ontok-build` 末尾补收口段、头部写适用工具版本）
+      （`skill export` **已取消** —— 用户口径：skill 就在 `skills/` 目录里、由人分发）
 - [ ] QA：重点 AC-002（URL 无口令）/ AC-004（不落盘）/ AC-007（不自动签）
+
+## skill 部分已完成（2026-10-27，workspace `7cdf241`）
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `skills/ontok-build/SKILL.md` | 新增 **§三·六 审核台：人签在这一步发生**（起法 `review open` / 退回 `console serve`、页面四步与判据、**四条禁令**、签完才 `bundle pack`）；把路径 A/B 的 `--accept-all` 从主流程降为「人明确全部接受时」；检查单加 4 项；头加「适用工具版本」 |
+| `skills/ontok-extract/SKILL.md` | 新增 **§十 抽完之后：交给人审核**（你的任务到此为止、交接口径、**四条不许代签**） |
+
+**顺带修了一处会直接坑人的陈旧**：两份 skill 里的构建命令还写着 `ontok doc ingest` / `ontok ontology export`，
+而 REQ-152 之后它们在 `ontok-builder` ⇒ **21 处命令已改**（只剩 `ontok console serve` 这类服务面命令仍是 `ontok`，正确）。
+
+⇒ AC-008（skill 与二进制同版本 / 无「自动接受」指令）**现在可判**：两份 skill 里 `--accept-all` 只出现在「⛔ 不许」的上下文。
+
