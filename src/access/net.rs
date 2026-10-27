@@ -572,8 +572,12 @@ pub struct NetworkOptions {
     /// ⚠️ 生产路径**不**允许命令行指定它（否则签名有效期变成可伪造的），
     /// 只有测试与将来的「签名自检」会钉死它。
     pub timestamp: Option<i64>,
-    /// 覆盖 service（默认从 host 推：`api.example.com` → `cvm`）。
-    /// 测试用假 endpoint 时钉成 `cvm`，好让签名可被独立复算。
+    /// 覆盖 service（测试用后门）。
+    ///
+    /// ⭐ REQ-166 起 service 的**事实源是 AM 的 `auth.service`**：`resolve_service` 的顺序是
+    /// 本字段（trim 非空）→ AM `auth.service` → tc3 则拒绝；⛔ **不再**从 host 推
+    /// （`api.example.com` → `cvm` 那种猜法已删）—— 只有**非 tc3** 模式才保留旧 host 行为。
+    /// 生产路径不设本字段，所以实际生效的是 AM。
     pub service: Option<String>,
     pub retry: RetryPolicy,
     pub timeouts: HttpTimeouts,
