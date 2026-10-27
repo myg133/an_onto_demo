@@ -516,7 +516,11 @@ pub struct OpenArgs {
 ///
 /// ⛔ 只读：**不迁移、不建版本、不写库**（demand §三-1）。
 /// 版本省略 ⇒ 最新一版；一版都没有 ⇒ `Ok((proj, None))`（审核台照常起：
-/// `build run` 的产物是**提案**，未 apply 之前本来就可能没有版本）。
+/// 还没 apply 过的项目本来就可能没有版本）。
+///
+/// ⚠️ REQ-163：本条命令**只服务库里的项目**。`build run` 已改成纯本地链（不写库），
+/// 所以它**不会**再替本命令「先把项目建出来」—— 要审库里的东西，项目 / 版本得先用
+/// `project new` / `version new` / `import` 建出来。
 pub async fn resolve_target(
     pool: &PgPool,
     project: &str,
@@ -536,8 +540,9 @@ pub async fn resolve_target(
         .ok_or_else(|| {
             bad(format!(
                 "项目 {project:?} 不存在。\n  控制面只服务**已存在**的项目：先 `ontok-builder \
-                 project new --name {project}`（或先跑一次 `build run`）。\n  ⛔ 本命令不建项目 \
-                 —— 它只读。"
+                 project new --name {project}`（或 `import` 一次把项目建出来）。\n  ⛔ 本命令不建项目 \
+                 —— 它只读。\n  （⭐ REQ-163：`build run` 已改成**纯本地**链、不写库，\
+                 所以它不会再替你把库里的项目建出来。）"
             ))
         })?;
     let versions = projects
@@ -616,7 +621,11 @@ pub async fn open(args: OpenArgs) -> Result<(), anyhow::Error> {
     open_with(&pool, args).await
 }
 
-/// 已经拿到连接池的入口（`build run` 用它：那一路本来就连着库）。
+/// 已经拿到连接池的入口（[`open`] 用它：自己连完库再调这里）。
+///
+/// ⚠️ REQ-163：`build run` **不再**走这里（它已改成纯本地链，尾巴起的是
+/// `console::serve`）。本函数保留是因为 [`open`] 的两段式（先判入参、再连库）
+/// 需要一个「池已就绪」的入口 —— 测试也用它注入懒连接池。
 ///
 /// 顺序见模块头「绑定与端口」一节；每一步失败都在**绑 socket 之前**报出来
 /// （除了绑本身），与 `console::serve` 同一条纪律。

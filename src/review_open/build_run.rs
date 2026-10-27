@@ -1,64 +1,70 @@
-//! ⭐ REQ-160 · **`ontok-builder build run`** —— 一条命令从文档跑到审核台。
+//! ⭐ REQ-163 · **`ontok-builder build run`** —— 一条命令从文档跑到**本机评审台**（纯本地）。
 //!
 //! ```text
-//! ontok-builder build run --project demo --input docs/ \
+//! ontok-builder build run --input docs/ --work-dir demo/
 //!     --agent acp --agent-command pi-acp --agent-skill Deploy/skills/ontok-extract/SKILL.md
 //! ```
 //!
-//! # 它只是**便利入口**，不是唯一入口（风险 2 的缓解）
+//! 四段（`①②③④`，与 `--help` 里的编号一致）：
 //!
-//! 四段各自仍然可以单独跑（`doc ingest` / `doc merge` / `propose import` / `review open`）：
-//! `--work-dir` 把中间产物留在盘上，所以「某一阶段想单独重跑」不需要重跑整条链。
+//! | 段 | 做什么 | 连库？ | 产物 |
+//! | --- | --- | --- | --- |
+//! | ① | `crate::cli::doc_ingest_cmd`（ACP 抽取） | ⛔ | `<work-dir>/assertions.jsonl` |
+//! | ② | `crate::cli::doc_merge_cmd`（机械合并） | ⛔ | `<work-dir>/merged.json` |
+//! | ③ | 把合并结果写成**草稿** | ⛔ | `<work-dir>/out/proposal.json` |
+//! | ④ | 起**本机评审台**（console v2） | ⛔ | 无（`GET /api/state` 看得见草稿） |
+//!
+//! # ⭐ REQ-163：整条链**一个字节都不写库、不需要任何环境变量**
+//!
+//! REQ-162 把 `console serve` 变成了纯本地评审台（`--dir`、无口令、无库），但本命令当时
+//! 还是「plan 查库 → ①② → 建项目/版本 → import 写库 → review open 要口令 + 要库」——
+//! 一跑 `build run` 就掉回旧台。现在：
+//!
+//! | 旧 | 新 |
+//! | --- | --- |
+//! | `plan_base_seq`（查库） | [`plan_base_seq`]（**读目录**：`1` 或「最新定版 + 1」） |
+//! | `ensure_base`（建项目 / 版本） | **删掉** —— 本地没有「项目表」，工作目录就是项目 |
+//! | `import_proposal_core`（写库） | [`write_draft`]（写 `<work-dir>/out/proposal.json`） |
+//! | `review_open::open_with`（口令 + 库） | `console::serve::serve`（**同一条**启动路径） |
+//!
+//! ⇒ `build run` **全程不连库**：`ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY` 缺了也照常跑通
+//! （`tests/test_req163_local_chain.rs` 的真进程判据把这两个变量从子进程环境里删掉再跑）。
 //!
 //! # 每一段调的都是**既有实现**（⛔ 不复制）
 //!
-//! | 段 | 调的函数 | 为什么是它 |
+//! | 段 | 调的东西 | 为什么是它 |
 //! | --- | --- | --- |
-//! | ① 抽取 | [`crate::cli::doc_ingest_cmd`]（`doc ingest` 的装配点） | 预算闸 / 指纹缓存 / ACP 出产物闸 / `--strict-deterministic` 全在里面；抄一份 = 判据分叉 |
-//! | ② 合并 | [`crate::cli::doc_merge_cmd`]（`doc merge` 的装配点） | 纯机械对齐 + 输出撞车检查在同一处 |
-//! | ③ 导入 | [`crate::cli::import_proposal_core`]（`propose import` / `POST /api/import` 的同一个） | 「不猜项目 / `importable` 硬闸 / 基版本未冻结」只有一份 |
-//! | ④ 收口 | [`super::open`]（`review open` 的实现） | 本需求的**唯一出口** |
+//! | ① 抽取 | [`crate::cli::doc_ingest_cmd`] | 预算闸 / 指纹缓存 / ACP 出产物闸 / `--strict-deterministic` 全在里面；抄一份 = 判据分叉 |
+//! | ② 合并 | [`crate::cli::doc_merge_cmd`] | 纯机械对齐 + 输出撞车检查在同一处 |
+//! | ③ 草稿 | [`crate::console::local::write_atomic`] + `local::DRAFT_REL` | 与评审台读的**同一个**路径、同一份原子落盘（半份 JSON 会让页面 500） |
+//! | ④ 评审台 | [`crate::console::serve::serve`] | 与 `console serve --dir` **同一条**启动路径（回环闸 / 横幅 / 路由全复用）；⛔ 本文件没有第二个 HTTP server |
 //!
-//! ⛔ 本文件**不 shell out 去调自己**：那是「两条实现」的开始（argv 一变就漂）。
+//! # 项目名与基版本：`--project` / `--base-version` 都只是**可选覆盖**
+//!
+//! | 值 | 缺省 | 从哪来 |
+//! | --- | --- | --- |
+//! | 项目名 | **工作目录名** | [`crate::console::local::project_name_of_workdir`]（与评审台同一份 sanitize，⛔ 没有第二份） |
+//! | 基版本 | `1`，或「最新定版 + 1」 | [`plan_base_seq`]（只读 `<work-dir>/.ontok/versions/`） |
+//!
+//! 基版本的含义：草稿标的是「这一份**将成为**哪一版」（定版时评审台取「最新 + 1」），
+//! 所以缺省值与 `--base-version` 的校验都按这个口径（≤ 已定版的最新版 ⇒ exit 2）。
 //!
 //! # 四条裁定落在哪
 //!
 //! | 裁定 | 落点 |
 //! | --- | --- |
-//! | **R1** 任一阶段失败 ⇒ 整体失败、⛔ **不产半成品** | 每段失败都 `return Err`，后面的段一个都不跑；产物文件由各段自己的闸保证「要么完整、要么不存在」（`doc ingest` 的预算/严格闸、`doc merge` 的先合并后写） |
-//! | **R2** 末尾**自动** `review open`；`--no-browser` 只影响浏览器 | [`run`] 的最后一步无条件调 [`super::open`]；`--no-browser` 只传给它的 `no_browser` |
-//! | **R3** ⛔ **不自动 apply / freeze** | [`run`] 的终点是「人看到待审清单」；本文件**没有**任何 apply / freeze 调用（结构判据 `the_orchestrator_never_applies_or_freezes`） |
-//! | **R4** 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑、缓存命中即 0 token | [`artifacts`] 是**唯一**的路径取值点；缓存文件由 `doc ingest` 的老规矩产生（`<out>.cache.json`），重跑直接命中 |
-//! | **R5** 只做**文档路径** | `--agent` 只认 `acp`；库路径（`introspect` / `propose`）不在本命令里，也不接受别的取值 |
-//!
-//! # 基版本（`base_version`）从哪来 —— 这是本命令**唯一**的写库动作（不是 apply）
-//!
-//! `propose import` 要求提案挂在一个**已存在且未冻结**的版本上（`import_proposal_core`
-//! 的 `version_by_seq`）。所以本命令需要两件准备：**知道**落点、**建出**落点。
-//!
-//! ⚠️ **这两件事是分开的，顺序是判据**（QA REQ-160 退回项）：
-//!
-//! | 步骤 | 函数 | 写不写库 | 什么时候 |
-//! | --- | --- | --- | --- |
-//! | ① 算序号 | [`plan_base_seq`] | **只读** | 第 ① 段抽取**之前**（空提案要填 `base_version`） |
-//! | ② 建项目 / 建版本 | [`ensure_base`] | **写** | 第 ① ② 段**都成功之后**、导入之前 |
-//!
-//! 为什么不能把 ② 提前到 ①：抽取失败（agent 连不上 / 文档格式不对 / 合并撞车）时
-//! **连项目名都不该被占用** —— FDE 打错一次项目名就多一个空壳项目 + v1，而空壳没有
-//! 回收入口。AC-006 的门面正是「不产出断言文件、**不建版本**」。
-//! 结构判据：`the_preparatory_write_happens_after_both_stages`（把它挪回开头即红）。
-//!
-//! 两者都只建「空容器」，⛔ 不产生任何本体内容；建了什么会**打在屏幕上**。
-//! 最新一版**已冻结**时**不**自动再建一版：那是「项目在生产中」的信号，该由人决定
-//! （报错并给出 `version new` 的写法）。
+//! | **R1** 任一阶段失败 ⇒ 整体失败、⛔ **不产半成品** | 每段失败都 `return Err`，后面的段一个都不跑；③ 只在 ①② 都成功之后（结构判据 `the_draft_write_and_the_desk_serve_happen_after_both_stages`） |
+//! | **R2** 末尾**自动**起评审台；`--no-browser` 只影响浏览器 | [`run`] 的最后一步无条件走 `console::serve::serve` |
+//! | **R3** ⛔ **不自动 apply / freeze** | [`run`] 的终点是「人看到待审清单」；本文件没有任何签名动作（结构判据 `the_orchestrator_never_applies_or_freezes`） |
+//! | **R4** 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑、缓存命中即 0 token | [`artifacts`] 是**唯一**的路径取值点 |
+//! | **R5** 只做**文档路径** | `--agent` 只认 `acp` |
 
 use std::path::PathBuf;
 
-use sqlx::postgres::PgPool;
+use crate::console::local::{self, DRAFT_REL};
+use crate::console::serve::ServeArgs;
 
-use crate::db::project::PgProjectStore;
-
-use super::{bad, OpenArgs};
+use super::bad;
 
 /// `--work-dir` 的默认值（R4）。
 pub const DEFAULT_WORK_DIR: &str = ".ontok-build";
@@ -69,7 +75,8 @@ pub const ONLY_AGENT: &str = "acp";
 /// `build run` 的参数（已从 clap 拆出来：本模块不认识 clap）。
 #[derive(Debug, Clone)]
 pub struct Options {
-    pub project: String,
+    /// 项目名覆盖。`None` ⇒ **工作目录名**（[`project_name`]）。
+    pub project: Option<String>,
     /// 文档目录或单个 `.md` / `.txt`。
     pub input: PathBuf,
     /// `acp`（唯一取值）。
@@ -79,23 +86,38 @@ pub struct Options {
     /// 单轮往返截止（秒）。省略用 `doc ingest` 的默认值。
     pub agent_timeout_secs: Option<u64>,
     pub strict_deterministic: bool,
-    /// 中间产物落点（默认 [`DEFAULT_WORK_DIR`]）。
+    /// **工作目录**（中间产物 + 草稿 + `.ontok/`；默认 [`DEFAULT_WORK_DIR`]）。
     pub work_dir: PathBuf,
-    /// 真实 schema（`doc merge` 的严格校验 + 审核台的声明校验）。
+    /// 真实 schema（`doc merge` 的严格校验）。
     pub schema: Option<PathBuf>,
     /// 基础提案（省略 = 在工作目录里生成一份空提案，并自动开纯文档通路）。
     pub proposal: Option<PathBuf>,
     /// 强制开纯文档通路（`doc merge --allow-doc-only`）。省略时：生成了空提案就开。
     pub allow_doc_only: bool,
-    /// 基版本序号。省略 = 该项目最新版本（没有就建 v1）。
+    /// 基版本序号覆盖。`None` ⇒ `1` 或「最新定版 + 1」（[`plan_base_seq`]）。
     pub base_version: Option<i32>,
-    /// 透传给 `review open` 的那几个开关。
+    /// 评审台的监听地址（与 `console serve` 同一条语义；默认内核分配端口）。
     pub bind: String,
-    pub allow_public: bool,
     pub no_browser: bool,
-    pub token_ttl: String,
-    pub base: Option<String>,
-    pub audit_out: Option<PathBuf>,
+}
+
+/// 本命令的**项目名**：`--project` 给了就用它，否则 = 工作目录名。
+///
+/// ⚠️ 缺省分支走 [`local::project_name_of_workdir`] —— 与 `console serve --dir` / 页面标题 /
+/// 包 manifest 的**同一个**派生点。抄一份 sanitize 的后果是「CLI 说项目 A、页面说项目 B」。
+pub fn project_name(o: &Options) -> String {
+    match &o.project {
+        Some(p) => p.clone(),
+        None => local::project_name_of_workdir(&o.work_dir),
+    }
+}
+
+/// 草稿落点：`<work-dir>/out/proposal.json`。
+///
+/// ⚠️ 用 `local::DRAFT_REL` 而不是字面量：这个路径是评审台**读**的那一个
+/// （`console serve --dir <work-dir>` 打开的就是它），两处各写一遍迟早会漂。
+pub fn draft_path(o: &Options) -> PathBuf {
+    o.work_dir.join(DRAFT_REL)
 }
 
 /// 四段产物在 `--work-dir` 里的**唯一**落点（R4）。
@@ -109,9 +131,11 @@ pub struct Artifacts {
     pub proposal_in: PathBuf,
     /// 基础提案是不是**本命令生成的**（决定要不要自动开纯文档通路）。
     pub proposal_generated: bool,
-    /// ② 的产物：合并结果（与 `proposal.json` 同形状，可直接 `propose import`）。
+    /// ② 的产物：合并结果（与 `proposal.json` 同形状）。
     pub merged: PathBuf,
     pub merged_stats: PathBuf,
+    /// ③ 的产物：**草稿**（评审台读的那一份）。
+    pub draft: PathBuf,
 }
 
 /// 路径表（**纯函数**：判据不需要真跑一遍抽取）。
@@ -128,6 +152,7 @@ pub fn artifacts(o: &Options) -> Artifacts {
         proposal_in,
         merged: work.join("merged.json"),
         merged_stats: work.join("merge.stats.json"),
+        draft: work.join(DRAFT_REL),
         work_dir: work,
     }
 }
@@ -152,10 +177,9 @@ pub fn empty_proposal_json(project: &str, base_version: i32) -> String {
 
 /// 入参闸（**纯函数**：不建目录、不写文件、不连库）。
 ///
-/// 为什么单独暴露：`build run` 的 ③④ 段要元数据库，命令整体在**连库之后**分派；
-/// 若入参校验也放在那里，没配库的机器上 `--input` 打错也只会看到「ONTOK_DATABASE_URL
-/// 未设置」——报错指向错的原因，退出码也从 2 变成 1。所以 CLI 在连库之前先调本函数
-/// （与 `doc ingest` / `review open` 在连库之前分派同一条纪律）。
+/// 为什么单独暴露：`cli::run` 在**任何活儿之前**先调它 —— `--input` 打错时应该看到
+/// 「读不到 --input」（exit 2），而不是先看到一段抽取流水账。与 `doc ingest` /
+/// `console serve` 在干活之前判入参同一条纪律。
 pub fn validate(o: &Options) -> anyhow::Result<()> {
     let meta = std::fs::metadata(&o.input).map_err(|e| {
         bad(format!(
@@ -202,8 +226,8 @@ pub fn validate(o: &Options) -> anyhow::Result<()> {
 
 /// ① ② 两段：**不碰数据库**，只吃本地文件、只产本地文件。
 ///
-/// 拆出来的理由（也是判据 6 的入口）：这两段的失败面**完全不需要库**
-/// （agent 连不上 / 文档格式不对 / 合并撞车），所以「失败零产物」可以在没有元数据库的
+/// 拆出来的理由（也是「失败零产物」判据的入口）：这两段的失败面**完全不需要库**
+/// （agent 连不上 / 文档格式不对 / 合并撞车），所以那条判据可以在没有任何元数据库的
 /// 机器上真跑一遍，而不是标成「未验」。
 pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<Artifacts> {
     // ── 入参闸（⛔ 全部在干活之前判完）──────────────────────────
@@ -239,7 +263,7 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     .map_err(|e| {
         anyhow::anyhow!(
             "第 1/4 段（doc ingest）失败：{e:#}\n\
-             ⛔ R1：后面的三段一个都不会跑 —— 本轮**不产出**合并结果、不建提案、不起审核台。\
+             ⛔ R1：后面的三段一个都不会跑 —— 本轮**不产出**合并结果、不写草稿、不起评审台。\
              中间产物留在 {}（重跑会命中指纹缓存，成功的块不重复计费）。",
             art.work_dir.display()
         )
@@ -250,15 +274,21 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     // ⚠️ 位置在**抽取成功之后**（QA 退回项）：空提案只是第 ② 段的输入，
     // 第 ① 段失败时连它都不该落盘 —— 「失败零产物」在文件层也要成立。
     if art.proposal_generated {
-        let text = empty_proposal_json(&o.project, base_version);
-        std::fs::write(&art.proposal_in, text).map_err(|e| {
-            anyhow::anyhow!("写不出基础提案 {}：{e}", art.proposal_in.display())
+        let project = project_name(o);
+        let text = empty_proposal_json(&project, base_version);
+        local::write_atomic(&art.proposal_in, text.as_bytes()).map_err(|e| {
+            anyhow::anyhow!(
+                "写不出基础提案 {}：{}（改法：{}）",
+                art.proposal_in.display(),
+                e.message,
+                e.hint
+            )
         })?;
         eprintln!(
             "· 基础提案：本命令生成了空提案 {}（项目 {} · 基版本 v{base_version}）—— \
              纯文档通路会自动打开（新建实体 / 关系的档位是 low，仍需人签）",
             art.proposal_in.display(),
-            o.project
+            project
         );
     } else {
         eprintln!("· 基础提案：{}（人给的）", art.proposal_in.display());
@@ -285,7 +315,7 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     .map_err(|e| {
         anyhow::anyhow!(
             "第 2/4 段（doc merge）失败：{e:#}\n\
-             ⛔ R1：不导入、不起审核台。断言文件仍在 {}（可单独重跑 `doc merge`）。",
+             ⛔ R1：不写草稿、不起评审台。断言文件仍在 {}（可单独重跑 `doc merge`）。",
             art.assertions.display()
         )
     })?;
@@ -293,237 +323,188 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     Ok(art)
 }
 
-/// **只读**地算「这一轮会落在哪个基版本上」（⛔ 一个字节都不写）。
+/// **只读**地算「这一轮草稿标哪一版」—— 读工作目录，⛔ 一个字节都不写、不连库。
 ///
-/// # 为什么必须先算、但不能先建（REQ-160 · QA 退回项）
+/// # 口径（与评审台的定版规则对齐）
 ///
-/// `doc merge` 产出的 `merged.json` 顶层要带 `base_version`（`propose import`
-/// 按它找基版本），所以第 ② 段**之前**就得知道这个序号。但**知道**与**创建**
-/// 是两件事：
+/// | 情形 | 结果 |
+/// | --- | --- |
+/// | 工作目录里还没有任何定版 | **1**（第一次定版会产出 v1） |
+/// | 已有最新定版 v`N` | **`N + 1`**（评审台定版时取「最新 + 1」） |
+/// | 给了 `--base-version v` | `v`，但必须 **> 最新定版号**（否则 exit 2） |
 ///
-/// | | 什么时候做 | 为什么 |
-/// | --- | --- | --- |
-/// | 算序号（本函数） | 第 ① 段**之前** | 只读查询；给空提案填 `base_version` |
-/// | 建项目 / 建版本（[`ensure_base`]） | 第 ① ② 段**都成功之后** | 只有「确实要导入」时才需要落库 |
-///
-/// 反例（QA 实测的那次）：agent 连不上 ⇒ 第 ① 段就失败 ⇒ 若提前 `get_or_create`
-/// + `new_version()`，库里会多出一个**空壳项目 + v1**。FDE 打错一次项目名，
-/// 就永久多一个空壳；而 AC-006 的门面是「不建版本」。所以创建挪到后面。
-///
-/// 序号怎么算（全部只读）：
-/// - 项目不存在 ⇒ **1**（真建的时候是 v1）；
-/// - 项目存在但没有版本 ⇒ **1**；
-/// - 给了 `--base-version` ⇒ 它必须在、且未冻结，否则 exit 2（此时**什么都还没写**）；
-/// - 否则取最新一版：已冻结 ⇒ exit 2（⛔ 不自动开新版，那是人的决定）。
-pub async fn plan_base_seq(pool: &PgPool, o: &Options) -> anyhow::Result<i32> {
-    let projects = PgProjectStore::new(pool.clone());
-    let Some(proj) = projects
-        .get_by_name(&o.project)
-        .await
-        .map_err(|e| anyhow::anyhow!("查项目 {} 失败：{e}", o.project))?
-    else {
-        // 项目还不存在：真要导入时会建它 + v1，所以这里的计划序号是 1。
-        if let Some(v) = o.base_version {
-            if v != 1 {
-                return Err(bad(format!(
-                    "项目 {} 还不存在，`--base-version {v}` 无从谈起 —— \
-                     新建的项目只有 v1（要别的序号请先建项目 / 版本）。",
-                    o.project
-                )));
-            }
-        }
-        return Ok(1);
-    };
-    let versions = projects
-        .list_versions(proj.id)
-        .await
-        .map_err(|e| anyhow::anyhow!("查项目 {} 的版本失败：{e}", o.project))?;
-    match o.base_version {
-        Some(v) => {
-            let row = versions.iter().find(|x| x.seq == v).ok_or_else(|| {
-                bad(format!(
-                    "版本 v{v} 不存在（项目 {}）。现有：{}",
-                    o.project,
-                    if versions.is_empty() {
-                        "（一版都没有）".to_string()
-                    } else {
-                        versions
-                            .iter()
-                            .map(|x| format!("v{}", x.seq))
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    }
-                ))
-            })?;
-            if row.frozen_at.is_some() {
-                return Err(bad(format!(
-                    "版本 v{v} 已冻结（项目 {}）：⛔ 冻结的版本只读，不能在它上面提新提案。\n  \
-                     先新开一版：`ontok-builder version new --project {}`，\
-                     再用 `--base-version <新序号>` 重跑（⛔ 本命令不自动开新版本）。",
-                    o.project, o.project
-                )));
-            }
-            Ok(v)
-        }
-        None => match versions.last() {
-            Some(v) if v.frozen_at.is_none() => Ok(v.seq),
-            Some(v) => Err(bad(format!(
-                "最新版本 v{} 已冻结（项目 {}）。\n  \
-                 ⛔ 本命令**不自动**在冻结版本之上开新版本（那是人的决定）：\
-                 先 `ontok-builder version new --project {}` 再重跑。",
-                v.seq, o.project, o.project
-            ))),
-            None => Ok(1),
-        },
+/// 为什么要先算：`doc merge` 产出的合并结果顶层要带 `base_version`（草稿的抬头）。
+/// 为什么**只读**：算错了不该在盘上留下任何东西 —— 它是第 ① 段之前唯一的「计划」动作，
+/// 与 REQ-160 的「建项目 / 版本只能在两段成功之后」是同一条判断（AC-006：失败零产物）。
+pub fn plan_base_seq(o: &Options) -> anyhow::Result<i32> {
+    let latest = local::latest_version_seq_of(&o.work_dir);
+    match (o.base_version, latest) {
+        (Some(v), _) if v < 1 => Err(bad("`--base-version` 不合法：定版号从 1 开始。")),
+        (Some(v), Some(l)) if v <= l => Err(bad(format!(
+            "`--base-version {v}` 不大于已定版的最新版本 v{l}（工作目录 {}）。\n  \
+             草稿的 `base_version` 标的是「这一份**将成为**哪一版」，而评审台定版时取\
+             「最新定版 + 1」⇒ 至少是 v{}。\n  \
+             不给 `--base-version` 就用这个缺省值 v{}。",
+            o.work_dir.display(),
+            l + 1,
+            l + 1
+        ))),
+        (Some(v), _) => Ok(v),
+        (None, Some(l)) => Ok(l + 1),
+        (None, None) => Ok(1),
     }
 }
 
-/// **准备性写库**（⛔ 不是 apply / freeze）：确保项目存在、且有一个**未冻结**的基版本。
-///
-/// ⚠️ 这是本命令唯一的两处写库，**只在第 ① ② 段都成功之后**才被调用
-/// （调用点在 [`run`]；判据 `the_preparatory_write_happens_after_both_stages`）。
-///
-/// 返回真实基版本序号。若与 [`plan_base_seq`] 算出的不同（并发下别人先建了版本），
-/// **不猜**：直接失败并让人重跑 —— 把提案挂到没算过的版本上比报错危险。
-pub async fn ensure_base(
-    pool: &PgPool,
-    o: &Options,
-    planned: i32,
-) -> anyhow::Result<crate::db::project::ProjectRow> {
-    let projects = PgProjectStore::new(pool.clone());
-    let proj = projects
-        .get_or_create(&o.project)
-        .await
-        .map_err(|e| anyhow::anyhow!("项目 {} 取得 / 新建失败：{e}", o.project))?;
-    let versions = projects
-        .list_versions(proj.id)
-        .await
-        .map_err(|e| anyhow::anyhow!("查项目 {} 的版本失败：{e}", o.project))?;
-    let base_seq = match versions.last() {
-        Some(v) if v.frozen_at.is_none() => Some(v.seq),
-        Some(v) => {
-            return Err(bad(format!(
-                "最新版本 v{} 已冻结（项目 {}）。\n  ⛔ 本命令**不自动**在冻结版本之上开新版本：\
-                 先 `ontok-builder version new --project {}` 再重跑。",
-                v.seq, o.project, o.project
-            )));
-        }
-        None => None,
-    };
-    let actual = match base_seq {
-        Some(seq) => seq,
-        None => {
-            let v = projects
-                .new_version(proj.id)
-                .await
-                .map_err(|e| anyhow::anyhow!("给项目 {} 建 v1 失败：{e}", o.project))?;
-            eprintln!(
-                "· 项目 {} 还没有任何版本 ⇒ 已建 v{}（**未冻结**、无内容；\
-                 ⛔ 本命令不 apply / freeze）",
-                o.project, v.seq
-            );
-            v.seq
-        }
-    };
-    if actual != planned {
-        return Err(anyhow::anyhow!(
-            "基版本在本次运行期间变了（计划 v{planned}，实际 v{actual}）—— \
-             多半是另一个进程刚建了版本。⛔ 不把提案挂到没算过的版本上：\
-             请重跑一次（`--work-dir` 里的产物可以直接复用）。"
-        ));
-    }
-    Ok(proj)
+/// ③ 段产出的草稿（人看一眼就够的三栏：路径 / 条数 / 字节数）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    pub path: PathBuf,
+    /// `items` 的条数（评审台第一屏就是「共 N 条，已签 0」）。
+    pub items: usize,
+    pub bytes: usize,
 }
 
-/// 四段串起来（R1 的「整体失败」由 `?` 保证；R2 的「末尾自动 review open」在最后）。
+/// ③ **把合并结果写成草稿**：`<work-dir>/out/proposal.json`。
 ///
-/// # 顺序是**判据**（QA 退回项）：准备性写库在两段成功之后
+/// # 为什么是「复制字节」而不是「重新序列化」
+///
+/// 草稿的 sha256 会进 `decisions.json`（「裁决是对哪一份草稿签的」）与定版的
+/// `meta.json`。重新序列化一轮（不同 pretty / 键序）就会让「同一份合并结果」算出
+/// 两个 sha —— 人会在页面上看到莫名其妙的 `stale`。⇒ 这里**逐字节**搬 `merged.json`。
+///
+/// # 为什么先校验再落盘
+///
+/// 评审台对草稿只有两个要求：合法 JSON + 有 `items` 数组（`parse_draft`）。在这里
+/// 先判一遍，失败时能点名「是合并产物坏了」；否则要等人在浏览器里点开页面才看到 400。
+///
+/// ⚠️ 位置是承重的：**只能在 ①② 都成功之后**（调用点在 [`run_draft`]；
+/// 结构判据 `the_draft_write_and_the_desk_serve_happen_after_both_stages`）。
+pub fn write_draft(art: &Artifacts) -> anyhow::Result<Draft> {
+    let text = std::fs::read_to_string(&art.merged).map_err(|e| {
+        anyhow::anyhow!(
+            "读不到合并结果 {}：{e}（先跑 `ontok-builder doc merge` 产出它）",
+            art.merged.display()
+        )
+    })?;
+    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        anyhow::anyhow!(
+            "合并结果 {} 不是合法 JSON：{e}（这是第 ② 段的产物，请重跑 `doc merge`）",
+            art.merged.display()
+        )
+    })?;
+    let items = doc
+        .get("items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "合并结果 {} 里没有 `items` 数组 —— 评审台读不懂这样的草稿\
+                 （草稿形状是 `{{project, base_version?, items:[{{kind,target,payload}}]}}`）",
+                art.merged.display()
+            )
+        })?;
+    local::write_atomic(&art.draft, text.as_bytes()).map_err(|e| {
+        anyhow::anyhow!(
+            "写不出草稿 {}：{}（改法：{}）",
+            art.draft.display(),
+            e.message,
+            e.hint
+        )
+    })?;
+    Ok(Draft {
+        path: art.draft.clone(),
+        items: items.len(),
+        bytes: text.len(),
+    })
+}
+
+/// ①②③ 三段（**不连库、不起服务**）：算基版本 → 抽取 → 合并 → 写草稿。
+///
+/// 单独暴露是为了让「失败零产物」与「草稿在 ①② 之后」这两条判据能在**不起服务**
+/// 的前提下真跑（真进程的 ④ 段要 Ctrl-C 才结束）。
+///
+/// # 顺序是**判据**
 ///
 /// ```text
-/// ① plan_base_seq（只读）→ ② 抽取 → ③ 合并 → ④ ensure_base（建项目/版本）→ ⑤ 导入 → ⑥ 起审核台
+/// ① plan_base_seq（只读）→ ② 抽取 → ③ 合并 → ④ 写草稿
 /// ```
 ///
-/// 为什么 ④ 不能提前到 ①：抽取失败时**连项目名都不该被占用**（AC-006 的门面是
-/// 「不产出断言文件、**不建版本**」）—— FDE 打错一次项目名就多一个空壳，
-/// 而空壳没有任何回收入口。结构判据见
-/// `the_preparatory_write_happens_after_both_stages`（把 `ensure_base` 挪回开头即红）。
-pub async fn run(pool: &PgPool, o: Options) -> anyhow::Result<()> {
-    // ── 计划基版本（**只读**；exit 2 的三种情形都在这里，一个字节都还没写）──
-    let base_seq = plan_base_seq(pool, &o).await?;
+/// ④ 不能提前到 ①② 之前：抽取失败（agent 连不上 / 文档格式不对 / 合并撞车）时
+/// 连草稿都不该落盘 —— 评审台会把一份半成品当成「人待审的清单」，而它其实什么都没抽到。
+pub async fn run_draft(o: &Options) -> anyhow::Result<Artifacts> {
+    // ── 计划基版本（**只读**；exit 2 的情形都在这里，一个字节都还没写）──
+    let base_seq = plan_base_seq(o)?;
 
-    // ── ① ② ────────────────────────────────────────────────
-    let art = build_artifacts(&o, base_seq).await?;
+    // ── ① ②（既有装配点）────────────────────────────────────
+    let art = build_artifacts(o, base_seq).await?;
 
-    // ── 准备性写库：项目 + 未冻结的基版本（⛔ 不是 apply / freeze）──
-    // ⚠️ 位置是承重的：它在两段成功**之后**（见函数文档与那条结构判据）。
-    ensure_base(pool, &o, base_seq).await?;
-
-    // ── ③ 导入（与 `propose import` / `POST /api/import` **同一个**函数）──
-    eprintln!("── 第 3/4 段：proposal import ──────────────────────────────────");
-    let text = std::fs::read_to_string(&art.merged)
-        .map_err(|e| anyhow::anyhow!("读不到合并结果 {}：{e}", art.merged.display()))?;
-    let doc: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("合并结果 {} 不是合法 JSON：{e}", art.merged.display()))?;
-    let receipt = crate::cli::import_proposal_core(
-        pool,
-        &doc,
-        &art.merged,
-        Some(&o.project),
-        true,
-    )
-    .await
-    .map_err(|e| {
+    // ── ③ 写草稿（⚠️ 位置承重：只能在 ①② 都成功之后）────────────
+    eprintln!("── 第 3/4 段：写草稿（out/proposal.json）───────────────────────");
+    let draft = write_draft(&art).map_err(|e| {
         anyhow::anyhow!(
-            "第 3/4 段（proposal import）失败：[{}] {}\n  {}\n\
-             ⛔ R1：不起审核台。合并结果仍在 {}（可单独重跑 `import --file`）。",
-            e.code,
-            e.message,
-            e.hint,
+            "第 3/4 段（写草稿）失败：{e:#}\n\
+             ⛔ R1：不起评审台。合并结果仍在 {}（可单独重跑 `doc merge`）。",
             art.merged.display()
         )
     })?;
     println!(
-        "提案 {} 已导入，共 {} 个条目（基版本 v{base_seq}）：",
-        receipt.alias,
-        receipt.items.len()
+        "草稿已写出：{}（{} 条，项目 {}）",
+        draft.path.display(),
+        draft.items,
+        project_name(o)
     );
-    for r in receipt.items.iter().take(20) {
-        println!("  [{}] {} {}", r.seq, r.kind, r.target_key);
+    if draft.items == 0 {
+        eprintln!(
+            "⚠ 这一份草稿 **0 条**：评审台上没有可签的东西。\
+             多半是文档里没有可对齐的断言（看 {} 里的未映射原因）。",
+            art.merged_stats.display()
+        );
     }
-    if receipt.items.len() > 20 {
-        println!("  …（其余 {} 条在页面上看）", receipt.items.len() - 20);
-    }
-    // ⛔ R3：这里是**终点**。下面只起审核台，不 apply、不 freeze。
+    // ⛔ R3：这里是**终点**。下面只起评审台，不签、不冻。
     println!(
         "⛔ 本命令**不自动 apply / freeze**：终点是「你在页面上看到待审清单」（R3）。\
          决策只在页面上做。"
     );
 
-    // ── ④ 收口（**同进程**调用，不 spawn 子进程）──────────────────
-    eprintln!("── 第 4/4 段：review open ──────────────────────────────────────");
-    super::open_with(
-        pool,
-        OpenArgs {
-            project: o.project.clone(),
-            version: Some(base_seq),
-            bind: o.bind.clone(),
-            allow_public: o.allow_public,
-            no_browser: o.no_browser,
-            token_ttl: o.token_ttl.clone(),
-            schema: o.schema.clone(),
-            base: o.base.clone(),
-            audit_out: o.audit_out.clone(),
-        },
-    )
+    Ok(art)
+}
+
+/// 四段串起来：`run_draft` + **起本机评审台**（④）。
+///
+/// `run` 的函数体只做两件事，顺序是判据：先 [`run_draft`]（算基版本 / ①②③），
+/// 全部成功之后才起服务（`console::serve::serve`）—— ①② 失败时端口一个都不占，
+/// 更不会出现「页面开着、草稿不存在」那种自相矛盾的界面。
+///
+/// ⚠️ ④ 是**前台常驻**：它与 `ontok-builder console serve --dir <work-dir>` 起的是
+/// 同一个服务（同一份回环闸 / 同一张路由表），Ctrl-C 结束。
+pub async fn run(o: Options) -> anyhow::Result<()> {
+    // ── ①②③ ───────────────────────────────────────────────
+    let art = run_draft(&o).await?;
+
+    // ── ④ 起本机评审台（**同一条**启动路径，⛔ 不另写 HTTP server）──
+    eprintln!("── 第 4/4 段：起本机评审台（console v2）────────────────────────");
+    eprintln!(
+        "· 工作目录 {} 就是这项工作区（草稿 {}）",
+        art.work_dir.display(),
+        local::DRAFT_REL
+    );
+    eprintln!(
+        "· 等价命令：`ontok-builder console serve --dir {}`（Ctrl-C 结束）",
+        art.work_dir.display()
+    );
+    crate::console::serve::serve(ServeArgs {
+        dir: art.work_dir.clone(),
+        bind: o.bind.clone(),
+        no_browser: o.no_browser,
+    })
     .await
 }
 
-/// 本文件源码 —— 「⛔ 不自动签」的结构判据扫它。
+/// 本文件源码 —— 「⛔ 不自动签」与「③④ 只能在 ①② 之后」的结构判据扫它。
 #[cfg(test)]
 const MODULE_SRC: &str = include_str!("build_run.rs");
 
 // ══════════════════════════════════════════════════════════════
-// 判据（① ② 段真跑；③ ④ 段需要库 ⇒ 结构判据 + 如实标注）
+// 判据（①②③ 真跑；④ 段由 `tests/test_req163_local_chain.rs` 用真进程验）
 // ══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -533,7 +514,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!(
-            "ontok-req160-build-{tag}-{}-{}",
+            "ontok-req163-build-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -546,10 +527,10 @@ mod tests {
 
     fn options(dir: &Path) -> Options {
         Options {
-            project: "req160_demo".into(),
+            project: None,
             input: dir.join("docs"),
             agent: ONLY_AGENT.into(),
-            agent_command: "ontok-agent-that-does-not-exist-req160".into(),
+            agent_command: "ontok-agent-that-does-not-exist-req163".into(),
             agent_skill: dir.join("SKILL.md"),
             agent_timeout_secs: Some(5),
             strict_deterministic: true,
@@ -559,11 +540,7 @@ mod tests {
             allow_doc_only: false,
             base_version: None,
             bind: super::super::DEFAULT_BIND.into(),
-            allow_public: false,
             no_browser: true,
-            token_ttl: super::super::DEFAULT_TOKEN_TTL.into(),
-            base: None,
-            audit_out: None,
         }
     }
 
@@ -579,7 +556,18 @@ mod tests {
         std::fs::write(dir.join("SKILL.md"), "# 抽取契约（测试用）\n").expect("写 skill");
     }
 
-    // ── 测试 6 · build run 失败零产物 ─────────────────────────
+    /// 取一个 `pub (async) fn` 的函数体（从签名到顶格的 `}`）—— 结构判据的公共入口。
+    fn fn_body(name: &str) -> &'static str {
+        let needle = format!("fn {name}(");
+        let start = MODULE_SRC
+            .find(&needle)
+            .unwrap_or_else(|| panic!("`fn {name}` 不见了"));
+        let rest = &MODULE_SRC[start..];
+        let end = rest.find("\n}\n").map(|i| i + 2).unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    // ── 失败零产物（R1）────────────────────────────────────────
 
     #[tokio::test]
     async fn a_failed_ingest_leaves_no_assertions_and_no_merged_proposal() {
@@ -592,10 +580,7 @@ mod tests {
             .await
             .expect_err("agent 连不上时整条链必须失败");
         let msg = format!("{err:#}");
-        assert!(
-            msg.contains("第 1/4 段"),
-            "失败要点名是哪一段：{msg}"
-        );
+        assert!(msg.contains("第 1/4 段"), "失败要点名是哪一段：{msg}");
         assert!(
             msg.contains("后面的三段一个都不会跑") || msg.contains("不产出"),
             "失败要说清 R1 的后果：{msg}"
@@ -610,6 +595,15 @@ mod tests {
             !art.merged.exists(),
             "⛔ 第 2 段没跑却留下了合并结果：{}",
             art.merged.display()
+        );
+        assert!(
+            !art.draft.exists(),
+            "⛔ 第 ①② 段没成功却留下了**草稿**：{}（评审台会把半成品当成待审清单）",
+            art.draft.display()
+        );
+        assert!(
+            !art.draft.parent().map(|p| p.exists()).unwrap_or(false),
+            "⛔ 连 `out/` 目录都不该建（③ 段没跑过）"
         );
         assert!(
             art.work_dir.is_dir(),
@@ -679,6 +673,9 @@ mod tests {
         assert_eq!(art.merged_stats, dir.join("merge.stats.json"));
         assert!(art.proposal_generated, "没给 --proposal ⇒ 生成空提案");
         assert_eq!(art.proposal_in, dir.join("proposal.json"));
+        // ⭐ ③ 的落点必须与评审台读的那一个**同一个**（`out/proposal.json`）。
+        assert_eq!(art.draft, dir.join("out/proposal.json"));
+        assert_eq!(art.draft, draft_path(&o), "路径表与 draft_path 不许漂");
 
         let given = PathBuf::from("/tmp/my-proposal.json");
         let o2 = Options {
@@ -700,20 +697,163 @@ mod tests {
         assert_eq!(v["base_version"], 3);
         assert_eq!(v["round"], 1);
         assert_eq!(v["items"].as_array().map(|a| a.len()), Some(0));
-        // ⛔ 不夹带 `importable: false`（那会被导入闸挡下），也不预填任何条目。
+        // ⛔ 不预填任何条目，也不夹带状态字段。
         assert!(v.get("importable").is_none());
         // 确定性：同输入两次生成逐字节相同（重跑可比对）。
         assert_eq!(text, empty_proposal_json("demo", 3));
         assert!(text.ends_with('\n'), "落盘文件以换行收尾");
     }
 
+    // ── ⭐ REQ-163 · 项目名 / 基版本：都在**目录**上算，不需要库 ──────
+
+    #[test]
+    fn the_project_name_defaults_to_the_work_dir_name_and_can_be_overridden() {
+        let dir = temp_dir("Project Name!");
+        let o = Options {
+            work_dir: dir.clone(),
+            ..options(&dir)
+        };
+        // 缺省 = 目录名（与 `console serve --dir` 同一份 sanitize）
+        assert_eq!(
+            project_name(&o),
+            crate::console::local::project_name_of_workdir(&dir)
+        );
+        assert_eq!(
+            project_name(&o),
+            crate::console::local::project_name_of(&std::fs::canonicalize(&dir).unwrap()),
+            "两条派生必须一致（否则 CLI 与页面会报不同的项目名）"
+        );
+        // 目录名里的空格 / 大写 / `!` 都不合法 ⇒ 被 sanitize 掉，且仍是合法项目名
+        assert!(
+            crate::bundle::pack::is_valid_project_name(&project_name(&o)),
+            "sanitize 之后必须是合法项目名：{}",
+            project_name(&o)
+        );
+        // `--project` 是**可选覆盖**
+        let o2 = Options {
+            project: Some("my_project".into()),
+            ..options(&dir)
+        };
+        assert_eq!(project_name(&o2), "my_project");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_project_name_is_derivable_before_the_dir_exists() {
+        // `build run` 在**抽取之前**就要知道项目名：那时 `--work-dir` 可能还不存在。
+        let base = temp_dir("notyet");
+        let dir = base.join("Demo Workspace");
+        assert!(!dir.exists(), "这条判据要的是「目录还不存在」");
+        let o = Options {
+            work_dir: dir.clone(),
+            ..options(&base)
+        };
+        let name = project_name(&o);
+        assert_eq!(name, "demo_workspace", "目录名要按同一份规则 sanitize");
+        assert!(crate::bundle::pack::is_valid_project_name(&name));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_base_version_is_one_or_the_latest_finalized_plus_one() {
+        let dir = temp_dir("base");
+        let o = Options {
+            work_dir: dir.clone(),
+            ..options(&dir)
+        };
+        // 一版都没有 ⇒ 1
+        assert_eq!(plan_base_seq(&o).unwrap(), 1);
+
+        // 已有 v1 / v2（只读地看目录）⇒ v3
+        for seq in [1, 2] {
+            let v = dir.join(format!(".ontok/versions/v{seq}"));
+            std::fs::create_dir_all(&v).unwrap();
+            std::fs::write(v.join("snapshot.json"), b"{}").unwrap();
+        }
+        assert_eq!(plan_base_seq(&o).unwrap(), 3, "缺省 = 最新定版 + 1");
+
+        // `--base-version` 覆盖：> 最新 才允许
+        let ok = Options {
+            work_dir: dir.clone(),
+            base_version: Some(7),
+            ..options(&dir)
+        };
+        assert_eq!(plan_base_seq(&ok).unwrap(), 7);
+        let next = Options {
+            work_dir: dir.clone(),
+            base_version: Some(3),
+            ..options(&dir)
+        };
+        assert_eq!(plan_base_seq(&next).unwrap(), 3, "恰好是最新 + 1 也允许");
+
+        // ≤ 最新定版 ⇒ exit 2（草稿会标一个不可能成为的版本号）
+        for stale in [1, 2] {
+            let o2 = Options {
+                work_dir: dir.clone(),
+                base_version: Some(stale),
+                ..options(&dir)
+            };
+            let e = plan_base_seq(&o2).expect_err("不能低于已定版的最新版本");
+            assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+            let msg = format!("{e:#}");
+            assert!(msg.contains("v2"), "要点名最新定版号：{msg}");
+            assert!(msg.contains("base_version"), "要解释这个字段的含义：{msg}");
+        }
+        let zero = Options {
+            work_dir: dir.clone(),
+            base_version: Some(0),
+            ..options(&dir)
+        };
+        let e = plan_base_seq(&zero).expect_err("0 不是定版号");
+        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+
+        // ⛔ 一个字节都没写（这条函数只读目录）。
+        assert!(!dir.join(".ontok/versions/v3").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_draft_is_written_atomically_from_the_merged_bytes() {
+        let dir = temp_dir("draft");
+        let o = options(&dir);
+        let art = artifacts(&o);
+        std::fs::create_dir_all(&art.work_dir).unwrap();
+        let merged = "{\n  \"project\": \"req163_demo\",\n  \"base_version\": 1,\n  \"items\": [\n    {\"kind\": \"add_entity_type\", \"target\": \"客户\", \"payload\": {\"key\": \"customer\"}},\n    {\"kind\": \"add_entity_type\", \"target\": \"订单\", \"payload\": {\"key\": \"order\"}}\n  ]\n}\n";
+        std::fs::write(&art.merged, merged).unwrap();
+
+        let draft = write_draft(&art).expect("合并结果是合法的 ⇒ 应当写出草稿");
+        assert_eq!(draft.path, dir.join(".ontok-build/out/proposal.json"));
+        assert_eq!(draft.items, 2);
+        assert_eq!(draft.bytes, merged.len());
+        // ⚠️ **逐字节**搬（草稿的 sha256 会进裁决与定版 meta，重排一次就多一个 sha）
+        assert_eq!(std::fs::read(&draft.path).unwrap(), merged.as_bytes());
+        // 原子落盘：不留 `.tmp`
+        assert!(
+            !draft.path.with_extension("json.tmp").exists(),
+            "落盘之后不该留下临时文件"
+        );
+
+        // 合并结果没有 `items` ⇒ 明确报错（评审台读不懂这样的草稿）
+        std::fs::write(&art.merged, br#"{"project":"x"}"#).unwrap();
+        let e = write_draft(&art).expect_err("没有 items 必须失败");
+        assert!(format!("{e:#}").contains("items"), "{e:#}");
+
+        // 合并结果不是 JSON ⇒ 明确报错
+        std::fs::write(&art.merged, b"not json").unwrap();
+        let e = write_draft(&art).expect_err("坏 JSON 必须失败");
+        assert!(format!("{e:#}").contains("不是合法 JSON"), "{e:#}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     // ── R3 · 不自动签（结构判据）────────────────────────────────
 
     /// ⛔ **不自动 apply / freeze**。
     ///
-    /// 为什么是源码判据：这两个动作需要真库才能「跑完再看版本状态」，
-    /// 而本机没有元数据库（派单 §4 的如实登记）。源码判据不依赖环境，
-    /// 且**结构上**能答「这个文件有没有可能调它们」—— 一句 `if` 忘了删也会被抓到。
+    /// 为什么是源码判据：这两个动作在这条纯本地链上**根本不存在**（没有库），
+    /// 所以没有可跑的行为面；结构上能答「这个文件有没有可能调它们」——
+    /// 一句 `if` 忘了删也会被抓到。
     ///
     /// ⚠️ 探针用 `concat!` 拼：把那些标识符原样写进本文件会让 `include_str!`
     /// 读到的源码里**恰好含有**探针（自指），判据就永远红了。
@@ -736,22 +876,26 @@ mod tests {
             MODULE_SRC.contains("不自动 apply / freeze"),
             "R3 要在输出里明说"
         );
-        // 而且终点必须是 review open（不是「导入完就结束」）。
+        // 而且终点必须是本机评审台（不是「写完草稿就结束」）。
         assert!(
-            MODULE_SRC.contains("super::open_with("),
-            "R2：末尾必须自动起审核台"
+            MODULE_SRC.contains(concat!("console::serve::", "serve(")),
+            "R2：末尾必须自动起评审台"
         );
     }
 
-    /// 四段都调的是**既有实现**（⛔ 不复制一份）。
+    /// 四段都调的是**既有实现**（⛔ 不复制一份），而且 ⛔ 没有第二个 HTTP server。
     #[test]
     fn the_four_stages_reuse_the_existing_entry_points() {
         for needle in [
             concat!("crate::cli::doc_", "ingest_cmd("),
             concat!("crate::cli::doc_", "merge_cmd("),
-            concat!("crate::cli::import_", "proposal_core("),
+            // ③：草稿的路径与落盘都来自 `console::local`（⛔ 不写字面量路径 / 自己的 fs::write）
+            concat!("local::", "write_atomic("),
+            concat!("local::", "DRAFT_REL"),
+            // ④：与 `console serve --dir` 同一条启动路径
+            concat!("crate::console::serve::", "serve("),
         ] {
-            assert!(MODULE_SRC.contains(needle), "第几段没复用既有实现：缺 {needle}");
+            assert!(MODULE_SRC.contains(needle), "没复用既有实现：缺 {needle}");
         }
         // ⛔ 不 shell out 去调自己（探针同样避开自指）。
         for forbidden in [
@@ -764,6 +908,18 @@ mod tests {
                 "⛔ 不 spawn 子进程调自己：{forbidden}"
             );
         }
+        // ⛔ **不另写 HTTP server**（R1-4）：评审台只有 `console::serve` 那一份。
+        for forbidden in [
+            concat!("ax", "um::"),
+            concat!("Router::", "new("),
+            concat!("Tcp", "Listener"),
+            concat!("hyper", "::"),
+        ] {
+            assert!(
+                !MODULE_SRC.contains(forbidden),
+                "⛔ 本文件不许自己起服务：出现 `{forbidden}` 就说明有第二个 HTTP server"
+            );
+        }
         // 缓存：给 None ⇒ doc ingest 用默认 `<out>.cache.json`（重跑 0 token）。
         assert!(
             MODULE_SRC.contains("None, // 缓存落点"),
@@ -771,65 +927,83 @@ mod tests {
         );
     }
 
-    // ── QA 退回项 · 准备性写库必须在两段成功之后 ──────────────────
+    // ── QA 退回项（REQ-160）· 等价判据：③④ 只能在 ①② 之后 ──────────
 
-    /// ⛔ **结构判据**：`get_or_create` / `new_version` 只许出现在 [`ensure_base`] 里，
-    /// 且它的**调用点**必须在 ①② 段成功之后、导入之前。
+    /// ⛔ **结构判据**：写草稿 / 起评审台**只能在 ①② 都成功之后**。
     ///
-    /// # 为什么这条必须能红
+    /// # 它承接的是 REQ-160 的 `the_preparatory_write_happens_after_both_stages`
     ///
-    /// QA 真库实测过一版：写库跑在抽取之前 ⇒ agent 连不上时「文件层零产物」成立，
-    /// 但库里多了一个**空壳项目 + v1**（FDE 打错一次项目名就多一个废弃物）。
-    /// 三种挪法都会让这条红：
+    /// 那条老判据钉的是「`ensure_base`（建项目 / 建版本）只能在 ①② 之后」——
+    /// 它防的事故是：agent 连不上时库里多一个**空壳项目 + v1**（FDE 打错一次项目名
+    /// 就多一个没有回收口的废弃物）。REQ-163 把 `ensure_base` **整段删掉**了
+    /// （纯本地链没有项目表），所以那条判据字面上无处可钉。
+    ///
+    /// ⚠️ 但**事故面没有消失**，只是换了宿主：现在「提前落盘」的后果是评审台里出现一份
+    /// **半成品草稿**（人打开页面，看到一份其实什么都没抽到的待审清单，还以为能签）。
+    /// ⇒ 判据等价替换成同一条纪律的两个新落点：
     ///
     /// | 挪法 | 哪条断言红 |
     /// | --- | --- |
-    /// | `ensure_base(...)` 挪到 `build_artifacts` 之前 | `build < ensure` |
-    /// | 把 `get_or_create` 内联回 `run` 开头 | `run` 体里出现写库调用 |
-    /// | 把 `new_version(` 内联回 `run` | 同上 |
+    /// | `write_draft` 挪进 `build_artifacts`（第 ① 段之前） | `build < write` |
+    /// | 把 ③ 内联回 `run_draft` 的**开头** | `build < write` |
+    /// | `run_draft(&o)` 挪到起服务那一步之后 | `draft < serve` |
     ///
-    /// （探针用 `concat!` 拼：源码判据扫的是本文件，字面量探针会自指。）
+    /// 行为面的一半在「失败时草稿与 `out/` 都不存在」（见本模块的
+    /// `a_failed_ingest_leaves_no_assertions_and_no_merged_proposal`）与
+    /// `tests/test_req163_local_chain.rs`（真进程）。
     #[test]
-    fn the_preparatory_write_happens_after_both_stages() {
-        let run_start = MODULE_SRC
-            .find(concat!("pub async fn ", "run("))
-            .expect("`run` 不见了");
-        let tail = MODULE_SRC[run_start..]
-            .find(concat!("#[cfg", "(test)]"))
-            .expect("`run` 之后应当紧跟判据模块");
-        let body = &MODULE_SRC[run_start..run_start + tail];
+    fn the_draft_write_and_the_desk_serve_happen_after_both_stages() {
+        // ── `run`：先跑完 ①②③，才起服务 ────────────────────────
+        let run = fn_body("run");
+        let draft_phase = run
+            .find(concat!("run_draft(&", "o)"))
+            .expect("`run` 必须先跑 ①②③（`run_draft`）");
+        let serve = run
+            .find(concat!("console::serve::", "serve("))
+            .expect("`run` 必须起本机评审台");
+        assert!(
+            draft_phase < serve,
+            "⛔ 起评审台**只能在** ①②③ 成功之后 —— 现在的顺序是先起服务：\
+             抽取失败时页面已经开着，而草稿根本不存在"
+        );
 
-        let plan = body
-            .find(concat!("plan_base_seq(pool, &o)"))
-            .expect("`run` 必须**只读**地先算基版本（空提案要填 base_version）");
-        let build = body
-            .find(concat!("build_artifacts(&o, ", "base_seq)"))
-            .expect("`run` 必须调 ①② 段");
-        let ensure = body
-            .find(concat!("ensure_base(pool, &o, ", "base_seq)"))
-            .expect("`run` 必须调准备性写库（项目 / 版本）");
-        let import = body
-            .find(concat!("import_proposal_core", "("))
-            .expect("`run` 必须调导入");
-
+        // ── `run_draft`：算基版本 → ①② → 写草稿 ────────────────
+        let draft_fn = fn_body("run_draft");
+        let plan = draft_fn
+            .find(concat!("plan_base_seq(o)"))
+            .expect("`run_draft` 必须**只读**地先算基版本（草稿要填 base_version）");
+        let build = draft_fn
+            .find(concat!("build_artifacts(o, ", "base_seq)"))
+            .expect("`run_draft` 必须调 ①② 段");
+        let write = draft_fn
+            .find(concat!("write_draft(&", "art)"))
+            .expect("`run_draft` 必须写草稿");
         assert!(
             plan < build,
-            "算基版本必须在抽取之前（否则空提案的 base_version 没法填）"
+            "算基版本必须在抽取之前（否则草稿的 base_version 没法填）"
         );
         assert!(
-            build < ensure,
-            "⛔ 准备性写库（建项目 / 建版本）必须在 ①② 段**成功之后** —— \
-             现在的顺序是写库在前：agent 连不上就会在库里留下空壳项目 + v1（AC-006）"
+            build < write,
+            "⛔ 写草稿必须在 ①② 段**成功之后** —— 现在的顺序是先写草稿：\
+             agent 连不上时评审台里会出现一份半成品草稿"
         );
-        assert!(ensure < import, "准备性写库必须在导入之前（import 要求基版本已存在）");
 
-        // 两处写库只许收在 `ensure_base` 里：`run` 自己的函数体不许出现它们。
-        for w in [concat!("get_or_", "create("), concat!("new_", "version(")] {
+        // ── ② 段自己绝不许写草稿（写草稿只能收在 `run_draft` 的 ③）────
+        let build_fn = fn_body("build_artifacts");
+        for w in [concat!("write_", "draft("), concat!("DRAFT_", "REL")] {
             assert!(
-                !body.contains(w),
-                "⛔ `run` 的函数体里出现了 `{w}` —— 写库必须收在 `ensure_base` 里，\
-                 否则它又会跑在两段之前（QA 实测过的那次空壳项目就是它）"
+                !build_fn.contains(w),
+                "⛔ `build_artifacts` 的函数体里出现了 `{w}` —— ①② 段不许碰草稿，\
+                 否则它又跑在两段成功之前"
             );
         }
+        // 同理：起服务只许出现在 `run` 里（`run_draft` 不许起服务 —— 那是判据跑得动的前提）。
+        let all_serve_calls = MODULE_SRC
+            .matches(concat!("console::serve::", "serve("))
+            .count();
+        assert_eq!(
+            all_serve_calls, 1,
+            "起评审台只许有**一处**调用（现在 {all_serve_calls} 处）"
+        );
     }
 }
