@@ -1,0 +1,36 @@
+diff --git a/skills/ontok-query/access_fetch.py b/skills/ontok-query/access_fetch.py
+index c476061..da4b1e2 100644
+--- a/skills/ontok-query/access_fetch.py
++++ b/skills/ontok-query/access_fetch.py
+@@ -1167,9 +1167,31 @@ class Tc3Signer(Signer):
+         )
+ 
+ 
++class AcmeHmacSha1Signer(Signer):
++    """示例：一个「假 vendor」的签名器，只演示可插拔，不是真的协议。"""
++
++    MODE = "hmac-sha1-simple"
++    DEFAULT_SIGNED_HEADERS = ("host",)
++    DEFAULT_TIMESTAMP_HEADER = "X-Acme-Timestamp"
++    DEFAULT_TIMESTAMP_FORMAT = "unix-seconds"
++    DEFAULT_SCOPE = ("date",)
++    REQUIRED_AUTH_KEYS = ()
++
++    def sign(self, credentials, *, method, uri, query, headers, body_bytes,
++             timestamp, profile):
++        key_id, secret = credentials
++        stamp = "%s\n%s\n%s" % (int(timestamp), headers.get("Host", ""),
++                                hashlib.sha1(body_bytes).hexdigest())
++        digest = hmac.new(secret.encode("utf-8"), stamp.encode("utf-8"),
++                          hashlib.sha1).hexdigest()
++        return {"authorization": "ACME-HMAC-SHA1 KeyId=%s, Signature=%s"
++                                 % (key_id, digest)}
++
++
+ #: 已注册的签名器（**唯一一处**）。加一种算法 = 加一行。
+ SIGNERS = {
+     Tc3Signer.MODE: Tc3Signer(),
++    AcmeHmacSha1Signer.MODE: AcmeHmacSha1Signer(),
+ }
+ 
+ 

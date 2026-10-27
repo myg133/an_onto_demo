@@ -4,10 +4,15 @@
 
 为什么有这个脚本
 ----------------
-`AUTH-SPEC.md` 教你怎么写 TC3 签名，`RECIPE.md` 教你怎么读 `get` 配方。两份都是
-**给客户端实现者看**的规格：每个数字员工照它实现一遍，就多一份实现，而
-「签名 / 分页 / 剪枝」正是最容易写错的三件事（实测 9 次错误里 6 次出在这里）。
+AM 是**本体 ↔ 取数方式的声明式映射**，它由人签（`reviewed_by`）。`AUTH-SPEC.md`
+讲签名算法，`RECIPE.md` 讲 `get` 配方的每一键怎么读 —— 两份都是**给客户端实现者
+看**的规格：每个数字员工照它实现一遍，就多一份实现，而「签名 / 分页 / 剪枝」正是
+最容易写错的三件事（实测 9 次错误里 6 次出在这里）。
 本脚本是那份实现的**唯一一份**：你只传 AM 路径 + entity，别自己再写一遍。
+
+本脚本**只按 AM 契约办事**：接口、参数、路径、分页、签名器全都来自 AM，
+一处都不猜。加一种鉴权算法 = 往 `SIGNERS` 注册表加一个签名器，**主流程一行不改**
+（`--list-signers` 看当前支持哪些）。
 
 用法
 ----
@@ -15,21 +20,24 @@
     python access_fetch.py --mapping am.json --check
 
     # ② 试跑：用 entity.fixture 走完整流程，不发网络、不要凭据
-    python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
+    python access_fetch.py --mapping am.json --entity <entity id> --dry-run
 
     # ③ 真取数：凭据只从 auth.credential_env 命名的环境变量读
-    python access_fetch.py --mapping am.json --entity CvmInstance \
-        --param region=ap-guangzhou --limit 100 --max-rows 500 --out ./cvm.json
+    python access_fetch.py --mapping am.json --entity <entity id> \
+        --param <参数名>=<值> --limit 100 --max-rows 500 --out ./rows.json
 
-    # ④ 离线自检：不联网、不要凭据（AC-003 / AC-004 / AC-010 的证据来源）
+    # ④ 离线自检：不联网、不要凭据
     python access_fetch.py --selftest
 
-退出码（与 demand §4.3 一一对应）
---------------------------------
+    # ⑤ 看当前注册了哪些签名器
+    python access_fetch.py --list-signers
+
+退出码（码 → 退出码的唯一一份表在 `CODE_EXIT`）
+----------------------------------------------
     0  成功且取全
     2  am.invalid / am.unsigned / param.not_pushdown
     3  credential.missing
-    4  auth.rejected
+    4  auth.rejected / auth.unsupported（auth.mode 没有对应签名器，⛔ 不 fallback）
     5  api.throttled
     6  api.invalid
     7  net.timeout / net.error
@@ -43,6 +51,8 @@
 * 未签 entity（`reviewed_by` 为空）一律拒绝。
 * 取不全必须如实说：`meta.truncated=true` + 退出码 8，⛔ 不许静默截断。
 * 自建 JSONPath 子集（`$.a.b[*]` / `$.a.b`），⛔ 不引 jsonpath 库。
+* 每个签名器**自带默认值**（signed_headers / timestamp / scope / content_type /
+  service）；主流程里不出现任何一家厂商的默认值。
 
 参考规格：`AUTH-SPEC.md`（签名）、`RECIPE.md`（模板/剪枝/分页）、`AM-FIELDS.md`（键义）。
 """
@@ -82,13 +92,20 @@ DEFAULT_TIMEOUT = 60          # 单次请求超时（秒）
 MAX_PAGES_HARD_CAP = 1000     # 分页保险丝：再多就停（并标记 truncated）
 JSONLD_CONTEXT = {"ontok": "https://ontok.dev/ns#"}
 
-#: `auth` 段缺声明时用的 TC3 默认值。**只在 AM 没写这三项时**生效，
-#: 且 `--check` 会把这件事明说出来（⛔ 不做静默推断，见 AUTH-SPEC §9）。
-TC3_DEFAULT_SIGNED_HEADERS = ["content-type", "host", "x-tc-action"]
-TC3_DEFAULT_TIMESTAMP_HEADER = "X-TC-Timestamp"
-TC3_DEFAULT_TIMESTAMP_FORMAT = "unix-seconds"
-TC3_DEFAULT_SCOPE = ["date", "service", "tc3_request"]
-TC3_DEFAULT_CONTENT_TYPE = "application/json; charset=utf-8"
+#: 码 → 退出码（**唯一一份**）。加码只加在这里；既有 9 个码的值一位不动。
+CODE_EXIT = {
+    "am.invalid": EXIT_INPUT,           # 2  AM 结构/版本/字段不对
+    "am.unsigned": EXIT_INPUT,          # 2  entity 未签
+    "param.not_pushdown": EXIT_INPUT,   # 2  参数不在 capability.pushdown 白名单
+    "credential.missing": EXIT_CREDENTIAL,  # 3  环境变量没设
+    "auth.rejected": EXIT_AUTH,         # 4  401/403/签名错
+    "auth.unsupported": EXIT_AUTH,      # 4  auth.mode 没有对应签名器（⛔ 不 fallback）
+    "api.throttled": EXIT_THROTTLED,    # 5  429 / 限流
+    "api.invalid": EXIT_API,            # 6  400 参数错
+    "net.timeout": EXIT_NETWORK,        # 7  超时
+    "net.error": EXIT_NETWORK,          # 7  连不上 / 5xx
+    "rows.truncated": EXIT_TRUNCATED,   # 8  没取全（数据可用）
+}
 
 #: 缺失哨兵：`MISSING` 表示「这个位置没有值」，与 JSON 的 `null` 严格区分。
 MISSING = object()
@@ -141,6 +158,11 @@ def redact(text):
 def fail(code, exit_code, message, fix=None, extra=None):
     """抛一个 FetchError（写起来比 `raise FetchError(...)` 短）。"""
     raise FetchError(code, exit_code, message, fix, extra)
+
+
+def fail_code(code, message, fix=None, extra=None):
+    """按 `CODE_EXIT` 查退出码再抛错 —— 码与退出码不会各写一遍、漂开。"""
+    raise FetchError(code, CODE_EXIT.get(code, EXIT_INPUT), message, fix, extra)
 
 
 # --------------------------------------------------------------------------- #
@@ -240,7 +262,7 @@ def parse_jsonpath(expr, where):
     if not body:
         fail("am.invalid", EXIT_INPUT,
              "%s 的 JSONPath 只有 `$`：%r" % (where, expr),
-             "至少给一段：`$.Response.InstanceSet[*]`。")
+             "至少给一段：`$.<字段>.<数组>[*]`。")
     segments = body.split(".")
     for seg in segments:
         if (not seg) or ("[" in seg) or ("]" in seg) or ("*" in seg) or ("$" in seg):
@@ -260,7 +282,8 @@ def dig_path(obj, dotted, where="path"):
     """
     if not isinstance(dotted, str) or not dotted:
         fail("am.invalid", EXIT_INPUT, "%s 为空" % where,
-             "每条 `fields.<属性>.path` 都要一个非空字符串，如 `\"InstanceId\"`。")
+             "每条 `fields.<属性>.path` 都要一个非空字符串，"
+             "如 \"<记录里的键名>\" 或 \"<外层>.<内层>\"。")
     cur = obj
     for seg in dotted.split("."):
         if not seg or "[" in seg or "]" in seg:
@@ -305,7 +328,8 @@ def load_am(path):
     am = read_json_file(path, "AM 文件")
     if not isinstance(am, dict):
         fail("am.invalid", EXIT_INPUT, "AM 顶层必须是 JSON 对象，实际是 %s" % type(am).__name__,
-             "照 `am-tencent.json` 的形状：{contract_version, sources[], entities[]}。")
+             "照 AM 契约的形状：{contract_version, sources[], entities[]}"
+             "（逐键说明见 AM-FIELDS.md）。")
     return am
 
 
@@ -375,20 +399,40 @@ def validate_am(am, check_fixtures=True, am_path=None):
         if auth is not None:
             envs = auth.get("credential_env")
             mode = auth.get("mode")
-            if mode != "tc3-hmac-sha256":
+            signer = None
+            if not isinstance(mode, str) or not mode.strip():
                 report.error("am.invalid",
-                             "%s 的 auth.mode=%r；本脚本只实现 tc3-hmac-sha256"
-                             % (where, mode))
+                             "%s 的 auth 段缺 `auth.mode`（必填；已支持：%s）"
+                             % (where, signers_text()))
+            else:
+                signer = SIGNERS.get(mode.strip())
+                if signer is None:
+                    report.error("auth.unsupported",
+                                 "%s 的 auth.mode=%r 没有对应的签名器；已支持：%s"
+                                 % (where, mode, signers_text()))
             if not isinstance(envs, list) or len(envs) < 2 or \
                     not all(isinstance(x, str) and x for x in envs):
                 report.error("am.invalid",
                              "%s 的 auth.credential_env 必须是两个非空变量名"
-                             "（第 1 个 SecretId、第 2 个 SecretKey）" % where)
+                             "（第 1 个放凭据 ID、第 2 个放凭据密钥）" % where)
                 envs = None
-            missing = [k for k in ("signed_headers", "timestamp", "scope")
-                       if not auth.get(k)]
-            if missing:
-                report.auth_defaults.append(sid)
+            if signer is not None:
+                for key in signer.REQUIRED_AUTH_KEYS:
+                    value = auth.get(key)
+                    if not isinstance(value, str) or not value.strip():
+                        report.error("am.invalid",
+                                     "%s 的 `auth.%s` 缺失 —— `%s` 签名器要求显式声明"
+                                     "（⛔ 不从 base_url / host 推断）。补：%s"
+                                     % (where, key, signer.MODE,
+                                        signer.auth_key_hint(key)))
+                missing = [k for k in signer.DEFAULTABLE_AUTH_KEYS if not auth.get(k)]
+                if missing:
+                    report.auth_defaults.append({
+                        "id": sid,
+                        "mode": signer.MODE,
+                        "missing": missing,
+                        "defaults": signer.describe_defaults(),
+                    })
         report.sources.append(src)
 
     # ---- entities ----
@@ -548,13 +592,20 @@ def validate_am(am, check_fixtures=True, am_path=None):
 
 
 def first_error(report):
-    """把报告的第一条 error 变成 FetchError（取数路径用：先拦住再说）。"""
+    """把报告的第一条 error 变成 FetchError（取数路径用：先拦住再说）。
+
+    退出码取自 `CODE_EXIT`（与 `--check` 同一张表），所以两边不会漂。
+    """
     code, message = report.errors[0]
-    exit_code = EXIT_INPUT
+    exit_code = CODE_EXIT.get(code, EXIT_INPUT)
     hint = None
     if code == "am.unsigned":
         hint = ("让映射作者在 AM 里补 `reviewed_by`（形如 `name@YYYY-MM-DD`），"
                 "或换一个已签的 entity（`--check` 会列出哪些已签）。")
+    elif code == "auth.unsupported":
+        hint = ("换一个已支持的 `auth.mode`（`--list-signers` 可查），"
+                "或者给这个 mode 注册一个签名器（`SIGNERS` 里加一行）；"
+                "⛔ 本脚本不会退回到别的算法去签。")
     elif code == "am.invalid":
         hint = "按消息点名的那一处改 AM；改完先跑 `--check`。"
     extra = {"errors": report.errors}
@@ -852,12 +903,117 @@ def build_body(entity, source, values, plan, offset, limit):
     if not isinstance(body, dict):
         fail("am.invalid", EXIT_INPUT,
              "%s 渲染出来不是对象（%s）" % (where, type(body).__name__),
-             "模板顶层应是对象，如 {\"Region\": \"{region}\"}。")
+             "模板顶层应是对象，如 {\"<参数名>\": \"{<占位名>}\"}。")
     return body
 
 
 # --------------------------------------------------------------------------- #
-# 签名：TC3-HMAC-SHA256（AUTH-SPEC §2–§6）
+# 签名器注册表（SIGNERS）：一个 `auth.mode` = 一个签名器
+# --------------------------------------------------------------------------- #
+#
+# 主流程**只做查表**：`signer = SIGNERS[auth.mode]`。所以加一种鉴权算法 =
+# 写一个 `Signer` 子类 + 在 `SIGNERS` 里注册一行，主流程一行不用改。
+# 不认识 mode ⇒ `auth.unsupported`（退出码 4）+ 列出已支持的 mode，⛔ 不 fallback。
+#
+# 每个签名器**自带它的默认值**（signed_headers / timestamp / scope /
+# content_type / service），主流程里不出现任何一家厂商的常量。
+
+class Signer(object):
+    """签名器接口。
+
+    子类只需要：① 填 `MODE` 与默认值；② 实现 `sign()`（要发算法特有的 header
+    就覆盖 `build_headers()`）。默认值与「哪些 auth 键必须显式声明」都在类上，
+    所以主流程不必知道具体算法。
+    """
+
+    #: 注册用的 mode 字符串（`auth.mode` 的值）
+    MODE = ""
+    #: AM 没写时用本签名器的默认值（`--check` 会明说正在用默认值）
+    DEFAULT_SIGNED_HEADERS = ()
+    DEFAULT_TIMESTAMP_HEADER = ""
+    DEFAULT_TIMESTAMP_FORMAT = ""
+    DEFAULT_SCOPE = ()
+    DEFAULT_CONTENT_TYPE = "application/json; charset=utf-8"
+    #: 缺了就算默认值的 auth 键（`--check` 会提示）
+    DEFAULTABLE_AUTH_KEYS = ("signed_headers", "timestamp", "scope")
+    #: AM **必须**显式声明、⛔ 不许推断的 auth 键
+    REQUIRED_AUTH_KEYS = ()
+    #: 必填键的「怎么补」话术（键 → 一句人话）
+    AUTH_KEY_HINTS = {}
+
+    def profile(self, auth, source_id="?"):
+        """把 AM 的 `auth` 段 + 本签名器的默认值合成一份 profile。"""
+        timestamp_cfg = auth.get("timestamp") or {}
+        profile = {
+            "signer": self,
+            "mode": self.MODE,
+            "source": source_id,
+            "signed_headers": list(auth.get("signed_headers")
+                                   or self.DEFAULT_SIGNED_HEADERS),
+            "timestamp_header": timestamp_cfg.get("header")
+                                or self.DEFAULT_TIMESTAMP_HEADER,
+            "timestamp_format": timestamp_cfg.get("format")
+                                or self.DEFAULT_TIMESTAMP_FORMAT,
+            "scope": list(auth.get("scope") or self.DEFAULT_SCOPE),
+            "content_type": auth.get("content_type") or self.DEFAULT_CONTENT_TYPE,
+        }
+        for key in self.REQUIRED_AUTH_KEYS:
+            value = auth.get(key)
+            if not isinstance(value, str) or not value.strip():
+                fail("am.invalid", EXIT_INPUT,
+                     "source `%s` 的 `auth.%s` 缺失 —— `%s` 签名器要求显式声明"
+                     % (source_id, key, self.MODE),
+                     self.auth_key_hint(key))
+            profile[key] = value.strip()
+        return profile
+
+    def auth_key_hint(self, key):
+        """必填 auth 键缺失时的一句「怎么补」。"""
+        return self.AUTH_KEY_HINTS.get(key) or (
+            "在 source 的 `auth` 里加 \"%s\": \"<值>\"（键义见 AM-FIELDS.md）。" % key)
+
+    def describe_defaults(self):
+        """一句话说清本签名器的默认值（`--check` 的提示用）。"""
+        return ("signed_headers=%s · timestamp=%s/%s · scope=%s"
+                % (";".join(self.DEFAULT_SIGNED_HEADERS) or "（无）",
+                   self.DEFAULT_TIMESTAMP_HEADER or "（无）",
+                   self.DEFAULT_TIMESTAMP_FORMAT or "（无）",
+                   "/".join(self.DEFAULT_SCOPE) or "（无）"))
+
+    def build_headers(self, entity, profile, values, timestamp, body, content_type):
+        """要发的 header：AM 声明了 `operation.headers` 就照它拼，否则补要用的。
+
+        默认实现只补「所有 HTTP 请求都要有」的 Content-Type / Host 和时间戳头；
+        算法特有的头（版本号、动作名…）由子类覆盖。
+        """
+        operation = entity.get("operation") or {}
+        declared = operation.get("headers") or {}
+        headers = {}
+        if declared:
+            for name, template in declared.items():
+                rendered = render_template(template, values,
+                                           "entity `%s` 的 operation.headers"
+                                           % entity.get("id"))
+                if rendered is MISSING:
+                    continue
+                headers[name] = text_of(rendered)
+        elif profile.get("timestamp_header"):
+            headers["Content-Type"] = content_type
+            headers[profile["timestamp_header"]] = str(int(timestamp))
+
+        headers.setdefault("Content-Type", content_type)
+        headers["Host"] = profile.get("host") or ""
+        return headers
+
+    def sign(self, credentials, *, method, uri, query, headers, body_bytes,
+             timestamp, profile):
+        """算出 `Authorization` 等值，返回 dict（至少含 `authorization`）。"""
+        raise NotImplementedError("签名器 `%s` 没有实现 sign()" % (self.MODE or "?"))
+
+
+# --------------------------------------------------------------------------- #
+# 签名算法细节：TC3-HMAC-SHA256（AUTH-SPEC §2–§6）
+# —— 只有 `Tc3Signer` 用，别的签名器自己写自己的
 # --------------------------------------------------------------------------- #
 
 def canonical_header_string(headers, signed_headers):
@@ -946,60 +1102,124 @@ def sign_tc3(secret_id, secret_key, *, method, uri, query, headers, signed_heade
     }
 
 
-def auth_profile(entity, source):
-    """取这个 entity 的签名参数；AM 没声明时用 TC3 默认并**留痕**（warn 由 --check 打）。"""
-    auth = source.get("auth") or {}
-    host = urllib.parse.urlsplit(source.get("base_url", "")).netloc
-    service = auth.get("service")
-    if not service:
-        service = host.split(".")[0] if host else ""
-    if not service:
-        fail("am.invalid", EXIT_INPUT,
-             "source `%s` 的 base_url 解析不出 host" % source.get("id"),
-             "base_url 要是 `https://cvm.tencentcloudapi.com` 这种绝对地址。")
-    timestamp_cfg = auth.get("timestamp") or {}
-    return {
-        "signed_headers": auth.get("signed_headers") or list(TC3_DEFAULT_SIGNED_HEADERS),
-        "timestamp_header": timestamp_cfg.get("header") or TC3_DEFAULT_TIMESTAMP_HEADER,
-        "timestamp_format": timestamp_cfg.get("format") or TC3_DEFAULT_TIMESTAMP_FORMAT,
-        "scope": auth.get("scope") or list(TC3_DEFAULT_SCOPE),
-        "service": service,
-        "host": host,
-        "mode": auth.get("mode"),
-    }
+class Tc3Signer(Signer):
+    """TC3-HMAC-SHA256 签名器（算法规格见 `AUTH-SPEC.md`）。
 
-
-def build_headers(entity, source, profile, values, timestamp, body, content_type):
-    """要发的 header：AM 声明了 `operation.headers` 就照它拼，否则补 TC3 标准头。
-
-    ⛔ 同一个值不同时进 header 与 body（RECIPE §七①：`Region` 两处都写 ⇒
-    `UnknownParameter`）。AM 已经把 Region 写进 body 模板时，脚本不会再补
-    `X-TC-Region`；反之才补。
+    默认值全部在这个类里 —— 主流程不再持有任何 TC3 常量。
+    `service` 是**待签名 scope 与派生密钥的输入**，必须来自 AM（`auth.service`），
+    ⛔ 不从 `base_url` 的 host 猜：猜错不会报错，只会签出一个「看起来对」的错签名。
     """
-    operation = entity.get("operation") or {}
-    declared = operation.get("headers") or {}
-    headers = {}
-    if declared:
-        for name, template in declared.items():
-            rendered = render_template(template, values, "entity `%s` 的 operation.headers"
-                                       % entity.get("id"))
-            if rendered is MISSING:
-                continue
-            headers[name] = text_of(rendered)
-    else:
-        headers["Content-Type"] = content_type
-        headers["X-TC-Action"] = text_of(operation.get("action"))
-        headers["X-TC-Version"] = text_of(operation.get("version"))
-        headers[profile["timestamp_header"]] = str(int(timestamp))
 
-    headers.setdefault("Content-Type", content_type)
-    headers["Host"] = profile["host"]
+    MODE = "tc3-hmac-sha256"
+    DEFAULT_SIGNED_HEADERS = ("content-type", "host", "x-tc-action")
+    DEFAULT_TIMESTAMP_HEADER = "X-TC-Timestamp"
+    DEFAULT_TIMESTAMP_FORMAT = "unix-seconds"
+    DEFAULT_SCOPE = ("date", "service", "tc3_request")
+    DEFAULT_CONTENT_TYPE = "application/json; charset=utf-8"
+    REQUIRED_AUTH_KEYS = ("service",)
+    AUTH_KEY_HINTS = {
+        "service": ("在 source 的 `auth` 里加 \"service\": \"<该接口所属服务名>\" —— "
+                    "它进待签名 scope 与派生密钥，签名器不替你猜"
+                    "（键义见 AM-FIELDS.md『auth.service』）。"),
+    }
+    ACTION_HEADER = "X-TC-Action"
+    VERSION_HEADER = "X-TC-Version"
+    REGION_HEADER = "X-TC-Region"
 
-    region = values.get("region")
-    body_has_region = any(str(k).lower() == "region" for k in body)
-    if region is not None and not body_has_region:
-        headers["X-TC-Region"] = text_of(region["value"])
-    return headers
+    def build_headers(self, entity, profile, values, timestamp, body, content_type):
+        """TC3 的标准头：动作名 / 版本 / 时间戳；Region 只放一处（header 或 body）。"""
+        operation = entity.get("operation") or {}
+        declared = operation.get("headers") or {}
+        headers = {}
+        if declared:
+            for name, template in declared.items():
+                rendered = render_template(
+                    template, values,
+                    "entity `%s` 的 operation.headers" % entity.get("id"))
+                if rendered is MISSING:
+                    continue
+                headers[name] = text_of(rendered)
+        else:
+            headers["Content-Type"] = content_type
+            headers[self.ACTION_HEADER] = text_of(operation.get("action"))
+            headers[self.VERSION_HEADER] = text_of(operation.get("version"))
+            headers[profile["timestamp_header"]] = str(int(timestamp))
+
+        headers.setdefault("Content-Type", content_type)
+        headers["Host"] = profile["host"]
+
+        region = values.get("region")
+        body_has_region = any(str(k).lower() == "region" for k in body)
+        if region is not None and not body_has_region:
+            headers[self.REGION_HEADER] = text_of(region["value"])
+        return headers
+
+    def sign(self, credentials, *, method, uri, query, headers, body_bytes,
+             timestamp, profile):
+        """按 AUTH-SPEC 算签名；返回全部中间值（自检要逐段对拍）。"""
+        secret_id, secret_key = credentials
+        return sign_tc3(
+            secret_id, secret_key,
+            method=method, uri=uri, query=query, headers=headers,
+            signed_headers=profile["signed_headers"],
+            body_bytes=body_bytes, timestamp=timestamp,
+            scope_segments=profile["scope"], service=profile["service"],
+        )
+
+
+#: 已注册的签名器（**唯一一处**）。加一种算法 = 加一行。
+SIGNERS = {
+    Tc3Signer.MODE: Tc3Signer(),
+}
+
+
+def supported_modes():
+    """已注册的 mode（排序后返回；报错与 `--list-signers` 都用它）。"""
+    return sorted(SIGNERS)
+
+
+def signers_text():
+    """已注册的 mode 拼成一句话（错误消息里列「支持列表」用）。"""
+    return ", ".join(supported_modes()) or "（无）"
+
+
+def signer_of(mode, source_id=None):
+    """按 `auth.mode` 查签名器；未知 ⇒ `auth.unsupported`（退出 4）+ 支持列表。
+
+    ⛔ 这里**没有** fallback：查不到就是查不到，绝不用别的算法顶上。
+    """
+    where = ("source `%s` 的 " % source_id) if source_id else ""
+    if not isinstance(mode, str) or not mode.strip():
+        fail("am.invalid", EXIT_INPUT,
+             "%s`auth.mode` 缺失 —— AM 必须写明用哪个签名器" % where,
+             "补 \"mode\": \"<签名器 mode>\"；已支持：%s（`--list-signers` 可查）。"
+             % signers_text())
+    signer = SIGNERS.get(mode.strip())
+    if signer is None:
+        fail_code("auth.unsupported",
+                  "%s`auth.mode`=%r 没有对应的签名器；已支持：%s"
+                  % (where, mode, signers_text()),
+                  "换一个已支持的 mode，或者给这个 mode 注册一个签名器"
+                  "（`SIGNERS` 里加一行，主流程不用改）。⛔ 不会退回到别的算法去签。")
+    return signer
+
+
+def auth_profile(entity, source):
+    """取这个 entity 的签名参数：签名器按 `auth.mode` **查表**，默认值由签名器自带。
+
+    `auth.service`（tc3 要求必填）这类键**只从 AM 来** —— ⛔ 不从 host 猜。
+    """
+    auth = source.get("auth") or {}
+    source_id = source.get("id")
+    signer = signer_of(auth.get("mode"), source_id)
+    profile = signer.profile(auth, source_id=source_id)
+    host = urllib.parse.urlsplit(source.get("base_url") or "").netloc
+    if not host:
+        fail("am.invalid", EXIT_INPUT,
+             "source `%s` 的 base_url 解析不出 host" % source_id,
+             "base_url 要是绝对 http(s) 地址。")
+    profile["host"] = host
+    return profile
 
 
 # --------------------------------------------------------------------------- #
@@ -1084,34 +1304,34 @@ def fail_for_http_status(status, raw, url):
         snippet = ""
     detail = "；响应片段：%s" % snippet if snippet else ""
     if status in (401, 403):
-        fail("auth.rejected", EXIT_AUTH,
-             "服务端拒绝鉴权（HTTP %d）：%s%s" % (status, url, detail),
-             "凭据是否有效/是否过期？签名段是否照 AUTH-SPEC 实现（本脚本已实现，"
-             "⛔ 不要自己再写一份）？")
+        fail_code("auth.rejected",
+                  "服务端拒绝鉴权（HTTP %d）：%s%s" % (status, url, detail),
+                  "凭据是否有效/是否过期？签名器是否按 `auth.mode` 的实际规格实现"
+                  "（本脚本已实现，⛔ 不要自己再写一份）？")
     if status == 429:
-        fail("api.throttled", EXIT_THROTTLED,
-             "被限流（HTTP 429）：%s%s" % (url, detail),
-             "降并发/减小 --limit 或 --max-rows，隔一会儿再来；本脚本不自动退避。")
+        fail_code("api.throttled",
+                  "被限流（HTTP 429）：%s%s" % (url, detail),
+                  "降并发/减小 --limit 或 --max-rows，隔一会儿再来；本脚本不自动退避。")
     if status in (400, 404):
-        fail("api.invalid", EXIT_API,
-             "请求参数被拒（HTTP %d）：%s%s" % (status, url, detail),
-             "多半是请求体/参数不对：看 `--dry-run` 打出来的 body、以及 "
-             "`capability.pushdown` 允许哪些参数。")
-    fail("net.error", EXIT_NETWORK,
-         "服务端状态异常（HTTP %d）：%s%s" % (status, url, detail),
-         "5xx 多为服务端瞬时故障，稍后重试；持续 5xx 报给运维。")
+        fail_code("api.invalid",
+                  "请求参数被拒（HTTP %d）：%s%s" % (status, url, detail),
+                  "多半是请求体/参数不对：看 `--dry-run` 打出来的 body、以及 "
+                  "`capability.pushdown` 允许哪些参数。")
+    fail_code("net.error",
+              "服务端状态异常（HTTP %d）：%s%s" % (status, url, detail),
+              "5xx 多为服务端瞬时故障，稍后重试；持续 5xx 报给运维。")
 
 
 def classify_vendor_error(code_text):
-    """腾讯云把业务错误放在 HTTP 200 的 `Response.Error` 里；按码翻成固定分类。"""
+    """有的接口把业务错误放在 HTTP 200 的响应体里（`<信封>.Error`）；按码翻成固定分类。"""
     low = str(code_text or "").lower()
     if "limitexceeded" in low or "throttl" in low or "toomanyrequest" in low:
-        return "api.throttled", EXIT_THROTTLED
+        return "api.throttled"
     if low.startswith("authfailure") or "signature" in low or "unauthorized" in low:
-        return "auth.rejected", EXIT_AUTH
+        return "auth.rejected"
     if "internalerror" in low:
-        return "net.error", EXIT_NETWORK
-    return "api.invalid", EXIT_API
+        return "net.error"
+    return "api.invalid"
 
 
 class FixtureTransport(Transport):
@@ -1196,7 +1416,7 @@ def fetch_rows(entity, source, profile, transport, *, limit, max_rows, params,
     plan = paging_plan(entity)
     operation = entity.get("operation") or {}
     action = operation.get("action")
-    content_type = operation.get("content_type") or TC3_DEFAULT_CONTENT_TYPE
+    content_type = operation.get("content_type") or profile["content_type"]
     url = str(source.get("base_url", "")).rstrip("/") + (operation.get("path") or "/")
 
     values = build_value_table(entity, source, params, timestamp, None)
@@ -1221,19 +1441,18 @@ def fetch_rows(entity, source, profile, transport, *, limit, max_rows, params,
         if not dry_run:
             if not credentials:
                 raise RuntimeError("fetch_rows: 非 dry-run 却没有传 credentials")
-            headers = build_headers(entity, source, profile, values, timestamp,
-                                    body, content_type)
-            signed = sign_tc3(
-                credentials[0], credentials[1],
+            signer = profile["signer"]
+            headers = signer.build_headers(entity, profile, values, timestamp,
+                                           body, content_type)
+            signed = signer.sign(
+                credentials,
                 method=operation.get("method") or "POST",
                 uri=operation.get("path") or "/",
                 query="",
                 headers=headers,
-                signed_headers=profile["signed_headers"],
                 body_bytes=body_bytes,
                 timestamp=timestamp,
-                scope_segments=profile["scope"],
-                service=profile["service"],
+                profile=profile,
             )
             headers["Authorization"] = signed["authorization"]
 
@@ -1255,7 +1474,7 @@ def fetch_rows(entity, source, profile, transport, *, limit, max_rows, params,
             fail("am.invalid", EXIT_INPUT,
                  "entity `%s` 没有 `iterator`，无法知道响应里哪一段是「一行」"
                  % entity.get("id"),
-                 "补 `iterator`（形状 `$.Response.InstanceSet[*]`），"
+                 "补 `iterator`（形状 `$.<字段>.<数组>[*]`），"
                  "或先 `--check` 看它还缺什么。")
         batch = parse_jsonpath(iterator, "entity `%s` 的 iterator"
                                % entity.get("id")).resolve(response)
@@ -1299,7 +1518,11 @@ def fetch_rows(entity, source, profile, transport, *, limit, max_rows, params,
 
 
 def _raise_vendor_error(entity, action, response):
-    """腾讯云 200 里带 `Response.Error` 时，按码翻成固定错误码。"""
+    """接口把业务错误放在响应体的 `<信封>.Error` 里时，按码翻成固定错误码。
+
+    ⚠️ 信封形状（`Response.Error{Code,Message}`）本身是**某个厂商的**约定；
+    本脚本只认这一种形状，换个信封形状的源需要扩这里（见 AM-FIELDS「已知限制」）。
+    """
     if not isinstance(response, dict):
         return
     payload = response.get("Response")
@@ -1310,11 +1533,11 @@ def _raise_vendor_error(entity, action, response):
         return
     code = error.get("Code") or ""
     message = error.get("Message") or ""
-    mapped_code, exit_code = classify_vendor_error(code)
-    fail(mapped_code, exit_code,
-         "接口返回错误：%s · %s（entity `%s`，action `%s`）"
-         % (code, message, entity.get("id"), action),
-         _fix_for_vendor_code(code))
+    mapped_code = classify_vendor_error(code)
+    fail_code(mapped_code,
+              "接口返回错误：%s · %s（entity `%s`，action `%s`）"
+              % (code, message, entity.get("id"), action),
+              _fix_for_vendor_code(code))
 
 
 def _fix_for_vendor_code(code):
@@ -1322,14 +1545,14 @@ def _fix_for_vendor_code(code):
     low = str(code or "").lower()
     if "signature" in low or low.startswith("authfailure"):
         fail_hint = ("签名不匹配：先确认凭据对、时钟准（时间戳是 UTC 秒）、"
-                     "再确认 AM 的 auth.signed_headers / timestamp / scope 与实际一致。"
-                     "⛔ 不要自己重写签名，本脚本已按 AUTH-SPEC 实现。")
+                     "再确认 AM 的 auth.signed_headers / timestamp / scope / service "
+                     "与实际发出的 header 一致。⛔ 不要自己重写签名，本脚本已按规格实现。")
         return fail_hint
     if "limitexceeded" in low or "throttl" in low:
-        return "降 --limit / --max-rows 或分地域取；本脚本不自动退避。"
+        return "降 --limit / --max-rows 或收窄 --param 范围；本脚本不自动退避。"
     if "unknownparameter" in low:
         return ("参数不在该接口的接受集里：看 `--dry-run` 打出的 body；"
-                "`X-TC-Region` 这类只能走 header（RECIPE §七①）。")
+                "有的参数只能走 header（RECIPE §七①），⛔ 别两处都写。")
     if "missingparameter" in low:
         return "AM 的 request.required 少给了值：补 `--param <名>=<值>`。"
     return "看 code 与 message；必要时先 `--dry-run` 排除映射问题。"
@@ -1467,12 +1690,13 @@ def cmd_check(am, am_path, entity_ref=None):
              len(report.unsigned), len(am.get("relations") or [])))
 
     print("\nsource 检查")
+    default_ids = {item["id"] for item in report.auth_defaults}
     for src in report.sources:
         auth = src.get("auth") or {}
         envs = auth.get("credential_env") or []
         extra = ""
-        if src.get("id") in report.auth_defaults:
-            extra = "  [auth 用了默认签名参数]"
+        if src.get("id") in default_ids:
+            extra = "  [auth 用了签名器默认值]"
         print("  ✓ %-16s %-9s %-38s 凭据变量 %s%s"
               % (src.get("id"), src.get("kind"), src.get("base_url"),
                  "/".join(envs) or "（无）", extra))
@@ -1491,14 +1715,20 @@ def cmd_check(am, am_path, entity_ref=None):
 
     notes = list(report.warnings)
     if report.auth_defaults:
-        notes.append("%d 个 source 的 auth 只声明了 mode/credential_env，缺 "
-                     "signed_headers/timestamp/scope ⇒ 按 TC3 默认签名"
-                     "（%s / %s / %s）。要精确就在 AM 里补这三项。"
-                     % (len(report.auth_defaults), ";".join(TC3_DEFAULT_SIGNED_HEADERS),
-                        TC3_DEFAULT_TIMESTAMP_HEADER, "/".join(TC3_DEFAULT_SCOPE)))
+        modes = sorted({item["mode"] for item in report.auth_defaults})
+        keys = sorted({key for item in report.auth_defaults
+                       for key in item["missing"]})
+        defaults = "; ".join(
+            "%s: %s" % (mode, SIGNERS[mode].describe_defaults())
+            for mode in modes if mode in SIGNERS)
+        notes.append("%d 个 source 的 auth 缺 %s ⇒ 按签名器默认值（%s）。"
+                     "要精确就在 AM 里补这几项。"
+                     % (len(report.auth_defaults), "/".join(keys), defaults))
 
+    exit_code = EXIT_OK
     if report.errors:
-        print("\n错误（阻断，退出码 2）")
+        exit_code = CODE_EXIT.get(report.errors[0][0], EXIT_INPUT)
+        print("\n错误（阻断，退出码 %d）" % exit_code)
         for code, message in report.errors:
             print("  ✗ [%s] %s" % (code, message))
     if notes:
@@ -1517,7 +1747,7 @@ def cmd_check(am, am_path, entity_ref=None):
 
     if report.errors:
         print("\n结果：拒绝（%d error / %d warning）" % (len(report.errors), len(notes)))
-        return EXIT_INPUT
+        return exit_code
     print("\n结果：通过（%d sources / %d entities，0 error / %d warning）"
           % (len(report.sources), len(report.entities), len(notes)))
     return EXIT_OK
@@ -1545,7 +1775,7 @@ def parse_params(raw_params, entity):
         if "=" not in item:
             fail("param.not_pushdown", EXIT_INPUT,
                  "--param 要写成 K=V，收到 %r" % item,
-                 "例：`--param zone=ap-guangzhou-5`。")
+                 "例：`--param <参数名>=<值>`。")
         name, value = item.split("=", 1)
         name = name.strip()
         if name.lower() not in allowed:
@@ -1582,7 +1812,7 @@ def check_required(entity, params, plan, source):
              "entity `%s` 的 request.required 里有 %s，这次没给值 —— 不发请求"
              % (entity.get("id"), "、".join("`%s`" % m for m in missing)),
              "补 `--param <名>=<值>`（该 entity 的 pushdown 允许：%s）。"
-             "这类业务标识（实例 ID、月份…）必须由你从别处拿到，平台不替你猜。"
+             "这类业务标识（业务主键、时间区间…）必须由你从别处拿到，平台不替你猜。"
              % (", ".join(str(x) for x in (entity.get("capability") or {}).get("pushdown") or []) or "（空）"))
 
 
@@ -1604,7 +1834,7 @@ def run_fetch(am, am_path, args):
     if not (entity.get("identity") or {}).get("key_path"):
         fail("am.invalid", EXIT_INPUT,
              "entity `%s` 没有 identity.key_path，无法把一行变成 `@id`" % entity.get("id"),
-             "补 `\"identity\": {\"key_path\": \"InstanceId\"}`；"
+             "补 `\"identity\": {\"key_path\": \"<记录里的键名>\"}`；"
              "⛔ 不要拿 fields 里随便一个属性当主键（RECIPE §六）。")
     plan = paging_plan(entity)
     params = parse_params(args.param, entity)
@@ -1661,33 +1891,22 @@ def run_fetch(am, am_path, args):
 # 子命令：--selftest（离线；不联网、不要凭据）
 # --------------------------------------------------------------------------- #
 
-_AUTH_VECTOR = {
-    "secret_id": "AKID" + "*" * 32,
-    "secret_key": "*" * 32,
-    #: 自检内部用的假凭据（不来自环境、不打印；只为了让签名路径真的跑一遍）
-    "credentials": ("AKIDSELFTEST000000000000000", "SELFTESTSECRETKEY0123456789ABCDEF"),
-    "host": "cvm.tencentcloudapi.com",
-    "service": "cvm",
-    "action": "DescribeInstances",
-    "version": "2017-03-12",
-    "content_type": "application/json; charset=utf-8",
-    "timestamp": 1551113065,
-    "signed_headers": ["content-type", "host", "x-tc-action"],
-    "scope": ["date", "service", "tc3_request"],
-    # AUTH-SPEC §7.2 的期望值（逐字节）
-    "expected": {
-        "hashed_request_payload": "35e9c5b0e3ae67532d3c9f17ead6c90222632e5b1ff7f6e89887f1398934f064",
-        "SecretDate": "da98fb70dcf6b112dc21038d1eeeb3a95c74b4dcb12c1131f864f6066bd02be0",
-        "SecretService": "8d70cbefb03939f929db64d32dc2ba89b1095620119fe3e050e2b18c5bd2752f",
-        "SecretSigning": "b596b923aad85185e2d1f6659d2a062e0a86731226e021e61bfe06f7ed05f5af",
-        "hashed_canonical_request": "7019a55be8395899b900fb5564e4200d984910f34794a27cb3fb7d10ff6a1e84",
-        "signature": "10b1a37a7301a02ca19a647ad722d5e43b4b3cff309d421d85b46093f6ab6c4f",
-    },
-    "expected_authorization": (
-        "TC3-HMAC-SHA256 Credential=" + "AKID" + "*" * 32 +
-        "/2019-02-25/cvm/tc3_request, SignedHeaders=content-type;host;x-tc-action, "
-        "Signature=10b1a37a7301a02ca19a647ad722d5e43b4b3cff309d421d85b46093f6ab6c4f"),
-}
+#: 签名向量的**数据**在 `fixtures/auth-vector.json`（含主机名/服务名这类
+#: 「那份规格里的值」）。脚本只放**加载与对拍**的代码：向量里写哪个 mode，就用
+#: 注册表里哪个签名器去签 —— 换一种算法做向量，脚本同样不用改。
+AUTH_VECTOR_FIXTURE = "auth-vector.json"
+
+
+def load_auth_vector(selftest):
+    """读签名向量；读不到就让自检失败（⛔ 不静默跳过签名验证）。"""
+    path = _mini_fixture(selftest, AUTH_VECTOR_FIXTURE)
+    if not path:
+        return None
+    try:
+        return read_json_file(path, "签名向量")
+    except FetchError as exc:
+        selftest.check("签名向量可读", False, exc.rendered())
+        return None
 
 
 class SelfTest(object):
@@ -1755,23 +1974,37 @@ def assert_imports_stdlib(selftest):
 
 
 def _selftest_auth(selftest):
-    """AC-003：TC3 签名对 AUTH-SPEC §7 已知向量逐字节相等。"""
-    print("\n[1] TC3 签名 · AUTH-SPEC §7 已知向量（固定 secret / 时间戳 / body）")
-    vector = _AUTH_VECTOR
-    body = json.dumps({"Limit": 1,
-                       "Filters": [{"Values": ["未命名"], "Name": "instance-name"}]},
-                      ensure_ascii=True).encode("utf-8")
-    headers = {
-        "Content-Type": vector["content_type"],
-        "Host": vector["host"],
-        "X-TC-Action": vector["action"],
-    }
-    signed = sign_tc3(
-        vector["secret_id"], vector["secret_key"],
-        method="POST", uri="/", query="", headers=headers,
-        signed_headers=vector["signed_headers"], body_bytes=body,
-        timestamp=vector["timestamp"], scope_segments=vector["scope"],
-        service=vector["service"],
+    """AC-003 / AC-006：签名向量逐字节相等（向量数据在 `fixtures/auth-vector.json`）。
+
+    脚本这边只按向量里的 `mode` 去注册表取签名器 —— 换一种算法做向量，
+    这里同样不用改。
+    """
+    print("\n[1] 签名向量（fixtures/%s；固定凭据 / 时间戳 / body）"
+          % AUTH_VECTOR_FIXTURE)
+    vector = load_auth_vector(selftest)
+    if not vector:
+        return None
+    mode = vector.get("mode")
+    signer = SIGNERS.get(mode) if isinstance(mode, str) else None
+    selftest.check("向量里的 mode=%r 已在注册表里" % (mode,), signer is not None,
+                   "已注册：%s" % signers_text())
+    if signer is None:
+        return None
+
+    body = json.dumps(vector.get("body"),
+                      ensure_ascii=bool(vector.get("body_ensure_ascii", True))
+                      ).encode("utf-8")
+    headers = dict(vector.get("headers") or {})
+    profile = signer.profile(vector.get("auth") or {}, source_id="<selftest>")
+    signed = signer.sign(
+        tuple(vector.get("credentials") or ()),
+        method=vector.get("method") or "POST",
+        uri=vector.get("uri") or "/",
+        query=vector.get("query") or "",
+        headers=headers,
+        body_bytes=body,
+        timestamp=vector["timestamp"],
+        profile=profile,
     )
     print("  body 字节 = %s" % body.decode("utf-8"))
     print("  规范请求串（\\n 显示为换行）：")
@@ -1787,19 +2020,15 @@ def _selftest_auth(selftest):
     print("  Signature = %s" % signed["signature"])
     print("  Authorization = %s" % signed["authorization"])
 
-    expected = vector["expected"]
-    selftest.equal("HashedRequestPayload", signed["hashed_request_payload"],
-                   expected["hashed_request_payload"])
-    selftest.equal("SecretDate", signed["SecretDate"], expected["SecretDate"])
-    selftest.equal("SecretService", signed["SecretService"], expected["SecretService"])
-    selftest.equal("SecretSigning", signed["SecretSigning"], expected["SecretSigning"])
-    selftest.equal("HashedCanonicalRequest", signed["hashed_canonical_request"],
-                   expected["hashed_canonical_request"])
-    selftest.equal("Signature", signed["signature"], expected["signature"])
+    expected = vector.get("expected") or {}
+    for key in ("hashed_request_payload", "SecretDate", "SecretService",
+                "SecretSigning", "hashed_canonical_request", "signature"):
+        selftest.equal(key, signed.get(key), expected.get(key))
     selftest.equal("Authorization（全串逐字节）", signed["authorization"],
-                   vector["expected_authorization"])
-    selftest.equal("scope", signed["scope"], "2019-02-25/cvm/tc3_request")
-    return signed
+                   vector.get("expected_authorization"))
+    if vector.get("expected_scope"):
+        selftest.equal("scope", signed["scope"], vector["expected_scope"])
+    return vector
 
 
 def _selftest_jsonpath(selftest):
@@ -1859,7 +2088,7 @@ def _mini_fixture(selftest, name):
     return path
 
 
-def _selftest_paging(selftest, am, am_path):
+def _selftest_paging(selftest, am, am_path, credentials=()):
     """AC-004：2 页 / 150 行；`--max-rows 120` ⇒ truncated + exit 8。"""
     print("\n[4] 分页（fixtures/paged-*.json：2 页、TotalCount=150）")
     page1 = _mini_fixture(selftest, "paged-page1.json")
@@ -1879,7 +2108,7 @@ def _selftest_paging(selftest, am, am_path):
     transport = ListTransport(payloads)
     result = fetch_rows(entity, source, profile, transport, limit=None, max_rows=1000,
                         params=params, timestamp=1551113065,
-                        credentials=_AUTH_VECTOR["credentials"])
+                        credentials=credentials)
     selftest.equal("恰 2 次请求", transport.calls, 2)
     selftest.equal("rows", len(result.rows), 150)
     selftest.check("truncated=false", result.truncated is False)
@@ -1893,7 +2122,7 @@ def _selftest_paging(selftest, am, am_path):
     transport2 = ListTransport(payloads)
     result2 = fetch_rows(entity, source, profile, transport2, limit=None, max_rows=120,
                          params=params, timestamp=1551113065,
-                         credentials=_AUTH_VECTOR["credentials"])
+                         credentials=credentials)
     selftest.equal("--max-rows 120 ⇒ rows", len(result2.rows), 120)
     selftest.equal("--max-rows 120 ⇒ 停在第 2 页", result2.pages, 2)
     selftest.check("--max-rows 120 ⇒ truncated=true", result2.truncated is True)
@@ -2002,7 +2231,7 @@ def _selftest_guards(selftest, am):
                          ("RequestLimitExceeded", "api.throttled"),
                          ("InvalidParameter", "api.invalid"),
                          ("MissingParameter", "api.invalid")):
-        selftest.equal("厂商码 %s ⇒ %s" % (vendor, want), classify_vendor_error(vendor)[0], want)
+        selftest.equal("厂商码 %s ⇒ %s" % (vendor, want), classify_vendor_error(vendor), want)
 
     # 网络异常分类（纯函数；真正的超时在 AC-006 的本地假接口里端到端验过）
     timeout_exc = urllib.error.URLError(socket.timeout("timed out"))
@@ -2038,6 +2267,77 @@ def _selftest_check(selftest, am):
             selftest.equal("%s ⇒ 退出码 2" % label, first_error(report).exit_code, 2)
 
 
+def _selftest_signers(selftest, am):
+    """AC-004 / AC-005 / AC-008：签名器注册表、未知 mode、必填 auth 键、码表。"""
+    print("\n[7] 签名器注册表与 auth 契约（离线）")
+
+    modes = supported_modes()
+    selftest.check("注册表非空（%s）" % signers_text(), bool(modes))
+    selftest.check("注册表按 key=MODE 登记",
+                   all(SIGNERS[m].MODE == m for m in modes),
+                   str({m: SIGNERS[m].MODE for m in modes}))
+    selftest.check("注册表里至少有一个签名器能签 tc3-hmac-sha256（AUTH-SPEC 的实现）",
+                   "tc3-hmac-sha256" in modes, signers_text())
+
+    # AC-004：未知 mode ⇒ auth.unsupported + 列出支持列表 + 退出码 4，⛔ 不 fallback
+    try:
+        signer_of("hmac-sha1")
+        unsupported = None
+    except FetchError as exc:
+        unsupported = exc
+    selftest.check("未注册的 auth.mode ⇒ auth.unsupported",
+                   unsupported is not None and unsupported.code == "auth.unsupported",
+                   str(unsupported and unsupported.code))
+    if unsupported is not None:
+        selftest.equal("auth.unsupported ⇒ 退出码", unsupported.exit_code, 4)
+        selftest.check("错误消息列出支持列表",
+                       "tc3-hmac-sha256" in unsupported.rendered(),
+                       unsupported.rendered())
+
+    # --check 那条路也走同一个判定（不是只有取数路径才拒）
+    bad_mode = json.loads(json.dumps(am))
+    bad_mode["sources"][0]["auth"]["mode"] = "hmac-sha1"
+    report = validate_am(bad_mode, check_fixtures=False)
+    selftest.check("--check 对未知 mode ⇒ auth.unsupported",
+                   any(code == "auth.unsupported" for code, _ in report.errors),
+                   str([code for code, _ in report.errors]))
+    selftest.equal("--check 对未知 mode ⇒ 退出码", first_error(report).exit_code, 4)
+    selftest.check("--check 的拒绝也列出支持列表",
+                   "tc3-hmac-sha256" in report.errors[0][1], report.errors[0][1])
+
+    # AC-005：缺 auth.service ⇒ am.invalid 并点名字段（⛔ 不从 host 猜）
+    no_service = json.loads(json.dumps(am))
+    no_service["sources"][0]["auth"].pop("service", None)
+    report = validate_am(no_service, check_fixtures=False)
+    selftest.check("缺 auth.service ⇒ am.invalid 且点名 auth.service",
+                   any(code == "am.invalid" and "auth.service" in message
+                       for code, message in report.errors),
+                   str(report.errors[:3]))
+    selftest.equal("缺 auth.service ⇒ 退出码", first_error(report).exit_code, 2)
+    selftest.check("缺 auth.service ⇒ 消息里给补法",
+                   "service" in report.errors[0][1], report.errors[0][1])
+    try:
+        auth_profile(None, no_service["sources"][0])
+        profile_error = None
+    except FetchError as exc:
+        profile_error = exc
+    selftest.check("取数路径缺 auth.service ⇒ am.invalid 点名 auth.service",
+                   profile_error is not None
+                   and profile_error.code == "am.invalid"
+                   and "auth.service" in profile_error.rendered(),
+                   str(profile_error and profile_error.code))
+
+    # AC-008：码 → 退出码表（既有 9 个码的值一个不动，auth.unsupported 是新增）
+    expected_codes = {
+        "am.invalid": 2, "am.unsigned": 2, "param.not_pushdown": 2,
+        "credential.missing": 3, "auth.rejected": 4, "auth.unsupported": 4,
+        "api.throttled": 5, "api.invalid": 6,
+        "net.timeout": 7, "net.error": 7, "rows.truncated": 8,
+    }
+    selftest.equal("码表 = 9 个既有码 + auth.unsupported（共 %d 个键）"
+                   % len(expected_codes), CODE_EXIT, expected_codes)
+
+
 def cmd_selftest():
     """`--selftest`：离线自检。**不联网、不要凭据**（AC-010）。
 
@@ -2068,16 +2368,18 @@ def cmd_selftest():
                        not ({"requests", "urllib3"} & set(modules)),
                        "发现第三方 HTTP 库")
 
-        _selftest_auth(selftest)
+        vector = _selftest_auth(selftest)
         _selftest_jsonpath(selftest)
         _selftest_pruning(selftest)
 
         am_path = _mini_fixture(selftest, "mini-am.json")
         if am_path:
             am = load_am(am_path)
-            _selftest_paging(selftest, am, am_path)
+            credentials = tuple((vector or {}).get("credentials") or ())
+            _selftest_paging(selftest, am, am_path, credentials)
             _selftest_guards(selftest, am)
             _selftest_check(selftest, am)
+            _selftest_signers(selftest, am)
     finally:
         socket.socket = original_socket
         socket.getaddrinfo = original_getaddrinfo
@@ -2099,8 +2401,10 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="access_fetch.py",
         description="按 access mapping（AM）取数：读 AM → 签名 → 分页 → 映射成 JSON-LD。",
-        epilog="退出码：0 成功 / 2 AM·未签·参数 / 3 凭据 / 4 鉴权 / 5 限流 / "
-               "6 参数错 / 7 网络 / 8 没取全（truncated）。",
+        epilog="退出码：0 成功 / 2 AM·未签·参数 / 3 凭据 / "
+               "4 鉴权（auth.rejected / auth.unsupported）/ 5 限流 / "
+               "6 参数错 / 7 网络 / 8 没取全（truncated）。"
+               "已支持的签名器：%s（--list-signers）" % signers_text(),
     )
     parser.add_argument("--mapping", metavar="AM.json", help="access mapping 文件（--check / 取数必填）")
     parser.add_argument("--entity", metavar="ID|CLASS", help="entity id 或本体 class")
@@ -2113,6 +2417,8 @@ def build_parser():
     parser.add_argument("--dry-run", action="store_true", help="用 entity.fixture 取数，不发网络")
     parser.add_argument("--check", action="store_true", help="只校验 AM 结构，不取数")
     parser.add_argument("--selftest", action="store_true", help="离线自检（无网络、无凭据）")
+    parser.add_argument("--list-signers", action="store_true",
+                        help="打印已注册的签名器 mode（auth.mode 的合法值）")
     parser.add_argument("--format", choices=("jsonld", "rows"), default="jsonld",
                         help="输出形状（默认 jsonld）")
     parser.add_argument("--out", metavar="FILE", help="写到文件（默认 stdout）")
@@ -2138,8 +2444,14 @@ def main(argv=None):
     if args.selftest:
         return cmd_selftest()
 
+    if args.list_signers:
+        # 一行一个 mode，方便 `--list-signers | grep` 这类用法
+        for mode in supported_modes():
+            print(mode)
+        return EXIT_OK
+
     if not args.mapping:
-        parser.error("--mapping 必填（除非用 --selftest）")
+        parser.error("--mapping 必填（除非用 --selftest / --list-signers）")
     am_path = args.mapping
     try:
         am = load_am(am_path)

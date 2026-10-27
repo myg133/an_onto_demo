@@ -90,8 +90,8 @@ MCP 用户也可以读资源：`ontok://ontology/customer.ttl`、`ontok://ontolo
 ### ⭐ TTL 里怎么认出「平台不会给我数据」的类
 
 ```turtle
-:cvm_instance a owl:Class ;
-    rdfs:label "CVM 实例"@zh ;
+:<类名> a owl:Class ;
+    rdfs:label "<这个类的显示名>"@zh ;
     ontok:sourceKind "api" .        # ← 这个类的数据不在这套本体里，在外部接口
 ```
 
@@ -125,7 +125,7 @@ grep -c 'ontok:sourceKind "api"' onto.ttl
 grep -B20 'ontok:sourceKind "api"' onto.ttl | grep -E '^:[A-Za-z_]' | sed 's/ .*//'
 
 # ③ 看某一个类（含它的属性与关系），只取那一段
-awk '/^:cvm_instance /{f=1} f&&/^\.$/{print;exit} f' onto.ttl
+awk '/^:<类名> /{f=1} f&&/^\.$/{print;exit} f' onto.ttl
 ```
 
 需要更多细节，用 `catalog` 分页 + `describe` 单个概念——**它们本来就是为"不全量读"设计的**。
@@ -204,12 +204,12 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 ```json
 { "@graph": [],
   "@pending": [
-    { "@type": "ontok:cvm_instance", "reason": "source_is_api",
-      "get": { "class": "cvm_instance",
+    { "@type": "ontok:<class>", "reason": "source_is_api",
+      "get": { "class": "<class>",
                "filter": {},                       // ← 注意这一项，见下
-               "pushdown": ["region","zone"],
-               "ref": "access#CvmInstance@v1" } } ],
-  "meta": { "complete": false, "unresolved_classes": ["cvm_instance"] } }
+               "pushdown": ["<可下推参数>", "<另一个>"],
+               "ref": "access#<entity id>@v<版本>" } } ],
+  "meta": { "complete": false, "unresolved_classes": ["<class>"] } }
 ```
 
 | `get` 里的字段 | 你怎么用 |
@@ -223,7 +223,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 
 | ⛔ 不要 | ✅ 要 |
 | --- | --- |
-| 直接**无过滤全量拉取** | 先用该类的标识属性（`describe` 看，如 `:cvm_instance__instance_id`）**在你自己的取数侧**拿到标识，再带 `ids` 去取 |
+| 直接**无过滤全量拉取** | 先用该类的标识属性（`describe` 看，如 `:<class>__<标识属性>`）**在你自己的取数侧**拿到标识，再带 `ids` 去取 |
 | 把 `pushdown` 当"随便筛" | 暂时拿不到标识时，**至少用 `pushdown` 里的字段收窄**范围 |
 
 > **账单、告警一类接口全量拉 = 烧钱 + 触发限流。** 这不是保守，是会被计费的。
@@ -264,7 +264,7 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 实测一轮里 9 次错误，**6 次**都在这上面（模块名猜错、并发代码写崩、地域列表没有）。
 
-✅ 正确姿势：**调用 `access_fetch.py`**（§4.5）。TC3 签名、分页、剪枝、字段映射、9 个固定错误码，它都实现好了。
+✅ 正确姿势：**调用 `access_fetch.py`**（§4.5）。签名、分页、剪枝、字段映射、10 个固定错误码（9 个既有 + `auth.unsupported`），它都实现好了。
 只有当包里**没有**这个脚本（例如客户环境根本没有 Python）才考虑手写，那时照附录 A 抄，⛔ 别重新发明。
 
 #### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`；⛔ 也别每条命令都 `cd`
@@ -295,8 +295,8 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 ```bash
 # 取数：用现成的（签名 / 翻页 / 剪枝 / 错误码都在里面，见 §4.5）
-python access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-guangzhou --out ./cvm.json
-python access_fetch.py --mapping am.json --entity CbsDisk     --param region=ap-beijing  --out ./cbs.json
+python access_fetch.py --mapping <am.json> --entity <entity id> --param <名>=<值> --out ./rows.json
+python access_fetch.py --mapping <am.json> --entity <另一个 entity id> --param <名>=<值> --out ./rows2.json
 ```
 
 **分析照样要落成文件**（实测：分析阶段 25 次 `python - <<'PY'`，每次重导 `json`/`collections`）：
@@ -305,7 +305,7 @@ python access_fetch.py --mapping am.json --entity CbsDisk     --param region=ap-
 # 一次写好，按"问题"分子命令
 python ana.py policies      # 告警策略：启用但零绑定
 python ana.py certs         # 证书：过期 / 临期
-python ana.py bill --class cvm_instance
+python ana.py bill --class <class>
 ```
 
 | 反例 | 为什么坏 |
@@ -334,7 +334,7 @@ python ana.py bill --class cvm_instance
 | 它干的 | 为什么白干 |
 | --- | --- |
 | `curl /openapi.json`、`/api/access`、`/docs` | **这些端点不存在** ⇒ 404。可用端点见 §〇 的表 |
-| `grep -n 'class Certificate' site-packages/tencentcloud/ssl/...` | 翻 SDK 源码猜参数名 |
+| `grep -n '<类名>' site-packages/<某厂商 SDK>/...` | 翻 SDK 源码猜参数名 |
 | 猜接口版本（实测有人把对象的版本猜成另一个） | 能跑通，但**取回的字段可能对不上本体** |
 
 **正确顺序**：
@@ -353,24 +353,27 @@ python ana.py bill --class cvm_instance
 > 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
 > 9 次错误里 6 次出在这几件事上（§4.4②）。
 
-脚本在同目录：`access_fetch.py`；离线夹具在 `fixtures/`。
+脚本在同目录：`access_fetch.py`；离线夹具在 `fixtures/`（含签名向量与几份演示 AM）。
 
-#### ① 三条最常用的命令
+#### ① 最常用的命令
 
 ```bash
 # 0) 先跑一次「不需要 AM、不需要凭据」的离线自检（断网也能过）
 python access_fetch.py --selftest
 
+# 0.5) 看当前支持哪些 auth.mode（AM 里只能写这里列出来的）
+python access_fetch.py --list-signers
+
 # 1) 体检 AM：结构对不对、entity 签没签、夹具在不在。不取数、不要凭据
-python access_fetch.py --mapping am.json --check
+python access_fetch.py --mapping <am.json> --check
 
 # 2) 试跑：用 entity.fixture 走完整流程，不发网络、不要凭据
-python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
+python access_fetch.py --mapping <am.json> --entity <entity id> --dry-run
 
 # 3) 真取数：凭据只从 auth.credential_env 命名的环境变量读
-export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 只 export 一次，⛔ 别 echo
-python access_fetch.py --mapping am.json --entity CvmInstance \
-    --param region=ap-guangzhou --max-rows 500 --out ./cvm.json
+export <变量名1>=<值>  <变量名2>=<值>    # 变量名照 AM 的 auth.credential_env 写；只 export 一次，⛔ 别 echo
+python access_fetch.py --mapping <am.json> --entity <entity id> \
+    --param <名>=<值> --max-rows 500 --out ./rows.json
 ```
 
 参数就这些（`--param` 可重复，**只允许 `capability.pushdown` 里的键**）：
@@ -378,12 +381,13 @@ python access_fetch.py --mapping am.json --entity CvmInstance \
 | 选项 | 作用 |
 | --- | --- |
 | `--mapping <am.json>` | 已签的 access mapping（`--check` / 取数必填） |
-| `--entity <id\|class>` | 取哪个实体（`CvmInstance` 或 `cvm_instance` 都行） |
+| `--entity <id\|class>` | 取哪个实体（entity 的 `id` 或本体 `class` 都行） |
 | `--param K=V` | 下推参数；不在 `pushdown` 里会被拒，并**列出可用参数** |
 | `--limit N` | 每页条数（会被 `paging.max_limit` 夹住） |
 | `--max-rows N` | 最多取多少条（默认 1000；**取不全要如实说**） |
 | `--dry-run` | 用夹具，不发网络 |
 | `--check` | 只体检 AM，不取数 |
+| `--list-signers` | 打印已支持的 `auth.mode`（AM 里只能写这些） |
 | `--format jsonld\|rows` | 默认 JSON-LD；要平表用 `rows` |
 | `--out FILE` | 写文件（默认 stdout） |
 | `--selftest` | 离线自检（无网络、无凭据） |
@@ -393,12 +397,14 @@ python access_fetch.py --mapping am.json --entity CvmInstance \
 ```json
 { "@context": { "ontok": "https://ontok.dev/ns#" },
   "@graph": [
-    { "@id": "ontok:cvm_instance/ins-abc123", "@type": "ontok:cvm_instance",
-      "ontok:instance_id": "ins-abc123", "ontok:cpu": 4 } ],
-  "meta": { "entity": "CvmInstance", "class": "cvm_instance",
+    { "@id": "ontok:<class>/<id>", "@type": "ontok:<class>",
+      "ontok:<属性>": "<值>", "ontok:<另一个属性>": 4 } ],
+  "meta": { "entity": "<entity id>", "class": "<class>",
             "rows": 1, "pages": 1, "truncated": false,
-            "source": "tencent-cvm", "mapping_version": 1 } }
+            "source": "<source id>", "mapping_version": <版本> } }
 ```
+
+> 一份填了具体厂商值的同名样例在**附录 B**（标了「示例不是规格」）：形状一样，名字只是那一家的。
 
 #### ② 两条铁律（最容易踩）
 
@@ -407,17 +413,18 @@ python access_fetch.py --mapping am.json --entity CvmInstance \
 | **未签的 entity 取不了** | `reviewed_by` 为空 ⇒ `[am.unsigned] …还没签`，退出码 **2**，一个请求都不发（与 R6 同一条纪律）。**别绕**：让映射作者补 `reviewed_by`（`name@YYYY-MM-DD`），或换一个已签的 entity（`--check` 会列出哪个没签） |
 | **截断时退出码是 8** | `meta.truncated: true` = **没取全**（到 `--max-rows`，或到 1000 页保险丝）。它不是一个警告，是把「数据不完整」写进契约。⛔ 别把 `truncated=true` 当"取全了"去作答：调大 `--max-rows` 或收窄 `--param`，实在取不全就在答案里说「这是前 N 条」 |
 
-#### ③ 常见错误表（9 个码：你看到它说明什么、怎么修）
+#### ③ 常见错误表（10 个码：你看到它说明什么、怎么修）
 
 | 退出码 | 码 | 你看到它说明什么 | 怎么修 |
 | --- | --- | --- | --- |
-| **2** | `am.invalid` | AM 结构/版本不对，或 `request.required` 里的名字这次没给值 | 看消息点名的那一处：`contract_version` 只认 `1`；缺键补键；缺业务标识就补 `--param`（例如 `--param month=2026-09`）。改完先 `--check` |
+| **2** | `am.invalid` | AM 结构/版本/必填键不对（含 `auth.service` 缺失），或 `request.required` 里的名字这次没给值 | 看消息点名的那一处：`contract_version` 只认 `1`；缺键补键；缺业务标识就补 `--param`（例如 `--param <名>=<值>`）。改完先 `--check` |
 | **2** | `am.unsigned` | 这个 entity 的 `reviewed_by` 为空——**未签不许取数** | 找映射作者签（`name@YYYY-MM-DD`），或换已签的 entity。⛔ 不要自己填个名字糊过去 |
 | **2** | `param.not_pushdown` | 你给的 `--param` 不在 `capability.pushdown` 里 | 用消息里列出的可用参数；其余条件只能拉回来自己筛（或在 AM 里加 pushdown 声明） |
 | **3** | `credential.missing` | `auth.credential_env` 命名的环境变量没设 | 在当前 shell export 一次（消息里会点名变量）；⛔ 不要把值写进命令行/脚本/AM |
-| **4** | `auth.rejected` | 401/403，或签名不匹配（`AuthFailure.*`） | 先确认凭据有效、机器时钟准（时间戳是 **UTC 秒**）；再确认 AM 的 `auth.*` 与实际发的 header 一致。⛔ 不要自己重写签名 |
-| **5** | `api.throttled` | 429 / `RequestLimitExceeded`——被限流 | 降 `--limit` / `--max-rows`，分地域取，隔一会儿再来。脚本**不自动退避**，重试由你决定 |
-| **6** | `api.invalid` | 400 / `InvalidParameter` / `UnknownParameter`——参数不对 | 看 `--dry-run` 打出的 `meta.request_body`；注意 `X-TC-Region` 这类只能走 header，⛔ 别两处都写（RECIPE §七①） |
+| **4** | `auth.rejected` | 401/403，或签名不匹配（服务端判签名错） | 先确认凭据有效、机器时钟准（时间戳是 **UTC 秒**）；再确认 AM 的 `auth.*`（含 `auth.service`）与实际发的 header 一致。⛔ 不要自己重写签名 |
+| **4** | `auth.unsupported` | `auth.mode` 没有对应的签名器（⛔ 脚本**不会**退回别的算法） | 用消息里列出的已支持 mode（`--list-signers` 可查）；确实要这个算法 ⇒ 提需求加签名器（加一个不用改主流程） |
+| **5** | `api.throttled` | 429 / 被限流（服务端说请求太多） | 降 `--limit` / `--max-rows`，收窄 `--param` 范围，隔一会儿再来。脚本**不自动退避**，重试由你决定 |
+| **6** | `api.invalid` | 400 / 服务端说参数不对（未知参数、参数值不合法） | 看 `--dry-run` 打出的 `meta.request_body`；有的参数只能走 header，⛔ 别两处都写（RECIPE §七①） |
 | **7** | `net.timeout` / `net.error` | 超时 / 连不上 / 5xx | 查 DNS、代理、出网策略；5xx 稍后重试。⛔ 不要改成猜地址（会连到别的环境） |
 | **8** | `rows.truncated` | 到 `--max-rows`（或分页保险丝）还没取全 | **数据可用但没取全**：调大 `--max-rows`、收窄 `--param`；答题时说清范围。⛔ 别当取全了 |
 
@@ -444,12 +451,100 @@ python access_fetch.py --mapping am.json --entity CvmInstance \
 
 ---
 
+### 4.6 AM 契约：数字员工可以依赖什么
+
+> AM（access mapping，**访问映射**）是**本体 ↔ 取数方式的声明式映射**：某个 `<class>` 该去哪个
+> `<source>`、用哪个接口、参数怎么拼、结果怎么切成一行、字段怎么落成属性。
+>
+> 本节讲**你能依赖什么、违反了会怎样**；逐键说明只有一处：[`AM-FIELDS.md`](AM-FIELDS.md)。
+> ⛔ 本节不重复字段表 —— 两处各写一份，一定会漂。
+
+#### ① AM 是什么：一份**人签过**的声明
+
+- 三段结构：`sources[]`（怎么连、怎么签）、`entities[]`（哪个 `<class>` 取哪个接口、怎么切行）、`relations[]`（脚本不读）。
+- **它由人签**：每个 entity 的 `reviewed_by` 是签名（`name@YYYY-MM-DD`）。签了才算契约。
+- 为什么这么设计：映射写错**不会报错**，只会给出一个「看起来对」的答案。签名把「谁为这份映射负责」写进文件，出了事有人可找。
+
+#### ② 三个版本号：谁决定「能不能执行」
+
+| 版本号 | 管什么 | 脚本怎么用它 |
+| --- | --- | --- |
+| `contract_version` | **契约形状**（有哪些键、键是什么意思、哪些必填） | **只认自己支持的值**（当前 `1`）。不认识 ⇒ `am.invalid`（退出 2），⛔ 不「尽力解析」 |
+| `mapping_version` | 映射**内容**的修订号 | 不判断，原样抄进输出 `meta.mapping_version` 供追溯 |
+| `ontology_version` | 这份映射绑的是哪版本体 | 不判断（`--check` 只打印，不拦） |
+
+**不一致时谁说了算**：能不能执行**只看** `contract_version`；`mapping_version` / `ontology_version`
+不一致**不拦**，但必须能在回执的 `meta` 里看见。
+
+#### ③ 必填 vs 可选
+
+- **必填**（缺 ⇒ `am.invalid`，退出 2）：`contract_version`、`sources[].{id,kind,base_url,auth}`、
+  `auth.mode`、`auth.credential_env`（两个变量名）、**签名器要求显式声明的键**（`tc3-hmac-sha256` 目前是 `auth.service`）、
+  `entities[].{id,class,source,operation,iri_template}` 以及 `reviewed_by`（缺它 ⇒ `am.unsigned`，退出 2）。
+- **缺了用签名器默认值**（`--check` 会提示）：`auth.signed_headers` / `auth.timestamp` / `auth.scope`。
+- **每个键到底是什么、脚本读不读**：只看 [`AM-FIELDS.md`](AM-FIELDS.md)（**唯一一份**字段表）。
+
+#### ④ 不变量（消费方可以直接依赖）
+
+| # | 不变量 | 违反了会怎样 |
+| --- | --- | --- |
+| 1 | `entities[].source` 必须出现在 `sources[].id` 里 | `am.invalid`（2），消息列出已有 id |
+| 2 | `iterator` 落在支持子集：`$.a.b[*]` / `$.a.b` | 别的写法 ⇒ `am.invalid`（2）—— ⛔ 脚本不猜路径 |
+| 3 | `fields.<属性>.path` 是**记录内**的点号路径（不支持数组下标） | 写法越界 ⇒ `am.invalid`（2）；某行缺这条路径只是「这行没这个属性」，**不丢整行** |
+| 4 | `iri_template` 的 `{id}` 由 `identity.key_path` 填 | 模板缺 `{id}` ⇒ `am.invalid`（2）；某行取不到 key ⇒ 该行跳过并计入 `meta.skipped_no_identity`（不静默） |
+| 5 | `capability.pushdown` 是**允许参数的白名单** | 传了白名单外的 `--param` ⇒ `param.not_pushdown`（2），并列出可用参数 |
+| 6 | `paging` 为空 ⇒ **单次取数**（不是「默认分页」） | 没声明分页就不翻页；`meta.truncated` 只在真没取全时才是 `true` |
+
+#### ⑤ 语义边界（最容易被误读的四条）
+
+| 你会这么以为 | 实际上 |
+| --- | --- |
+| `freshness` 保证数据是新的 | 它是**声明**：这个源正常情况下多新。⛔ 不是对本次回执的保证 |
+| 取数就该有数据 | AM 只声明「怎么取」，**不保证这次有数据**。`@pending`、空 `@graph`、`rows: []` 都是**合法回执** |
+| 空结果 = 没权限 | 不是。没权限是 `auth.rejected`（4）；空就是空 |
+| `truncated: false` = 一定是全量 | 是「按服务端给的总数 / 短页判断取全了」；服务端不报总数时，判断依据就是短页 |
+
+#### ⑥ 签署纪律
+
+- `reviewed_by` 为空 ⇒ **拒取**：`am.unsigned` + 退出码 **2**，**一个请求都不发**。
+- ⛔ 「先生成后补签」不是可用路径：脚本挡的是**使用时刻**的签名状态；空着就是未签。
+- ⛔ 不要自己填个名字糊过去 —— 那是伪造签名，比未签更糟。
+
+#### ⑦ 契约怎么演进
+
+| 改动 | 怎么办 |
+| --- | --- |
+| 改**契约形状**（加必填键、改键义、改不变量） | 升 `contract_version` 并通知所有消费方；旧脚本遇到不认识的值 ⇒ `am.invalid`（2），⛔ 不许「尽力解析」 |
+| 只改**映射内容**（换个参数名、改条路径、补签署人） | 升 `mapping_version`，`contract_version` 不动 |
+
+#### ⑧ 错误码 ↔ 契约里被违反的是哪一条
+
+| 码 | 退出 | 对应哪条 |
+| --- | --- | --- |
+| `am.invalid` | 2 | ②形状/版本、③必填键、④-2/3/4 路径子集、`auth.service` 缺失 |
+| `am.unsigned` | 2 | ⑥ 签署纪律（`reviewed_by` 空） |
+| `param.not_pushdown` | 2 | ④-5 pushdown 白名单 |
+| `credential.missing` | 3 | `auth.credential_env` 命名的环境变量没设 |
+| `auth.unsupported` | 4 | `auth.mode` 没有对应签名器（⛔ 不 fallback） |
+| `auth.rejected` | 4 | 凭据 / 签名 / 权限被服务端拒 |
+| `api.throttled` | 5 | 限流（运行时状态，与契约无关） |
+| `api.invalid` | 6 | 服务端不接受这次请求的参数 |
+| `net.timeout` / `net.error` | 7 | 网络（与契约无关） |
+| `rows.truncated` | 8 | ④-6 / `--max-rows`：数据没取全 |
+
+> 码与退出码的**唯一一份**表在脚本的 `CODE_EXIT`；行为与本文冲突时**以脚本为准**，并把文档改对。
+
+---
+
 ## 附录 A · 参考实现（**旧·仅当拿不到 `access_fetch.py` 时**）
 
+> **示例不是规格。** 本附录（以及附录 B）里出现的具体厂商名、接口名、字段名只是**那一家的样子**，
+> 用来把「逐字节正确的签名」讲清楚；它们**不是** skill 的规定，换一家就换掉。
+>
 > ⛔ **先看 §4.5**：正常路径是调用 `access_fetch.py`，本附录只在「包里没有脚本且环境有 Python」
 > 时作为最后兜底，且**不推荐**——它没有错误码、没有剪枝、没有截断标记，正是 §4.4② 说过的坑。
 >
-> ⚠️ **为什么附录里出现具体厂商**：本部署的 `get` 指向腾讯云，签名算法必须逐字节正确，
+> ⚠️ **为什么附录里出现具体厂商**：这套部署的 `get` 指向某家云，签名算法必须逐字节正确，
 > 抽象描述不足以实现。**换厂商只需替换 `call()` 里的签名段**，其余（翻页/重试/收窄）通用。
 >
 > 用途：当包里**没有**现成执行器时，抄这段，⛔ 不要自己重写。
@@ -523,6 +618,43 @@ if __name__ == "__main__":
 
 **注意**：示例里的 `host/action/version` **必须来自 `get`（或 `describe` 的 `access`），不要凭记忆写**。
 若 `get` 没给，就按 `ref` 找运维要**已签映射**——⛔ 不要猜版本（实测有人把 SSL 猜成另一个版本，能跑通但字段对不上本体）。
+
+---
+
+## 附录 B · 示例（某云厂商，仅供参考）
+
+> **示例不是规格。** 这一节只是把 §4.5 的占位符填成**某一家云**的样子，方便第一次用的人对照；
+> 名字（`CvmInstance` / `tencent-cvm` / `X-TC-*` / `TENCENT_*`）都属于**那一家的 AM**，不是本 skill 的规定。
+> 换成别的厂商/别的本体时，命令里的 `<entity id>`、参数名、环境变量名都按**你拿到的 AM** 填。
+
+**命令的填法**（对应 §4.5 ① 的三步）：
+
+```bash
+python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
+python access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-guangzhou --out ./cvm.json
+export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM 的 auth.credential_env
+```
+
+**输出形状**（对应 §4.5 ① 的 JSON；`meta` 字段一个不少）：
+
+```json
+{ "@context": { "ontok": "https://ontok.dev/ns#" },
+  "@graph": [
+    { "@id": "ontok:cvm_instance/ins-abc123", "@type": "ontok:cvm_instance",
+      "ontok:instance_id": "ins-abc123", "ontok:cpu": 4 } ],
+  "meta": { "entity": "CvmInstance", "class": "cvm_instance",
+            "rows": 1, "pages": 1, "truncated": false,
+            "source": "tencent-cvm", "mapping_version": 1 } }
+```
+
+**错误消息长什么样**（对应 §4.5 ③；码与退出码是规格，具体串是示例）：
+
+| 你会看到 | 这一家云里的样子 |
+| --- | --- |
+| 签名被拒（`auth.rejected`，4） | `AuthFailure.SignatureFailure`：时钟、`auth.service`、`auth.signed_headers` 对不上 |
+| 限流（`api.throttled`，5） | `RequestLimitExceeded` |
+| 参数被拒（`api.invalid`，6） | `InvalidParameter` / `UnknownParameter`；`X-TC-Region` 这类只能走 header，⛔ 别两处都写 |
+| 缺 `auth.service`（`am.invalid`，2） | `--check` 会点名 source 与 `auth.service`，并给 `"service": "<该接口所属服务名>"` 的补法 |
 
 ---
 
