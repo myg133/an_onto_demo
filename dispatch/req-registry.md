@@ -1638,4 +1638,5 @@ BA 曾称「纪律 O 的 `846` 与其分项 `62+704+142+1=847` **矛盾**，需�
 | **L5** | **出口收口未做**（REQ-107）· `filter_view` 与 `sanitize_display` 口径不一 · 各出口 stderr 报告各异 · `tools/list` 响应不过 `guard()` 且全仓无判据扫它（静态内容问题，形状与 H2 不同） |
 
 
-| REQ-170 | **构建链带上库结构**（`build run --dsn/--schema` + `doc ingest --schema` → 产出 `maps_to` → `r2rml generate` 可跑） | lion | 2026-10-27 | **实测缺口**：`doc_merge` 等关系断言的 `maps_to`（该文件 70 处），但 `src/extract/**` 与 skill **各 0 处**；`doc ingest` 无 schema 参数 ⇒ 关系全 `doc_unmapped`（REQ-147 那次 3/755 的主因）。且 `build run` 不调 `introspect` ⇒ 纯文档项目**没有 schema.json** ⇒ `r2rml generate`（`--schema` 必填）无从跑。**裁定**：R1 `build run --dsn\|--schema` 自动勘查 · R2 `doc ingest --schema` 随块下发（进指纹） · R3 契约补「给了表列怎么做」（BA 改 skill） · R4 端到端验到 R2RML 能被服务面只读解析 |
+| REQ-170 | ✅ **已完成**（`14bd7b7`）· **构建链带上库结构**（`build run --dsn/--schema` + `doc ingest --schema` → 产出 `maps_to` → `r2rml generate` 可跑） | lion | 2026-10-27 | **实测缺口**：`doc_merge` 等关系断言的 `maps_to`（该文件 70 处），但 `src/extract/**` 与 skill **各 0 处**；`doc ingest` 无 schema 参数 ⇒ 关系全 `doc_unmapped`（REQ-147 那次 3/755 的主因）。且 `build run` 不调 `introspect` ⇒ 纯文档项目**没有 schema.json** ⇒ `r2rml generate`（`--schema` 必填）无从跑。**裁定**：R1 `build run --dsn\|--schema` 自动勘查 · R2 `doc ingest --schema` 随块下发（进指纹） · R3 契约补「给了表列怎么做」（BA 改 skill） · R4 端到端验到 R2RML 能被服务面只读解析 |
+

@@ -574,3 +574,16 @@
 | QA | **0 阻断**（9 条非阻断：F1/F3/F4 修、F6/F7 不改、F2 由我改 changelog） |
 | 回收 | worktree + 分支已删；`cargo-163` 已删（D 盘 124.5 GB） |
 | 附带 | skills 删掉「尾步可能落到旧 review open」的过期提示 + 补 `bundle pack --dir`（Deploy 8b15675） |
+
+## 2026-10-27 22:40 · REQ-170 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **14bd7b7**（`--no-ff`）← `feature/REQ-170` **2457829**（基线 7323382） |
+| 冲突 | **零** |
+| 改动 | 14 文件 **+2949/−29**（新增 `schema_digest.rs` 1031 行 + `test_req170_schema_chain.rs` 920 行） |
+| 合并后复跑（空库 `req170_merge`） | `req170_schema_chain` **8/8** · `extract::` **259/259** · `req163_local_chain` 8 · `req147_doc_acp` 13 · `req159_bundle` 38 · `read_only_guard` 5 · `source_enumeration` 10 · `req160` 9 · `check` 绿 |
+| QA | 两轮：第 1 轮判**阻断 F-1**（只读账号下主键全 null ⇒ r2rml 0 TriplesMap）；整改后第 2 轮**可以合**（只读角色实验独立重建：PK 0→5、r2rml 0→2；变异红→绿） |
+| 回收 | worktree + 分支已删；`cargo-170` 已删（释放 3.23 GB） |
+| 补丁 | `5a72429` N-1 只改注释（与 QA 验过的树只差注释，避免"合进去的和验过的不是同一棵"） |
+| 遗留 | **REQ-171 待开**：真 UAT 数据验证发现选表打分在中文语料上几乎全 0 分（96 表只有 1 张 >0），top-N 退化成字典序并选中 `_volc_dts_pg_ddl_*` 垃圾表 ⇒ `maps_to` 落地 0；紧凑全表清单只需 3221 字符（< 12000 预算） |
