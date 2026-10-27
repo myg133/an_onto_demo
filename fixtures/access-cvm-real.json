@@ -13,7 +13,8 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
-        ]
+        ],
+        "service": "cvm"
       },
       "defaults": {
         "Region": "ap-guangzhou"
@@ -28,7 +29,8 @@
         "credential_env": [
           "TENCENT_SECRET_ID",
           "TENCENT_SECRET_KEY"
-        ]
+        ],
+        "service": "monitor"
       },
       "defaults": {
         "Region": "ap-guangzhou"
@@ -85,11 +87,18 @@
         },
         "bindings": {
           "ids": {
-            "source": "filter"
+            "source": "filter",
+            "shape": "array"
           },
           "zone": {
             "source": "filter"
           }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "number"
         }
       },
       "paging": {

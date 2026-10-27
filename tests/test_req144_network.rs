@@ -261,7 +261,7 @@ fn mapping_text_with_request(
     "id": "fake",
     "kind": "http-json",
     "base_url": "{base_url}",
-    "auth": {{ "mode": "tc3-hmac-sha256", "credential_env": ["ONTOK_TEST_SECRET_ID_144", "ONTOK_TEST_SECRET_KEY_144"] }},
+    "auth": {{ "mode": "tc3-hmac-sha256", "service": "cvm", "credential_env": ["ONTOK_TEST_SECRET_ID_144", "ONTOK_TEST_SECRET_KEY_144"] }},
     "defaults": {{ "Region": "ap-guangzhou" }}
   }}],
   "entities": [{{

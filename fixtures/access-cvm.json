@@ -10,7 +10,8 @@
       "base_url": "https://cvm.tencentcloudapi.com",
       "auth": {
         "mode": "tc3-hmac-sha256",
-        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"]
+        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
+        "service": "cvm"
       },
       "defaults": { "Region": "ap-guangzhou" }
     },
@@ -20,7 +21,8 @@
       "base_url": "https://monitor.tencentcloudapi.com",
       "auth": {
         "mode": "tc3-hmac-sha256",
-        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"]
+        "credential_env": ["TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"],
+        "service": "monitor"
       },
       "defaults": { "Region": "ap-guangzhou" }
     }
@@ -58,8 +60,14 @@
           ]
         },
         "bindings": {
-          "ids": { "source": "filter" },
+          "ids": { "source": "filter", "shape": "array" },
           "zone": { "source": "filter" }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "number"
         }
       },
       "paging": {
@@ -95,6 +103,14 @@
         "status": { "path": "AlarmStatus" },
         "instance_id": { "path": "AlarmObject" },
         "start_time": { "path": "StartTime", "type": "xsd:integer" }
+      },
+      "request": {
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "number"
+        }
       },
       "paging": {
         "offset_param": "Offset",
