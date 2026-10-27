@@ -18,6 +18,10 @@
 //! - 定版：`crate::domain::apply::apply(ApplyInput{..}) -> Snapshot` —— 零 I/O（`src/domain/apply.rs`）；
 //! - 打包：`crate::bundle::pack::{PackInput, assemble}` —— 零 I/O（`src/bundle/pack.rs`）。
 //!
+//! ⭐ REQ-163：页面导出（`POST /api/bundle`）与 `ontok-builder bundle pack --dir` 走的是
+//! **同一个** [`pack_version`]（同定版 + 同 `built_at` ⇒ 逐字节相同）；CLI 只多了一个
+//! 可以钉死的 `--built-at` 和它自己的落点（`--out`），⛔ 不是第二份打包实现。
+//!
 //! ⛔ 本模块**没有** `PgPool` / `sqlx` / 网络；`ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY`
 //! 缺了也照常起（AC-007）。判据见 `tests/test_req162_console.rs` 的真进程用例。
 //!
@@ -204,27 +208,12 @@ impl LocalConsole {
 
     /// 最近一个定版号（`None` = 一个都还没有）。
     fn latest_seq(&self) -> Option<i32> {
-        let mut seqs = self.version_seqs();
-        seqs.pop()
+        latest_version_seq_of(&self.dir)
     }
 
     /// 已经落盘的定版号，**升序**。
     fn version_seqs(&self) -> Vec<i32> {
-        let dir = self.versions_dir();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Vec::new();
-        };
-        let mut out: Vec<i32> = entries
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                let rest = name.strip_prefix('v')?;
-                rest.parse::<i32>().ok().filter(|n| *n >= 1)
-            })
-            .collect();
-        out.sort_unstable();
-        out
+        version_seqs_of(&self.dir)
     }
 
     /// 横幅用的一行概况（**永不失败**：读不出来就报 0，横幅不能把服务拦住）。
@@ -310,6 +299,53 @@ pub fn project_name_of(dir: &Path) -> String {
         s.push('_');
     }
     s
+}
+
+/// ⭐ REQ-163 · **工作目录 → 项目名**（`build run` / `bundle pack --dir` 走这一条）。
+///
+/// 与 [`LocalConsole::open`] 的派生**必须**一致（「一个工作目录 = 一个项目」是用户口径），
+/// 所以这里先按同一个口径**解析目录**再交给 [`project_name_of`] —— ⛔ 不写第二份 sanitize：
+///
+/// | 目录状态 | 解析方式 | 为什么 |
+/// | --- | --- | --- |
+/// | 已存在 | `canonicalize` | 与 `LocalConsole::open` 逐字节同一个名字（`--work-dir .` 也算得对） |
+/// | 还不存在 | `std::path::absolute`（纯词法） | `build run` 在**抽取之前**就要知道项目名（草稿的 `project`），那时目录还没建 |
+pub fn project_name_of_workdir(dir: &Path) -> String {
+    let resolved = match std::fs::canonicalize(dir) {
+        Ok(p) => p,
+        // 目录还没建：只做**词法**绝对化（不碰文件系统），末段仍是 `dir` 的末段。
+        Err(_) => std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()),
+    };
+    project_name_of(&resolved)
+}
+
+/// 某个工作目录里**已定版**的序号（**升序**；目录 / `.ontok/versions` 不存在 ⇒ 空）。
+///
+/// ⚠️ 为什么是吃 `&Path` 的自由函数：`build run` 在**打开评审台之前**就要知道
+/// 「基版本 = 1 还是最新定版 + 1」（草稿要填 `base_version`），而那时它手里只有一个
+/// 目录 —— [`LocalConsole::open`] 会 canonicalize 且要求目录**已存在**，用不了。
+/// ⛔ 这不是第二份实现：`LocalConsole::version_seqs` 调的就是它。
+pub fn version_seqs_of(dir: &Path) -> Vec<i32> {
+    let versions = dir.join(VERSIONS_REL);
+    let Ok(entries) = std::fs::read_dir(&versions) else {
+        return Vec::new();
+    };
+    let mut out: Vec<i32> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            let rest = name.strip_prefix('v')?;
+            rest.parse::<i32>().ok().filter(|n| *n >= 1)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// 最近一个定版号（一个都没有 ⇒ `None`）。
+pub fn latest_version_seq_of(dir: &Path) -> Option<i32> {
+    version_seqs_of(dir).pop()
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -608,7 +644,11 @@ fn extracted_by_of(doc: &Value) -> Option<ExtractedBy> {
 /// 为什么不是直接写目标：一份写了一半的 `decisions.json` / `snapshot.json`
 /// 比没有更糟（下次读会报「不是合法 JSON」，而人以为数据还在）。`.tmp` + rename
 /// 在同一个文件系统上是原子的。
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OpError> {
+///
+/// ⚠️ `pub(crate)`（REQ-163）：`build run` 的 ③ 段写草稿（`<work-dir>/out/proposal.json`）
+/// 也走它 —— 草稿是评审台的输入，半份文件会让页面在读到一个截断的 JSON 时报 500，
+/// 而不是「还没写出」。⛔ 不在 `build_run.rs` 里另写一个 `fs::write`。
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OpError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             OpError::internal(format!(
@@ -639,7 +679,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OpError> {
     })
 }
 
-fn now_rfc3339() -> String {
+/// 当前 UTC 的 RFC3339 串（秒级、带 `Z`）—— **唯一**的「打包时间」来源。
+///
+/// ⭐ REQ-163：页面导出（`POST /api/bundle`）与 `bundle pack --dir` **共用这一个函数**，
+/// 而且 CLI 还允许用 `--built-at` 把它**钉死**。两件事合起来才有那条判据：
+/// 「同一定版 + 同一个 built_at ⇒ 包逐字节相同」（见 `tests/test_req163_local_chain.rs`）。
+pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
@@ -1177,20 +1222,64 @@ async fn api_bundle(State(svc): State<Arc<LocalConsole>>, body: Bytes) -> Respon
 }
 
 fn bundle(svc: &LocalConsole, wanted: Option<i32>) -> Result<Value, OpError> {
+    let packed = pack_version(svc, wanted, &now_rfc3339())?;
+    let path = svc.bundle_path(packed.seq);
+    write_atomic(&path, &packed.bytes)?;
+    let sha = crate::query::audit::sha256_hex(&packed.bytes);
+    Ok(json!({
+        "seq": packed.seq,
+        "file": file_name_of(&path),
+        "path": path.display().to_string(),
+        "bytes": packed.bytes.len(),
+        "sha256": sha,
+    }))
+}
+
+/// 一份**已打好**的定版包（字节只在内存里，落不落盘由调用方决定）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedVersion {
+    /// 真实定版号（`wanted` 缺省时 = 最新定版）。
+    pub seq: i32,
+    /// 完整 `.ontokbundle` 字节（store-only zip）。
+    pub bytes: Vec<u8>,
+}
+
+/// ⭐ REQ-163 · **定版 → 包字节**：页面导出与 `bundle pack --dir` 的**唯一**打包点。
+///
+/// ```text
+/// POST /api/bundle {seq?}                  → pack_version(svc, seq, now_rfc3339()) → 写 <dir>/.ontok/bundles/
+/// ontok-builder bundle pack --dir D [...]  → pack_version(console(D), seq, --built-at) → 写 --out
+/// ```
+///
+/// # 为什么必须是**同一个函数**
+///
+/// 用户口径是「构建包就是个导出包的功能」—— CI 出的包与人在页面上点的那个包必须是
+/// **同一个东西**（同定版 + 同 `built_at` ⇒ 同 sha256）。两条实现哪怕只差一处
+/// `builder_host` 或一个键的顺序，服务端的 sha 校验就会说「两个包不一样」，
+/// 而人只能看见「CI 的包坏了」。⇒ 字节只在这里产生一次。
+///
+/// ⚠️ 本函数**不写盘**（页面写 `.ontok/bundles/`、CLI 写 `--out`）：落点是调用方的事。
+/// ⛔ 也不碰时钟：`built_at` 由调用方传入（页面传 [`now_rfc3339`]，CLI 可钉死）。
+pub fn pack_version(
+    svc: &LocalConsole,
+    wanted: Option<i32>,
+    built_at: &str,
+) -> Result<PackedVersion, OpError> {
     let seq = match wanted {
         Some(seq) => {
             if seq < 1 {
                 return Err(OpError::bad_request(
                     "BAD_SEQ",
-                    format!("seq 必须 ≥ 1，收到 {seq}。"),
-                    "定版号从 1 开始；不给 seq = 用最新定版。",
+                    format!("定版号必须 ≥ 1，收到 {seq}。"),
+                    "定版号从 1 开始；不给 = 用最新定版。",
                 ));
             }
             if !svc.version_seqs().contains(&seq) {
                 return Err(OpError::not_found(
                     "VERSION_NOT_FOUND",
                     format!("没有第 {seq} 版定版。"),
-                    "先 `GET /api/versions` 看有哪些；导出的是**定版**，不是草稿。",
+                    "先 `GET /api/versions`（或 `ls .ontok/versions`）看有哪些；\
+                     导出的是**定版**，不是草稿。",
                 ));
             }
             seq
@@ -1199,17 +1288,16 @@ fn bundle(svc: &LocalConsole, wanted: Option<i32>) -> Result<Value, OpError> {
             OpError::bad_request(
                 "NO_VERSION",
                 "还没有任何定版 —— 导出的是定版，草稿不能直接打包。",
-                "先把草稿签完（两轨都给值）再点「定版」，然后再导出。",
+                "先把草稿签完（两轨都给值）再定版，然后再导出/打包。",
             )
         })?,
     };
 
     let snapshot = svc.load_snapshot(seq)?;
-    let built_at = now_rfc3339();
     let bytes = assemble(&PackInput::new(
         svc.project().to_string(),
         seq,
-        built_at,
+        built_at.to_string(),
         snapshot,
     ))
     .map_err(|e| {
@@ -1220,16 +1308,7 @@ fn bundle(svc: &LocalConsole, wanted: Option<i32>) -> Result<Value, OpError> {
              目录名会 sanitize 成合法的项目名，若仍失败把这条错误原文报给维护者。",
         )
     })?;
-    let path = svc.bundle_path(seq);
-    write_atomic(&path, &bytes)?;
-    let sha = crate::query::audit::sha256_hex(&bytes);
-    Ok(json!({
-        "seq": seq,
-        "file": file_name_of(&path),
-        "path": path.display().to_string(),
-        "bytes": bytes.len(),
-        "sha256": sha,
-    }))
+    Ok(PackedVersion { seq, bytes })
 }
 
 async fn api_bundle_download(
