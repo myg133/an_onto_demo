@@ -1,5 +1,10 @@
 # 构建包在 Console 上的落地设计（lion 提案）
 
+> ⚠️ **方向已修正（2026-10-27 13:0x，见 [`ADR-013`](../decisions/ADR-013-service-plane-becomes-writable.md)）**：
+> REQ-159 的 8 条端点**已从 `console` 迁到 `query serve`**（由 Studio 调用）。
+> 本文档保留为**当时的设计记录**，不再代表当前落点；`console` 页面的「构建包」tab 仅作 Studio 的参考实现。
+>
+
 - 日期：2026-10-27 · 作者：lion（构建端 BA）· 读者：join（服务端实现者）
 - 关联：**REQ-159**（契约由 join 起草）、REQ-124（控制面 API）、REQ-153（覆盖盘点）、ADR-007（构建/消费分离）、ADR-011（分工）
 - 状态：**提案**。凡标「建议」的是我的判断，不是已定决策；标「现状」的是代码事实（带 `path:line`）
