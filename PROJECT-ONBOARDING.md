@@ -57,9 +57,9 @@ ontok-builder propose --schema /work/<项目>/schema.json \
               --out /work/<项目>/proposal.json
 
 # 2.3 人签（⛔ 不能自动化：这是唯一权威来源）
-ontok review decide --proposal p1 --project <项目> --accept-all   # 或逐条
-ontok proposal apply --proposal p1 --project <项目>
-ontok version freeze --project <项目> --version <N>
+ontok-builder review decide --proposal p1 --project <项目> --accept-all   # 或逐条
+ontok-builder proposal apply --proposal p1 --project <项目>
+ontok-builder version freeze --project <项目> --version <N>
 ```
 
 > ⚠️ **`--names` 是必填**（REQ-128）：不传就直接失败，因为默认值是脱敏占位表。
@@ -169,7 +169,7 @@ spec:
 
 ### ⚠️ 但**文档抽完进不了本体**
 
-`ontok doc ingest` 的帮助原话：
+`ontok-builder doc ingest` 的帮助原话：
 
 > 「**第一步**：非结构化文档 → 带证据的断言」「本命令**只做第一步**」
 

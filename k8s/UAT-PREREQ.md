@@ -86,9 +86,9 @@ kubectl -n anspire-ontok-uat create configmap ontok-config \
 ontok-builder introspect --out schema.json
 ontok-builder propose --schema schema.json --names table_names.json --out proposal.json
 ontok-builder import --file proposal.json
-ontok review decide --proposal p1 --project anspire_uat --accept-all
-ontok proposal apply --proposal p1 --project anspire_uat
-ontok version freeze --project anspire_uat --version 1
+ontok-builder review decide --proposal p1 --project anspire_uat --accept-all
+ontok-builder proposal apply --proposal p1 --project anspire_uat
+ontok-builder version freeze --project anspire_uat --version 1
 ```
 
 > 这一步要连**元数据库 + 源库**，在本机能连通时跑最省事；也可以在集群里跑一次性 Job。

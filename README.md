@@ -71,15 +71,15 @@ kubectl -n ontok create secret generic ontok-db \
 ```bash
 # 1 建元数据库（compose 的 db，或托管 PG）
 # 2 在能连源库的机器上：建项目 → 提议 → 评审 → 应用 → 冻结
-ontok project new --name anspire_prod
-ontok version new --project anspire_prod
+ontok-builder project new --name anspire_prod
+ontok-builder version new --project anspire_prod
 ontok-builder import --file proposal.json
-ontok review decide --proposal p1 --project anspire_prod --accept-all
-ontok proposal apply  --proposal p1 --project anspire_prod
-ontok version freeze  --project anspire_prod --version 3
+ontok-builder review decide --proposal p1 --project anspire_prod --accept-all
+ontok-builder proposal apply  --proposal p1 --project anspire_prod
+ontok-builder version freeze  --project anspire_prod --version 3
 # 3 导出并归档
-ontok ontology export --project anspire_prod --version 3 --model-view --out releases/anspire_prod-v3-20261023/model.ttl
-ontok r2rml generate  --project anspire_prod --version 3 --out releases/anspire_prod-v3-20261023/mapping.ttl
+ontok-builder ontology export --project anspire_prod --version 3 --model-view --out releases/anspire_prod-v3-20261023/model.ttl
+ontok-builder r2rml generate  --project anspire_prod --version 3 --out releases/anspire_prod-v3-20261023/mapping.ttl
 # 4 起服务，确认 /api/health 与 /api/catalog
 # 5 用两个真实租户做泄漏对拍，再放流量
 ```
