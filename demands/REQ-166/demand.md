@@ -61,3 +61,14 @@ BA 建议形状（不是最终契约）：
 ```
 
 理由：形状由**源的事实**定；用 JSONPath 风格与既有 `iterator` 一致；⛔ 不在脚本里内置第二套信封识别。
+
+### A 的修正（2026-10-27 19:05，join 逐键核对后）：分页有**两层**，两层都要显式
+
+| 层 | 键 | 例 |
+| --- | --- | --- |
+| 实体级 `entity.paging` | `offset_param` / `limit_param` / `max_limit` / `total_path` | `{"offset_param":"Offset","limit_param":"Limit","max_limit":100,"total_path":"$.Response.TotalCount"}` |
+| 请求级 `entity.request.paging` | `offset` / `page` / `limit` / `max_limit` / `value_type` / `offset_base` | `{"offset":"Offset","limit":"Limit","max_limit":100,"value_type":"string"}` |
+
+脚本读序（`access_fetch.py:862-865`）：`paging.offset_param → request.paging.offset → request.paging.page → "Offset"`，`limit`/`max_limit` 同理（`100` 也是字面量）。
+⇒ **"猜"的是最后那几个字面量**。REQ-167 会把「两层都缺」改成 `am.invalid`，且 `max_limit` 不再默认 100。
+⇒ 本单要求：**每个有 `iterator` 的 entity 两层都必须非空**（缺一层就红）。
