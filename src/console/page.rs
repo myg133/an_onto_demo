@@ -1500,11 +1500,42 @@ function showBundle(res) {
   var comps = res.components || {};
   box.appendChild(makeTable(["组件", "计数", "requires_dsn", "dialect", "状态"], ["ontology", "am", "db"].map(function (k) {
     var c = comps[k] || null;
-    return [k, c ? countOf(c) : "—", c ? flagOf(c.requires_dsn) : "—", c ? (c.dialect || "—") : "—",
+    return [k, c ? countSummary(k, c) : "—", dsnFlag(c), c ? (c.dialect || "—") : "—",
       compStatus(k)];
   }), "组件清单为空。"));
   needDsn(res);
   renderBundleGates();
+}
+
+// `requires_dsn` 列：**字段不存在就显示 —**（组件级契约里 ontology / am 没有这个字段）。
+// ⛔ 别拿「否」顶上去 —— 那是替服务端下一个它没下的结论（与「计数掉成 —」同一类毛病）。
+function dsnFlag(c) {
+  if (!c || c.requires_dsn === undefined || c.requires_dsn === null) return "—";
+  return flagOf(c.requires_dsn);
+}
+
+// 组件「计数」列：按组件给出人看得懂的摘要（字段名以契约 §五-2 为准）。
+// 缺哪个字段就省略那一段（例如只有 entity_types 就显示「30 类」），一个都没有才退回 countOf ——
+// ⛔ 别因为缺字段就把整列掉成「—」：FDE 会以为 manifest 里没写计数（服务端其实已经验过）。
+function countSummary(kind, c) {
+  if (!c) return "—";
+  var parts = [];
+  function add(v, unit) {
+    if (typeof v === "number" && isFinite(v)) parts.push(v + " " + unit);
+  }
+  if (kind === "ontology") {
+    add(c.entity_types, "类");
+    add(c.link_types, "关系");
+    add(c.properties, "属性");
+  } else if (kind === "am") {
+    add(c.entities, "实体");
+    add(c.sources, "源");
+  } else if (kind === "db") {
+    // 契约没规定 db 的计数：有 tables / columns 才显示，⛔ 不编。
+    add(c.tables, "表");
+    add(c.columns, "列");
+  }
+  return parts.length ? parts.join(" / ") : countOf(c);
 }
 
 // 组件状态（照服务端 P1a 的真实行为写，⛔ 别夸大成「已经可用」）：
@@ -2146,6 +2177,14 @@ mod tests {
             // 与 P1a 真实行为对齐的两条：重复 import 是幂等 200（不是 409）、am/ 只校验不落库
             "already_imported",
             "P1b 生效",
+            // 组件计数必须按契约字段给摘要（entity_types / link_types / entities / sources），
+            // 不许退回通用 count：缺字段就省略那一段，别整列掉成「—」。
+            "entity_types",
+            "link_types",
+            "entities",
+            "sources",
+            "countSummary",
+            "dsnFlag(",
             // key 能再次查看 ⇒ 每次查看都要留痕：审计提示是这条需求的唯一补偿，不许删
             "reveal_key",
             "id=\"b-key-view\"",
@@ -2226,6 +2265,45 @@ mod tests {
         assert!(
             CONSOLE_HTML.contains("body: f, ctype: \"application/octet-stream\""),
             "上传必须把文件句柄直接当 body 发（⛔ 不走 post()）"
+        );
+    }
+
+    /// 「组件没有 `requires_dsn` 字段 ⇒ 显示 `—`」（⛔ 不许渲染成「否」）。
+    ///
+    /// 为什么值得一条判据：把**字段不存在**渲染成**具体值**（「否」），等于替服务端下了一个
+    /// 它没下的结论。这类漂移只有上真浏览器才看得见（QA 的 Playwright 就是这么抓到组件计数
+    /// 那整列「—」的），所以把它钉在源码上：`dsnFlag()` 必须先判字段缺省，再落到 `flagOf`。
+    #[test]
+    fn a_missing_requires_dsn_renders_as_dash_not_false() {
+        let at = CONSOLE_HTML
+            .find("function dsnFlag(c)")
+            .expect("缺 dsnFlag（requires_dsn 列的渲染点）");
+        let tail = &CONSOLE_HTML[at..];
+        let end = tail
+            .find("\n}")
+            .map(|n| n + 2)
+            .expect("dsnFlag 没有函数体结尾");
+        let body = &tail[..end];
+        assert!(
+            body.contains("c.requires_dsn === undefined"),
+            "dsnFlag 必须先判「组件没有这个字段」：{body}"
+        );
+        assert!(
+            body.contains("return \"—\""),
+            "字段不存在时必须返回 —（⛔ 不是「否」）：{body}"
+        );
+        let dash_at = body.find("return \"—\"").unwrap();
+        let flag_at = body
+            .find("flagOf(")
+            .expect("dsnFlag 里要保留真正的 是/否 分支（否则「是」也永远不显示）");
+        assert!(
+            dash_at < flag_at,
+            "「—」分支必须排在 flagOf 之前：先判缺省，再下结论。{body}"
+        );
+        // 反向自证：组件表的 requires_dsn 列确实走这个函数（不是写了个没人调的函数）。
+        assert!(
+            CONSOLE_HTML.contains("dsnFlag(c), c ? (c.dialect"),
+            "组件表的 requires_dsn 列必须走 dsnFlag()"
         );
     }
 
