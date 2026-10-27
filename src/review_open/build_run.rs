@@ -34,10 +34,19 @@
 //! # 基版本（`base_version`）从哪来 —— 这是本命令**唯一**的写库动作（不是 apply）
 //!
 //! `propose import` 要求提案挂在一个**已存在且未冻结**的版本上（`import_proposal_core`
-//! 的 `version_by_seq`）。所以本命令在导入前做**两件准备**：
+//! 的 `version_by_seq`）。所以本命令需要两件准备：**知道**落点、**建出**落点。
 //!
-//! 1. 项目不存在 ⇒ `get_or_create`（与 `propose import` 同一个方法，幂等）；
-//! 2. 一版都没有 ⇒ `new_version()` 建 v1（**不冻结、不 apply**）。
+//! ⚠️ **这两件事是分开的，顺序是判据**（QA REQ-160 退回项）：
+//!
+//! | 步骤 | 函数 | 写不写库 | 什么时候 |
+//! | --- | --- | --- | --- |
+//! | ① 算序号 | [`plan_base_seq`] | **只读** | 第 ① 段抽取**之前**（空提案要填 `base_version`） |
+//! | ② 建项目 / 建版本 | [`ensure_base`] | **写** | 第 ① ② 段**都成功之后**、导入之前 |
+//!
+//! 为什么不能把 ② 提前到 ①：抽取失败（agent 连不上 / 文档格式不对 / 合并撞车）时
+//! **连项目名都不该被占用** —— FDE 打错一次项目名就多一个空壳项目 + v1，而空壳没有
+//! 回收入口。AC-006 的门面正是「不产出断言文件、**不建版本**」。
+//! 结构判据：`the_preparatory_write_happens_after_both_stages`（把它挪回开头即红）。
 //!
 //! 两者都只建「空容器」，⛔ 不产生任何本体内容；建了什么会**打在屏幕上**。
 //! 最新一版**已冻结**时**不**自动再建一版：那是「项目在生产中」的信号，该由人决定
@@ -210,22 +219,6 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
 
     let art = artifacts(o);
 
-    // ── ② 的输入：人给的提案，或本命令生成的空提案 ─────────────
-    if art.proposal_generated {
-        let text = empty_proposal_json(&o.project, base_version);
-        std::fs::write(&art.proposal_in, text).map_err(|e| {
-            anyhow::anyhow!("写不出基础提案 {}：{e}", art.proposal_in.display())
-        })?;
-        eprintln!(
-            "· 基础提案：本命令生成了空提案 {}（项目 {} · 基版本 v{base_version}）—— \
-             纯文档通路会自动打开（新建实体 / 关系的档位是 low，仍需人签）",
-            art.proposal_in.display(),
-            o.project
-        );
-    } else {
-        eprintln!("· 基础提案：{}（人给的）", art.proposal_in.display());
-    }
-
     // ── ① 抽取（既有装配点，一行实现都不抄）────────────────────
     eprintln!("── 第 1/4 段：doc ingest ───────────────────────────────────────");
     crate::cli::doc_ingest_cmd(
@@ -251,6 +244,25 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
             art.work_dir.display()
         )
     })?;
+
+    // ── ② 的输入：人给的提案，或本命令生成的空提案 ─────────────
+    //
+    // ⚠️ 位置在**抽取成功之后**（QA 退回项）：空提案只是第 ② 段的输入，
+    // 第 ① 段失败时连它都不该落盘 —— 「失败零产物」在文件层也要成立。
+    if art.proposal_generated {
+        let text = empty_proposal_json(&o.project, base_version);
+        std::fs::write(&art.proposal_in, text).map_err(|e| {
+            anyhow::anyhow!("写不出基础提案 {}：{e}", art.proposal_in.display())
+        })?;
+        eprintln!(
+            "· 基础提案：本命令生成了空提案 {}（项目 {} · 基版本 v{base_version}）—— \
+             纯文档通路会自动打开（新建实体 / 关系的档位是 low，仍需人签）",
+            art.proposal_in.display(),
+            o.project
+        );
+    } else {
+        eprintln!("· 基础提案：{}（人给的）", art.proposal_in.display());
+    }
 
     // ── ② 合并（机械对齐，不调模型）──────────────────────────
     eprintln!("── 第 2/4 段：doc merge ────────────────────────────────────────");
@@ -281,19 +293,52 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     Ok(art)
 }
 
-/// 四段串起来（R1 的「整体失败」由 `?` 保证；R2 的「末尾自动 review open」在最后）。
-pub async fn run(pool: &PgPool, o: Options) -> anyhow::Result<()> {
-    // ── 基版本：唯一的两处**准备性**写库（⛔ 不是 apply / freeze）──
+/// **只读**地算「这一轮会落在哪个基版本上」（⛔ 一个字节都不写）。
+///
+/// # 为什么必须先算、但不能先建（REQ-160 · QA 退回项）
+///
+/// `doc merge` 产出的 `merged.json` 顶层要带 `base_version`（`propose import`
+/// 按它找基版本），所以第 ② 段**之前**就得知道这个序号。但**知道**与**创建**
+/// 是两件事：
+///
+/// | | 什么时候做 | 为什么 |
+/// | --- | --- | --- |
+/// | 算序号（本函数） | 第 ① 段**之前** | 只读查询；给空提案填 `base_version` |
+/// | 建项目 / 建版本（[`ensure_base`]） | 第 ① ② 段**都成功之后** | 只有「确实要导入」时才需要落库 |
+///
+/// 反例（QA 实测的那次）：agent 连不上 ⇒ 第 ① 段就失败 ⇒ 若提前 `get_or_create`
+/// + `new_version()`，库里会多出一个**空壳项目 + v1**。FDE 打错一次项目名，
+/// 就永久多一个空壳；而 AC-006 的门面是「不建版本」。所以创建挪到后面。
+///
+/// 序号怎么算（全部只读）：
+/// - 项目不存在 ⇒ **1**（真建的时候是 v1）；
+/// - 项目存在但没有版本 ⇒ **1**；
+/// - 给了 `--base-version` ⇒ 它必须在、且未冻结，否则 exit 2（此时**什么都还没写**）；
+/// - 否则取最新一版：已冻结 ⇒ exit 2（⛔ 不自动开新版，那是人的决定）。
+pub async fn plan_base_seq(pool: &PgPool, o: &Options) -> anyhow::Result<i32> {
     let projects = PgProjectStore::new(pool.clone());
-    let proj = projects
-        .get_or_create(&o.project)
+    let Some(proj) = projects
+        .get_by_name(&o.project)
         .await
-        .map_err(|e| anyhow::anyhow!("项目 {} 取得 / 新建失败：{e}", o.project))?;
+        .map_err(|e| anyhow::anyhow!("查项目 {} 失败：{e}", o.project))?
+    else {
+        // 项目还不存在：真要导入时会建它 + v1，所以这里的计划序号是 1。
+        if let Some(v) = o.base_version {
+            if v != 1 {
+                return Err(bad(format!(
+                    "项目 {} 还不存在，`--base-version {v}` 无从谈起 —— \
+                     新建的项目只有 v1（要别的序号请先建项目 / 版本）。",
+                    o.project
+                )));
+            }
+        }
+        return Ok(1);
+    };
     let versions = projects
         .list_versions(proj.id)
         .await
         .map_err(|e| anyhow::anyhow!("查项目 {} 的版本失败：{e}", o.project))?;
-    let base_seq = match o.base_version {
+    match o.base_version {
         Some(v) => {
             let row = versions.iter().find(|x| x.seq == v).ok_or_else(|| {
                 bad(format!(
@@ -318,34 +363,100 @@ pub async fn run(pool: &PgPool, o: Options) -> anyhow::Result<()> {
                     o.project, o.project
                 )));
             }
-            v
+            Ok(v)
         }
         None => match versions.last() {
-            Some(v) if v.frozen_at.is_none() => v.seq,
-            Some(v) => {
-                return Err(bad(format!(
-                    "最新版本 v{} 已冻结（项目 {}）。\n  \
-                     ⛔ 本命令**不自动**在冻结版本之上开新版本（那是人的决定）：\
-                     先 `ontok-builder version new --project {}` 再重跑。",
-                    v.seq, o.project, o.project
-                )));
-            }
-            None => {
-                let v = projects.new_version(proj.id).await.map_err(|e| {
-                    anyhow::anyhow!("给项目 {} 建 v1 失败：{e}", o.project)
-                })?;
-                eprintln!(
-                    "· 项目 {} 还没有任何版本 ⇒ 已建 v{}（**未冻结**、无内容；\
-                     ⛔ 本命令不 apply / freeze）",
-                    o.project, v.seq
-                );
-                v.seq
-            }
+            Some(v) if v.frozen_at.is_none() => Ok(v.seq),
+            Some(v) => Err(bad(format!(
+                "最新版本 v{} 已冻结（项目 {}）。\n  \
+                 ⛔ 本命令**不自动**在冻结版本之上开新版本（那是人的决定）：\
+                 先 `ontok-builder version new --project {}` 再重跑。",
+                v.seq, o.project, o.project
+            ))),
+            None => Ok(1),
         },
+    }
+}
+
+/// **准备性写库**（⛔ 不是 apply / freeze）：确保项目存在、且有一个**未冻结**的基版本。
+///
+/// ⚠️ 这是本命令唯一的两处写库，**只在第 ① ② 段都成功之后**才被调用
+/// （调用点在 [`run`]；判据 `the_preparatory_write_happens_after_both_stages`）。
+///
+/// 返回真实基版本序号。若与 [`plan_base_seq`] 算出的不同（并发下别人先建了版本），
+/// **不猜**：直接失败并让人重跑 —— 把提案挂到没算过的版本上比报错危险。
+pub async fn ensure_base(
+    pool: &PgPool,
+    o: &Options,
+    planned: i32,
+) -> anyhow::Result<crate::db::project::ProjectRow> {
+    let projects = PgProjectStore::new(pool.clone());
+    let proj = projects
+        .get_or_create(&o.project)
+        .await
+        .map_err(|e| anyhow::anyhow!("项目 {} 取得 / 新建失败：{e}", o.project))?;
+    let versions = projects
+        .list_versions(proj.id)
+        .await
+        .map_err(|e| anyhow::anyhow!("查项目 {} 的版本失败：{e}", o.project))?;
+    let base_seq = match versions.last() {
+        Some(v) if v.frozen_at.is_none() => Some(v.seq),
+        Some(v) => {
+            return Err(bad(format!(
+                "最新版本 v{} 已冻结（项目 {}）。\n  ⛔ 本命令**不自动**在冻结版本之上开新版本：\
+                 先 `ontok-builder version new --project {}` 再重跑。",
+                v.seq, o.project, o.project
+            )));
+        }
+        None => None,
     };
+    let actual = match base_seq {
+        Some(seq) => seq,
+        None => {
+            let v = projects
+                .new_version(proj.id)
+                .await
+                .map_err(|e| anyhow::anyhow!("给项目 {} 建 v1 失败：{e}", o.project))?;
+            eprintln!(
+                "· 项目 {} 还没有任何版本 ⇒ 已建 v{}（**未冻结**、无内容；\
+                 ⛔ 本命令不 apply / freeze）",
+                o.project, v.seq
+            );
+            v.seq
+        }
+    };
+    if actual != planned {
+        return Err(anyhow::anyhow!(
+            "基版本在本次运行期间变了（计划 v{planned}，实际 v{actual}）—— \
+             多半是另一个进程刚建了版本。⛔ 不把提案挂到没算过的版本上：\
+             请重跑一次（`--work-dir` 里的产物可以直接复用）。"
+        ));
+    }
+    Ok(proj)
+}
+
+/// 四段串起来（R1 的「整体失败」由 `?` 保证；R2 的「末尾自动 review open」在最后）。
+///
+/// # 顺序是**判据**（QA 退回项）：准备性写库在两段成功之后
+///
+/// ```text
+/// ① plan_base_seq（只读）→ ② 抽取 → ③ 合并 → ④ ensure_base（建项目/版本）→ ⑤ 导入 → ⑥ 起审核台
+/// ```
+///
+/// 为什么 ④ 不能提前到 ①：抽取失败时**连项目名都不该被占用**（AC-006 的门面是
+/// 「不产出断言文件、**不建版本**」）—— FDE 打错一次项目名就多一个空壳，
+/// 而空壳没有任何回收入口。结构判据见
+/// `the_preparatory_write_happens_after_both_stages`（把 `ensure_base` 挪回开头即红）。
+pub async fn run(pool: &PgPool, o: Options) -> anyhow::Result<()> {
+    // ── 计划基版本（**只读**；exit 2 的三种情形都在这里，一个字节都还没写）──
+    let base_seq = plan_base_seq(pool, &o).await?;
 
     // ── ① ② ────────────────────────────────────────────────
     let art = build_artifacts(&o, base_seq).await?;
+
+    // ── 准备性写库：项目 + 未冻结的基版本（⛔ 不是 apply / freeze）──
+    // ⚠️ 位置是承重的：它在两段成功**之后**（见函数文档与那条结构判据）。
+    ensure_base(pool, &o, base_seq).await?;
 
     // ── ③ 导入（与 `propose import` / `POST /api/import` **同一个**函数）──
     eprintln!("── 第 3/4 段：proposal import ──────────────────────────────────");
@@ -504,9 +615,12 @@ mod tests {
             art.work_dir.is_dir(),
             "工作目录应当建好（可重跑、缓存可复用）"
         );
+        // ⚠️ 空提案（第 ② 段的输入）现在也写在**抽取成功之后**：
+        // 第 ① 段失败时它不该落盘（「失败零产物」在文件层也要成立）。
         assert!(
-            art.proposal_in.is_file(),
-            "基础提案是第 1 段之前就写好的输入（不是半成品产物）"
+            !art.proposal_in.exists(),
+            "⛔ 抽取失败却留下了基础提案：{}（它只是第 2 段的输入，不该提前落盘）",
+            art.proposal_in.display()
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -655,5 +769,67 @@ mod tests {
             MODULE_SRC.contains("None, // 缓存落点"),
             "缓存落点必须留给 doc ingest 的默认值（R4）"
         );
+    }
+
+    // ── QA 退回项 · 准备性写库必须在两段成功之后 ──────────────────
+
+    /// ⛔ **结构判据**：`get_or_create` / `new_version` 只许出现在 [`ensure_base`] 里，
+    /// 且它的**调用点**必须在 ①② 段成功之后、导入之前。
+    ///
+    /// # 为什么这条必须能红
+    ///
+    /// QA 真库实测过一版：写库跑在抽取之前 ⇒ agent 连不上时「文件层零产物」成立，
+    /// 但库里多了一个**空壳项目 + v1**（FDE 打错一次项目名就多一个废弃物）。
+    /// 三种挪法都会让这条红：
+    ///
+    /// | 挪法 | 哪条断言红 |
+    /// | --- | --- |
+    /// | `ensure_base(...)` 挪到 `build_artifacts` 之前 | `build < ensure` |
+    /// | 把 `get_or_create` 内联回 `run` 开头 | `run` 体里出现写库调用 |
+    /// | 把 `new_version(` 内联回 `run` | 同上 |
+    ///
+    /// （探针用 `concat!` 拼：源码判据扫的是本文件，字面量探针会自指。）
+    #[test]
+    fn the_preparatory_write_happens_after_both_stages() {
+        let run_start = MODULE_SRC
+            .find(concat!("pub async fn ", "run("))
+            .expect("`run` 不见了");
+        let tail = MODULE_SRC[run_start..]
+            .find(concat!("#[cfg", "(test)]"))
+            .expect("`run` 之后应当紧跟判据模块");
+        let body = &MODULE_SRC[run_start..run_start + tail];
+
+        let plan = body
+            .find(concat!("plan_base_seq(pool, &o)"))
+            .expect("`run` 必须**只读**地先算基版本（空提案要填 base_version）");
+        let build = body
+            .find(concat!("build_artifacts(&o, ", "base_seq)"))
+            .expect("`run` 必须调 ①② 段");
+        let ensure = body
+            .find(concat!("ensure_base(pool, &o, ", "base_seq)"))
+            .expect("`run` 必须调准备性写库（项目 / 版本）");
+        let import = body
+            .find(concat!("import_proposal_core", "("))
+            .expect("`run` 必须调导入");
+
+        assert!(
+            plan < build,
+            "算基版本必须在抽取之前（否则空提案的 base_version 没法填）"
+        );
+        assert!(
+            build < ensure,
+            "⛔ 准备性写库（建项目 / 建版本）必须在 ①② 段**成功之后** —— \
+             现在的顺序是写库在前：agent 连不上就会在库里留下空壳项目 + v1（AC-006）"
+        );
+        assert!(ensure < import, "准备性写库必须在导入之前（import 要求基版本已存在）");
+
+        // 两处写库只许收在 `ensure_base` 里：`run` 自己的函数体不许出现它们。
+        for w in [concat!("get_or_", "create("), concat!("new_", "version(")] {
+            assert!(
+                !body.contains(w),
+                "⛔ `run` 的函数体里出现了 `{w}` —— 写库必须收在 `ensure_base` 里，\
+                 否则它又会跑在两段之前（QA 实测过的那次空壳项目就是它）"
+            );
+        }
     }
 }
