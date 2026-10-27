@@ -33,6 +33,8 @@
 //! 没配环境变量时它们会**响亮的 SKIP**（打印原因并返回），⛔ 不静默当作通过 ——
 //! 所以「本机真跑过」的证据是报告里的库计数，不是这两条用例的绿。
 
+mod common;
+
 use std::process::Command;
 
 fn bin() -> &'static str {
@@ -376,8 +378,12 @@ fn skip(what: &str) {
     );
 }
 
+/// crate 根：⛔ **不用** `env!("CARGO_MANIFEST_DIR")`（那是编译期常量 ——
+/// 二进制被搬到别处跑时会去读**编译它时**那棵树，REQ-046 的事故形态）。
+/// 走 `tests/common/source_root.rs` 的运行时锚点（G-1 判据：
+/// `no_bare_env_manifest_dir_outside_anchor_file`）。
 fn crate_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    common::source_root::crate_root()
 }
 
 fn fake_acp_js() -> std::path::PathBuf {
