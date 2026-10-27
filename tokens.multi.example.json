@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "tokens": [
+    {
+      "label": "运维助手（假值，勿用于任何环境）",
+      "token": "EXAMPLE-MULTI-PROJECT-TOKEN-0001",
+      "project": "cloud-resource",
+      "tenant": "REPLACE-WITH-TENANT-A",
+      "max_rows": 200,
+      "max_concurrency": 2
+    },
+    {
+      "label": "账单助手（假值，勿用于任何环境）",
+      "token": "EXAMPLE-MULTI-PROJECT-TOKEN-0002",
+      "project": "billing",
+      "tenant": "REPLACE-WITH-TENANT-B",
+      "max_rows": 50,
+      "max_concurrency": 1
+    }
+  ]
+}

@@ -27,7 +27,7 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // ══════════════════════════════════════════════════════════════
 // sha256（FIPS 180-4）
@@ -235,9 +235,14 @@ impl AuditRecord {
 /// 集群负责采集」。写 `emptyDir` 等于把合规证据交给 Pod 生命周期（重启即丢）。
 /// 「忘了配 `--audit-out` 就没有审计」不是一个可接受的安全默认 —— 文件是**可选**的
 /// 第二落点，**不是**替代品：给了 `--audit-out` 也照样先写 stdout（AC-005）。
-#[derive(Debug)]
+///
+/// ⭐ REQ-159 P1b · `file` 是 `Arc<Mutex<File>>`、整个落点 `Clone`：
+/// 多项目模式下**每一份项目服务**都要能写同**一个**审计落点（一个进程一份审计，
+/// ⛔ 不是每个项目一份文件）。克隆共享同一个 `File`，写入仍由那把锁串行 ——
+/// 单项目模式只用到一个 clone，输出一个字节都不变。
+#[derive(Debug, Clone)]
 pub struct AuditSink {
-    file: Option<Mutex<std::fs::File>>,
+    file: Option<Arc<Mutex<std::fs::File>>>,
 }
 
 impl AuditSink {
@@ -253,7 +258,7 @@ impl AuditSink {
             .append(true)
             .open(path)?;
         Ok(Self {
-            file: Some(Mutex::new(file)),
+            file: Some(Arc::new(Mutex::new(file))),
         })
     }
 

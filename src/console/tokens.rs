@@ -24,6 +24,25 @@
 //! - `kind = query` 必须带非空 `tenant`（与 REQ-123 的 `tokens.json` 同一条要求）；
 //! - token ≥ 24 字符（与 REQ-123 的 `MIN_TOKEN_LEN` 同一条理由：低熵口令在摘要面前守不住）。
 //!
+//! # ⭐ REQ-159 P1b · `version: 2` 多一个 `project`
+//!
+//! ```json
+//! {"version": 2, "tokens": [
+//!   {"token": "…", "kind": "query", "project": "cloud-resource", "label": "运维助手"},
+//!   {"token": "…", "kind": "admin", "label": "fde-michael"}
+//! ]}
+//! ```
+//!
+//! | # | 规则 | 为什么 |
+//! | --- | --- | --- |
+//! | 1 | `version: 1` **仍然接受** | 老部署的 `admin-tokens.json` 一个字节不用改（R6） |
+//! | 2 | `kind = admin` 的 `project` **必须为空**（给了就拒） | admin 是运维/控制面的钥匙，**不属于任何一个项目**；给它绑项目只会让「谁能建项目」看起来像「谁能动这个项目」——两件事不是一件事 |
+//! | 3 | `kind = query` 的 `project` **可空** | 控制面（`console serve`）本来就只服务 `--project` 指定的那一个项目；`project` 在这里是**声明**，不是路由依据（查询面的多项目路由见 `query::serve` / `query::multi`） |
+//!
+//! ⚠️ 规则 3 的「可空」是有意的**宽松**：控制面**不按** token 里的 `project` 切项目
+//! （那会让一张 key 跨越 `--project` 的作用域）。真正「按 key 解析项目」的只有
+//! `query serve` 的多项目模式，那里的规则是**必填**（`query::tokens::parse_multi`）。
+//!
 //! # 已知边界
 //!
 //! - 表是**启动时读一次**的（不热加载）：改 token 要重启 —— 与 REQ-123 同一条口径；
@@ -59,8 +78,29 @@ impl TokenKind {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TokenFile {
+    /// ⭐ REQ-159 P1b · `"1.0.0"` 与 `2` **都收**（老文件的写法必须继续能读）。
+    #[serde(deserialize_with = "version_field")]
     version: String,
     tokens: Vec<TokenSpec>,
+}
+
+/// ⭐ REQ-159 P1b · `version` 的两种写法（字符串 / 数字）都读成字符串。
+///
+/// 与 `query::tokens::version_field` 同一条口径、同一个理由：需求样例写 `"version": 2`，
+/// 老文件写 `"1.0.0"`；只认一种就是「文档与实现对不上」。
+fn version_field<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(D::Error::custom(format!(
+            "version 只认字符串或整数（如 \"2.0.0\" / 2），收到 {other}"
+        ))),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +114,12 @@ struct TokenSpec {
     label: Option<String>,
     #[serde(default)]
     tenant: Option<String>,
+    /// ⭐ REQ-159 P1b · 这张 key 属于哪个项目。
+    ///
+    /// `kind = query` 可空（控制面本来就只服务 `--project` 那一个项目）；
+    /// `kind = admin` **必须为空**（给了就拒绝整份表）。
+    #[serde(default)]
+    project: Option<String>,
 }
 
 /// 一条**已校验**的 token。
@@ -85,6 +131,8 @@ pub struct TokenEntry {
     pub kind: TokenKind,
     pub label: Option<String>,
     pub tenant: Option<String>,
+    /// ⭐ REQ-159 P1b · 绑定的项目（`admin` 恒 `None`；`query` 可有可无 —— 见模块头）。
+    pub project: Option<String>,
 }
 
 impl TokenEntry {
@@ -111,9 +159,10 @@ impl AdminTokens {
         })?;
 
         let major = doc.version.trim().split('.').next().unwrap_or("");
-        if major != "1" {
+        // ⭐ REQ-159 P1b · `2` 起多一个 `project`；`1` 仍然收（老部署不用改，R6）。
+        if major != "1" && major != "2" {
             return Err(format!(
-                "admin-tokens.json 的 version = {:?}：本实现只认 1.x（升级格式要配一次迁移）",
+                "admin-tokens.json 的 version = {:?}：本实现只认 1.x / 2.x（升级格式要配一次迁移）",
                 doc.version
             ));
         }
@@ -153,6 +202,29 @@ impl AdminTokens {
                     "{at} 的 kind = query 却没有 tenant —— 查询 token 必须绑定一个租户"
                 ));
             }
+            // ⭐ REQ-159 P1b · `project`：admin **必须为空**；query 可空（但写了一定要像个名字）。
+            let project = t
+                .project
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            if t.kind == TokenKind::Admin && project.is_some() {
+                problems.push(format!(
+                    "{at} 的 kind = admin 却写了 project = {:?} —— ⛔ admin key 必须**不绑项目**。\n    \
+                     管理端点（建项目 / 传包 / 激活 / 查看 key）是**运维**的钥匙，不属于任何一个项目；\n    \
+                     给它绑项目会让人以为「这张 key 只对那个项目有权限」，而它其实能改所有项目。\n    \
+                     要一张只读某个项目数据的 key，请用 kind = \"query\" + project。",
+                    project.as_deref().unwrap_or_default()
+                ));
+            }
+            if t.kind == TokenKind::Query {
+                if let Some(p) = project.as_deref() {
+                    if p.chars().any(char::is_whitespace) {
+                        problems.push(format!("{at} 的 project = {p:?} 里含空白字符 —— 项目名不含空格"));
+                    }
+                }
+            }
             if t.kind == TokenKind::Admin {
                 has_admin = true;
             }
@@ -163,6 +235,7 @@ impl AdminTokens {
                     kind: t.kind,
                     label: t.label.clone(),
                     tenant,
+                    project,
                 });
             }
         }
@@ -322,7 +395,65 @@ mod tests {
 
     #[test]
     fn a_wrong_version_is_rejected() {
-        let raw = good().replace("\"1.0.0\"", "\"2.0.0\"");
-        assert!(AdminTokens::parse(&raw).unwrap_err().contains("只认 1.x"));
+        let raw = good().replace("\"1.0.0\"", "\"3.0.0\"");
+        let err = AdminTokens::parse(&raw).unwrap_err();
+        assert!(err.contains("只认 1.x"), "{err}");
+        assert!(err.contains("2.x"), "拒绝时要说清能用的版本：{err}");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-159 P1b · version 2 + `project`
+    // ══════════════════════════════════════════════════════════
+
+    /// **`version: 2` 的表能读**（`2` 数字 / `"2.0.0"` 字符串都收），
+    /// query token 的项目名被记下来。
+    #[test]
+    fn version_two_is_accepted_with_or_without_a_numeric_version() {
+        for version in ["2", "\"2.0.0\""] {
+            let raw = format!(
+                r#"{{"version":{version},"tokens":[
+                    {{"token":"{ADMIN}","kind":"admin","label":"fde"}},
+                    {{"token":"{QUERY}","kind":"query","tenant":"C0001",
+                     "project":"cloud-resource","label":"运维助手"}}
+                ]}}"#
+            );
+            let t = AdminTokens::parse(&raw).unwrap_or_else(|e| panic!("version={version} 应当能读：{e}"));
+            assert_eq!(t.query_count(), 1);
+            assert_eq!(
+                t.find(QUERY).unwrap().project.as_deref(),
+                Some("cloud-resource")
+            );
+            // admin 没写 project ⇒ None（不是空串）。
+            assert!(t.find(ADMIN).unwrap().project.is_none());
+        }
+    }
+
+    /// **`kind = admin` 带了 `project` ⇒ 整份拒绝**，并点名第几条 + 说清为什么。
+    ///
+    /// 变异：把这条判定删掉（admin 带 project 也放行）⇒ 本测试立刻红。
+    #[test]
+    fn an_admin_token_must_not_be_bound_to_a_project() {
+        let raw = format!(
+            r#"{{"version":2,"tokens":[
+                {{"token":"{ADMIN}","kind":"admin","project":"cloud-resource","label":"fde"}},
+                {{"token":"{QUERY}","kind":"query","tenant":"C0001","project":"cloud-resource"}}
+            ]}}"#
+        );
+        let err = AdminTokens::parse(&raw).expect_err("admin 带 project 必须拒绝");
+        assert!(err.contains("第 1 条"), "要点名是第几条：{err}");
+        assert!(err.contains("admin"), "{err}");
+        assert!(err.contains("不绑项目"), "{err}");
+        assert!(err.contains("kind = \"query\""), "要给出正确做法：{err}");
+        assert!(!err.contains("第 2 条"), "合法的 query 条目不该被牵连：{err}");
+    }
+
+    /// **`version: 1` 仍然能起来**（老部署向后兼容），且 query token 不带 project 也合法
+    /// —— 控制面本来只服务 `--project` 那一个项目。
+    #[test]
+    fn a_version_one_table_without_project_still_works() {
+        let t = AdminTokens::parse(&good()).expect("v1 老表必须继续能读");
+        assert_eq!(t.admin_count(), 1);
+        assert_eq!(t.query_count(), 1);
+        assert!(t.find(QUERY).unwrap().project.is_none());
     }
 }

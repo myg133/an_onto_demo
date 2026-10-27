@@ -2228,6 +2228,10 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；**不新增响应写点** ——
     // 复用 I14 的同一个 `Json(` 写点，只换 Content-Type，见 `query::http::respond_jsonld`）。
     ("src/query/mod.rs", "jsonld"),
+    // ⭐ REQ-159 P1b · **多项目模式**（一套部署 · 多套本体）：key → 项目 →
+    // `active_version_id` → 按 version_id 缓存快照。⛔ **不新增出口**：它只把一个请求
+    // 解析成一份 `QueryService`，响应仍走 I14 / I25 与 MCP 的既有写点。
+    ("src/query/mod.rs", "multi"),
     // ⭐ REQ-145 · access 映射（`--access-mapping`）：只做**判定**（哪些类来自 API、
     // 查询落到哪一类），⛔ 不写任何出口 —— 它的产物经既有 I14/I25 与 TTL 两视图送出。
     ("src/query/mod.rs", "source_gate"),

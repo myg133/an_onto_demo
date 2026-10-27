@@ -208,6 +208,21 @@ pub enum QueryCmd {
     /// SSE 连接数 + 空闲超时；超限 **429**。
     /// ⚠️ 审计：每次调用一行（时间 / token 摘要 / tenant / 查询哈希 / 行数 / 耗时 / code），
     /// ⛔ 不记 token 明文、不记查询原文。
+    ///
+    /// ⭐ **两种部署模式（REQ-159 P1b）** —— 判据只有一个：给没给 `--project`。
+    ///
+    /// ```text
+    /// 单项目（--project <名> --version <第几版>）    启动时加载一份快照；与 REQ-123 逐字节一致
+    /// 多项目（两个都不给）                          按 key 反查项目 → active_version_id → 按 version_id 缓存
+    /// ```
+    ///
+    /// 多项目模式是「一套部署 · 多套本体」：数字员工**不需要知道项目名和版本号**，换项目 =
+    /// 换 key。`activate` 之后**下一次请求**就生效（不需要重启、不需要跨进程通知）——
+    /// 因为缓存键是 `version_id`，而 `active_version_id` 每次请求都重读。
+    ///
+    /// 多项目模式的 token 表（`version: 2`）里**每一条**都要写
+    /// `"project": "<项目名>"`（缺一条 ⇒ **拒绝启动**并点名第几条）；`version: 1` 的老表
+    /// 在单项目模式下仍然照常可用。
     #[command(verbatim_doc_comment)]
     Serve {
         /// 监听地址。默认只允许内网/回环；绑 0.0.0.0 或公网地址要显式 `--allow-public`
@@ -216,12 +231,25 @@ pub enum QueryCmd {
         /// 静态 token 表（JSON，见 `tokens.example.json`；示例里的 token 是假值）
         #[arg(long)]
         tokens: PathBuf,
-        /// 项目名
+        /// 项目名。⭐ **省略 = 多项目模式**（每次请求按 key 绑定项目 → 该项目的
+        /// `active_version_id`）；给了就必须同时给 `--version`。
+        ///
+        /// 单项目模式（`--project` + `--version`）与 REQ-123 起的行为**逐字节一致**：
+        /// 启动时加载一份快照，token 只做鉴权、⛔ 不按 token 切项目。
+        ///
+        /// 多项目模式（两个都不给）：一个进程服务多套本体 —— 启动时**一份快照都不加载**，
+        /// 每次请求按 `Authorization: Bearer <key>` 反查项目，再取
+        /// `projects.active_version_id` 指向的那一版。换项目 = 换 key；activate 之后
+        /// **下一次请求**即生效（不需要重启、不需要任何跨进程通知）。
+        ///
+        /// ⚠️ 多项目模式下 token 表里**每一条**都必须写 `"project": "<项目名>"`
+        /// （否则**拒绝启动**并点名第几条）；`version: 2` 起支持这个字段，`version: 1`
+        /// 的老表在单项目模式下仍然照常可用。
         #[arg(long)]
-        project: String,
-        /// 第几版（该版必须已冻结）
+        project: Option<String>,
+        /// 第几版（该版必须已冻结）。**与 `--project` 成对**；多项目模式下省略。
         #[arg(long)]
-        version: i32,
+        version: Option<i32>,
         /// 真实 schema（`ontok-introspect` 产物）—— 列存在性 / 列类型只能来自它。
         ///
         /// **普通模式必填**；`--ontology-only` 下**互斥**（同时给 ⇒ 拒绝启动，R1）。

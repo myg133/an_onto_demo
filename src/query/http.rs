@@ -2,10 +2,21 @@
 //!
 //! # 一个进程、两种协议、**一份鉴权**
 //!
-//! 身份门是 [`require_token`]（一个 `middleware::from_fn_with_state`），同时挂在
+//! 身份门是 [`require_token`]（一个 `middleware::from_fn`），同时挂在
 //! `/api/catalog`、`/api/describe`、`/api/sparql`、`/mcp` 上。它做三件事：
 //! ① 只认 `Authorization: Bearer`（⛔ query string / cookie）；② 查 token 表；
 //! ③ 把 [`Auth`] 放进请求扩展（handler 只能用表里那一行，⛔ 读不到请求体里的 tenant）。
+//!
+//! ⭐ REQ-159 P1b · **两个模式、一份路由表**：路由与 handler 只有一份（[`routes`]），
+//! 差别只在最前面那层中间件 —— 它把「这个请求服务哪一份快照」放进请求扩展 [`Resolved`]：
+//!
+//! | 构建函数 | 模式 | 那层中间件 |
+//! | --- | --- | --- |
+//! | [`build_router`] | 单项目 | [`inject_single_service`]：启动时那**一个**服务（⛔ 不按 token 切项目，R6） |
+//! | [`build_router_multi`] | 多项目 | [`resolve_multi`]：查表（401）→ 项目 → `active_version_id`（503/500）→ 缓存/懒加载 |
+//!
+//! 于是 `QueryService` 不再是 axum 的 `State`：它是**请求级**的解析结果。
+//! 单项目模式的响应字节一个都没有变（R6）—— 只是把同一个 `Arc` 从 `State` 挪进了扩展。
 //!
 //! `/api/health` **在门之外**（AC-001：免 token）。它只给「这个部署是什么」：
 //! `service` / `version`（**产品**版本）/ `project` / `ontology_version`（**本体**版本，
@@ -112,6 +123,48 @@ COUNT/SUM/MIN/MAX/AVG + 单列 GROUP BY；不支持 OPTIONAL/UNION/子查询/BIN
 #[derive(Debug, Clone)]
 pub struct Auth(pub TokenEntry);
 
+/// ⭐ REQ-159 P1b · **每个请求服务哪一套本体**（解析结果，放进请求扩展）。
+///
+/// 为什么不再用 `State<Arc<QueryService>>`：多项目模式下「服务哪一份快照」是**请求级**的
+/// 事实（由 key 决定），而 axum 的 `State` 是**进程级**的。于是：
+///
+/// - 单项目模式：[`inject_single_service`] 把启动时那**一个**服务放进扩展（行为与 REQ-123
+///   一致，⛔ 一个字节不变 —— R6）；
+/// - 多项目模式：[`resolve_multi`] 按 key 解析出项目 → 生效版本 → 缓存/懒加载，再放进来。
+///
+/// ⛔ handler 拿不到「当前项目」以外的东西：没有 `project` 字段可改、没有 token 表可读。
+#[derive(Clone)]
+pub struct Resolved {
+    /// 这个请求服务的那一份（单项目模式恒 `Some`；多项目模式解析成功才 `Some`）。
+    pub svc: Option<Arc<QueryService>>,
+    /// 多项目模式的注册表（单项目模式 `None`）。只有 `/api/health` 与 `/metrics`
+    /// 这两个**免 token** 端点用它 —— 它们没有身份，也就没有项目。
+    pub multi: Option<Arc<super::multi::MultiProject>>,
+}
+
+impl Resolved {
+    fn single(svc: Arc<QueryService>) -> Self {
+        Self {
+            svc: Some(svc),
+            multi: None,
+        }
+    }
+
+    /// handler 里取「这个请求的那一份」；取不到只可能是接线错了（启动闸门已挡住真正的
+    /// 失败）—— 那就 500，⛔ 不静默回一个空目录（那会被读成「这个项目没有类」）。
+    fn expect_svc(&self, what: &'static str) -> Result<Arc<QueryService>, Response> {
+        self.svc.clone().ok_or_else(|| {
+            let e = ApiError::with_code(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL",
+                format!("{what} 没有解析到项目服务（多项目模式的请求期解析漏了一条路径）—— 这是 bug。"),
+                "重试一次；仍失败请把本页的 code 与时间交给维护者。",
+            );
+            respond(e.status, e.body())
+        })
+    }
+}
+
 /// 组装路由。
 ///
 /// - `/api/health` 免 token（产品版本 + 项目名 + **本体**版本 + 语法版本；⛔ 无租户/表名）；
@@ -123,6 +176,38 @@ pub struct Auth(pub TokenEntry);
 pub fn build_router(svc: Arc<QueryService>) -> Router {
     // ⭐ REQ-135 · 指标层挂在**最外层**：连 401 / 404 都计数（失败也是事实）。
     let metrics = svc.metrics.clone();
+    routes()
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(middleware::from_fn(require_token))
+        // ⭐ REQ-159 P1b · 把「这个请求的那一个服务」放进扩展（在身份门**之前**：
+        // 身份门要读它的 token 表）。单项目模式没有任何按请求的分叉。
+        .layer(middleware::from_fn_with_state(
+            svc.clone(),
+            inject_single_service,
+        ))
+        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
+}
+
+/// ⭐ REQ-159 P1b · **多项目模式**的路由。
+///
+/// 路由表 / handler / 错误契约与单项目模式是**同一份**（[`routes`]）；差别只有一层：
+/// 身份门后面多了一次「按 key 找项目 → 生效版本 → 快照」的解析
+/// （[`resolve_multi`]）。于是 REST 与 MCP 仍然共用一份鉴权（AC-004 的结构前提）。
+pub fn build_router_multi(multi: Arc<super::multi::MultiProject>) -> Router {
+    // ⭐ REQ-135 · 指标仍挂最外层（进程级），计数与单项目模式同一套指标名。
+    let metrics = multi.metrics.clone();
+    routes()
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // 身份 + 项目解析是同一次中间件：先查表（401），再解析项目（503/500）。
+        .layer(middleware::from_fn_with_state(
+            multi.clone(),
+            resolve_multi,
+        ))
+        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
+}
+
+/// 路由表（两种模式**共用**；⛔ 不各写一份 —— 那会长出两套端点清单）。
+fn routes() -> Router {
     Router::new()
         .route("/api/health", get(health))
         // ⭐ REQ-135 · `/metrics`：免 token（与 `/api/health` 同口径），零业务数据。
@@ -141,10 +226,6 @@ pub fn build_router(svc: Arc<QueryService>) -> Router {
         .route(TTL_PATH, get(get_ontology_ttl))
         .route("/mcp", post(mcp_post).get(mcp_sse))
         .fallback(not_found)
-        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(middleware::from_fn_with_state(svc.clone(), require_token))
-        .with_state(svc)
-        .layer(middleware::from_fn_with_state(metrics, crate::metrics::track))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -221,17 +302,33 @@ pub fn needs_auth(path: &str) -> bool {
     path == "/mcp" || path.starts_with("/mcp/") || path == "/api" || path.starts_with("/api/")
 }
 
-/// 身份门。**没有开关能绕过它** —— 只有它认识的那张表说了算。
-async fn require_token(
+/// 单项目模式：把启动时那**一个**服务放进扩展（⛔ 不按 token 切项目 —— R6）。
+///
+/// 它只做一件事，而且**必须**在身份门之前跑：身份门要读 `svc.tokens`。
+async fn inject_single_service(
     State(svc): State<Arc<QueryService>>,
     mut req: Request,
     next: Next,
 ) -> Response {
+    req.extensions_mut().insert(Resolved::single(svc));
+    next.run(req).await
+}
+
+/// 身份门。**没有开关能绕过它** —— 只有它认识的那张表说了算。
+async fn require_token(mut req: Request, next: Next) -> Response {
     let started = Instant::now();
     if !needs_auth(req.uri().path()) {
         return next.run(req).await;
     }
     let proto = proto_of(req.uri().path());
+    let Some(resolved) = req.extensions().get::<Resolved>().cloned() else {
+        // 接线错误（`inject_single_service` 没挂上）：⛔ 不能当成「没身份」回 401 ——
+        // 那会让「服务装配坏了」看起来像「你的 token 错了」。
+        return internal_no_service("身份门");
+    };
+    let Some(svc) = resolved.svc.clone() else {
+        return internal_no_service("身份门");
+    };
     let presented = bearer(req.headers());
     match svc.tokens.find(presented) {
         Some(entry) => {
@@ -248,6 +345,77 @@ async fn require_token(
         }
     }
 }
+
+/// ⭐ REQ-159 P1b · 多项目模式的**身份门 + 项目解析**（同一次中间件，顺序不能换）。
+///
+/// ```text
+/// ① Authorization: Bearer …  → token 表（定长比对）   … 不中 ⇒ 401（与单项目模式逐字节相同）
+/// ② project = token.project  → SELECT projects        … 项目不在 ⇒ 500 project.not_found
+/// ③ active_version_id                                 … NULL   ⇒ 503 project.no_active_version
+/// ④ 按 version_id 查缓存 / 懒加载                     … 取不到快照 ⇒ 500 project.snapshot_missing
+/// ⑤ 放进扩展（handler 只拿得到解析结果）
+/// ```
+///
+/// ⛔ 不在启动时预加载、⛔ 不按 project 做缓存键（见 `super::multi` 模块头）。
+async fn resolve_multi(
+    State(multi): State<Arc<super::multi::MultiProject>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let started = Instant::now();
+    if !needs_auth(req.uri().path()) {
+        // 免 token 的端点（health / metrics / studio 静态资源）：没有身份 ⇒ 没有项目。
+        req.extensions_mut().insert(Resolved {
+            svc: None,
+            multi: Some(Arc::clone(&multi)),
+        });
+        return next.run(req).await;
+    }
+    let proto = proto_of(req.uri().path());
+    let presented = bearer(req.headers());
+    let Some(entry) = multi.tokens.find(presented).cloned() else {
+        let e = ApiError::unauthorized();
+        let view = ttl_view_hint(req.uri().path(), req.uri().query());
+        // 401 那一刻**还没有项目** ⇒ 只能落到表自己的 sink 上（同一条记录格式）。
+        super::audit_anonymous_sink(&multi.audit, "auth", proto, view, e.code, started);
+        return respond(e.status, e.body());
+    };
+    match multi.service_for(&entry).await {
+        Ok(svc) => {
+            req.extensions_mut().insert(Auth(entry));
+            req.extensions_mut().insert(Resolved {
+                svc: Some(svc),
+                multi: Some(multi),
+            });
+            next.run(req).await
+        }
+        Err(e) => {
+            // 有身份、但项目这一侧不成立：审计里**必须**记下是谁在问（token 摘要按
+            // entry 走，不是 anonymous）——否则排查「谁一直在打一个没激活的项目」没有线索。
+            super::audit_token_sink(
+                &multi.audit,
+                "auth",
+                proto,
+                &entry,
+                e.code,
+                started,
+            );
+            respond(e.status, e.body())
+        }
+    }
+}
+
+/// 接线错了（没有解析到服务）：500，⛔ 不伪装成 401 / 404。
+fn internal_no_service(where_: &str) -> Response {
+    let e = ApiError::with_code(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "INTERNAL",
+        format!("{where_}没有解析到项目服务 —— 路由接线有缺口（这是 bug）。"),
+        "重试一次；仍失败请把本页的 code 与时间交给维护者。",
+    );
+    respond(e.status, e.body())
+}
+
 fn proto_of(path: &str) -> Protocol {
     if path.starts_with("/mcp") {
         Protocol::Mcp
@@ -277,11 +445,41 @@ fn proto_of(path: &str) -> Protocol {
 /// `CatalogPage { project, version }` 填的是**同一对字段**（都在 [`QueryService::new`] 里由
 /// `ServiceParts` 一次定下，运行期不变）。所以不存在「两处各算一次」：health 不重新查库、
 /// 不从 IRI/TTL 里反解项目名，只把启动时那一个事实读出来。
-async fn health(State(svc): State<Arc<QueryService>>) -> Response {
+///
+/// ⭐ REQ-159 P1b · **多项目模式**（免 token，所以没有身份也就没有项目）：字段照旧存在但
+/// 恒为 `null`，另给 `"mode": "multi-project"`（`--ontology-only` 时是
+/// `"multi-project+ontology-only"`）。⛔ 不列项目清单 —— 这个端点匿名可访问，
+/// 列出来等于把「这台服务上有哪些本体」公开。
+async fn health(Extension(ctx): Extension<Resolved>) -> Response {
     let started = Instant::now();
     // ⛔ 只读「这个服务是哪个项目 / 哪版本体 / 什么产品版本 / 说哪种语法（以及哪种模式）」。
     // 租户、连接串、表清单、类清单**仍然一个都不出去**（R2）。
-    audit_anonymous(&svc, "health", Protocol::Rest, None, "OK", started);
+    //
+    // ⭐ REQ-159 P1b · 多项目模式下**没有**「这个服务是哪个项目」这回事（项目由 key 决定）：
+    // 这个端点免 token ⇒ 它诚实地说 `mode=multi-project`、`project=null`，
+    // ⛔ 不列项目清单（那会把「这台服务上有哪些本体」匿名公开）。
+    let Some(svc) = ctx.svc.as_deref() else {
+        if let Some(multi) = ctx.multi.as_deref() {
+            super::audit_anonymous_sink(&multi.audit, "health", Protocol::Rest, None, "OK", started);
+            let mut body = json!({
+                "service": "ontok-query",
+                "version": env!("CARGO_PKG_VERSION"),
+                "syntax": SYNTAX_VERSION,
+                "protocols": ["rest", "mcp-http"],
+                "transports": ["http", "sse"],
+                // 与单项目模式同一对字段，但这里**没有单一答案**：项目 / 版本由 key 决定。
+                "project": Value::Null,
+                "ontology_version": Value::Null,
+                "mode": "multi-project",
+            });
+            if multi.deploy.mode.is_ontology_only() {
+                body["mode"] = json!("multi-project+ontology-only");
+            }
+            return respond(StatusCode::OK, body);
+        }
+        return internal_no_service("/api/health");
+    };
+    audit_anonymous(svc, "health", Protocol::Rest, None, "OK", started);
     let mut body = json!({
         "service": "ontok-query",
         "version": env!("CARGO_PKG_VERSION"),
@@ -303,8 +501,16 @@ async fn health(State(svc): State<Arc<QueryService>>) -> Response {
 ///
 /// 响应体由 [`crate::metrics::Metrics::http_response`] **唯一**构造（三个服务共用），
 /// 这里只把本进程的注册表交出去。⛔ 不读任何业务字段：指标里没有租户 / 表名 / SQL。
-async fn get_metrics(State(svc): State<Arc<QueryService>>) -> Response {
-    svc.metrics.http_response()
+async fn get_metrics(Extension(ctx): Extension<Resolved>) -> Response {
+    // ⭐ REQ-159 P1b · 多项目模式的指标记在**注册表**上（进程级；各项目的
+    // `QueryService` 各自还有一份，但那不是「这台服务」的口径）。
+    if let Some(svc) = ctx.svc.as_deref() {
+        return svc.metrics.http_response();
+    }
+    if let Some(multi) = ctx.multi.as_deref() {
+        return multi.metrics.http_response();
+    }
+    internal_no_service("/metrics")
 }
 
 /// `POST /api/sparql` —— body `{query, max_rows?, tenant?, format?}`。
@@ -326,13 +532,17 @@ async fn get_metrics(State(svc): State<Arc<QueryService>>) -> Response {
 /// ⛔ 默认（三处都不写）走 [`DEFAULT_FORMAT`] = `JsonLd`；要旧的行回执就
 /// 显式写 `format=rows`，其响应体与 REQ-123 **逐字节相同**（R2）。
 async fn post_sparql(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
     headers: HeaderMap,
     Query(q): Query<BTreeMap<String, String>>,
     body: Bytes,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("POST /api/sparql") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Rest,
@@ -495,11 +705,15 @@ fn respond_jsonld(body: super::jsonld::JsonLd<'_>) -> Response {
 
 /// `GET /api/catalog` —— 分页的类 / 属性 / 关系（含证据等级与枚举值）。
 async fn get_catalog(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
     Query(q): Query<BTreeMap<String, String>>,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("GET /api/catalog") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Rest,
@@ -519,11 +733,15 @@ async fn get_catalog(
 
 /// `GET /api/describe?name=` —— 类/属性详情；未知 ⇒ 404 + 相近项。
 async fn get_describe(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
     Query(q): Query<BTreeMap<String, String>>,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("GET /api/describe") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Rest,
@@ -550,12 +768,16 @@ async fn get_describe(
 /// - `ETag` = 正文 sha256 前 16 位；`If-None-Match` 命中 ⇒ 304 且无体（AC-005）；
 /// - 每次请求一行审计（含 401 / 400 / 304）（AC-006）。
 async fn get_ontology_ttl(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
     headers: HeaderMap,
     Query(q): Query<BTreeMap<String, String>>,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("GET /api/ontology.ttl") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Rest,
@@ -673,11 +895,15 @@ pub const TOOL_NAMES: &[&str] = &["catalog", "describe", "sparql_query", "sample
 
 /// `POST /mcp` —— JSON-RPC 2.0（`initialize` / `tools/list` / `tools/call` / `ping`）。
 async fn mcp_post(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
     body: Bytes,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("POST /mcp") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Mcp,
@@ -1074,10 +1300,14 @@ fn resources_read(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
 /// 连接数名额（`slot`）跟着状态机一起被 drop —— 客户端断开时 axum 丢掉 body ⇒
 /// `slot` 归还，**不需要**等一次写失败。
 async fn mcp_sse(
-    State(svc): State<Arc<QueryService>>,
+    Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
 ) -> Response {
     let started = Instant::now();
+    let svc = match ctx.expect_svc("GET /mcp") {
+        Ok(s) => s,
+        Err(res) => return res,
+    };
     let caller = Caller {
         token: auth.0,
         protocol: Protocol::Mcp,
@@ -1157,7 +1387,7 @@ fn parse_json(body: &[u8]) -> Result<Value, ApiError> {
 // ══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::query::audit::AuditSink;
     use crate::query::tokens::TokenTable;
