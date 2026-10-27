@@ -458,6 +458,7 @@ fn draft_options(
         strict_deterministic: true,
         work_dir: dir.join(".ontok-build"),
         schema: None,
+        dsn: None,
         proposal: None,
         allow_doc_only: false,
         base_version: None,

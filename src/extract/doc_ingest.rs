@@ -198,6 +198,22 @@ impl Prompts {
         let sha256 = sha256_hex(system.as_bytes());
         Self { system, sha256 }
     }
+
+    /// ⭐ REQ-170 · 在 system 消息**后面**追加一段（库结构摘要就走这里）。
+    ///
+    /// 为什么不是「另开一个字段塞进 user 消息」：`prompt_sha` 只算 system 的哈希
+    /// —— 摘要必须进 `prompt_sha`，否则「换了 schema，缓存照样命中」。
+    /// 走同一条通道 = 同一个哈希 = 与换 skill 完全同一条纪律。
+    ///
+    /// ⚠️ 空白与顺序都是**确定性**的（`\n\n` + 原文，不做 trim 之外的加工），
+    /// 所以同一份 schema 永远得到同一个 `prompt_sha`。
+    pub fn with_extra_system(self, extra: &str) -> Self {
+        let extra = extra.trim();
+        if extra.is_empty() {
+            return self;
+        }
+        Self::from_system(format!("{}\n\n{extra}", self.system))
+    }
 }
 
 impl Default for Prompts {
@@ -759,6 +775,38 @@ pub struct RelationAssertion {
     pub modality: Modality,
     pub alignable: bool,
     pub evidence: Evidence,
+    /// ⭐ REQ-170 · **这条边由哪一列实现**（`doc merge` 的消费契约，规则 3）。
+    ///
+    /// | 情形 | 值 |
+    /// | --- | --- |
+    /// | 给了 `--schema` 且两端表/列都在 schema 里 | `Some({child:{table,column},parent:{…}})` |
+    /// | 没给 `--schema` | `None`（⛔ 不吃模型给的 `maps_to`） |
+    /// | 给了但查不到表/列 | 该条关系**整条丢弃**并计数（`stats.maps_to_*`） |
+    ///
+    /// ⚠️ 形状与 `doc_merge::read_maps_to` **同一份**（直接复用那个类型，
+    /// ⛔ 不在这里另立一个「差不多」的 struct —— 两份一定会漂）。
+    ///
+    /// ⚠️ **读回是宽容的**：形状不对的 `maps_to`（例如模型写成字符串）**不**让整行
+    /// 反序列化失败（`deserialize_with` 吞成 `None`）。`doc_merge` 读的是原始 `Value`
+    /// （`read_maps_to`），它会照旧把那种行记成 `doc_unmapped/bad_maps_to` ——
+    /// 一份坏映射不该把整份 JSONL 变成读不出来的文件。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_maps_to"
+    )]
+    pub maps_to: Option<crate::extract::doc_merge::MapsTo>,
+}
+
+/// `maps_to` 的**宽容**读法：任何形状问题 ⇒ `None`（⛔ 不让整行 parse 失败）。
+fn lenient_maps_to<'de, D>(
+    d: D,
+) -> std::result::Result<Option<crate::extract::doc_merge::MapsTo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(raw.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 /// JSONL 的一行。
@@ -845,6 +893,13 @@ pub struct RawRelation {
     pub quote: String,
     #[serde(default)]
     pub modality: Option<String>,
+    /// ⭐ REQ-170 · 这条关系由哪一列实现（`{child_column, parent_column}`）。
+    ///
+    /// ⚠️ 收成 `Value` 而不是强类型：形状不对时只该丢**这一条**并计数，
+    /// 不该让整块回答被 [`Rejection::Parse`] 作废（那块里别的断言是好的）。
+    /// 校验与落表在 [`crate::extract::schema_digest::SchemaView::resolve_relation_maps_to`]。
+    #[serde(default)]
+    pub maps_to: Option<serde_json::Value>,
 }
 
 /// 模型对一块的回答（**未校验**）。
@@ -958,7 +1013,32 @@ fn check(
 }
 
 /// 校验一块的模型回答，产出**可以进 JSONL** 的断言（对不上的直接丢弃 + 计数）。
+///
+/// ⭐ REQ-170：这是 [`validate_with_schema`] 的**无 schema** 版本 —— 行为与 REQ-116
+/// 逐字节相同（关系不带 `maps_to`）。
 pub fn validate(chunk: &Chunk, raw: RawExtraction, stats: &mut DocStats) -> Vec<Assertion> {
+    validate_with_schema(chunk, raw, stats, None)
+}
+
+/// ⭐ REQ-170 · 与 [`validate`] 相同的证据/谓词/模态三道闸，外加**`maps_to` 的对账**。
+///
+/// `schema` 给了才吃关系断言上的 `maps_to`：
+///
+/// | 情形 | 结果 |
+/// | --- | --- |
+/// | 两端表/列都能在 schema 里查到 | 落成 `{child:{table,column},parent:{…}}`（`doc_merge` 的形状） |
+/// | 形状不对 / 表查不到 / 对上多张 / 列不在 | **整条关系丢弃** + 分类计数（[`MapsToReject`]） |
+/// | 没给 schema 却给了 `maps_to` | 只丢 `maps_to`、关系照留（⛔ 没表列不许输出映射） |
+///
+/// ⛔ 不给 schema 时**一个字节都不变**：`stats.schema_checked = false`，
+/// 关系里没有 `maps_to` 字段，stats.json 也没有 `maps_to` 那一节。
+pub fn validate_with_schema(
+    chunk: &Chunk,
+    raw: RawExtraction,
+    stats: &mut DocStats,
+    schema: Option<&crate::extract::schema_digest::SchemaView>,
+) -> Vec<Assertion> {
+    stats.schema_checked = schema.is_some();
     let mut out = Vec::new();
 
     for c in raw.concepts {
@@ -1049,6 +1129,44 @@ pub fn validate(chunk: &Chunk, raw: RawExtraction, stats: &mut DocStats) -> Vec<
             .cardinality
             .map(|c| c.trim().to_string())
             .filter(|c| matches!(c.as_str(), "1:1" | "1:N" | "N:1" | "N:N"));
+        // ── ⭐ REQ-170 · `maps_to` 的对账（⛔ 查不到就丢这条关系，不猜表/不编列）──
+        let maps_to = match (&r.maps_to, schema) {
+            (None, _) => None,
+            (Some(_), None) => {
+                // 没给 schema：模型不该给映射（skill 契约的另一半）。
+                // 只丢这一个字段、关系照留 —— 否则「不给 --schema 时产物不变」不成立。
+                stats.maps_to_dropped_no_schema += 1;
+                if stats.maps_to_samples.len() < 3 {
+                    stats.maps_to_samples.push(format!(
+                        "{}：{} -[{}]-> {} 带了 maps_to，但本轮没有 --schema ⇒ 映射不落地",
+                        chunk.chunk_id, subject, predicate, object
+                    ));
+                }
+                None
+            }
+            (Some(raw_maps), Some(sv)) => match sv.resolve_relation_maps_to(&subject, &object, raw_maps) {
+                Ok(m) => {
+                    stats.maps_to_kept += 1;
+                    Some(m)
+                }
+                Err(p) => {
+                    stats.count_maps_to_drop(p.reject);
+                    if stats.maps_to_samples.len() < 3 {
+                        stats.maps_to_samples.push(format!(
+                            "{}：{} -[{}]-> {} 的 maps_to 被丢（{}）：{}",
+                            chunk.chunk_id,
+                            subject,
+                            predicate,
+                            object,
+                            p.reject.label(),
+                            p.detail
+                        ));
+                    }
+                    // ⛔ 整条关系丢弃：一条「查不到表/列」的边不是证据，是噪声。
+                    continue;
+                }
+            },
+        };
         stats.relations += 1;
         *stats.predicate_counts.entry(predicate.clone()).or_insert(0) += 1;
         out.push(Assertion::Relation(RelationAssertion {
@@ -1059,6 +1177,7 @@ pub fn validate(chunk: &Chunk, raw: RawExtraction, stats: &mut DocStats) -> Vec<
             modality,
             alignable: modality.alignable(),
             evidence,
+            maps_to,
         }));
     }
 
@@ -1300,6 +1419,25 @@ pub struct DocStats {
     pub rejected_predicate_counts: BTreeMap<String, usize>,
     /// 作废样例（最多 5 条）
     pub rejection_samples: Vec<String>,
+    /// ⭐ REQ-170 · 本轮是否**带了 schema**（`--schema`）。
+    ///
+    /// 它同时是 stats.json 的开关：没有 schema 时 `maps_to` 这一节**整个不出现**
+    /// —— 于是「不给 `--schema` ⇒ 产物逐字节不变」在图省事的地方也不会破。
+    pub schema_checked: bool,
+    /// ⭐ REQ-170 · 关系断言里**带上了** `maps_to` 并通过对账的条数。
+    pub maps_to_kept: usize,
+    /// 模型给了 `maps_to`，但本轮**没有 schema** ⇒ 不落地（⛔ 没表列不许输出映射）。
+    pub maps_to_dropped_no_schema: usize,
+    /// 形状不对（不是对象 / 缺 `child_column` / 关系上给了 `table`）⇒ 丢弃。
+    pub maps_to_dropped_shape: usize,
+    /// 表定不下来（显式表不在 schema / 概念名与列名都对不上）⇒ 丢弃。
+    pub maps_to_dropped_table: usize,
+    /// 表对上了多张（不猜）⇒ 丢弃。
+    pub maps_to_dropped_ambiguous: usize,
+    /// 表定了但列不在那张表里 ⇒ 丢弃。
+    pub maps_to_dropped_column: usize,
+    /// `maps_to` 丢弃样例（最多 3 条；⛔ 不混进 `rejection_samples` 的五类计数）。
+    pub maps_to_samples: Vec<String>,
 }
 
 /// **比例 + 分子分母**（只报百分比会把「分母是 0」藏起来）。
@@ -1391,6 +1529,26 @@ impl DocStats {
             self.rejection_samples.push(format!("{}：{detail}", why.as_str()));
         }
     }
+
+    /// ⭐ REQ-170 · 记一条 `maps_to` 丢弃（**分类**：形状 / 查不到表 / 多张 / 查不到列）。
+    fn count_maps_to_drop(&mut self, why: crate::extract::schema_digest::MapsToReject) {
+        use crate::extract::schema_digest::MapsToReject as R;
+        match why {
+            R::BadShape => self.maps_to_dropped_shape += 1,
+            R::TableUnknown => self.maps_to_dropped_table += 1,
+            R::TableAmbiguous => self.maps_to_dropped_ambiguous += 1,
+            R::ColumnAbsent => self.maps_to_dropped_column += 1,
+        }
+    }
+
+    /// ⭐ REQ-170 · 本轮被丢掉的 `maps_to` 条数（不含「没给 schema」那种 —— 那不叫丢，
+    /// 叫没落地；两类都报，但别混成一个数）。
+    pub fn maps_to_dropped(&self) -> usize {
+        self.maps_to_dropped_shape
+            + self.maps_to_dropped_table
+            + self.maps_to_dropped_ambiguous
+            + self.maps_to_dropped_column
+    }
 }
 
 // ──────────────────────────────────────────────────────────
@@ -1417,6 +1575,25 @@ pub fn ingest_all(
     budget: u64,
     max_tokens: u32,
 ) -> (Vec<Assertion>, DocStats) {
+    ingest_all_with_schema(transport, cache, chunks, model, prompts, budget, max_tokens, None)
+}
+
+/// ⭐ REQ-170 · 与 [`ingest_all`] 完全相同，多一个**对账面**（`schema`）。
+///
+/// 为什么另开一个函数而不是加参数：`ingest_all` 有十几处调用点（本文件 + `doc_acp`
+/// 的判据），加参数会让每一处都要改一遍 —— 而它们判的都是「不给 schema 的那条路」，
+/// 一个字节都不该动。这里 delegating 的形态让老路径**编译期就证明**没变。
+#[allow(clippy::too_many_arguments)]
+pub fn ingest_all_with_schema(
+    transport: &mut dyn LlmTransport,
+    cache: &mut dyn DocCache,
+    chunks: &[Chunk],
+    model: &str,
+    prompts: &Prompts,
+    budget: u64,
+    max_tokens: u32,
+    schema: Option<&crate::extract::schema_digest::SchemaView>,
+) -> (Vec<Assertion>, DocStats) {
     let mut assertions: Vec<Assertion> = Vec::new();
     let mut stats = DocStats { chunks: chunks.len(), budget, ..Default::default() };
 
@@ -1436,7 +1613,7 @@ pub fn ingest_all(
             stats.tokens_replayed += entry.tokens;
             match parse_extraction(&entry.response) {
                 Ok(raw) => {
-                    let mut got = validate(chunk, raw, &mut stats);
+                    let mut got = validate_with_schema(chunk, raw, &mut stats, schema);
                     assertions.append(&mut got);
                 }
                 Err(detail) => {
@@ -1508,7 +1685,7 @@ pub fn ingest_all(
         );
         match parse_extraction(&text) {
             Ok(raw) => {
-                let mut got = validate(chunk, raw, &mut stats);
+                let mut got = validate_with_schema(chunk, raw, &mut stats, schema);
                 assertions.append(&mut got);
             }
             Err(detail) => stats.reject(Rejection::Parse, format!("{} {detail}", chunk.chunk_id)),
@@ -1625,6 +1802,29 @@ pub struct StatsReport {
     pub agent_version: String,
     pub files_detail: Vec<StatsFile>,
     pub rejection_samples: Vec<String>,
+    /// ⭐ REQ-170 · `maps_to` 的对账结果（**只在给了 `--schema` 时出现**）。
+    ///
+    /// `skip_serializing_if` 是零回归的关键：不给 `--schema` ⇒ 这一节整段不存在
+    /// ⇒ `stats.json` 与 REQ-163 的产物**逐字节相同**。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maps_to: Option<MapsToStats>,
+}
+
+/// ⭐ REQ-170 · `maps_to` 的四类丢弃 + 落地数（稳定码与 [`MapsToReject::code`] 同源）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MapsToStats {
+    /// 带上了并通过对账的关系条数。
+    pub kept: usize,
+    /// 模型给了 `maps_to` 但本轮没有 schema ⇒ 不落地（关系照留）。
+    pub dropped_no_schema: usize,
+    /// 四类丢弃合计。
+    pub dropped: usize,
+    pub dropped_shape: usize,
+    pub dropped_table_unknown: usize,
+    pub dropped_table_ambiguous: usize,
+    pub dropped_column_absent: usize,
+    /// 丢弃样例（最多 3 条，人话）。
+    pub samples: Vec<String>,
 }
 
 /// 造 `stats.json` 的内容（pretty JSON，键顺序固定）。
@@ -1695,6 +1895,20 @@ pub fn render_stats(
         agent_version: DOC_AGENT_VERSION.to_string(),
         files_detail,
         rejection_samples: stats.rejection_samples.clone(),
+        maps_to: if stats.schema_checked {
+            Some(MapsToStats {
+                kept: stats.maps_to_kept,
+                dropped_no_schema: stats.maps_to_dropped_no_schema,
+                dropped: stats.maps_to_dropped(),
+                dropped_shape: stats.maps_to_dropped_shape,
+                dropped_table_unknown: stats.maps_to_dropped_table,
+                dropped_table_ambiguous: stats.maps_to_dropped_ambiguous,
+                dropped_column_absent: stats.maps_to_dropped_column,
+                samples: stats.maps_to_samples.clone(),
+            })
+        } else {
+            None
+        },
     };
     serde_json::to_string_pretty(&report).context("stats.json 序列化失败")
 }
@@ -1925,10 +2139,159 @@ mod tests {
         assert_eq!(stats.rejected(), 2);
     }
 
+    // ── ⭐ REQ-170 · `maps_to` 的对账（带 schema 才落地）────────────
+
+    fn maps_schema() -> crate::extract::schema_digest::SchemaView {
+        crate::extract::schema_digest::SchemaView::from_json(
+            r#"{"tables":[
+              {"name":"cloud_disk","comment":"云硬盘","columns":[
+                 {"name":"id","data_type":"text","is_primary_key":true},
+                 {"name":"instance_id","data_type":"text"}]},
+              {"name":"cloud_server","comment":"云主机","columns":[
+                 {"name":"id","data_type":"text","is_primary_key":true},
+                 {"name":"zone","data_type":"text"}]}]}"#,
+        )
+        .expect("夹具 schema 合法")
+    }
+
+    fn mapped_relation_answer() -> Value {
+        serde_json::json!({
+            "concepts": [],
+            "relations": [{
+                "subject": "云硬盘", "predicate": "挂载到", "object": "云主机",
+                "quote": "云硬盘挂载到云主机", "modality": "fact",
+                "maps_to": {"child_column": "instance_id", "parent_column": "id"}
+            }]
+        })
+    }
+
+    /// **不给 schema**：模型给的 `maps_to` **不落地**，关系照留 —— 于是一份
+    /// 没带 `--schema` 的产物与 REQ-116/147 **逐字节相同**（JSONL 里没有那一栏）。
+    #[test]
+    fn without_schema_the_agents_maps_to_never_reaches_the_jsonl() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let mut stats = DocStats::default();
+        let got = validate(&c, raw(mapped_relation_answer()), &mut stats);
+        assert_eq!(got.len(), 1, "关系本身要留下：{got:?}");
+        match &got[0] {
+            Assertion::Relation(r) => {
+                assert!(r.maps_to.is_none(), "⛔ 没 schema 不许输出 maps_to");
+                let line = serde_json::to_string(r).unwrap();
+                assert!(
+                    !line.contains("maps_to"),
+                    "JSONL 那一行不许出现 maps_to（零回归的判据）：{line}"
+                );
+            }
+            other => panic!("应当是关系断言：{other:?}"),
+        }
+        assert_eq!(stats.maps_to_dropped_no_schema, 1);
+        assert!(!stats.schema_checked, "没 schema ⇒ schema_checked=false");
+        // stats.json 里也不许出现 maps_to 那一节
+        let docs = [doc("# 云硬盘\n\n云硬盘挂载到云主机。\n")];
+        let chunks = chunk_all(&docs);
+        let json = render_stats("docs", &docs, &chunks, &stats, None, "m", "p").unwrap();
+        assert!(!json.contains("maps_to"), "stats.json 里不许有 maps_to：{json}");
+    }
+
+    /// **给了 schema**：两端表/列都能查到 ⇒ 落成 `doc merge` 认的形状
+    /// （`{child:{table,column},parent:{…}}`，表由概念名落到具体表）。
+    #[test]
+    fn with_schema_a_resolvable_maps_to_lands_in_the_merge_shape() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let mut stats = DocStats::default();
+        let sv = maps_schema();
+        let got = validate_with_schema(&c, raw(mapped_relation_answer()), &mut stats, Some(&sv));
+        assert_eq!(got.len(), 1);
+        let Assertion::Relation(r) = &got[0] else { panic!("应当是关系断言") };
+        let m = r.maps_to.as_ref().expect("带 schema 且对得上 ⇒ 必须落地");
+        assert_eq!(m.child.as_ref().unwrap().table, "cloud_disk");
+        assert_eq!(m.child.as_ref().unwrap().column, "instance_id");
+        assert_eq!(m.parent.as_ref().unwrap().table, "cloud_server");
+        assert_eq!(m.parent.as_ref().unwrap().column, "id");
+        assert_eq!(m.table, None, "关系上的 maps_to 不带 table");
+        assert_eq!(stats.maps_to_kept, 1);
+        assert_eq!(stats.maps_to_dropped(), 0);
+        // 产物那一行能被 `doc_merge::read_maps_to` **原样读回**（同一份形状）
+        let value: Value = serde_json::to_value(r).unwrap();
+        let read = crate::extract::doc_merge::read_maps_to(&value["maps_to"])
+            .expect("doc merge 必须认得这份 maps_to");
+        assert_eq!(&read, m);
+        // 同一份 schema 两次 ⇒ 同一串字节（确定性）
+        assert_eq!(
+            serde_json::to_string(&got).unwrap(),
+            serde_json::to_string(&validate_with_schema(
+                &c,
+                raw(mapped_relation_answer()),
+                &mut DocStats::default(),
+                Some(&sv)
+            ))
+            .unwrap()
+        );
+    }
+
+    /// **给了 schema 但列查不到** ⇒ **整条关系丢弃** + 分类计数（⛔ 不编列名）。
+    /// 同一块里别的条目不受牵连（只丢这一条）。
+    #[test]
+    fn with_schema_a_maps_to_pointing_at_a_missing_column_drops_that_relation() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let mut stats = DocStats::default();
+        let sv = maps_schema();
+        let answer = serde_json::json!({
+            "concepts": [{"name": "云硬盘", "quote": "云硬盘挂载到云主机", "modality": "fact"}],
+            "relations": [{
+                "subject": "云硬盘", "predicate": "挂载到", "object": "云主机",
+                "quote": "云硬盘挂载到云主机", "modality": "fact",
+                "maps_to": {"child_column": "instance_id", "parent_column": "no_such_column"}
+            }]
+        });
+        let got = validate_with_schema(&c, raw(answer), &mut stats, Some(&sv));
+        assert_eq!(got.len(), 1, "概念留下、关系丢掉：{got:?}");
+        assert!(got[0].is_concept());
+        assert_eq!(stats.relations, 0, "没落地的关系不许算进 relations");
+        assert!(!stats.predicate_counts.contains_key("挂载到"));
+        assert_eq!(stats.maps_to_dropped_column, 1);
+        assert_eq!(stats.maps_to_dropped(), 1);
+        assert!(stats.maps_to_kept == 0);
+        assert!(
+            stats.maps_to_samples.iter().any(|s| s.contains("no_such_column")),
+            "丢弃要能点名到列：{:?}",
+            stats.maps_to_samples
+        );
+        // stats.json 里 maps_to 这一节**在**（因为本轮给了 schema）
+        let docs = [doc("# 云硬盘\n\n云硬盘挂载到云主机。\n")];
+        let chunks = chunk_all(&docs);
+        let json = render_stats("docs", &docs, &chunks, &stats, None, "m", "p").unwrap();
+        assert!(json.contains("\"maps_to\""), "给了 schema 就要有这一节：{json}");
+        assert!(json.contains("\"dropped_column_absent\": 1"), "{json}");
+    }
+
+    /// 摘要进 `prompt_sha`：**换 schema ⇒ 缓存整体失效**（与换 skill 同一条纪律）。
+    #[test]
+    fn the_schema_digest_enters_the_prompt_sha_so_changing_it_invalidates_the_cache() {
+        let base = Prompts::standard();
+        let a = base.clone().with_extra_system("表 cloud_disk（云硬盘）：instance_id text");
+        let b = base.clone().with_extra_system("表 cloud_server（云主机）：id text");
+        assert_ne!(a.sha256, b.sha256, "⛔ 换 schema 必须换 prompt_sha");
+        assert_ne!(a.sha256, base.sha256, "加了摘要就不该还是老哈希");
+        assert!(a.system.contains("cloud_disk"), "摘要要真的进 system 消息");
+        // 同一份摘要两次 ⇒ 同一串哈希（可复现）
+        assert_eq!(
+            a.sha256,
+            base.clone().with_extra_system("表 cloud_disk（云硬盘）：instance_id text").sha256
+        );
+        // 空白不算「换 schema」（摘要按 trim 后的正文进哈希）
+        assert_eq!(
+            a.sha256,
+            base.with_extra_system("  表 cloud_disk（云硬盘）：instance_id text  \n").sha256
+        );
+        // 空摘要 ⇒ 原样（不给 --schema 的那条路一个字节都不变）
+        let same = Prompts::standard().with_extra_system("   ");
+        assert_eq!(same, Prompts::standard());
+    }
+
     /// 谓词退化成结构词 ⇒ 丢弃（AC-004），且**原始分布里必须留痕**（N-2）。
     #[test]
-    fn structural_predicates_are_rejected_but_counted_raw() {
-        let c = chunk_of("# 关系\n\n订单属于客户。\n");
+    fn structural_predicates_are_rejected_but_counted_raw() {        let c = chunk_of("# 关系\n\n订单属于客户。\n");
         let mut stats = DocStats::default();
         let got = validate(
             &c,

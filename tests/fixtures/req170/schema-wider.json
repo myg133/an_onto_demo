@@ -1,0 +1,51 @@
+{
+  "server_version": "PostgreSQL 16",
+  "transaction_read_only": "on",
+  "schema": "public",
+  "table_count": 3,
+  "column_count": 6,
+  "commented_column_count": 0,
+  "foreign_key_count": 0,
+  "introspected_at": "2026-10-27T00:00:00+00:00",
+  "tables": [
+    {
+      "name": "cloud_disks",
+      "comment": "云硬盘",
+      "column_count": 3,
+      "commented_count": 0,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "name", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": false },
+        { "name": "server_id", "data_type": "text", "nullable": true, "comment": "挂载到哪台云主机", "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "servers",
+      "comment": "云主机",
+      "column_count": 2,
+      "commented_count": 0,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "hostname", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "disk_snapshots",
+      "comment": "云硬盘快照",
+      "column_count": 1,
+      "commented_count": 0,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": true }
+      ]
+    }
+  ]
+}

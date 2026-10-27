@@ -15,6 +15,11 @@ pub mod doc_acp;
 // 消费方的判据；放在一起会让「证据校验的唯一实现」与「合并规则的唯一实现」混成一份。
 // 零 I/O：输入是字符串 + `Value`，落盘由 `cli::doc_merge_cmd` 负责。
 pub mod doc_merge;
+// ⭐ REQ-170 · **库结构摘要**（`schema.json` → 进 prompt 的那一小块 + `maps_to` 的校验面）。
+// 独立成文件：`doc_merge` 的 `SchemaIndex` 只服务合并（表 → 列名集合，没有中文名、
+// 没有选表打分、也不该有 prompt 文案）；摘要与选表是**产出方**的事，放一起会让
+// 「合并规则的唯一实现」和「给模型的摘要」混成一份。
+pub mod schema_digest;
 // REQ-113 · 排除表（**一个实现**：解析 / 校验 / 剔除 / 记录都在这一个文件里）。
 // 不放 `domain/`：它判的是「这一轮抽取的作用域」，与 `extract::propose` 同层。
 pub mod exclusions;

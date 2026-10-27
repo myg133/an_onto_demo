@@ -15,6 +15,20 @@
 //!    不读任何业务表的数据行 —— 用户已明确授权边界：
 //!    **发 schema 元数据，不发数据行**。
 //!
+//! # ⚠️ 权限可见性（REQ-170 · QA F-1，踩过一次）
+//!
+//! 本需求的形态是**只读账号**（只有 `SELECT`）。`information_schema` 里有两类视图
+//! 对它**不可见**：`table_constraints` / `key_column_usage`（PG 的口径是
+//! 「属主 or 持有 SELECT **之外**的权限」）。于是「只查 information_schema」在 owner
+//! 账号下全绿、在只读账号下**主键全 null** —— 而且失效是**安静**的：
+//! 勘查照样成功、`schema.json` 照样写出，只是摘要说「没有主键」、`r2rml` 出 0 个
+//! TriplesMap。
+//!
+//! ⇒ **约束类事实（主键 / 唯一索引 / 外键计数）一律从 `pg_index` / `pg_constraint` /
+//! `pg_attribute` 取**：它们是系统目录，对所有可连账号可见。
+//! 判据：`tests/test_req170_schema_chain.rs::a_read_only_role_still_sees_primary_keys_so_r2rml_maps_the_tables`
+//!（真建一个只有 `GRANT SELECT` 的角色跑 `build run --dsn`）。
+//!
 //! # 为什么勘查与抽取要分开
 //!
 //! 勘查是**确定性**的（同样的库必然同样的产出，可缓存、可 diff、可复现）。
@@ -406,9 +420,14 @@ pub async fn introspect(url: &str) -> Result<SchemaReport> {
 
     ensure_read_only(&read_only)?;
 
+    // ⚠️ **不要用 `information_schema.table_constraints` 数外键**（REQ-170 · QA F-1）：
+    // 那张视图对**只有 SELECT** 的角色**看不到**约束行（PG 的口径是「属主 or 持有
+    // SELECT 之外的权限」）。`pg_constraint` 是系统目录，对所有可连账号可见。
     let foreign_key_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.table_constraints \
-         WHERE table_schema = $1 AND constraint_type = 'FOREIGN KEY'",
+        "SELECT count(*) FROM pg_constraint con \
+         JOIN pg_class c ON c.oid = con.conrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND con.contype = 'f'",
     )
     .bind(TARGET_SCHEMA)
     .fetch_one(&pool)
@@ -430,12 +449,19 @@ pub async fn introspect(url: &str) -> Result<SchemaReport> {
          JOIN information_schema.columns c
            ON c.table_schema = t.table_schema AND c.table_name = t.table_name
          LEFT JOIN (
-             SELECT kcu.table_name, kcu.column_name, true AS is_pk
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu
-               ON kcu.constraint_name = tc.constraint_name
-              AND kcu.table_schema = tc.table_schema
-             WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'
+             -- ⚠️ 主键**只能**从 `pg_index` 取（REQ-170 · QA F-1）：
+             -- `information_schema.table_constraints` 对**只有 SELECT** 的角色
+             -- 一行都读不到 ⇒ 主键全 null ⇒ 摘要写「没有主键」⇒ r2rml 0 个 TriplesMap。
+             -- `pg_index` / `pg_attribute` 对所有可连账号可见（QA 实测：只读账号 66 行）。
+             SELECT c.relname AS table_name, a.attname AS column_name, true AS is_pk
+             FROM pg_index i
+             JOIN pg_class c ON c.oid = i.indrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+             WHERE n.nspname = $1
+               AND i.indisprimary
+               AND a.attnum > 0
+               AND NOT a.attisdropped
          ) pk ON pk.table_name = t.table_name AND pk.column_name = c.column_name
          WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
          ORDER BY t.table_name, c.ordinal_position",
@@ -529,17 +555,26 @@ pub async fn key_catalog(url: &str) -> Result<KeyCatalog> {
     ensure_read_only(&read_only)?;
 
     // 主键按**列**取、再在 Rust 里折叠成「单列 / 复合」：
-    // `information_schema` 里没有「这个主键是单列吗」这一列，
-    // 在 SQL 侧拼一个 `count(*) = 1` 会把「复合」与「无主键」压成同一个
-    // `false` —— 而 R2（复合键上限 0.50）恰恰要区分这两者。
+    // 这里没有「这个主键是单列吗」这一列，在 SQL 侧拼一个 `count(*) = 1` 会把
+    // 「复合」与「无主键」压成同一个 `false` —— 而 R2（复合键上限 0.50）恰恰要区分这两者。
+    //
+    // ⚠️ REQ-170 · QA F-1：**必须走 `pg_index`**，⛔ 不要用
+    // `information_schema.table_constraints` —— 那张视图对**只有 SELECT** 的角色
+    // 一行都读不到（PG 的口径是「属主 or 持有 SELECT 之外的权限」），
+    // 于是只读账号下 `primary_key` 全为 null ⇒ 摘要写「没有主键」⇒ r2rml 出 0 个 TriplesMap。
+    // `pg_index` / `pg_attribute` 对所有可连账号可见（QA 实测：只读账号可见 66 行）。
+    // 唯一列那条本来就用 `pg_index`；主键这条现在与它同源。
     let pk_rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT tc.table_name, kcu.column_name
-         FROM information_schema.table_constraints tc
-         JOIN information_schema.key_column_usage kcu
-           ON kcu.constraint_name = tc.constraint_name
-          AND kcu.table_schema = tc.table_schema
-         WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'
-         ORDER BY tc.table_name, kcu.ordinal_position",
+        "SELECT c.relname, a.attname
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+         WHERE n.nspname = $1
+           AND i.indisprimary
+           AND a.attnum > 0
+           AND NOT a.attisdropped
+         ORDER BY c.relname, a.attnum",
     )
     .bind(TARGET_SCHEMA)
     .fetch_all(&pool)
