@@ -1008,3 +1008,22 @@ Copy-Item .local\cargo-XXX\debug\ontok-builder.exe .local\console-ui\ontok-build
 | 「现在没有 X，所以当年也没 X」 | 「当年有 19 条、现在 0 条 ⇒ 少了 19」 |
 
 > 与「引用要贴原文」同族：**被比较的两个数字必须来自同一时刻/同一口径**。
+
+### 编译缓存里最大的一块是 `incremental`（2026-10-27 实测 35.6 GB）
+
+`.local/<target>/debug` 拆开看：`deps` 18.3 GB（真产物）+ **`incremental` 12.4 GB**（增量编译缓存）。
+
+**事实**：我们跑 `cargo test` 为主、不做热编辑 ⇒ `incremental` **几乎全是浪费**，而且它是**按 target 各自一份**的
+（7 个 target 合计 **35.6 GB**）。
+
+**两条硬规定**：
+
+1. **跑构建/测试时设 `CARGO_INCREMENTAL=0`**（写进每条命令或会话环境）：
+   ```powershell
+   $env:CARGO_INCREMENTAL="0"
+   ```
+   代价：改一行重编会慢一点；收益：每个 target 少 30%+。
+2. **清理时优先删 `debug/incremental`**（安全：不影响已编译产物，只影响下次增量速度），
+   ⛔ 删 `deps` 就等于重编。**删之前确认那个 target 没有 `cargo`/`rustc` 在跑**。
+
+> 与「基线别建 target」「长驻服务别用 target 里的 exe」同属一族：**编译产物要可回收、可解耦**。
