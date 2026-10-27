@@ -469,7 +469,7 @@ fn build_run_with_schema_merges_the_relation_into_the_draft() {
 ///
 /// 退回前的形态：那条闸写在 `doc_ingest_cmd` 里用 `anyhow::bail!`，落到退出码 **1**
 ///（环境错），与「入参不合法」的 2 混了。修法是让 **clap** 在解析阶段就拒
-///（`value_parser(...).range(1..)`）—— 与其它入参错同一条出口，而且**一个字节都不写**。
+///（自定义值解析器 `parse_schema_max_tables`）—— 与其它入参错同一条出口，而且**一个字节都不写**。
 #[test]
 fn a_zero_schema_max_tables_is_an_input_error_with_exit_2() {
     let root = temp_dir("max-tables-zero");

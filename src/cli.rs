@@ -2679,8 +2679,8 @@ pub(crate) async fn doc_ingest_cmd(
     if limit_chunks == Some(0) {
         anyhow::bail!("--limit-chunks 是 0：0 块等于「什么都没跑」，那与「不跑」混淆。要跑就给 ≥1。");
     }
-    // ⚠️ `--schema-max-tables 0` **不在这里判**：clap 的
-    // `value_parser(...).range(1..)` 在**解析阶段**就拒了 —— 入参错必须退出码 **2**
+    // ⚠️ `--schema-max-tables 0` **不在这里判**：它在 clap 的**自定义值解析器**
+    // `parse_schema_max_tables` 里就拒了 —— 入参错必须退出码 **2**
     //（F-3：之前这条 `anyhow::bail` 落到了 exit 1，与其它入参错不一致）。
 
     // ① 输入 + 格式闸（AC-001）。`load_docs` 是**唯一**判「这个扩展名能不能吃」的地方。
