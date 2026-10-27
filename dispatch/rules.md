@@ -787,3 +787,30 @@ Rust 测试框架于是把它算成 **passed**。
 2. ⛔ 不要 `podman rm` / 重建容器：它有 3 天的历史库，重建等于把所有人的现场清掉
 3. ⛔ 不要把「造数据用的 `review decide --accept-all`」当成产品流程 —— 那是为了让 `apply` 有可应用条目
 4. **别再写「本机无元数据库 ⇒ 未验」**：库是有的。真跑不了的，写清具体是哪一步、报什么错
+
+---
+
+## 动了「服务端代码」必须通知 join（2026-10-27 用户口径）
+
+**为什么**：`join` 是服务端负责人，他在 `code/`（develop worktree）与 `feature/REQ-159b` 上并行改
+`src/console/**`、`src/query/**`、`src/db/**`。我这边合一次分支就可能动到他正在改的文件 ——
+不通知的后果不是冲突，而是**他基于旧状态继续改，然后一起炸**。
+
+**「服务端代码」的判据（按路径，不按感觉）**：
+
+| 目录 / 文件 | 是否算 |
+| --- | --- |
+| `src/console/**`（含 `page.rs` / `http.rs` / `bundle.rs` / `provision.rs` / `serve.rs`） | ✅ 算 |
+| `src/query/**`、`src/server/**`、`src/mcp/**`、`src/db/**`、`src/domain/**` | ✅ 算 |
+| `src/cli.rs`、`src/lib.rs`、`Cargo.toml` / `Cargo.lock` | ✅ 算（`lib.rs` 影响两个二进制；`cli.rs` 是共享 crate 的一部分） |
+| `src/bundle/**`、`src/review_open/**`、`tests/test_req1xx_*.rs` | ⬜ 构建面为主，但**改到共享文件时同上** |
+| `BA/**`、`Deploy/**`、`docs/**` | ❌ 不算 |
+
+**动作（三步，缺一不可）**：
+
+1. **动手前**（或合并前）：在 `.local/ba-bus/` 发一条，写明「要合哪条分支 / 会动哪些路径 / 预计多久」
+2. **合并后**：再发一条，写 **commit 号 + 受影响的文件清单（`git log --first-parent --name-only`）**
+3. 若他那边有**未提交改动**占着同一文件：**⛔ 不许替人 stash / checkout / 覆盖**，等他自己提交或明确授权
+
+> 已发生的一次教训（2026-10-27 12:26）：我合 `feature/REQ-159-bundle-fix` 时被 `code/` 里 join 的 8 个未提交文件挡住
+> —— 挡住还好（git 保护了），**真正危险的是「没被挡住却悄悄改了他刚写的同一行」**。
