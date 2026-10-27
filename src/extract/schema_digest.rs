@@ -54,6 +54,16 @@ pub const DEFAULT_MAX_TABLES: usize = 40;
 /// 几十 KB。两道闸都过才进 prompt。
 pub const MAX_DIGEST_CHARS: usize = 12_000;
 
+/// ⭐ F-2（QA）· **每张表最多带几列**（列闸，独立于表数闸与字符闸）。
+///
+/// 为什么需要它：字符闸原来只会「丢表」，而**单张超宽表**丢不掉 ——
+/// QA 实测一张 3001 列的表让摘要到了 60 478 字符（上限的 5 倍）。
+/// 现在先按列截断（剩余写「另有 M 列未列」），列缩到 1 还超限才允许继续丢表。
+///
+/// 24 这个数：真实源库最宽的表也就几十列，而模型真正要对齐的是**有注释/有语义**的那几列；
+/// 候选外键那条线另外还会点出 `*_id` 列（见 `naming_candidates`）。
+pub const MAX_COLUMNS_PER_TABLE: usize = 24;
+
 /// schema.json 里一张表的**最小读取形状**。
 ///
 /// ⚠️ 刻意**不**复用 `introspect::SchemaReport`：那个类型要求 `server_version` /
@@ -114,6 +124,15 @@ pub struct Table {
     pub primary_key: Option<String>,
     pub composite_primary_key: Vec<String>,
     pub unique_columns: Vec<String>,
+    /// ⭐ F-1（QA）：这份 `schema.json` **到底有没有**键事实。
+    ///
+    /// `tables[i]` 里出现 `primary_key` / `composite_primary_key` / `unique_columns`
+    /// 任一键 ⇒ `true`（那是 `ontok-introspect` 产物的形状）。
+    /// 三个键都不在 ⇒ `false` = **不知道**（旧产物 / 别家工具手写的 schema）。
+    ///
+    /// 为什么要这一位：「这张表没有主键」是**事实**，「我不知道它有没有主键」是**不知道**
+    /// —— 把后者渲染成「主键：无」会让模型据此编 `maps_to`（F-1 的事故正是它）。
+    pub keys_known: bool,
 }
 
 impl Table {
@@ -147,8 +166,24 @@ pub struct SchemaView {
 impl SchemaView {
     /// 从 JSON 文本建视图。⛔ 不猜：`tables` 缺失 ⇒ 空视图（调用方会报「一列都没读到」）。
     pub fn from_json(text: &str) -> Result<Self> {
-        let raw: RawReport =
+        // 两遍：`Value` 用来判「这个键到底在不在」（`Option` 分不出「null」与「缺键」），
+        // 类型化那一遍只取需要的字段。
+        let doc: serde_json::Value =
             serde_json::from_str(text).context("schema 不是合法 JSON（要 tables[].columns[]）")?;
+        let raw: RawReport = serde_json::from_value(doc.clone())
+            .context("schema 不是合法 JSON（要 tables[].columns[]）")?;
+        let mut keys_known: std::collections::BTreeSet<String> = Default::default();
+        if let Some(arr) = doc.get("tables").and_then(serde_json::Value::as_array) {
+            for t in arr {
+                let Some(name) = t.get("name").and_then(|n| n.as_str()) else { continue };
+                let known = ["primary_key", "composite_primary_key", "unique_columns"]
+                    .iter()
+                    .any(|k| t.get(k).is_some());
+                if known {
+                    keys_known.insert(name.trim().to_string());
+                }
+            }
+        }
         let mut tables = BTreeMap::new();
         for t in raw.tables {
             let name = t.name.trim().to_string();
@@ -168,6 +203,7 @@ impl SchemaView {
             tables.insert(
                 name.clone(),
                 Table {
+                    keys_known: keys_known.contains(&name),
                     name,
                     comment: t.comment.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
                     columns,
@@ -249,11 +285,27 @@ impl SchemaView {
             .map(|(_, t)| *t)
             .collect();
 
-        // 兜底闸：字符上限（表多 / 表宽都可能顶到它）
-        let mut text = self.render(&picked, matched, max);
-        while text.chars().count() > MAX_DIGEST_CHARS && picked.len() > 1 {
-            picked.pop();
-            text = self.render(&picked, matched, max);
+        // 兜底闸：字符上限（表多 / 表宽都可能顶到它）。
+        //
+        // ⚠️ F-2（QA）：只「丢表」对**单张超宽表**不生效 —— 一张 3001 列的表能把
+        // 摘要顶到 6 万字符，而 `picked.len() > 1` 的保护让循环一次都不进。
+        // 所以先按**列**收缩（每表最多带 `MAX_COLUMNS_PER_TABLE` 列，剩余写「另有 M 列未列」），
+        // 列也得缩到 1 才允许丢表；连最后一张表都缩到 1 列还超限才停（极端：列名本身极长）。
+        let mut col_cap = MAX_COLUMNS_PER_TABLE;
+        let mut text = self.render(&picked, matched, max, col_cap);
+        while text.chars().count() > MAX_DIGEST_CHARS {
+            if col_cap > 1 {
+                col_cap = (col_cap / 2).max(1);
+                text = self.render(&picked, matched, max, col_cap);
+                continue;
+            }
+            if picked.len() > 1 {
+                picked.pop();
+                col_cap = MAX_COLUMNS_PER_TABLE;
+                text = self.render(&picked, matched, max, col_cap);
+                continue;
+            }
+            break;
         }
         Digest {
             text,
@@ -264,7 +316,7 @@ impl SchemaView {
         }
     }
 
-    fn render(&self, picked: &[&Table], matched: usize, max: usize) -> String {
+    fn render(&self, picked: &[&Table], matched: usize, max: usize, col_cap: usize) -> String {
         let mut out = String::new();
         out.push_str("## 源库结构（只读勘查产物 `schema.json` 的摘要）\n");
         out.push_str(&format!(
@@ -287,18 +339,23 @@ impl SchemaView {
         for t in picked {
             let cn = t.comment.as_deref().unwrap_or("无中文名");
             let keys = t.key_columns();
-            out.push_str(&format!(
-                "\n表 `{}`（{cn}）{}：\n  ",
-                t.name,
-                if keys.is_empty() {
-                    "主键：无（没有单列主键）".to_string()
-                } else {
-                    format!("主键：{}", keys.join(" + "))
-                }
-            ));
+            // ⚠️ F-1（QA）：「主键：无」**只允许**在「schema 明确说没有键」时出现。
+            // 三个键字段都不在的旧产物是**不知道**，不是「没有主键」——
+            // 把它渲染成「无」会让模型据此编 `maps_to`（只读账号那次的假信息就是这样进 prompt 的）。
+            let key_line = if !keys.is_empty() {
+                format!("主键：{}", keys.join(" + "))
+            } else if t.keys_known {
+                "主键：无（这张表真的没有单列/复合主键）".to_string()
+            } else {
+                "主键：**未勘明**（这份 schema.json 里没有键事实 —— ⛔ 不要当作「没有主键」）"
+                    .to_string()
+            };
+            out.push_str(&format!("\n表 `{}`（{cn}）{key_line}：\n  ", t.name));
+            let shown = t.columns.len().min(col_cap.max(1));
             let cols: Vec<String> = t
                 .columns
                 .iter()
+                .take(shown)
                 .map(|c| {
                     let pk = if c.is_primary_key || keys.iter().any(|k| *k == c.name) {
                         " PK"
@@ -309,6 +366,13 @@ impl SchemaView {
                 })
                 .collect();
             out.push_str(&cols.join(" · "));
+            if t.columns.len() > shown {
+                out.push_str(&format!(
+                    " …（另有 {} 列未列，共 {} 列）",
+                    t.columns.len() - shown,
+                    t.columns.len()
+                ));
+            }
             out.push('\n');
             let cand = self.naming_candidates(t);
             if !cand.is_empty() {
@@ -874,5 +938,94 @@ mod tests {
         assert!(v.has_column("cloud_disk", "instance_id"));
         assert!(!v.has_column("cloud_disk", "zone"));
         assert!(v.table_names().contains(&"cloud_server"));
+    }
+
+    // ── ⭐ F-2（QA 退回项）· 字符闸对「单表超宽」也必须生效 ──────────
+
+    /// 一张 3001 列的表：摘要必须**按列截断**到上限以内，且**说清还剩多少列没列**。
+    ///
+    /// 退回前的形态：字符闸只会「丢表」，而单表丢不掉 ⇒ QA 实测 60 478 字符（上限 5 倍）。
+    #[test]
+    fn a_single_very_wide_table_is_cut_by_columns_and_stays_under_the_char_cap() {
+        let cols: Vec<String> = (0..3001)
+            .map(|i| format!(r#"{{"name":"c{i:04}","data_type":"text"}}"#))
+            .collect();
+        let schema = format!(
+            r#"{{"tables":[{{"name":"wide_table","comment":"宽表","primary_key":"c0000",
+                "columns":[{}]}}]}}"#,
+            cols.join(",")
+        );
+        let v = SchemaView::from_json(&schema).expect("合法");
+        let d = v.digest("这张宽表是文档的主角 wide_table", 40);
+        assert_eq!(d.included, 1, "只有一张表");
+        let n = d.text.chars().count();
+        assert!(
+            n <= MAX_DIGEST_CHARS,
+            "⛔ 单表超宽时摘要仍然超限：{n} 字符 > {MAX_DIGEST_CHARS}（F-2 的原始形态是 60478）"
+        );
+        assert!(
+            d.text.contains(&format!("另有 {} 列未列", 3001 - MAX_COLUMNS_PER_TABLE)),
+            "截掉多少列必须**说清**（⛔ 不能悄悄少给）：{}",
+            d.text
+        );
+        assert!(d.text.contains("c0000 text PK"), "{}", d.text);
+        assert!(
+            !d.text.contains("c0024 "),
+            "第 {} 列之后不该再列出来：{}",
+            MAX_COLUMNS_PER_TABLE,
+            d.text
+        );
+    }
+
+    // ── ⭐ F-1（QA 退回项）· 「主键：无」只在 schema 真的说了时才允许出现 ──
+
+    /// 三种情形必须**分得开**：
+    ///
+    /// | `schema.json` 里 | 摘要该写什么 |
+    /// | --- | --- |
+    /// | 有 `primary_key: "id"` | `主键：id` |
+    /// | 有键字段但**真的没有**主键（`primary_key: null` + 空数组） | `主键：无（这张表真的没有…）` |
+    /// | **一个键字段都没有**（旧产物 / 别家手写） | `主键：**未勘明**`（⛔ 不许写「无」） |
+    ///
+    /// 第三行就是 F-1 的假信息来源：只读账号下主键读不到，摘要写成「没有主键」，
+    /// 模型据此永远不会给对的 `maps_to`。
+    #[test]
+    fn the_no_primary_key_line_is_only_used_when_the_schema_really_says_so() {
+        let with_pk = SchemaView::from_json(
+            r#"{"tables":[{"name":"t_pk","comment":"有主键","primary_key":"id",
+                 "columns":[{"name":"id","data_type":"text","is_primary_key":true}]}]}"#,
+        )
+        .unwrap();
+        let d = with_pk.digest("有主键 t_pk", 10);
+        assert!(d.text.contains("主键：id"), "{}", d.text);
+
+        let no_pk = SchemaView::from_json(
+            r#"{"tables":[{"name":"t_nopk","comment":"真的没主键","primary_key":null,
+                 "composite_primary_key":[],"unique_columns":[],
+                 "columns":[{"name":"a","data_type":"text"}]}]}"#,
+        )
+        .unwrap();
+        let d = no_pk.digest("真的没主键 t_nopk", 10);
+        assert!(
+            d.text.contains("主键：无（这张表真的没有单列/复合主键）"),
+            "有键事实 + 真没有主键 ⇒ 才允许写「无」：{}",
+            d.text
+        );
+
+        let unknown = SchemaView::from_json(
+            r#"{"tables":[{"name":"t_unknown","comment":"不知道","columns":[{"name":"a","data_type":"text"}]}]}"#,
+        )
+        .unwrap();
+        let d = unknown.digest("不知道 t_unknown", 10);
+        assert!(
+            !d.text.contains("主键：无"),
+            "⛔ 键字段都不在（不知道）时**不许**写成「没有主键」：{}",
+            d.text
+        );
+        assert!(
+            d.text.contains("未勘明"),
+            "要说清「这份 schema.json 没有键事实」：{}",
+            d.text
+        );
     }
 }

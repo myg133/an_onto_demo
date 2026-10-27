@@ -555,7 +555,9 @@ pub enum DocCmd {
         /// ⭐ REQ-170 · 大库的**大小闸**：每块最多带几张表（默认 40）。
         ///
         /// 只与 `--schema` 一起用。没有匹配的表就**一张都不带**（⛔ 不拿无关的表凑数）。
-        #[arg(long)]
+        /// ⚠️ `0` 是**入参错**：clap 在解析阶段就拒（退出码 **2**，与其它入参错一致）——
+        /// 0 张表等于「不给模型看库结构」，那会与「不传 `--schema`」混淆。
+        #[arg(long, value_parser = parse_schema_max_tables)]
         schema_max_tables: Option<usize>,
     },
     /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
@@ -2627,6 +2629,30 @@ fn build_doc_transport(
     })
 }
 
+/// ⭐ REQ-170 · F-3（QA 退回项）· `--schema-max-tables` 的**入参闸**（clap 值解析器）。
+///
+/// # 为什么在 clap 层，而不是在 `doc_ingest_cmd` 里 `anyhow::bail!`
+///
+/// 入参不合法必须是**退出码 2**（与 `--limit-chunks` / `build run` 那些同级参数一致）；
+/// `bail!` 走的是 `main` 的失败出口 ⇒ 退出码 **1**（与「连不上模型 / 库」这类环境错混了）。
+/// 放在 clap 的值解析器里 ⇒ 解析阶段就拒：码是 2，而且**一个字节都还没写**。
+///
+/// 取值：正整数。`0` 的意思是「不给模型看库结构」，那与「不传 `--schema`」是同一件事，
+/// 必须让人显式二选一。
+fn parse_schema_max_tables(s: &str) -> std::result::Result<usize, String> {
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("要一个正整数（收到 {s:?}）"))?;
+    if n == 0 {
+        return Err(
+            "0 张表等于「不给模型看库结构」，那与「不传 --schema」混淆；要带表就给 ≥1"
+                .to_string(),
+        );
+    }
+    Ok(n)
+}
+
 /// REQ-116 · `ontok doc ingest` 的装配点（唯一一个调模型的 `doc` 子命令）。
 ///
 /// ⭐ REQ-147：本函数多了一个**岔口**（`--agent acp`），但默认那一支**一行没改** ——
@@ -2653,12 +2679,9 @@ pub(crate) async fn doc_ingest_cmd(
     if limit_chunks == Some(0) {
         anyhow::bail!("--limit-chunks 是 0：0 块等于「什么都没跑」，那与「不跑」混淆。要跑就给 ≥1。");
     }
-    if schema_max_tables == Some(0) {
-        anyhow::bail!(
-            "--schema-max-tables 是 0：0 张表等于「不给模型看库结构」，\
-             那与「不传 --schema」混淆。要带表就给 ≥1。"
-        );
-    }
+    // ⚠️ `--schema-max-tables 0` **不在这里判**：clap 的
+    // `value_parser(...).range(1..)` 在**解析阶段**就拒了 —— 入参错必须退出码 **2**
+    //（F-3：之前这条 `anyhow::bail` 落到了 exit 1，与其它入参错不一致）。
 
     // ① 输入 + 格式闸（AC-001）。`load_docs` 是**唯一**判「这个扩展名能不能吃」的地方。
     let docs = di::load_docs(&input)?;

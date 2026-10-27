@@ -1882,6 +1882,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "with_digest",
         "运维辅助（REQ-170：把 `--schema` 的摘要挂到 system 消息上；零 I/O、零写出）",
     ),
+    // ⭐ REQ-170 · F-3（QA 退回项）：`--schema-max-tables` 的入参闸 ——
+    // 放在 clap 值解析器里，入参错才是退出码 2（`bail!` 会落到 1，与环境错混淆）。
+    (
+        "src/cli.rs",
+        "parse_schema_max_tables",
+        "clap 值解析器（REQ-170：`--schema-max-tables` 必须 ≥1；0 按**入参错** exit 2）",
+    ),
     // ⚠️ REQ-159 的 6 个 bundle 函数登记在下面（develop 侧已补齐，REQ-160 不再重复登记）。
     // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
     (
