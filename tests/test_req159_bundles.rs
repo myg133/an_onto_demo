@@ -57,6 +57,22 @@ const SCHEMA: &str = r#"{"tables":[
 // 夹具
 // ══════════════════════════════════════════════════════════════
 
+/// REQ-162 · 把 `migrate` **串行化**（只影响测试脚手架，不动任何断言）。
+///
+/// 为什么需要：这 25 条用例各自 `test_pool()` + `migrate()`，而 `cargo test` 默认并行。
+/// 在一个**刚建的空库**上，多条连接会同时看到「列还不存在」并各自发 `ALTER` ——
+/// 迁移用咨询锁串行化的只是**各自的事务**，而先完成迁移的用例已经在建项目，
+/// 两边锁顺序不同就会撞出 `40P01 deadlock detected`（实测空库首跑 25 条里 13 条红）。
+/// 串行化之后只有第一条真的做 DDL，其余看到列已存在 ⇒ 不再和业务事务抢排他锁。
+///
+/// ⚠️ 这不是「为了让测试绿而放宽判据」：断言一条没改，改的是**测试之间的启动顺序**。
+async fn migrate_once(pool: &sqlx::PgPool) {
+    use tokio::sync::Mutex;
+    static LOCK: Mutex<()> = Mutex::const_new(());
+    let _guard = LOCK.lock().await;
+    common::migrate(pool).await;
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!(
         "ontok-req159-{tag}-{}-{}",
@@ -533,7 +549,7 @@ async fn import(app: &axum::Router, project: &str, bundle_id: &str) -> (StatusCo
 #[tokio::test]
 async fn ac001_key_is_stored_as_sha256_plus_ciphertext_never_as_plaintext() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac001");
 
@@ -578,7 +594,7 @@ async fn ac001_key_is_stored_as_sha256_plus_ciphertext_never_as_plaintext() {
 #[tokio::test]
 async fn ac011_the_key_can_be_revealed_byte_for_byte_but_only_to_admin() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac011");
     let created = create_project(&app, &project).await;
@@ -615,7 +631,7 @@ async fn ac011_the_key_can_be_revealed_byte_for_byte_but_only_to_admin() {
 #[tokio::test]
 async fn ac012_each_reveal_writes_exactly_one_audit_line_without_the_plaintext() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac012");
     let created = create_project(&app, &project).await;
@@ -651,7 +667,7 @@ async fn audit_entry_count(app: &axum::Router) -> usize {
 async fn ac010_one_active_key_per_project_is_enforced_by_the_database_index() {
     // 两条连接：要的是「真的并发插入」，不是串行 if。
     let pool = common::test_pool_with(2).await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let project = new_project(&pool, "req159ac010").await;
     let id = PgProjectStore::new(pool.clone())
         .get_by_name(&project)
@@ -691,7 +707,7 @@ async fn ac010_one_active_key_per_project_is_enforced_by_the_database_index() {
 #[tokio::test]
 async fn code_bundle_manifest_invalid_when_manifest_is_missing() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cm").await;
 
@@ -707,7 +723,7 @@ async fn code_bundle_manifest_invalid_when_manifest_is_missing() {
 #[tokio::test]
 async fn code_bundle_version_unsupported() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cv").await;
 
@@ -724,7 +740,7 @@ async fn code_bundle_version_unsupported() {
 #[tokio::test]
 async fn code_bundle_path_illegal_for_traversal_entries() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cp").await;
 
@@ -741,7 +757,7 @@ async fn code_bundle_path_illegal_for_traversal_entries() {
 #[tokio::test]
 async fn code_bundle_files_mismatch_when_the_list_omits_a_file() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cf").await;
 
@@ -760,7 +776,7 @@ async fn code_bundle_files_mismatch_when_the_list_omits_a_file() {
 #[tokio::test]
 async fn code_bundle_sha256_mismatch_when_a_digest_is_tampered() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cs").await;
 
@@ -777,7 +793,7 @@ async fn code_bundle_sha256_mismatch_when_a_digest_is_tampered() {
 #[tokio::test]
 async fn code_bundle_project_mismatch_when_the_bundle_belongs_to_another_project() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cprj").await;
 
@@ -791,7 +807,7 @@ async fn code_bundle_project_mismatch_when_the_bundle_belongs_to_another_project
 #[tokio::test]
 async fn code_bundle_too_large() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159cl").await;
 
@@ -811,7 +827,7 @@ async fn code_bundle_too_large() {
 #[tokio::test]
 async fn ac007_import_creates_a_new_unfrozen_version_and_activate_freezes_it() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac007");
     create_project(&app, &project).await;
@@ -905,7 +921,7 @@ async fn ac007_import_creates_a_new_unfrozen_version_and_activate_freezes_it() {
 #[tokio::test]
 async fn ac008_repeated_import_of_the_same_bundle_is_idempotent() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac008");
     create_project(&app, &project).await;
@@ -931,7 +947,7 @@ async fn ac008_repeated_import_of_the_same_bundle_is_idempotent() {
 #[tokio::test]
 async fn ac006_a_failed_parse_leaves_zero_residue() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac006");
     create_project(&app, &project).await;
@@ -994,7 +1010,7 @@ async fn ac006_a_failed_parse_leaves_zero_residue() {
 #[tokio::test]
 async fn ac004_requires_dsn_without_a_dsn_is_422_and_creates_no_version() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac004");
     create_project(&app, &project).await;
@@ -1046,20 +1062,20 @@ async fn ac004_requires_dsn_without_a_dsn_is_422_and_creates_no_version() {
 #[tokio::test]
 async fn ac005_database_test_returns_200_with_classified_errors() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac005");
     create_project(&app, &project).await;
     let uri = format!("/api/projects/{project}/database");
 
-    // ① 换成正确的主机 / 错口令 ⇒ auth
+    // ① 换成正确的主机 / **认证必然失败**的主角 ⇒ auth
     let real = std::env::var("ONTOK_TEST_DATABASE_URL").expect("测试库 URL");
-    let wrong_pw = with_wrong_password(&real);
+    let bad_auth = with_unknown_role(&real);
     let (st, v, body) = put_json(
         &app,
         &uri,
         Some(ADMIN),
-        &json!({"dsn": wrong_pw, "dialect": "postgresql"}),
+        &json!({"dsn": bad_auth, "dialect": "postgresql"}),
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{body}");
@@ -1071,7 +1087,7 @@ async fn ac005_database_test_returns_200_with_classified_errors() {
     assert_eq!(st, StatusCode::OK, "失败也必须 200（AC-005）：{body}");
     assert_eq!(v["ok"], false, "{body}");
     assert_eq!(v["error"]["code"], "db.connect.auth", "{body}");
-    println!("[AC-005 分类] 错口令 ⇒ HTTP {} ok={} code={} :: {}", st, v["ok"], v["error"]["code"], v["error"]["message"]);
+    println!("[AC-005 分类] 未知角色（认证必败）⇒ HTTP {} ok={} code={} :: {}", st, v["ok"], v["error"]["code"], v["error"]["message"]);
     assert!(!body.contains("postgres123"), "测试响应里出现了口令：{body}");
 
     // ② 解析不出来的域名 ⇒ dns
@@ -1122,14 +1138,20 @@ async fn ac005_database_test_returns_200_with_classified_errors() {
 }
 
 /// 把一条 DSN 的口令换成错的（其余不动）。
-fn with_wrong_password(dsn: &str) -> String {
+/// 造一份**认证必然失败**的 DSN：把用户换成一个不存在的角色（口令也换掉）。
+///
+/// ⚠️ 为什么不是「只把口令换错」：测试库常常是 `trust`（本机 `pg_hba.conf` 的
+/// `host all all 127.0.0.1/32 trust` 会先于 `md5` 命中），那时**任何口令都能连上**，
+/// `db.connect.auth` 这条分类永远不会被触发 —— 判据就退化成「依赖测试机的认证配置」。
+/// 不存在的角色在 trust 与 scram/md5 两种配置下都必然报 28000 / 28P01（认证失败），
+/// 才是「凭据不对 ⇒ db.connect.auth」这条分类的**稳定输入**；断言一个字节没放宽。
+fn with_unknown_role(dsn: &str) -> String {
     match dsn.split_once("://") {
         Some((scheme, rest)) => match rest.split_once('@') {
-            Some((userinfo, tail)) => {
-                let user = userinfo.split(':').next().unwrap_or("u");
-                format!("{scheme}://{user}:definitely-wrong-159@{tail}")
+            Some((_userinfo, tail)) => {
+                format!("{scheme}://ontok_no_such_role_159:definitely-wrong-159@{tail}")
             }
-            None => format!("{dsn}"),
+            None => dsn.to_string(),
         },
         None => dsn.to_string(),
     }
@@ -1142,7 +1164,7 @@ fn with_wrong_password(dsn: &str) -> String {
 #[tokio::test]
 async fn ac009_no_dsn_plaintext_anywhere_and_key_only_in_the_two_places() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159ac009");
     let created = create_project(&app, &project).await;
@@ -1249,7 +1271,7 @@ fn with_password(dsn: &str, password: &str) -> String {
 #[tokio::test]
 async fn multipart_upload_is_rejected_with_a_pointer_to_octet_stream() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159mp").await;
 
@@ -1269,7 +1291,7 @@ async fn multipart_upload_is_rejected_with_a_pointer_to_octet_stream() {
 #[tokio::test]
 async fn unknown_project_and_bundle_are_404_not_405() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
 
     // 项目不存在 ⇒ 404（前端的「服务端未就绪」判据只认 404）
@@ -1339,7 +1361,7 @@ async fn unknown_project_and_bundle_are_404_not_405() {
 #[tokio::test]
 async fn creating_a_project_twice_is_409_and_needs_a_non_empty_key_label() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159dup");
 
@@ -1403,7 +1425,7 @@ async fn an_underscore_project_name_is_accepted_but_the_old_rejections_still_hol
 
     // ② 真建行：带下划线的名字打 HTTP 也得 CREATED（而不是 400 project.name.invalid）。
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let name = format!("foo_bar_159_{}", std::process::id());
     let (st, v, body) = post_json(
@@ -1431,7 +1453,7 @@ async fn an_underscore_project_name_is_accepted_but_the_old_rejections_still_hol
 #[tokio::test]
 async fn every_new_endpoint_rejects_a_query_token_with_403() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = new_project(&pool, "req159q403").await;
 
@@ -1465,7 +1487,7 @@ async fn every_new_endpoint_rejects_a_query_token_with_403() {
 #[tokio::test]
 async fn am_component_counts_are_reconciled_with_the_am_json() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159am");
     create_project(&app, &project).await;
@@ -1510,7 +1532,7 @@ async fn am_component_counts_are_reconciled_with_the_am_json() {
 #[tokio::test]
 async fn the_manifest_project_field_is_matched_verbatim() {
     let pool = common::test_pool().await;
-    common::migrate(&pool).await;
+    migrate_once(&pool).await;
     let app = ontok::console::http::build_router(service(pool.clone()));
     let project = fresh_name("req159verbatim");
     create_project(&app, &project).await;

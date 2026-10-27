@@ -947,6 +947,22 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
         1,
         "`build run` 第 ③ 段末尾的 **R3 声明**（固定文案，零数据）：⛔ 本命令不自动 apply / freeze",
     ),
+    // ── ⭐ REQ-162 · 本地评审台的**文件落盘**（裁决 / 定版 / 构建包）──
+    //
+    // 一处 `fs::write`（`console::local::write_atomic`）承接三种写：`decisions.json`、
+    // `versions/vN/{snapshot,meta}.json`、`bundles/*.ontokbundle`。判据：
+    // · 写的是**本机工作目录里的文件**，不是响应体、不是客户视图 —— 页面拿到的 JSON
+    //   仍走 I18（`console::http::respond`，与旧控制面同一个写点）；
+    // · 内容是人签的裁决 / 冻结的快照 / 导出的包，客户视图零读取（Studio 侧另有入口）；
+    // · 原子落盘（`.tmp` + rename）是这一条**唯一**的物理写点，所以只登记一次。
+    (
+        "src/console/local.rs",
+        "fs::write(",
+        1,
+        "本地评审台的原子落盘（REQ-162）：裁决 `decisions.json` / 定版 `versions/vN/{snapshot,meta}.json` / \
+         构建包 `bundles/*.ontokbundle`。写的是**工作目录里的文件**，不是响应体；\
+         页面 JSON 仍走 I18（`console::http::respond`），客户端零读取这些文件",
+    ),
 ];
 
 /// 整文件豁免：**只允许**「不承载客户视图」的文件（运维二进制 / 响应构造器）。
@@ -2331,7 +2347,11 @@ const MODULES: &[(&str, &str)] = &[
     ("src/console/mod.rs", "http"),
     ("src/console/mod.rs", "ops"),
     // ⭐ REQ-125 · 工作台页面壳（GET /）：零数据 HTML 骨架；出口 I22 登记在 OUTLETS。
+    // ⭐ REQ-162 · 重写成一屏两栏的**本地评审台**；模块名不变（I22 仍是同一个写点）。
     ("src/console/mod.rs", "page"),
+    // ⭐ REQ-162 · 本地评审台（6+1 条纯文件端点）：裁决 / 定版 / 导出包。
+    // ⛔ 不新增响应写点：JSON 走 I18（`console::http::respond`），页面壳走 I22。
+    ("src/console/mod.rs", "local"),
     // ⭐ REQ-159 · 7 个端点的领域编排（建项目发 key / 上传 / import / activate / DSN）。
     ("src/console/mod.rs", "provision"),
     ("src/console/mod.rs", "serve"),

@@ -187,27 +187,20 @@ pub enum Cmd {
     /// 连上后**读回** `transaction_read_only = on` 才执行。
     #[command(verbatim_doc_comment)]
     Sparql { #[command(subcommand)] cmd: SparqlCmd },
-    /// ⭐ REQ-124 · **控制面 API**（管理流水线的 HTTP 化）
+    /// ⭐ REQ-162 · **本地评审台**（草稿 → 人签 → 定版 → 导出包）
     ///
-    /// 把 `propose import` / `proposal apply` / `version freeze` / `ontology export` /
-    /// `r2rml generate` / `review show|decide` 各变成一个端点。
-    /// ⛔ **不是后门**：只暴露既有流程（import → review → apply → freeze），
-    /// 没有「直接改对象」的端点，也没有抽取（抽取属任务系统，另开需求）。
+    /// 纯本地构建，**不需要口令**；一个工作目录就是一个项目；单页两栏：评审 + 导出。
+    /// ⛔ 没有登录 / 项目选择 / 上传 / DSN / 入库 / 激活 / key / 审计（那些是 Studio 的事）。
     ///
     /// 【可以照抄的一整条】
     ///
-    /// ontok console serve --bind 127.0.0.1:8899 --tokens admin-tokens.json --project anspire_r2rml_excl --schema code/out/schema.json
+    /// ontok-builder console serve --dir D:\work\anspire_real
     ///
-    /// ⚠️ `--tokens` 里装**两套**凭据（`kind: "admin" | "query"`）：query token 调管理端点
-    /// ⇒ **403**（不是 401），没有 token ⇒ 401；⛔ 同一个 token 不许两用（加载时拒绝）。
-    /// ⚠️ 默认只绑**回环**：`0.0.0.0` / 任何非回环地址都要显式 `--allow-public`（启动警告）。
-    /// ⚠️ 三份声明（`--exclusions` / `--policy` / `--tenancy`）的 PUT **保存前校验**：
-    /// 表 / 列必须存在于 `--schema`；`main_only` 必须带 `reason`；`publicDimensions`
-    /// 必须带 `reason`；exclusions 的 `category` 要在枚举内且 `reason`/`decided_by` 非空。
-    /// 失败 ⇒ 400 + 点名，**原文件一个字节都不变**。
-    /// ⚠️ `GET /api/export/ttl` 与 `POST /api/r2rml` 的产物与对应 CLI 命令**逐字节相同**
-    /// （同一个渲染/生成函数，不是第二次实现）。
-    /// ⚠️ 审计：每个写操作一行（含失败），token 只记摘要。
+    /// ⚠️ 状态全在**工作目录里的文件**：`out/proposal.json`（草稿，只读）·
+    /// `.ontok/decisions.json`（人签）· `.ontok/versions/v<N>/`（定版）·
+    /// `.ontok/bundles/`（导出包）。⛔ 不碰 Postgres，也不需要 `ONTOK_DATABASE_URL`。
+    /// ⚠️ 只绑**回环**（127.0.0.1 / ::1）：非回环地址直接拒绝，没有 `--allow-public`。
+    /// ⚠️ 导出的是**定版**（不是草稿）：先签完 → 定版 → 再导出 `.ontokbundle`。
     #[command(verbatim_doc_comment)]
     Console { #[command(subcommand)] cmd: ConsoleCmd },
     /// ⭐ REQ-144 · **access mapping**：API 源的映射契约（体检 / 离线取数 / 发布）
@@ -1089,87 +1082,43 @@ pub enum AccessCmd {
     },
 }
 
-/// ⭐ REQ-124 · 控制面（`ontok console serve`）。
+/// ⭐ REQ-162 · 本地评审台（`ontok-builder console serve`）。
 #[derive(Subcommand)]
 pub enum ConsoleCmd {
-    /// 起控制面 API：管理流水线的每一步一个端点（⛔ 只暴露既有流程）
+    /// 起本地评审台：草稿 → 人逐条签 → 定版 → 导出 `.ontokbundle`（纯本地，无口令）
     ///
-    /// 端点：
+    /// 一个**工作目录**就是一个项目（不建项目、不选项目）。所有状态都在目录里的文件：
     ///
-    /// GET  /                                 ⭐REQ-125 工作台页面壳（免 token；壳内零数据）
-    /// GET  /api/health                       免 token，只给版本
-    /// ⚠️ 本服务**不含查询端点**：POST /api/sparql、GET /api/catalog、GET /api/describe 属于 `ontok query serve`（另一进程）；
-    ///    查询台 / 目录浏览需由反向代理把两者挂到**同一个源**下（本机 `tests/fixtures/req125/dev_proxy.ps1`，部署见 BA/runbook/ontology-e2e.md §7.3）。
-    /// GET  /api/projects                     项目 / 版本 / 冻结状态 / 对象·关系计数
-    /// POST /api/import                       body {project, path} 或 {project, proposal}
-    /// POST /api/apply                        body {project, proposal}
-    /// POST /api/freeze                       body {project, version}
-    /// GET  /api/export/ttl                   ?project&version&model_view=1&schema=&tenancy=
-    /// POST /api/r2rml                        body {project, version, schema, exclude?, include_inherit?}
-    /// GET/PUT /api/config/{exclusions|policy|tenancy}   读原文 / 保存前校验后写入
-    /// GET  /api/audit                        ?limit=
-    /// GET  /api/review                       ?project&proposal
-    /// POST /api/decide                       body {project, proposal, item, track, decision}
+    /// out/proposal.json                            agent 的草稿（**只读**，页面改不了它）
+    /// .ontok/decisions.json                        人的裁决（唯一可写状态；两轨都有值才算签完）
+    /// .ontok/versions/v<N>/snapshot.json           定版快照（冻结；草稿再变也不影响旧定版）
+    /// .ontok/versions/v<N>/meta.json               {seq, created_at, items, snapshot_sha256, proposal_sha256}
+    /// .ontok/bundles/<project>-v<N>.ontokbundle    从**定版**打的包（不是草稿）
     ///
-    /// ⭐ REQ-159 · 构建包导入（P1a，全部 admin token；query token ⇒ 403）：
+    /// 端点（全部纯文件，无库、无口令）：
     ///
-    /// POST /api/projects                     body {project, label?, key_label} → 201 + **一次性 query key**
-    ///                                        （库里存 sha256 + AES-256-GCM 密文，明文可再次查看）
-    /// POST /api/projects/:p/bundles          body = 包的**原始字节**（Content-Type: application/octet-stream，⛔ 不是 multipart）
-    /// GET  /api/projects/:p/bundles/:id      包状态与组件清单
-    /// POST /api/projects/:p/bundles/:id/import    解析入库（单事务产**新版本**，⛔ 不冻结）
-    /// POST /api/projects/:p/bundles/:id/activate  冻结该版本 + 写 projects.active_version_id
-    /// PUT  /api/projects/:p/database        body {dsn, dialect} → 加密存；响应**没有** dsn
-    /// POST /api/projects/:p/database/test   真连一次；**失败也返 200** + {ok:false, error:{code,message}}
-    /// GET  /api/projects/:p/key             再次查看 key（每次调用写一条 reveal_key 审计）
+    /// GET  /api/state                  目录 · 草稿进度 · 最近定版 · 最近包
+    /// GET  /api/draft                  草稿全文 + 每条当前裁决 + progress
+    /// POST /api/decide                 {key, biz?, model?, reason?} → 写 decisions.json
+    /// POST /api/finalize               pending==0 才能定版；算快照 → versions/v<N>/
+    /// GET  /api/versions               定版列表（倒序）
+    /// POST /api/bundle                 {seq?}（默认最新定版）→ 写 .ontok/bundles/
+    /// GET  /api/bundle/download?seq=   application/octet-stream 原始字节
     ///
-    /// ⚠️ 包校验顺序：体积（100 MB）→ zip 合法 → 路径安全 → manifest → files[] sha256 →
-    /// project 同名 → 组件计数。8 个错误码：bundle.manifest.invalid /
-    /// bundle.files.mismatch / bundle.sha256.mismatch / bundle.project.mismatch /
-    /// bundle.version.unsupported / bundle.path.illegal / bundle.too_large / db.dsn.missing。
-    /// ⚠️ DSN 的加密列需要 `ONTOK_SECRET_KEY`（64 位十六进制 = 32 字节）；**缺了就拒绝启动**。
-    ///
-    /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。`--tokens` 里装两套凭据
-    /// （`kind: "admin" | "query"`）：query token 调管理端点 ⇒ **403**；无 token ⇒ 401。
-    /// ⛔ 同一个 token 不许两用 —— 加载时直接拒绝整份表。
-    /// ⚠️ 默认只绑回环；`0.0.0.0` / 公网地址必须显式 `--allow-public`（启动警告）。
-    /// ⚠️ 声明 PUT 的校验对照 `--schema`（真实 schema）：表 / 列必须存在；
-    /// `main_only` 与 `publicDimensions` 必须带 `reason`；exclusions 的 `category`
-    /// 要在枚举内且 `reason` / `decided_by` 非空。校验失败 ⇒ 400 + 点名，
-    /// **原文件一个字节都不变**（校验在写之前）。
-    /// ⚠️ `GET /api/export/ttl` / `POST /api/r2rml` 与 CLI 的产物**逐字节相同**。
+    /// ⛔ 没有登录 / 项目 / 上传 / DSN / 入库 / 激活 / key / 审计（那些是 Studio 的事）。
+    /// ⛔ 只绑回环（127.0.0.1 / ::1）：非回环地址直接拒绝，没有放行非回环的开关。
+    /// ⛔ 不需要 `ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY`（缺了照常起）。
     #[command(verbatim_doc_comment)]
     Serve {
-        /// 监听地址。默认 `127.0.0.1:8899`；非回环地址必须加 `--allow-public`
+        /// 工作目录（一个工作目录 = 一个项目）；草稿约定在 `<dir>/out/proposal.json`
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// 监听地址。默认 `127.0.0.1:8899`；只许回环，非回环直接拒绝
         #[arg(long, default_value = "127.0.0.1:8899")]
         bind: String,
-        /// 两套凭据的静态表（`admin-tokens.json`；示例见 `admin-tokens.example.json`）
+        /// 不自动打开浏览器（只影响开不开浏览器，不影响服务起不起来）
         #[arg(long)]
-        tokens: PathBuf,
-        /// 本服务只服务这一个项目
-        #[arg(long)]
-        project: String,
-        /// 真实 schema（`ontok-introspect` 产物）—— 声明校验的「表 / 列必须存在」只能来自它
-        #[arg(long, default_value = crate::console::DEFAULT_SCHEMA)]
-        schema: PathBuf,
-        /// 排除声明（GET / PUT 的目标）
-        #[arg(long, default_value = crate::console::DEFAULT_EXCLUSIONS)]
-        exclusions: PathBuf,
-        /// 租户声明（GET / PUT 的目标）
-        #[arg(long, default_value = crate::console::DEFAULT_POLICY)]
-        policy: PathBuf,
-        /// 租户标注声明（GET / PUT 的目标）
-        #[arg(long, default_value = crate::console::DEFAULT_TENANCY)]
-        tenancy: PathBuf,
-        /// 允许绑非回环地址（`0.0.0.0` / 公网）。⛔ 不加就只能绑回环
-        #[arg(long)]
-        allow_public: bool,
-        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**（容器日志 → 集群采集）；给了它 = stdout **+** 这个文件（同时写）
-        #[arg(long)]
-        audit_out: Option<PathBuf>,
-        /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
-        #[arg(long, default_value = "https://ontok.local/")]
-        base: String,
+        no_browser: bool,
     },
 }
 
@@ -1269,11 +1218,12 @@ pub enum ReviewCmd {
     /// ⛔ **明文 HTTP**（本服务没有 TLS）：生产 / 远程访问**必须**走反向代理 + TLS；
     /// 本机一次性口令只适合**单机审核** —— `--allow-public` 只是「允许绑非回环」，
     /// 它**不**提供任何加密，⛔ 不要拿它当远程方案。
-    /// ⚠️ 起的是与 `console serve` **同一个**控制面（同一份路由表），区别只有
-    /// 「凭据从哪来」：那边读 `--tokens <文件>`，这边是内存里的一次性口令。
+    /// ⚠️ 兼容期：本命令仍复用 REQ-124 的**库版控制面路由**（`console::http::build_router`
+    /// + 一次性口令）；`console serve` 自 REQ-162 起已改为**纯文件评审台**，两条命令
+    /// 不再共用同一张路由表。收口（把本命令也换成文件评审台）另立单。
     /// ⚠️ 需要 `ONTOK_SECRET_KEY`（32 字节 hex）。**本版即使只想审核也要给** ——
-    /// 控制面持有 DSN 加密器，缺密钥即拒绝启动（与 `console serve` 同一条纪律；
-    /// 不在本命令里单独降级：那会把「缺密钥」从启动期 fail-fast 变成运行期 500）。
+    /// 库版控制面持有 DSN 加密器，缺密钥即拒绝启动（不在本命令里单独降级：
+    /// 那会把「缺密钥」从启动期 fail-fast 变成运行期 500）。
     /// 后续改进（另立单）：DSN 端点降级 503，那时才谈「没密钥也能审」。
     /// ⚠️ 声明校验需要真实 schema：给 `--schema`，或用默认 `code/out/schema.json`；
     /// 都没有时声明校验**关闭（fail-closed）**，页面审阅照常可用。
@@ -2236,6 +2186,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // ⇒ 若把这条挪到下面那个 match（连库之后），`bundle verify` 会先被
         // 「连不上库」挡住，报错指向的原因就错了。
         Cmd::Bundle { cmd } => return bundle_cmd(cmd).await,
+        // ⭐ REQ-162 · `console serve` 也在**连库之前**分派：它是纯本地评审台
+        // （`--dir` 一个目录 = 一个项目；不读 token / project / schema，不碰库）。
+        // 若留到下面那个 match（先连库），`ONTOK_DATABASE_URL` 没配的机器上
+        // 「本机评审」这件纯本地的事就根本起不来 —— AC-007 当场不成立。
+        Cmd::Console { cmd } => return console_cmd(cmd).await,
         // ⭐ REQ-160 · `review open` 也在**连库之前**分派（理由与 `doc ingest` 同一条）：
         // 它**先判入参**（`--bind 0.0.0.0:8899` 不带 `--allow-public` 是**入参错** ⇒ exit 2），
         // 判完才自己连库（[`crate::review_open::open`]）。若留到下面那个 match（先连库），
@@ -2297,7 +2252,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // ⭐ REQ-122 · SPARQL → SQL（按声明注入租户；只读源库由本命令自己连）
         Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
         // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化；⛔ 只暴露既有流程）
-        Cmd::Console { cmd } => console_cmd(&pool, cmd).await,
+        // ⭐ REQ-162 · 本机评审台**已提到连库之前**（`console serve` 不碰库）；
+        // 这里保留一条人话，防止将来有人把提前返回删掉。
+        Cmd::Console { .. } => anyhow::bail!(
+            "内部错误：`console` 子命令应当在连库之前处理（本地评审台不碰产品库）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
         // ⭐ REQ-160 · 一条命令跑到审核台（① ② 段不碰库，③ ④ 段要元数据库 ⇒
         // 放在连库之后；两段的失败面在 `review_open::build_run` 里各自点名）。
         Cmd::Build { cmd } => build_cmd(&pool, cmd).await,
@@ -7017,40 +6977,23 @@ async fn sparql_cmd(pool: &PgPool, cmd: SparqlCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// ⭐ REQ-123 · `ontok query serve` —— 参数只在这里翻译，逻辑全在 `query::serve`。
+/// ⭐ REQ-162 · `ontok-builder console serve` —— 参数只在这里翻译，逻辑全在 `console::serve`。
 ///
-/// ⚠️ 这里**不做**任何鉴权 / 限额 / 绑定判断：那些在 `query::serve::serve` 与
-/// `query::http` 里（一处实现）。本函数只做「clap 参数 → ServeArgs」的搬运。
-/// ⭐ REQ-124 · `ontok console serve` —— 参数只在这里翻译，逻辑全在 `console::serve`。
-///
-/// ⚠️ 这里**不做**任何鉴权 / 绑定判断：那些在 `console::http` 与 `console::serve`
-/// 里（一处实现）。本函数只做「clap 参数 → ServeArgs」的搬运 —— 与 `query_cmd` 同一条分工。
-async fn console_cmd(pool: &PgPool, cmd: ConsoleCmd) -> anyhow::Result<()> {
+/// ⚠️ 这里**不做**任何绑定判断：回环闸在 `console::serve::check_bind`（与 `review open`
+/// 同一份实现）。本函数只做「clap 参数 → ServeArgs」的搬运 —— 与 `query_cmd` 同一条分工。
+/// ⛔ 也不做任何环境变量检查：本地评审台不需要 `ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY`。
+async fn console_cmd(cmd: ConsoleCmd) -> anyhow::Result<()> {
     let ConsoleCmd::Serve {
+        dir,
         bind,
-        tokens,
-        project,
-        schema,
-        exclusions,
-        policy,
-        tenancy,
-        allow_public,
-        audit_out,
-        base,
+        no_browser,
     } = cmd;
     let args = crate::console::serve::ServeArgs {
+        dir,
         bind,
-        tokens,
-        project,
-        schema,
-        exclusions,
-        policy,
-        tenancy,
-        allow_public,
-        audit_out,
-        base,
+        no_browser,
     };
-    crate::console::serve::serve(pool, args).await
+    crate::console::serve::serve(args).await
 }
 
 /// ⭐ REQ-160 · `BuildCmd` → [`crate::review_open::build_run::Options`]。

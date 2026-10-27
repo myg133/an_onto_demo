@@ -1,71 +1,56 @@
-//! ⭐ REQ-124 · **控制面 API** —— 把管理流水线的每一步 CLI 变成一个端点。
+//! ⭐ REQ-162 · **console = 本地评审台**（草稿 → 人签 → 定版 → 导出包）。
 //!
 //! ```text
-//! ontok console serve --bind 127.0.0.1:8899 --tokens admin-tokens.json \
-//!     --project anspire_r2rml_excl --schema code/out/schema.json
+//! ontok-builder console serve --dir <工作目录> [--bind 127.0.0.1:8899] [--no-browser]
 //! ```
 //!
-//! # 它**不是**一条新的写库路径
+//! # 用户口径（唯一依据）
 //!
-//! | 端点 | 它调的**既有**实现 |
+//! > 「纯本地构建，不需要口令。一个工作目录就是一个项目。构建包就是个导出包的功能。
+//! >  console 的核心功能是评审。agent 生成的是草稿，人审批过后是定版，导出的是定版。」
+//!
+//! ⇒ 没有登录、没有项目选择、没有上传 / DSN / 入库 / 激活 / key / 审计。
+//! 一条 `--dir` 就是全部作用域；`GET /` 是[一屏两栏的评审台](page)，数据全来自工作目录里的文件。
+//!
+//! # 本模块的组成
+//!
+//! | 模块 | 是什么 |
 //! | --- | --- |
-//! | `POST /api/import` | [`crate::cli::import_proposal_core`]（`propose import` 的实现搬到这里，两个入口共用） |
-//! | `POST /api/apply` | [`crate::db::apply::PgApplier::apply_proposal`]（`proposal apply` 调的同一个函数） |
-//! | `POST /api/freeze` | [`crate::db::project::PgProjectStore::freeze`]（`version freeze` 调的同一个函数） |
-//! | `GET /api/export/ttl` | [`crate::cli::prepare_ttl_export`]（读取/投影段）+ [`crate::console::ops::render_ttl_export`]（渲染） |
-//! | `POST /api/r2rml` | [`crate::cli::r2rml_core`]（`r2rml generate` 的生成段，两个入口共用） |
-//! | `GET/PUT /api/config/*` | 三份声明的既有解析器（`Exclusions` / `QueryPolicy` / `TenancyDecl`） |
-//! | `GET /api/review` · `POST /api/decide` | [`crate::review_ui::http::review_json`] / [`decide_json`]（`review serve` 的同一份序列化与同一个 `decide_item`） |
+//! | [`local`] | ⭐ REQ-162 · 本地评审台的领域层 + 6+1 条**纯文件**端点（无库、无口令） |
+//! | [`serve`] | 启动与回环闸（复用既有 `check_bind`；⛔ 不写第二份） |
+//! | [`page`] | 一屏两栏页面壳（自包含单文件、零外部资源、无 localStorage） |
+//! | [`OpError`] | CLI 核心函数与 HTTP 层共用的错误形状（`{code, message, hint}` 的源头） |
 //!
-//! ⭐ **REQ-159 · 构建包导入（P1a）** 在这张表上新增 7 个端点，它们同样不是新写库路径：
+//! # 旧「控制面」的那几个模块（诚实登记）
 //!
-//! | 端点 | 它调的**既有**实现 |
-//! | --- | --- |
-//! | `POST /api/projects` | [`crate::db::project::PgProjectStore::create_labeled_in`] + [`crate::db::bundle_store::PgBundleStore::create_key_in`]（同一事务） |
-//! | `POST /api/projects/:p/bundles` | [`bundle::verify_and_read`]（校验）+ [`crate::db::bundle_store::PgBundleStore::create_bundle`] |
-//! | `GET /api/projects/:p/bundles/:id` | [`crate::db::bundle_store::PgBundleStore::get_bundle_in_project`] |
-//! | `PUT /api/projects/:p/database` | [`crate::provision::crate::provision::dsn::SecretCipher::encrypt`] + [`crate::db::bundle_store::PgBundleStore::upsert_database`] |
-//! | `POST /api/projects/:p/database/test` | [`crate::provision::dsn::probe`]（真连一次） |
-//! | `POST /api/projects/:p/bundles/:id/import` | [`crate::db::apply::begin_new_version`] + [`crate::db::apply::write_snapshot_in`]（**与 `proposal apply` 同一套**，单事务） |
-//! | `POST /api/projects/:p/bundles/:id/activate` | [`crate::db::project::PgProjectStore::activate`]（冻结 + 生效指针，同一事务） |
+//! `audit` / `decl` / `dsn` / `ops` / `provision` / `provision_api` / `tokens` 与
+//! [`http`] 里的库版路由是 REQ-124 / REQ-159 的产物。它们**不再被 `console serve` 挂载**：
+//! `console serve` 现在挂的是 [`local::build_router`]。
 //!
-//! ⚠️ **架构变化（要写 ADR）**：这 7 个端点让**控制面**第一次获得「写元数据库里的
-//! 本体内容」的能力（`project apply` 之外的第二条产出新版本的路径）。边界是硬的：
-//! 只有 **admin token** 能调（`query` token 一律 403），而 `query serve` 仍然**只读**、
-//! 仍然一进程一项目（多项目是 P1b，本刀一行没碰）。见 demand §六-4。
+//! 那批代码仍然编译、仍然被下面这些**本单不可改范围**的调用方使用：
 //!
-//! ⭐ REQ-125 · `GET /` 是**工作台页面壳**（[`page`]）：自包含单文件、零外部依赖、
-//! **壳内零数据**、免 token（浏览器导航带不了 `Authorization`）。七个视图只消费上面
-//! 这些端点（外加 REQ-123 查询服务的 `/api/sparql` / `/api/catalog` / `/api/describe`，
-//! 按**同源**路径调用）—— ⛔ 本模块没有为前端新开端点。
+//! - `ontok-builder review open`（REQ-160）复用的是 [`http::build_router`] 与
+//!   [`ConsoleService`]（一次性口令审核台，另一条命令、另一套语义）；
+//! - `query serve` 的写面复用 [`provision_api`] / [`dsn`] / [`bundle`]（join 正在把它们
+//!   搬到 `src/provision/`）；
+//! - `cli.rs` 的既有子命令复用 [`ops`]。
 //!
-//! ⛔ 本模块**没有**「直接改对象」的端点：只暴露 import → review → apply → freeze
-//! 这条既有流程（需求风险 1）。HTTP 层只做「解析 → 调上面那个函数 → 序列化」。
+//! ⛔ 所以「旧库版路由删干净」在本分支的落点是：**`console serve` 的进程里一条都不挂**
+//! （`tests/test_req162_console.rs` 逐条断言 404）；源码里那份路由要等 `review open`
+//! 另单收口后才能删 —— 已写进 `BA/.local/dispatch/REQ-162-dev-changelog.md` 的「偏离」一节。
 //!
-//! # 四道硬闸
+//! # 已知限制
 //!
-//! 1. **token 分离**（R1）：[`tokens`] 一张文件两套凭据；query token 调管理端点 ⇒
-//!    **403**（[`http::require_token`]），没有/错 token ⇒ **401**。
-//! 2. **绑定**（R2）：默认只绑回环；非回环地址必须 `--allow-public` + 启动警告（[`serve`]）。
-//! 3. **声明保存前校验**（R4）：[`decl::validate`] 对照 `--schema` 查表/列；
-//!    失败 ⇒ 400 + 点名，**不落盘**（用保存前后 sha256 自证，见 `decl::save` 的调用顺序）。
-//! 4. **审计**（R6）：[`audit::AuditLog`] 每个写操作一行（含失败），token 只记摘要。
-//!
-//! # 已知限制（⛔ 不写成「已封堵」）
-//!
-//! - 端点里**没有抽取**（`POST /api/extract` 刻意不做）：读源库 + 调模型 + 分钟级长任务
-//!   属于任务系统，另开需求。
-//! - 只有 `admin` 一个角色（本轮不做多用户 / 角色体系），所以「谁能 freeze」只有
-//!   「谁有 admin token」一个答案。
-//! - `GET /api/export/ttl` 的 `schema` / `tenancy` 是**服务端路径**（与 CLI 的
-//!   `--schema` / `--tenancy` 同义）。拿 admin token 的人本来就能跑 CLI，这不是
-//!   新的权限面；但它是「可以读服务端文件」的一条路，已登记在已知限制里。
-//! - 声明 PUT 是**整份替换**（不是逐条增删）：校验的是「这份新文件」；
-//!   并发两个 PUT 的结果是后写覆盖（没有乐观锁 / ETag）。
+//! - 没有多用户：本机同一个人。**没有任何凭据**，边界就是回环绑定。
+//! - 快照的 `version_id` 每次定版新生成（`domain::apply` 的既有行为），
+//!   包内/文件里的 `seq` 才是人看的那一栏。
+//! - 并发写同一份 `decisions.json` 是后写覆盖（本地单人评审，没有锁 / ETag）。
 
 pub mod audit;
 pub mod decl;
 pub mod http;
+/// ⭐ REQ-162 · 本地评审台（纯文件端点；⛔ 一行 SQL / 一次网络都没有）。
+pub mod local;
 pub mod ops;
 pub mod page;
 pub mod provision;

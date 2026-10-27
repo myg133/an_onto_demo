@@ -1,60 +1,53 @@
-//! REQ-124 · **控制面的启动与绑定闸门** —— 默认只绑回环，`0.0.0.0` 要 `--allow-public`。
+//! ⭐ REQ-162 · **本地评审台的启动与绑定闸门**。
+//!
+//! ```text
+//! ontok-builder console serve --dir <工作目录> [--bind 127.0.0.1:8899] [--no-browser]
+//! ```
 //!
 //! # 启动顺序（每条失败都在**绑 socket 之前**报出来）
 //!
 //! | # | 步骤 | 为什么在这个位置 |
 //! | --- | --- | --- |
-//! | ① | 绑定地址 + 闸门 | 绑错了根本不该读 token / schema |
-//! | ② | `admin-tokens.json`（两套凭据） | 没有 token 表就没有鉴权 |
-//! | ③ | `--schema` | 声明校验的「表 / 列必须存在」只能来自它 |
-//! | ④ | 三份声明 | **存在性**检查（缺了只警告：GET 会 404，PUT 会新建） |
-//! | ⑤ | 元数据库：项目存在 | 服务作用域必须是真项目 |
-//! | ⑥ | 审计落点 | 打不开 ⇒ 拒绝启动（⛔ 不静默降级） |
-//! | ⑦ | 启动横幅 → 绑 socket | 横幅打印绑定地址 / 项目 / 版本 / token 数 |
+//! | ① | 绑定地址 + 回环闸 | 非回环地址**直接拒**（没有 `--allow-public`：本机评审台不出本机） |
+//! | ② | 打开工作目录 | 目录不存在 / 不是目录 ⇒ 拒绝启动（说清 `--dir` 该给什么） |
+//! | ③ | 绑 socket → 拿**真实**端口 | `--bind 127.0.0.1:0` 时横幅要打印内核分配的端口 |
+//! | ④ | 启动横幅（stderr） | 打印 URL + 工作目录 + 草稿/定版概况（零业务数据） |
+//! | ⑤ | 默认开浏览器 | `--no-browser` 只影响开不开浏览器，不影响起不起来 |
 //!
-//! # R2 比 `query serve` **更严**
+//! # ⛔ 无口令、无项目、无库
 //!
-//! `query serve` 允许「内网地址」（RFC1918）默认放行；控制面**默认只给回环**：
-//! 管理端点能 import / apply / freeze —— 那是改本体的权限，不是取数权限。
-//! 任何非回环地址（含 `0.0.0.0` 与内网地址）都要显式 `--allow-public` + 启动警告。
+//! 不读 `--tokens` / `--project` / `--schema`，也不碰 `ONTOK_SECRET_KEY` ——
+//! `ONTOK_DATABASE_URL` 缺了照常起（AC-007；真进程判据见 `tests/test_req162_console.rs`）。
+//! 唯一的口令是**回环绑定**本身：只有本机进程能连上。
+//!
+//! # 回环闸复用旧的那一份
+//!
+//! [`check_bind`] 是 REQ-124/160 就在用的纯函数（`ontok-builder review open` 也在用），
+//! 本单**不写第二份**：非回环 ⇒ 报错 + 说明「本机评审台只绑回环」。
 //!
 //! # 已知限制
 //!
 //! - 绑定闸门判的是**地址**，不是路由表：多网卡 / NAT / 端口转发仍可能把回环以外的
-//!   东西暴露出去。真正的边界是网络策略 + admin token。
-//! - 没有 TLS：本机 / 内网明文 HTTP。放到别处必须由反向代理加 TLS。
+//!   东西暴露出去。真正的边界是本机网络策略。
+//! - 没有 TLS：本机明文 HTTP。⛔ 放到别处没有意义（那是 Studio 的事）。
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sqlx::postgres::PgPool;
-
-use crate::db::project::PgProjectStore;
-use crate::domain::ttl::SchemaTypes;
-use crate::query::audit::AuditSink;
 use crate::query::serve::{is_internal_ip, parse_bind};
 
-use super::audit::AuditLog;
-use super::decl::DeclPaths;
-use super::tokens::AdminTokens;
-use super::{ConsoleParts, ConsoleService};
+use super::local::{self, LocalConsole};
 
 /// `ontok console serve` 的参数（与 clap 分开：本模块不认识 clap）。
 #[derive(Debug, Clone)]
 pub struct ServeArgs {
+    /// 工作目录（**一个工作目录 = 一个项目**；默认 `.`）。
+    pub dir: PathBuf,
+    /// 监听地址；只许回环。
     pub bind: String,
-    pub tokens: PathBuf,
-    pub project: String,
-    pub schema: PathBuf,
-    pub exclusions: PathBuf,
-    pub policy: PathBuf,
-    pub tenancy: PathBuf,
-    /// 绑非回环地址时必须显式给。
-    pub allow_public: bool,
-    pub audit_out: Option<PathBuf>,
-    /// IRI 基（必须与 `r2rml generate` / `ontology export` 是同一个）。
-    pub base: String,
+    /// 只影响开不开浏览器，不影响起不起来。
+    pub no_browser: bool,
 }
 
 /// 绑定地址的判定结果。
@@ -182,171 +175,111 @@ pub fn banner(
     s
 }
 
-/// 载入 → 起服务。
-pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
-    // ── ① 绑定地址 + 闸门 ───────────────────────────────────
+/// 打开工作目录 → 绑 socket → 起本地评审台。
+///
+/// ⚠️ 顺序：先判地址与目录（失败时不占端口），再绑 socket 拿真实端口，最后打印横幅。
+/// `--bind 127.0.0.1:0` 时只有绑完才知道端口 —— 横幅必须打印**真实**地址，
+/// 否则 `--no-browser` 的人不知道要打开哪里（`review open` 同一条顺序，理由相同）。
+pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    // ── ① 绑定地址 + 回环闸（复用旧的那一份 check_bind，⛔ 不写第二份）──
     let addr = parse_bind(&args.bind).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let verdict = check_bind(addr, args.allow_public).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    // ── ② 两套凭据 ──────────────────────────────────────────
-    let raw = std::fs::read_to_string(&args.tokens).map_err(|e| {
+    // `allow_public = false` 是硬编码的：本机评审台**只绑回环**（AC-001）。
+    check_bind(addr, false).map_err(|e| {
         anyhow::anyhow!(
-            "读不出 token 表 {:?}：{e}\n  格式：{{\"version\":\"1.0.0\",\"tokens\":[\
-             {{\"token\":\"…\",\"kind\":\"admin\"}}, {{\"token\":\"…\",\"kind\":\"query\",\"tenant\":\"C0001\"}}]}}\n  \
-             示例见 `admin-tokens.example.json`（里面的 token 是假值）。",
-            args.tokens
-        )
-    })?;
-    let tokens = AdminTokens::parse(&raw)
-        .map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))?;
-
-    // ── ②b ⭐ REQ-159 · DSN 加密列的密钥（**缺了就拒绝启动**）──────────
-    //
-    // 为什么在绑 socket 之前、而且是**无条件**的（哪怕这次启动一个人都不会配 DSN）：
-    // `PUT /api/projects/:p/database` 要把 DSN 加密后落库。带着一把坏密钥 / 没有密钥
-    // 启动，等于让那个端点在一个**会失败的**状态下对外可用 —— 那时用户已经上传了包、
-    // 点开 DSN 弹窗，才收到 500。启动期报错的成本是零，运行期报错的成本是一次联调。
-    //
-    // ⛔ 没有「本地调试可以先跳过」的开关（与 `ONTOK_VIEW_TOKEN` 同一条纪律）。
-    let secret_cipher = crate::provision::dsn::SecretCipher::from_env().map_err(|e| {
-        anyhow::anyhow!(
-            "DSN 加密列的密钥不可用，拒绝启动控制面：\n{e}\n  \
-             设置方式（当前会话）：\n    \
-             PowerShell : $env:ONTOK_SECRET_KEY = '<64 位十六进制>'\n    \
-             bash/zsh   : export ONTOK_SECRET_KEY=<64 位十六进制>\n  \
-             ⚠️ 换密钥会让**已有**的 DSN 密文读不出来（v1 不做密钥轮换）：\
-             换完要重新 `PUT /api/projects/:p/database` 一次。"
+            "{e}\n  本机评审台（console serve）没有 `--allow-public`：\
+             它只做「草稿 → 人签 → 定版 → 导出包」，不出本机。"
         )
     })?;
 
-    // ── ③ schema（声明校验的唯一事实来源）────────────────────
-    // 默认值 `code/out/schema.json` 是**仓库根**的相对路径。工作树（feature-*）
-    // 里没有 `code/`，从工作树里敲文档上那条命令时会在上一级找到它 ——
-    // 只在「默认值 + 相对路径」这一种情况下回落，⛔ 不猜任意路径。
-    let schema_path = if args.schema.is_file() {
-        args.schema.clone()
-    } else {
-        let sibling = std::path::Path::new("..").join(&args.schema);
-        if args.schema == std::path::Path::new(crate::console::DEFAULT_SCHEMA) && sibling.is_file() {
-            eprintln!(
-                "· schema 不在当前目录，回落到工作树的上一级：{}",
-                sibling.display()
-            );
-            sibling
-        } else {
-            args.schema.clone()
-        }
-    };
-    let raw = std::fs::read_to_string(&schema_path).map_err(|e| {
-        anyhow::anyhow!(
-            "读不出 schema 文件 {:?}：{e}\n  控制面用它判「声明里的表 / 列是否存在」；\
-             ⛔ 没有 schema 就没有 R4 的保存前校验 —— 拒绝启动。\n  \
-             写法：`--schema code/out/schema.json`（`ontok-introspect` 的产物；\
-             默认路径相对于**仓库根**，工作树里会自动向上一级找）。",
-            args.schema
-        )
+    // ── ② 工作目录（一个工作目录 = 一个项目）───────────────────
+    let console = LocalConsole::open(&args.dir).map_err(|e| {
+        anyhow::anyhow!("{}\n  改法：{}", e.message, e.hint)
     })?;
-    let schema = SchemaTypes::parse(&raw)
-        .map_err(|e| anyhow::anyhow!("schema 文件 {:?} 不合法：{e}", schema_path))?;
-    if schema.is_empty() {
-        anyhow::bail!(
-            "schema 文件 {:?} 里一列都没读到 —— 这份 schema 无法校验声明（⛔ 不猜列）",
-            schema_path
-        );
-    }
 
-    // ── ④ 三份声明：只判**存在性**（缺失只警告）───────────────
-    let paths = DeclPaths {
-        exclusions: args.exclusions.clone(),
-        policy: args.policy.clone(),
-        tenancy: args.tenancy.clone(),
-    };
-    for (kind, path) in [
-        ("exclusions", &paths.exclusions),
-        ("policy", &paths.policy),
-        ("tenancy", &paths.tenancy),
-    ] {
-        if !path.is_file() {
-            eprintln!(
-                "⚠ 声明 {kind} 不存在：{} —— GET /api/config/{kind} 会 404，PUT 会**新建**它",
-                path.display()
-            );
-        }
-    }
-
-    // ── ⑤ 项目必须存在（服务作用域是真项目）───────────────────
-    let projects = PgProjectStore::new(pool.clone());
-    let proj = projects
-        .get_by_name(&args.project)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "项目 {:?} 不存在 —— 控制面只服务已存在的项目。\n  先建：\
-                 `ontok project new --name {}`",
-                args.project,
-                args.project
-            )
-        })?;
-    let versions = projects.list_versions(proj.id).await?;
-    let latest = versions.last().map(|v| v.seq);
-
-    // ── ⑥ 审计落点 ─────────────────────────────────────────
-    let sink = match &args.audit_out {
-        Some(path) => AuditSink::open(path).map_err(|e| {
-            anyhow::anyhow!(
-                "打不开审计文件 {path:?}：{e} —— ⛔ 不静默降级成「只有 stdout」，\
-                 请换一个可写的路径或去掉 --audit-out"
-            )
-        })?,
-        None => AuditSink::stdout_only(),
-    };
-
-    // ── ⑦ 服务状态 + 横幅 ──────────────────────────────────
-    let admin_tokens = tokens.admin_count();
-    let query_tokens = tokens.query_count();
-    if query_tokens == 0 {
-        eprintln!(
-            "⚠ token 表里没有 query token：403（「这是查询 token，不是管理凭据」）这条语义\
-             在本进程里**不会被触发** —— 401 与 403 就无法区分。"
-        );
-    }
-    let svc = Arc::new(ConsoleService::new(ConsoleParts {
-        pool: pool.clone(),
-        project: args.project.clone(),
-        base: args.base.clone(),
-        tokens,
-        schema,
-        paths,
-        audit: AuditLog::new(sink),
-        bind: addr,
-        allow_public: args.allow_public,
-        secret_cipher,
-    }));
-
-    eprintln!(
-        "{}",
-        banner(
-            addr,
-            verdict,
-            &svc.project,
-            latest,
-            admin_tokens,
-            query_tokens,
-            &svc.paths.exclusions,
-            &svc.paths.policy,
-            &svc.paths.tenancy,
-        )
-    );
-
-    let app = super::http::build_router(Arc::clone(&svc));
+    // ── ③ 绑 socket（拿内核分配的真实端口）────────────────────
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-        anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
+        anyhow::anyhow!(
+            "绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）"
+        )
     })?;
+    let real = listener.local_addr().map_err(|e| {
+        anyhow::anyhow!("拿不到实际监听地址：{e}（这不该发生；把这条错误报给维护者）")
+    })?;
+
+    // ── ④ 启动横幅（stderr；stdout 留给需要 `| jq` 的场景）──────
+    eprintln!("{}", desk_banner(real, &console));
+
+    // ── ⑤ 默认开浏览器（`--no-browser` 只影响这一步）──────────
+    if !args.no_browser {
+        open_browser(&format!("http://{real}/"));
+    }
+
+    let app = local::build_router(Arc::new(console));
     axum::serve(listener, app)
         .await
-        .map_err(|e| anyhow::anyhow!("控制面退出：{e}"))
+        .map_err(|e| anyhow::anyhow!("本机评审台退出：{e}"))
 }
 
+/// 本地评审台的启动横幅（**纯函数**：判据在单测里逐项对）。
+///
+/// ⛔ 零业务数据：工作目录 / 项目名 / 计数 / 最近定版号 —— 没有对象名、没有 token
+/// （本来也没有 token）。
+pub fn desk_banner(addr: SocketAddr, console: &LocalConsole) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "· ontok console serve 就绪：http://{addr}/（仅本机 · 无口令）\n"
+    ));
+    s.push_str(&format!(
+        "· 工作目录 {} · 项目 {}\n",
+        crate::console::local::display_path(console.dir()),
+        console.project()
+    ));
+    let draft = console.draft_summary();
+    s.push_str(&format!(
+        "· 草稿 {}（{} 条，已签 {}）· 最新定版 {} · 构建包 {}\n",
+        draft.0, draft.1, draft.2, draft.3, draft.4
+    ));
+    s.push_str(
+        "· 本机评审台只做四件事：读草稿 · 记裁决 · 定版 · 导出包\
+         （无登录 / 项目 / 上传 / DSN / 入库 / 激活 / key / 审计）\n",
+    );
+    s.push_str(
+        "· 端点：GET /api/state · GET /api/draft · POST /api/decide · POST /api/finalize · \
+         GET /api/versions · POST /api/bundle · GET /api/bundle/download?seq=\n",
+    );
+    s
+}
+
+/// 打开本机浏览器（`--no-browser` 时调用方不走这里）。
+///
+/// 失败**不**影响服务：打不开浏览器是环境问题（无桌面 / 容器），不是启动失败 ——
+/// 横幅已经把 URL 打出来了，复制粘贴即可。所以这里一个错误都不往上抛。
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let mut cmd = cmd;
+    let _ = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
 // ══════════════════════════════════════════════════════════════
 // 判据（纯函数：不连库、不绑 socket）
 // ══════════════════════════════════════════════════════════════
