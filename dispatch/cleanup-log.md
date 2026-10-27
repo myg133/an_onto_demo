@@ -451,3 +451,15 @@
 | 被跟踪文件 | workspace：**10 → 3**（`README.md` / `.gitignore` / `AGENTS.md`）⇒ 挂了很久的「10 文件 vs 规范 2 个」**收口**，只剩 2026-09-28 已批准的 `AGENTS.md` 例外 |
 | 引用修正 | `Deploy/digital-employee/AGENTS.md` 两处 `skills/…` → `../skills/…`（原路径是相对仓库根的，搬走后会 404） |
 | 决策记录 | `BA/decisions/ADR-012-skill归Deploy维护.md`（含对 2026-10-26 决定的反转说明：防漂移靠「只有一份」，不靠位置） |
+
+## 2026-10-27 11:50 · REQ-159 页面补丁合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **f4b0663**（`--no-ff`）← `feature/REQ-159-console-fix` **9041954** |
+| 内容 | 组件计数按契约字段给摘要；`requires_dsn` 缺失渲染 `—` 而非「否」 |
+| 合并前验证 | 单测 **10/10** + **8/8**；**Playwright 真浏览器 23/23**（含 4 条逐格断言） |
+| 合并后验证（code/） | `cargo check --lib` 绿 · `console::page` **10/10** · `test_req125_page` **8/8** |
+| 冲突 | 零（只动 `src/console/page.rs` 一个文件） |
+| 回收 | worktree + 分支已移除（先 `merge-base --is-ancestor` 确认） |
+| 工具沉淀 | `BA/tools/ui-check/`（Playwright + 本机 chromium；README 记了两轮结果与 `executablePath` 坑） |
