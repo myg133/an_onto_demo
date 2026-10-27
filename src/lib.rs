@@ -96,3 +96,12 @@ pub mod access;
 // （见 `src/bundle/mod.rs` 模块头；守卫在 `tests/test_req159_bundle.rs`）。
 pub mod bundle;
 
+// ⭐ REQ-160 · **构建端的共同出口**：抽完就起本机审核台（`review open`）+
+// 一条命令串四段（`build run`）。
+// **不放 domain/**：它要连元数据库、绑 socket、起 HTTP 服务。
+// ⛔ 也不是新写一套 HTTP —— 路由表 / 服务对象 / 回环闸 / 横幅全部复用
+// [`console`] 那一份（见 `src/review_open/mod.rs` 模块头的复用表）。
+// ⚠️ 只被构建面（[`cli`]）引用：服务面（[`service`]）不碰它 —— 审核台是本机进程，
+// 不是交付物（demand §六）。
+pub mod review_open;
+
