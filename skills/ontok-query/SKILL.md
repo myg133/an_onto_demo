@@ -598,6 +598,19 @@ python scripts/access_fetch.py --recipe recipe.json --entity <class> \
 | `env` 全量打印找变量 | `env \| grep '^SKILL_CREDENTIAL_' \| sed 's/=.*//'`（只看名字，⛔ 不看值） |
 | 对应关系靠猜 | 配方约定：`credential_env` **第 1 个 = SecretId、第 2 个 = SecretKey** |
 
+**在数字员工平台上部署本 skill 时**（平台侧三件事，都不是 skill 内容本身）：
+
+| # | 平台侧 | 说明 |
+| --- | --- | --- |
+| 1 | **`credentials` 声明** | skill 元数据里声明凭据字段（`id` 由平台分配，如 `key-4764`），平台据此注入 |
+| 2 | **注入名带前缀** | 平台注入为 `SKILL_CREDENTIAL_*`（如 `SKILL_CREDENTIAL_SECRETID`），**不是**源侧名字 ⇒ 见上面的桥接 |
+| 3 | **先跑 `scripts/env_probe.py`** | 只打印变量名与值长度（⛔ 不打印值）；输出 `NO_SKILL_CREDENTIAL_ENV` ⇒ 声明/绑定/凭据状态三处之一没生效 |
+
+```bash
+python scripts/env_probe.py      # 沙箱里执行；退出码恒 0（只观测，不阻断）
+```
+
+
 > **v1 契约**：`@pending.get` 只有 4 键 ⇒ `--recipe` 会拒（`am.invalid` 并说明"该部署可能是 v1"）
 > ⇒ 这种部署下必须向调用方要 AM 文件。
 
