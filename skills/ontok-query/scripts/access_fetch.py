@@ -374,6 +374,69 @@ def load_am(path):
     return am
 
 
+def am_from_recipe(recipe, source_label="<recipe>"):
+    """把服务端 `@pending.get` 给的那一段配方，合成一份**最小 AM**。
+
+    为什么需要：`query serve` 在 v2 契约下，`@pending[].get` 已经含
+    `source` / `operation` / `request` / `iterator` / `fields` / `auth` —— 取数所需的一切。
+    数字员工如果手上一份 AM 文件都没有，**不必去找：查一次本体就有了**。
+    本函数只做「配方 → AM 外壳」这一层，之后走完全相同的取数流程。
+
+    ⚠️ 两处如实标注（⛔ 不假装）：
+      · `reviewed_by`：配方由服务端发出，而服务端只对**已签**条目发配方 ⇒ 标注来源，不再要求本地签名字段
+      · `identity` / `iri_template`：配方里**没有**（那是本体侧信息）⇒ 用 `--id-property` 指定，
+        不给就只能 `--format rows`（⛔ 不瞎猜主键）
+    """
+    if not isinstance(recipe, dict):
+        fail("am.invalid", EXIT_INPUT, "配方必须是 JSON 对象，实际是 %s" % type(recipe).__name__,
+             "把 `@pending[0]` 或它的 `get` 子对象整个传进来。")
+    entry = recipe.get("get") if isinstance(recipe.get("get"), dict) else recipe
+    cls = entry.get("class")
+    if not cls:
+        fail("am.invalid", EXIT_INPUT, "配方里缺 `class`（该取哪个类）",
+             "确认传的是 `@pending[].get` 而不是别的字段。")
+    src = entry.get("source") or {}
+    base_url = src.get("base_url")
+    if not base_url:
+        fail("am.invalid", EXIT_INPUT, "配方里缺 `source.base_url`（打哪个接口）",
+             "该部署可能用的是 **v1 契约**：v1 的 `@pending.get` 只有 class/filter/pushdown/ref，"
+             "不含取数配方 ⇒ 这种部署下必须向调用方要 AM 文件。")
+    ref = entry.get("ref") or ""
+    entity_id = ref.split("#")[-1].split("@")[0] or cls
+    auth = dict(entry.get("auth") or {})
+    if src.get("auth_mode"):
+        auth.setdefault("mode", src["auth_mode"])
+    entity = {
+        "id": entity_id,
+        "class": cls,
+        "source": "pending-recipe",
+        "reviewed_by": "server:%s" % (ref or "pending"),
+        "operation": entry.get("operation") or {},
+        "request": entry.get("request") or {},
+        "iterator": entry.get("iterator") or "$[*]",
+        # 配方里的 fields 是 {属性: "路径字符串"}；AM 契约里是 {属性: {"path": "..."}}
+        # —— 这里归一化成 AM 的形状（两形状都接受，避免因写法不同而拒）
+        "fields": {
+            k: (v if isinstance(v, dict) else {"path": v})
+            for k, v in (entry.get("fields") or {}).items()
+        },
+        "iri_template": "ontok:%s/{id}" % cls,
+        "capability": {"pushdown": entry.get("pushdown") or []},
+    }
+    return {
+        "contract_version": 2,
+        "mapping_version": 1,
+        "sources": [{
+            "id": "pending-recipe",
+            "kind": "http-json",
+            "base_url": base_url,
+            "auth": auth,
+            "defaults": (entry.get("request") or {}).get("defaults") or {},
+        }],
+        "entities": [entity],
+    }
+
+
 def supported_versions_text():
     """支持列表拼成一句话（`--check` 与错误消息共用，不各写一遍）。"""
     return ", ".join(str(v) for v in SUPPORTED_CONTRACT_VERSIONS)
@@ -1914,11 +1977,13 @@ def run_fetch(am, am_path, args):
              "让映射作者补 `reviewed_by`（形如 `name@YYYY-MM-DD`）并重新签；"
              "或换一个已签的 entity。")
     source = find_source(am, entity.get("source"))
-    if not (entity.get("identity") or {}).get("key_path"):
+    # `@id` 只有 jsonld 输出才需要；`--format rows` 是平表，⛔ 不该因为缺主键就拒
+    # （2026-10-27 实测出来的：`--recipe --format rows` 被这条挡了，与设计矛盾）
+    if args.format == "jsonld" and not (entity.get("identity") or {}).get("key_path"):
         fail("am.invalid", EXIT_INPUT,
              "entity `%s` 没有 identity.key_path，无法把一行变成 `@id`" % entity.get("id"),
-             "补 `\"identity\": {\"key_path\": \"<记录里的键名>\"}`；"
-             "⛔ 不要拿 fields 里随便一个属性当主键（RECIPE §六）。")
+             "补 `\"identity\": {\"key_path\": \"<记录里的键名>\"}`，或用 `--format rows` "
+             "（平表不需要主键）；⛔ 不要拿 fields 里随便一个属性当主键（RECIPE §六）。")
     plan = paging_plan(entity)
     params = parse_params(args.param, entity)
     check_required(entity, params, plan, source)
@@ -2436,6 +2501,58 @@ def _selftest_signers(selftest, am):
                    % len(expected_codes), CODE_EXIT, expected_codes)
 
 
+def _selftest_recipe(selftest):
+    """`--recipe`：把服务端 `@pending.get` 的配方合成最小 AM（REQ-168 之后新增的入口）。"""
+    print("\n[8] 配方模式（--recipe，离线）")
+
+    get = {
+        "class": "demo_vm", "ref": "access#DemoVm@v1",
+        "pushdown": ["region"],
+        "source": {"base_url": "https://demo.example.invalid", "auth_mode": "tc3-hmac-sha256"},
+        "operation": {"action": "DescribeDemo", "method": "POST", "path": "/"},
+        "request": {"template": {"Region": "{region}"}},
+        "iterator": "$.Response.Set[*]",
+        "fields": {"vm_id": "InstanceId", "cpu": "CPU"},      # 配方里是「属性 → 路径字符串」
+        "auth": {"credential_env": ["DEMO_ID", "DEMO_KEY"], "service": "demo"},
+    }
+    am = am_from_recipe(get)
+    ent = am["entities"][0]
+    selftest.equal("裸配方 ⇒ 1 个 source / 1 个 entity",
+                   (len(am["sources"]), len(am["entities"])), (1, 1))
+    selftest.equal("class 原样带过来", ent["class"], "demo_vm")
+    selftest.equal("id 从 ref 里取（access#<id>@v<n>）", ent["id"], "DemoVm")
+    selftest.check("fields 归一化成 AM 形状 {属性: {path}}（配方里是字符串）",
+                   ent["fields"].get("vm_id") == {"path": "InstanceId"},
+                   str(ent["fields"].get("vm_id")))
+    selftest.check("reviewed_by 标注来源（⛔ 不假装本地签过）",
+                   str(ent["reviewed_by"]).startswith("server:"), str(ent["reviewed_by"]))
+
+    # 带 `get` 外壳的整个 @pending 条目也能吃
+    wrapped = am_from_recipe({"@type": "ontok:demo_vm", "ontok:sourceKind": "api", "get": get})
+    selftest.equal("整条 @pending（带 get 外壳）等价于裸配方",
+                   wrapped["entities"][0]["class"], "demo_vm")
+
+    # 缺 class ⇒ am.invalid
+    try:
+        am_from_recipe({"source": {"base_url": "https://x.example.invalid"}})
+        e1 = None
+    except FetchError as exc:
+        e1 = exc
+    selftest.check("配方缺 class ⇒ am.invalid", e1 is not None and e1.code == "am.invalid",
+                   str(e1 and e1.code))
+
+    # 缺 source.base_url ⇒ am.invalid，且提示「该部署可能是 v1」（v1 的 @pending.get 没有配方）
+    try:
+        am_from_recipe({"class": "c"})
+        e2 = None
+    except FetchError as exc:
+        e2 = exc
+    selftest.check("配方缺 source.base_url ⇒ am.invalid", e2 is not None and e2.code == "am.invalid",
+                   str(e2 and e2.code))
+    selftest.check("缺 base_url 时提示「该部署可能是 v1」",
+                   e2 is not None and "v1" in e2.rendered(), "" if e2 is None else e2.rendered()[:80])
+
+
 def cmd_selftest():
     """`--selftest`：离线自检。**不联网、不要凭据**（AC-010）。
 
@@ -2491,6 +2608,7 @@ def cmd_selftest():
             _selftest_guards(selftest, am)
             _selftest_check(selftest, am)
             _selftest_signers(selftest, am)
+        _selftest_recipe(selftest)
     finally:
         socket.socket = original_socket
         socket.getaddrinfo = original_getaddrinfo
@@ -2517,7 +2635,13 @@ def build_parser():
                "6 参数错 / 7 网络 / 8 没取全（truncated）。"
                "已支持的签名器：%s（--list-signers）" % signers_text(),
     )
-    parser.add_argument("--mapping", metavar="AM.json", help="access mapping 文件（--check / 取数必填）")
+    parser.add_argument("--mapping", metavar="AM.json",
+                        help="access mapping 文件（--check / 取数必填）")
+    parser.add_argument("--recipe", metavar="RECIPE.json",
+                        help="直接吃服务端 `@pending[].get` 的配方（用 `-` 从 stdin 读）："
+                             "v2 契约下查一次本体就有，不需要 AM 文件")
+    parser.add_argument("--id-property", metavar="PROP",
+                        help="配方里没有 identity：用哪个属性当主键（jsonld 输出必填）")
     parser.add_argument("--entity", metavar="ID|CLASS", help="entity id 或本体 class")
     parser.add_argument("--param", action="append", default=[], metavar="K=V",
                         help="可重复；只允许 capability.pushdown 里的键")
@@ -2561,8 +2685,43 @@ def main(argv=None):
             print(mode)
         return EXIT_OK
 
+    if args.recipe:
+        # ⭐ 从「服务端给的配方」取数：不需要 AM 文件
+        try:
+            if args.recipe == "-":
+                try:
+                    recipe = json.loads(sys.stdin.read())
+                except ValueError as exc:
+                    fail("am.invalid", EXIT_INPUT, "stdin 不是合法 JSON：%s" % exc,
+                         "把 `@pending[0]` 或它的 `get` 整段传进来。")
+            else:
+                recipe = read_json_file(args.recipe, "配方文件")
+            am = am_from_recipe(recipe)
+            if args.id_property:
+                props = am["entities"][0]["fields"] or {}
+                if args.id_property not in props:
+                    fail("am.invalid", EXIT_INPUT,
+                         "--id-property=%s 不在配方的 fields 里（有：%s）"
+                         % (args.id_property, ", ".join(sorted(props)[:8])),
+                         "用 fields 里的属性名。")
+                am["entities"][0]["identity"] = {"key_path": props[args.id_property]}
+            elif args.format == "jsonld" and not args.check:
+                fail("recipe.no_identity", EXIT_INPUT,
+                     "配方里没有 identity，jsonld 输出无法生成 @id",
+                     "加 `--id-property <属性名>`，或用 `--format rows`。")
+            if args.check:
+                return cmd_check(am, args.recipe, args.entity)
+            if args.dry_run:
+                fail("recipe.no_fixture", EXIT_INPUT,
+                     "配方里没有 fixture，`--dry-run` 无从试跑",
+                     "去掉 `--dry-run` 走真取数（需要凭据），或改用 `--mapping <带 fixture 的 AM>`。")
+            return run_fetch(am, args.recipe, args)
+        except FetchError as exc:
+            print_err(exc)
+            return exc.exit_code
+
     if not args.mapping:
-        parser.error("--mapping 必填（除非用 --selftest / --list-signers）")
+        parser.error("--mapping 必填（除非用 --selftest / --recipe / --list-signers）")
     am_path = args.mapping
     try:
         am = load_am(am_path)
