@@ -730,6 +730,7 @@ QA 的判断（BA 采纳）：**「有没有第三层」无解，但「规则不
 | REQ-157 | 动词治理：字典 + `relation verbs check` + skill/schema 对齐 + **本体 v5 已落地**（泛词 3→0、动词 15→10） | **已完成**（v0.2.9 + 本体 v5） | REQ-156/158 | 2026-10-27 |
 | REQ-158 | 修 fail-open：TTL 形状的英文语义能过闸（第四档-b，真进程实证 exit 0→2） | **已完成**（v0.2.7） | REQ-156 实测 | 2026-10-27 |
 | REQ-159 | **构建包（Bundle）导入契约 v1**：构建端打包 → 服务端建项目发 key → 上传 → 配 DSN 并测通 → 解析入库 → 人工激活 | **进行中（P1a 已派）** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
+| REQ-160 | **构建端两种模式收口**：agent 模式（独立 agent 用 skill 包抽取）+ acp 模式（手动命令驱动 ACP 抽取），**两者抽取完成后都自动起 console 审核台**（`review open`：内存一次性 admin token + 自动选端口 + 开浏览器 + 只绑回环） | **已就绪** | ba-lion-michael-workstation-49056-20261027-094244 | 2026-10-27 | **触发**：用户 10:15 明确 builder 要承载两种模式，且「抽取完成后启动 console 让用户审核确认」。**核心裁定**：⛔ 两种模式都不自动 apply/freeze（人签仍在 console 里由人点）；收口动作**同一条命令**（agent 模式由 skill 指示调用，acp 模式由编排自动调用）；skill 包带版本号，与二进制同源导出（避免 agent 侧 skill 与工具版本漂移）；console 只绑回环，token 只进本地终端、⛔ 不进 URL。**依赖**：REQ-124（console 控制面）、REQ-147（doc ingest --agent acp）、REQ-111（review serve 是另一条，不复用）。|
 
 ## REQ-066 验收结论（2026-10-10，**PASS · 三轮 · 建议合并**）
 
