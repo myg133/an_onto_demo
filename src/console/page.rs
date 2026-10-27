@@ -13,7 +13,7 @@
 //!
 //! | 位置 | 允许出现什么 |
 //! | --- | --- |
-//! | `GET /` 的响应体（本文件的 [`CONSOLE_HTML`]） | **只有**界面骨架：标题、tab 名、表单、CSS/JS |
+//! | `GET /` 的响应体（本文件的 [`CONSOLE_HTML`]） | **只有**界面骨架：标题、左导航入口、表单、CSS/JS |
 //! | 项目名 / 版本号 / 对象名 / 条目 / 声明原文 | **一律不出现**；全部靠拿到口令后的 `/api/*` |
 //!
 //! 判据（`tests/test_req125_page.rs`）：拿 `secretproj` / 第 7 版 / `绝密对象` 起服务，
@@ -104,6 +104,22 @@
 //! 评审 40 条/页、审计默认 100（服务端上限 1000，页面最多渲染 1000）、
 //! 目录按服务端分页（`page_size` ≤ 200）、查询结果最多渲染 200 行并写明
 //! 「只显示前 N 行 / 共 M 行」。⛔ 不一次渲染上万行。
+//!
+//! # 壳（REQ-161 换皮）：左导航 + 单一主区、32px 行高 / sticky 表头、key·IRI 等宽、目录右侧抽屉
+//!
+//! 换的**只有壳**，视图 / 端点 / 逻辑三不变（判据见 `mod tests` 与 `tests/test_req125_page.rs`）：
+//!
+//! | 结构 | 判据 |
+//! | --- | --- |
+//! | 左导航 `#nav` 里 8 个 `.nav-item`；顶栏 `#tabs` 不再存在 | 按钮 id 仍是 `tab-*`，`switchTab` 的口径没变 |
+//! | 单一主区 `#views` 是**唯一**滚动容器 | 视图容器 `v-*` 一个不少 |
+//! | `thead` sticky + `tbody td` 行高 32px | 表体在 `.tablewrap` 里滚动 |
+//! | key / IRI 一律等宽 `.key`（目录浏览 / 审计 / 评审三处） | CSS 有定义 + 三处确实在用 |
+//! | 目录详情在右侧抽屉 `#drawer`（默认收起；Esc / 遮罩 / ✕ 关闭） | `#k-detail` 在抽屉里，不再占页面底部 |
+//! | `已迁到 Studio` 的 ADR-013 提示条保留 | 构建包视图 |
+//!
+//! ⛔ 换皮不许改的事实：`/api/*` 路径集合与本单之前**逐字相等**
+//! （`the_api_path_set_is_frozen`），壳内仍然零数据、零外部资源。
 
 use axum::http::{HeaderName, HeaderValue};
 
@@ -121,261 +137,437 @@ pub const CONSOLE_HTML: &str = r####"<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>内部工作台</title>
 <style>
-:root{--bg:#141416;--fg:#f2f2f7;--mut:#9b9ba1;--line:#3c3c40;--card:#1c1c1f;--acc:#4d9bff;--ok:#3fbf6a;--bad:#ff6b5e;--warn:#ffb340;--head:#232327}
-@media (prefers-color-scheme: light){
-  :root{--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#d2d2d7;--card:#fff;--acc:#0a6cff;--ok:#0a8f3c;--bad:#c2261c;--warn:#b26a00;--head:#f2f2f5}
-}
+:root{color-scheme:dark;--bg:#070a10;--bg-2:#0b0f17;--card:#111721;--head:#0d131c;--line:rgba(255,255,255,.085);--line-2:rgba(255,255,255,.045);--fg:#e8edf6;--mut:#9aa7bd;--mut-2:#64708a;--acc:#6ec8ff;--ok:#5fd3a3;--warn:#e6b455;--bad:#ef7a8a;--mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;--row:32px;--ease:cubic-bezier(.22,.61,.36,1)}
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
-header{position:sticky;top:0;z-index:8;background:var(--head);border-bottom:1px solid var(--line);padding:8px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-h1{font-size:15px;margin:0;font-weight:600;white-space:nowrap}
-#who{color:var(--mut);font-size:13px}
-#who b{color:var(--fg)}
-input,select,textarea{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
-input[type=password]{width:190px}
-textarea{width:100%;min-height:260px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:10px;resize:vertical}
-button{font:inherit;padding:4px 11px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer;white-space:nowrap}
-button:hover{border-color:var(--acc);color:var(--acc)}
-button:disabled{opacity:.45;cursor:default}
-button.danger{border-color:var(--bad);color:var(--bad)}
-button.danger:hover{background:var(--bad);color:#fff}
-button.ok{border-color:var(--ok);color:var(--ok)}
-#msg{font-size:13px;flex:1;min-width:220px;color:var(--mut)}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+/* ── 壳：左侧窄导航 + 单一主区 ─────────────────────────── */
+.app{height:100%;display:grid;grid-template-columns:212px minmax(0,1fr)}
+#nav{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.022),transparent 42%)}
+.brand{display:flex;align-items:center;gap:9px;padding:13px 13px 11px;border-bottom:1px solid var(--line-2)}
+.brand-mark{width:17px;height:17px;border-radius:50%;flex:none;background:radial-gradient(circle at 34% 30%,#dff1ff,#6ec8ff 42%,#1b4f77 78%);box-shadow:0 0 12px rgba(110,200,255,.45)}
+.brand-text{font-weight:600;font-size:13px;letter-spacing:.2px}
+.brand-text em{display:block;font-style:normal;font-weight:400;font-size:10px;color:var(--mut-2);letter-spacing:.14em;text-transform:uppercase;margin-top:1px}
+#nav-list{flex:1;min-height:0;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:2px}
+.nav-group{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut-2);opacity:.8;padding:9px 9px 3px}
+.nav-group:first-child{padding-top:2px}
+.nav-item{display:flex;align-items:center;gap:8px;height:auto;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:var(--mut);font:inherit;text-align:left;cursor:pointer;transition:background .16s var(--ease),color .16s var(--ease)}
+.nav-item:hover{background:rgba(255,255,255,.028);color:var(--fg)}
+.nav-item.is-on{background:rgba(255,255,255,.05);color:var(--fg);box-shadow:inset 2px 0 0 var(--acc)}
+.nav-i{font:10px/1 var(--mono);color:var(--mut-2)}
+.nav-item.is-on .nav-i{color:var(--acc)}
+#nav-foot{padding:9px 12px 11px;border-top:1px solid var(--line-2);display:grid;gap:4px}
+#nav-foot .kv{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--mut-2)}
+#who{color:var(--mut);font-weight:600;font-size:11.5px}
+.nav-note{font-size:10.5px;color:var(--mut-2);line-height:1.45}
+#main{min-width:0;min-height:0;display:flex;flex-direction:column}
+#topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:rgba(11,15,23,.72);flex-wrap:wrap}
+.ctx-label{font-size:11.5px;color:var(--mut-2)}
+#login{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#msg{padding:7px 14px;border-bottom:1px solid var(--line-2);font-size:12px;color:var(--mut);min-height:32px}
 #msg.bad{color:var(--bad);font-weight:600}
 #msg.ok{color:var(--ok)}
-#tabs{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:49px;z-index:7}
-#tabs button{border-radius:999px;padding:3px 13px;color:var(--mut)}
-#tabs button.on{border-color:var(--acc);color:var(--acc);font-weight:600}
-main{padding:14px 16px 80px;max-width:1280px;margin:0 auto}
+#views{flex:1;min-height:0;overflow:auto;padding:14px 16px 64px}
+/* ── 视图容器 ─────────────────────────────────────────── */
 .view[hidden]{display:none}
 .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .note{color:var(--mut);font-size:12px}
+.summary{color:var(--mut);font-size:12px;margin-bottom:10px}
+.summary b{color:var(--fg)}
+/* ── 面板 ─────────────────────────────────────────────── */
 .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px}
-.panel h2{font-size:13px;margin:0 0 8px;color:var(--fg);font-weight:600}
+.panel h2{font-size:12.5px;margin:0 0 8px;color:var(--fg);font-weight:600}
+.panel h3{font-size:12px;margin:10px 0 6px;color:var(--mut);font-weight:600}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:900px){.grid2{grid-template-columns:1fr}}
+/* ── 表格 / 表单 / 按钮（密度见检查点 2） ─────────────── */
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-weight:600;font-size:12px;color:var(--mut);white-space:nowrap}
-td.mono,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
-.badge{display:inline-block;font-size:12px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
-.badge.ok{color:var(--ok);border-color:var(--ok)}
-.badge.bad{color:var(--bad);border-color:var(--bad)}
-.badge.warn{color:var(--warn);border-color:var(--warn)}
-.badge.acc{color:var(--acc);border-color:var(--acc)}
+td.mono,.mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+input,select,textarea{font:inherit;color:var(--fg);background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:7px;padding:3px 8px;height:28px;outline:none;transition:border-color .16s var(--ease),background .16s var(--ease)}
+input:focus,select:focus,textarea:focus{border-color:rgba(110,200,255,.5);background:rgba(255,255,255,.05)}
+input::placeholder{color:var(--mut-2)}
+input[type=password]{width:200px;font:12px/1 var(--mono)}
+select option{background:var(--bg-2);color:var(--fg)}
+textarea{width:100%;height:auto;min-height:260px;font-family:var(--mono);font-size:12px;line-height:1.6;padding:10px;resize:vertical}
+button{font:inherit;height:28px;padding:3px 10px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.03);color:var(--mut);cursor:pointer;white-space:nowrap;transition:background .16s var(--ease),border-color .16s var(--ease),color .16s var(--ease)}
+button:hover{border-color:rgba(110,200,255,.5);color:var(--acc)}
+button:disabled{opacity:.45;cursor:default}
+button.danger{border-color:rgba(239,122,138,.4);color:var(--bad);background:rgba(239,122,138,.07)}
+button.danger:hover{background:rgba(239,122,138,.16);color:#ffc7ce}
+button.ok{border-color:rgba(95,211,163,.4);color:var(--ok);background:rgba(95,211,163,.07)}
+/* ── 状态 / 提示 ─────────────────────────────────────── */
+.badge{display:inline-block;font-size:11.5px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:rgba(95,211,163,.35);background:rgba(95,211,163,.08)}
+.badge.bad{color:var(--bad);border-color:rgba(239,122,138,.35);background:rgba(239,122,138,.08)}
+.badge.warn{color:var(--warn);border-color:rgba(230,180,85,.34);background:rgba(230,180,85,.08)}
+.badge.acc{color:var(--acc);border-color:rgba(110,200,255,.35);background:rgba(110,200,255,.09)}
 ul.warns{margin:6px 0;padding-left:18px}
 ul.warns li{margin:3px 0;color:var(--warn)}
 ul.warns li.bad{color:var(--bad);font-weight:600}
-#summary,.summary{color:var(--mut);font-size:13px;margin-bottom:10px}
-#summary b,.summary b{color:var(--fg)}
 article.item{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:8px}
 article.item.vetoed{border-color:var(--bad)}
 .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap}
-.idx{color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums}
+.idx{color:var(--mut-2);font-size:12px;font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .target{font-weight:600}
-.kind{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 8px}
+.kind{font-size:11.5px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 8px}
 .why{font-size:12px;color:var(--mut);margin-top:4px}
 .why b{color:var(--fg)}
 .tracks{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;font-size:13px}
 .track{display:flex;gap:6px;align-items:center}
 .track .name{color:var(--mut)}
-.st{font-size:12px;border:1px solid var(--line);border-radius:5px;padding:0 6px}
+.st{font-size:11.5px;border:1px solid var(--line);border-radius:5px;padding:0 6px}
 .st.accepted{color:var(--ok);border-color:var(--ok)}
 .st.rejected{color:var(--bad);border-color:var(--bad)}
 .st.pending{color:var(--mut)}
-pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font-size:12px;overflow:auto;max-height:300px;white-space:pre-wrap;word-break:break-all}
-.pager{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:13px;color:var(--mut)}
+pre{margin:6px 0 0;padding:8px;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:6px;font-size:12px;overflow:auto;max-height:300px;white-space:pre-wrap;word-break:break-all}
+.pager{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:12px;color:var(--mut)}
 .err{background:var(--card);border:1px solid var(--bad);border-radius:10px;padding:10px 12px;margin:10px 0}
-.err .code{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--bad);font-weight:600}
+.err .code{font-family:var(--mono);font-size:12px;color:var(--bad);font-weight:600}
 .err .msg{margin-top:4px}
 .err .hint{margin-top:4px;color:var(--mut);font-size:12px}
 .okbox{background:var(--card);border:1px solid var(--ok);border-radius:10px;padding:10px 12px;margin:10px 0}
-.kv{display:grid;grid-template-columns:160px 1fr;gap:2px 12px;font-size:13px}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:2px 12px;font-size:12.5px}
 .kv dt{color:var(--mut)}
 .kv dd{margin:0;word-break:break-all}
-#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:30}
+.empty{color:var(--mut-2);text-align:center;padding:26px 0}
+/* ── 弹窗（危险动作确认：目标 + 后果） ────────────────── */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:20px;z-index:30}
 #modal[hidden]{display:none}
 #mbox{background:var(--card);border:1px solid var(--line);border-radius:12px;max-width:640px;width:100%;max-height:82vh;overflow:auto;padding:16px 20px}
 #mbox h2{margin:0 0 10px;font-size:16px}
-#m-rows{display:grid;grid-template-columns:72px 1fr;gap:6px 10px;margin:0 0 12px;font-size:13px}
+#m-rows{display:grid;grid-template-columns:72px 1fr;gap:6px 10px;margin:0 0 12px;font-size:12.5px}
 #m-rows dt{color:var(--mut)}
 #m-rows dd{margin:0;word-break:break-all}
 #mbox .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:6px}
-.empty{color:var(--mut);text-align:center;padding:30px 0}
+/* ── 视图头 / 分块面板（检查点 2：信息密度） ─────────── */
+.view-head{margin:0 0 12px;max-width:980px}
+.view-head h2{margin:0 0 4px;font-size:15px;font-weight:600;letter-spacing:.2px}
+.view-head p{margin:0;color:var(--mut-2);font-size:12px}
+.view-head strong{color:var(--mut);font-weight:600}
+code{font:11.5px/1 var(--mono);color:var(--acc);background:rgba(110,200,255,.09);padding:1px 4px;border-radius:4px}
+.panel-flush{padding:0;overflow:hidden}
+.panel-head{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--line-2);font-size:12px;color:var(--mut);background:rgba(255,255,255,.018);flex-wrap:wrap}
+.panel-body{padding:11px}
+.panel-body>*:last-child{margin-bottom:0}
+.panel-head>h2{font-size:12px;margin:0;color:var(--fg);font-weight:600}
+.spacer{margin-left:auto}
+label{display:inline-flex;gap:6px;align-items:center;color:var(--mut-2);font-size:11.5px}
+/* ── 表格：行高 32px + 表头 sticky + key/IRI 等宽 ─────── */
+.tablewrap{overflow:auto;max-height:calc(100vh - 300px);border:1px solid var(--line-2);border-radius:8px}
+.tablewrap.tall{max-height:calc(100vh - 250px)}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+thead th{position:sticky;top:0;z-index:1;text-align:left;font-weight:500;color:var(--mut-2);font-size:11.5px;height:30px;padding:0 10px;background:var(--bg-2);border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{height:32px;padding:0 10px;border-bottom:1px solid var(--line-2);color:var(--mut);vertical-align:middle;white-space:nowrap}
+tbody tr:hover td{background:rgba(255,255,255,.026);color:var(--fg)}
+tbody tr.is-sel td{background:rgba(110,200,255,.09);color:var(--fg)}
+tbody tr.can-open{cursor:pointer}
+td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
+.key{font-family:var(--mono);font-size:12px;color:#cfe6ff;word-break:break-all}
+.keylink{height:auto;padding:0;border:0;background:transparent;color:#cfe6ff;font:12px/1 var(--mono);cursor:pointer;text-align:left;white-space:normal}
+.keylink:hover{color:var(--acc);text-decoration:underline}
+/* ── 校验清单（声明编辑：把「保存前校验」说清） ──────── */
+.checks{display:grid;gap:7px;font-size:12px}
+.chk{display:flex;gap:8px;align-items:flex-start;color:var(--mut)}
+.chk::before{content:"○";color:var(--mut-2);flex:none}
+.chk.ok::before{content:"✓";color:var(--ok)}
+.chk.bad::before{content:"✕";color:var(--bad)}
+.chk .why{color:var(--mut-2)}
+/* ── 右侧抽屉（目录详情；默认收起，不遮表格） ────────── */
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,92vw);display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--bg-2);box-shadow:-18px 0 50px rgba(0,0,0,.45);transform:translateX(102%);transition:transform .26s var(--ease);z-index:20}
+#drawer.is-on{transform:translateX(0)}
+#drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:19}
+.drawer-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--line);font:12.5px/1 var(--mono);color:var(--fg)}
+.drawer-head span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-head .btn-icon{margin-left:auto;width:26px;height:26px;padding:0;border-color:var(--line);background:transparent;color:var(--mut)}
+.drawer-head .btn-icon:hover{color:var(--fg);border-color:var(--line)}
+.drawer-body{flex:1;min-height:0;overflow:auto;padding:12px 13px}
+#k-detail{margin:0;border:0;padding:0;background:transparent;overflow-x:auto}
+/* 抽屉里的属性 / 关系：紧凑列表（名字等宽 + 一行摘要），不是 7 列表格 */
+.list{display:grid;gap:5px;margin-top:4px}
+.row2{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;line-height:1.5}
+.row2 .k{color:#cfe6ff}
+.row2 .t{color:var(--mut-2);word-break:break-word}
+/* ── 滚动条 ───────────────────────────────────────────── */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.16);background-clip:content-box}
+@media (max-width:1080px){.app{grid-template-columns:64px minmax(0,1fr)}.brand-text,.nav-foot,.nav-group,.nav-i{display:none}.nav-item{justify-content:center;padding:9px 4px}.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<header>
-  <h1>内部工作台</h1>
-  <span id="who">未连接</span>
-  <span id="login">
-    <input id="token" type="password" placeholder="管理口令（admin token）" autocomplete="off">
-    <input id="qtoken" type="password" placeholder="查询口令（query token，可选）" autocomplete="off">
-    <button id="go">载入</button>
-  </span>
-  <span id="msg">口令只留在本标签页的 sessionStorage 里：不进地址栏、不写长期存储。</span>
-</header>
-
-<nav id="tabs">
-  <button id="tab-projects" data-tab="projects" class="on">项目与版本</button>
-  <button id="tab-review" data-tab="review">评审</button>
-  <button id="tab-export" data-tab="export">导出</button>
-  <button id="tab-config" data-tab="config">声明编辑</button>
-  <button id="tab-audit" data-tab="audit">审计</button>
-  <button id="tab-query" data-tab="query">查询台</button>
-  <button id="tab-catalog" data-tab="catalog">目录浏览</button>
-  <button id="tab-bundles" data-tab="bundles">构建包</button>
-</nav>
-
-<main>
-  <!-- ── 1 · 项目与版本 ─────────────────────────────────── -->
-  <section id="v-projects" class="view">
-    <div class="bar">
-      <button id="p-refresh">刷新</button>
-      <span class="note">GET /api/projects —— 项目 / 版本 / 冻结状态 / 对象·关系计数；本服务只服务启动时指定的那一个项目。</span>
+<div class="app">
+  <aside id="nav" aria-label="视图导航">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">内部工作台<em>Console</em></span>
     </div>
-    <div id="p-summary" class="summary">尚未载入。</div>
-    <div id="p-table"></div>
-    <div class="panel" style="margin-top:12px">
-      <h2>应用提案（apply）</h2>
-      <p class="note">apply 会把审核过的提案写成**新版本**（对象 / 关系落库）。已应用的提案再 apply ⇒ 409；基版本已冻结也 ⇒ 409。此动作不可撤销。</p>
-      <div class="bar">
-        <label>提案别名 <input id="p-alias" value="p1" size="10"></label>
-        <button id="p-apply" class="danger">应用提案…</button>
+    <nav id="nav-list">
+      <div class="nav-group">建库</div>
+      <button id="tab-projects" class="nav-item is-on" data-tab="projects"><span class="nav-i">01</span>项目与版本</button>
+      <button id="tab-review" class="nav-item" data-tab="review"><span class="nav-i">02</span>评审</button>
+      <button id="tab-export" class="nav-item" data-tab="export"><span class="nav-i">03</span>导出</button>
+      <div class="nav-group">运维</div>
+      <button id="tab-config" class="nav-item" data-tab="config"><span class="nav-i">04</span>声明编辑</button>
+      <button id="tab-audit" class="nav-item" data-tab="audit"><span class="nav-i">05</span>审计</button>
+      <div class="nav-group">查询</div>
+      <button id="tab-query" class="nav-item" data-tab="query"><span class="nav-i">06</span>查询台</button>
+      <button id="tab-catalog" class="nav-item" data-tab="catalog"><span class="nav-i">07</span>目录浏览</button>
+      <div class="nav-group">构建</div>
+      <button id="tab-bundles" class="nav-item" data-tab="bundles"><span class="nav-i">08</span>构建包</button>
+    </nav>
+    <div id="nav-foot">
+      <div class="kv"><span>连接</span><b id="who">未连接</b></div>
+      <div class="nav-note">口令只在本标签页的 sessionStorage</div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header id="topbar">
+      <span class="ctx-label">管理口令 / 查询口令</span>
+      <span id="login">
+        <input id="token" type="password" placeholder="管理口令（admin token）" autocomplete="off">
+        <input id="qtoken" type="password" placeholder="查询口令（query token，可选）" autocomplete="off">
+        <button id="go">载入</button>
+      </span>
+    </header>
+    <div id="msg">口令只留在本标签页的 sessionStorage 里：不进地址栏、不写长期存储。</div>
+
+    <div id="views">  <!-- ── 1 · 项目与版本 ─────────────────────────────────── -->
+  <section id="v-projects" class="view">
+    <div class="view-head">
+      <h2>项目与版本</h2>
+      <p>版本是<strong>不可变</strong>的：冻结后不能改，只能出新版本；导出与查询都只认已冻结版本。</p>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <span>版本与冻结状态</span>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/projects</span>
+        <button id="p-refresh">刷新</button>
       </div>
-      <div id="p-apply-out"></div>
+      <div class="panel-body">
+        <div id="p-summary" class="summary">尚未载入。</div>
+        <div id="p-table" class="tablewrap"></div>
+      </div>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>应用提案（apply）</span><span class="spacer"></span><span class="mono">POST /api/apply</span></div>
+      <div class="panel-body">
+        <p class="note">apply 会把审核过的提案写成<strong>新版本</strong>（对象 / 关系落库）。已应用的提案再 apply ⇒ 409；基版本已冻结也 ⇒ 409。此动作不可撤销。</p>
+        <div class="bar">
+          <label>提案别名 <input id="p-alias" value="p1" size="10"></label>
+          <button id="p-apply" class="danger">应用提案…</button>
+        </div>
+        <div id="p-apply-out"></div>
+      </div>
     </div>
   </section>
 
   <!-- ── 2 · 评审 ───────────────────────────────────────── -->
   <section id="v-review" class="view" hidden>
-    <div class="bar">
-      <label>提案 <input id="r-proposal" value="p1" size="8"></label>
-      <button id="r-load">载入</button>
-      <span class="note">GET /api/review?proposal=…（p1 = 该项目内最近导入的提案）；逐条签走 POST /api/decide。</span>
+    <div class="view-head">
+      <h2>评审</h2>
+      <p>AI 出的提案逐条过，<strong>两轨都要签</strong>（业务轨 + 建模轨）；决策记在审计里，改不回来只能再提一轮。</p>
     </div>
-    <div id="r-summary" class="summary">尚未载入。</div>
-    <div id="r-list"></div>
-    <div class="pager" id="r-pager"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>提案 <input id="r-proposal" value="p1" size="8"></label>
+        <button id="r-load">载入</button>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/review?proposal=… · POST /api/decide</span>
+      </div>
+      <div class="panel-body">
+        <div id="r-summary" class="summary">尚未载入。</div>
+        <div id="r-list"></div>
+        <div class="pager" id="r-pager"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 3 · 导出 ───────────────────────────────────────── -->
   <section id="v-export" class="view" hidden>
+    <div class="view-head">
+      <h2>导出</h2>
+      <p>客户视图与建模视图<strong>不是同一份</strong>；页面不加工正文，<strong>字节与 CLI 产物逐字节相同</strong>（sha256 可对拍）。</p>
+    </div>
     <div class="grid2">
-      <div class="panel">
-        <h2>TTL（GET /api/export/ttl）</h2>
-        <p class="note">与 `ontok ontology export` 是同一份字节（sha256 应相等）。</p>
-        <div class="bar">
-          <label>版本 <select id="e-version"></select></label>
-          <label><input type="checkbox" id="e-model"> 建模视图（model_view=1）</label>
+      <div class="panel panel-flush">
+        <div class="panel-head"><span>TTL</span><span class="spacer"></span><span class="mono">GET /api/export/ttl</span></div>
+        <div class="panel-body">
+          <p class="note">与 <code>ontok ontology export</code> 是同一份字节（sha256 应相等）。</p>
+          <div class="bar">
+            <label>版本 <select id="e-version"></select></label>
+            <label><input type="checkbox" id="e-model"> 建模视图（model_view=1）</label>
+          </div>
+          <div class="bar">
+            <label>schema <input id="e-schema" placeholder="留空 = 服务端默认" size="26"></label>
+          </div>
+          <div class="bar">
+            <label>tenancy <input id="e-tenancy" placeholder="留空 = 不传" size="26"></label>
+          </div>
+          <div class="bar"><button id="e-ttl">导出 TTL</button></div>
+          <div id="e-ttl-out"></div>
         </div>
-        <div class="bar">
-          <label>schema <input id="e-schema" placeholder="留空 = 服务端默认" size="26"></label>
-        </div>
-        <div class="bar">
-          <label>tenancy <input id="e-tenancy" placeholder="留空 = 不传" size="26"></label>
-        </div>
-        <div class="bar"><button id="e-ttl">导出 TTL</button></div>
-        <div id="e-ttl-out"></div>
       </div>
-      <div class="panel">
-        <h2>R2RML（POST /api/r2rml）</h2>
-        <p class="note">与 `ontok r2rml generate` 是同一份字节；`include_inherit` 决定继承边要不要生成 join。</p>
-        <div class="bar">
-          <label>版本 <select id="e2-version"></select></label>
-          <label><input type="checkbox" id="e2-inherit"> include_inherit</label>
+      <div class="panel panel-flush">
+        <div class="panel-head"><span>R2RML</span><span class="spacer"></span><span class="mono">POST /api/r2rml</span></div>
+        <div class="panel-body">
+          <p class="note">与 <code>ontok r2rml generate</code> 是同一份字节；<code>include_inherit</code> 决定继承边要不要生成 join。</p>
+          <div class="bar">
+            <label>版本 <select id="e2-version"></select></label>
+            <label><input type="checkbox" id="e2-inherit"> include_inherit</label>
+          </div>
+          <div class="bar">
+            <label>schema（必填，服务端路径） <input id="e2-schema" placeholder="如 code/out/schema.json" size="26"></label>
+          </div>
+          <div class="bar">
+            <label>排除文件（可选） <input id="e2-exclude" placeholder="服务端路径" size="26"></label>
+          </div>
+          <div class="bar"><button id="e2-go">生成 R2RML</button></div>
+          <div id="e2-out"></div>
         </div>
-        <div class="bar">
-          <label>schema（必填，服务端路径） <input id="e2-schema" placeholder="如 code/out/schema.json" size="26"></label>
-        </div>
-        <div class="bar">
-          <label>排除文件（可选） <input id="e2-exclude" placeholder="服务端路径" size="26"></label>
-        </div>
-        <div class="bar"><button id="e2-go">生成 R2RML</button></div>
-        <div id="e2-out"></div>
       </div>
     </div>
   </section>
 
   <!-- ── 4 · 声明编辑 ───────────────────────────────────── -->
   <section id="v-config" class="view" hidden>
-    <div class="bar">
-      <label>声明
-        <select id="c-kind">
-          <option value="exclusions">exclusions（排除）</option>
-          <option value="policy">policy（租户口径）</option>
-          <option value="tenancy">tenancy（租户列标注）</option>
-        </select>
-      </label>
-      <button id="c-load">载入</button>
-      <button id="c-save" class="danger">保存…</button>
-      <span class="note">PUT 是整份替换：服务端先按 schema 校验表 / 列，失败 ⇒ 400 且原文件一个字节都不变。</span>
+    <div class="view-head">
+      <h2>声明编辑</h2>
+      <p>保存前<strong>按真实 schema 校验</strong>表 / 列：<code>main_only</code> 与 <code>publicDimensions</code> 必须带 <code>reason</code>；校验失败 ⇒ 原文件一个字节都不变。</p>
     </div>
-    <div id="c-meta" class="note"></div>
-    <textarea id="c-text" spellcheck="false" placeholder="点「载入」读取当前声明原文；保存失败时这里的内容不会被清空或回滚。"></textarea>
-    <div id="c-out"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>声明
+          <select id="c-kind">
+            <option value="exclusions">exclusions（排除）</option>
+            <option value="policy">policy（租户口径）</option>
+            <option value="tenancy">tenancy（租户列标注）</option>
+          </select>
+        </label>
+        <button id="c-load">载入</button>
+        <button id="c-save" class="danger">保存…</button>
+        <span class="spacer"></span>
+        <span class="mono">GET / PUT /api/config/…</span>
+      </div>
+      <div class="panel-body">
+        <div id="c-meta" class="note"></div>
+        <textarea id="c-text" spellcheck="false" placeholder="点「载入」读取当前声明原文；保存失败时这里的内容不会被清空或回滚。"></textarea>
+        <div id="c-out"></div>
+      </div>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>保存前会发生什么（校验在后端，失败一个字节都不落盘）</span></div>
+      <div class="panel-body">
+        <div class="checks">
+          <div class="chk"><span>表 / 列必须存在</span><span class="why">— 服务端按 schema 校验，对不上 ⇒ 400</span></div>
+          <div class="chk"><span><code>main_only</code> / <code>publicDimensions</code> 必须带 <code>reason</code></span><span class="why">— 缺 reason ⇒ 400</span></div>
+          <div class="chk"><span>PUT 是整份替换</span><span class="why">— 校验通过才落盘，失败时编辑器内容原样保留</span></div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 5 · 审计 ───────────────────────────────────────── -->
   <section id="v-audit" class="view" hidden>
-    <div class="bar">
-      <label>最近 <input id="a-limit" value="100" size="5"> 条</label>
-      <label>动作
-        <select id="a-action">
-          <option value="">全部</option>
-          <option value="import">import</option>
-          <option value="apply">apply</option>
-          <option value="freeze">freeze</option>
-          <option value="export">export</option>
-          <option value="r2rml">r2rml</option>
-          <option value="config">config</option>
-          <option value="decide">decide</option>
-          <option value="auth">auth</option>
-        </select>
-      </label>
-      <button id="a-load">刷新</button>
-      <span class="note">GET /api/audit?limit=（服务端上限 1000，返回顺序 oldest_first）。筛选在页面里做，只影响显示。</span>
+    <div class="view-head">
+      <h2>审计</h2>
+      <p>每个写操作一行，<strong>含失败</strong>；令牌只记 <code>sha256</code> 前 12 位——不记原文。</p>
     </div>
-    <div id="a-summary" class="summary">尚未载入。</div>
-    <div id="a-table"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>最近 <input id="a-limit" value="100" size="5"> 条</label>
+        <label>动作
+          <select id="a-action">
+            <option value="">全部</option>
+            <option value="import">import</option>
+            <option value="apply">apply</option>
+            <option value="freeze">freeze</option>
+            <option value="export">export</option>
+            <option value="r2rml">r2rml</option>
+            <option value="config">config</option>
+            <option value="decide">decide</option>
+            <option value="auth">auth</option>
+          </select>
+        </label>
+        <button id="a-load">刷新</button>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/audit?limit=（上限 1000，oldest_first）</span>
+      </div>
+      <div class="panel-body">
+        <div id="a-summary" class="summary">尚未载入。</div>
+        <div id="a-table" class="tablewrap tall"></div>
+        <div class="note">筛选在页面里做，只影响显示，不影响服务端返回。</div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 6 · 查询台 ─────────────────────────────────────── -->
   <section id="v-query" class="view" hidden>
-    <div class="panel">
-      <h2>SPARQL（POST /api/sparql）</h2>
-      <p class="note">查询服务只认 query token（租户由口令决定）。⭐ 服务**默认**回执是 JSON-LD 上下文子图；本页要表格，所以请求里显式带 <code>format:"rows"</code>（字节与旧的默认回执相同）。结果区**必须**同时给出 warnings / coverage / join_states / truncated —— 只给表格等于把「可能漏数据」藏起来。</p>
-      <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
-      <div class="bar" style="margin-top:8px">
-        <label>max_rows <input id="q-max" value="200" size="6"></label>
-        <button id="q-go">执行</button>
-        <span class="note">行数上限由 token 决定；页面最多渲染 200 行。</span>
+    <div class="view-head">
+      <h2>查询台</h2>
+      <p>本体模式下 <strong>api 源</strong>的类会返回 <code>@graph: []</code> + <code>@pending[]</code>——平台<strong>不执行</strong> API 调用，配方给你自己取；默认回执是 JSON-LD，本页显式要 rows。</p>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <span>SPARQL</span>
+        <span class="spacer"></span>
+        <span class="mono">POST /api/sparql（format:"rows"）</span>
+      </div>
+      <div class="panel-body">
+        <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
+        <div class="bar" style="margin-top:8px">
+          <label>max_rows <input id="q-max" value="200" size="6"></label>
+          <button id="q-go">执行</button>
+          <span class="note">行数上限由 token 决定；页面最多渲染 200 行。</span>
+        </div>
       </div>
     </div>
-    <div id="q-meta"></div>
+    <div class="panel panel-flush" style="border-color:rgba(230,180,85,.3)">
+      <div class="panel-head"><span>查询元信息（先看这四段，再看表格）</span><span class="spacer"></span><span class="mono">warnings · coverage · join_states · truncated</span></div>
+      <div class="panel-body" style="padding:0">
+        <div id="q-meta"></div>
+      </div>
+    </div>
     <div id="q-table"></div>
   </section>
 
   <!-- ── 7 · 目录浏览 ───────────────────────────────────── -->
   <section id="v-catalog" class="view" hidden>
-    <div class="bar">
-      <label>page <input id="k-page" value="1" size="4"></label>
-      <label>page_size <input id="k-size" value="50" size="4"></label>
-      <button id="k-load">载入</button>
-      <span class="note">GET /api/catalog?page=&amp;page_size=（page_size ≤ 200）；点名字看 GET /api/describe?name=… 的详情。</span>
+    <div class="view-head">
+      <h2>目录浏览</h2>
+      <p>分页读 <code>GET /api/catalog</code>；<strong>点任意一行</strong>在右侧抽屉里看 <code>GET /api/describe</code> 的详情——抽屉不遮表格，方便对照着读。</p>
     </div>
-    <div id="k-summary" class="summary">尚未载入。</div>
-    <div id="k-table"></div>
-    <div class="pager">
-      <button id="k-prev">上一页</button>
-      <span id="k-pos"></span>
-      <button id="k-next">下一页</button>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>page <input id="k-page" value="1" size="4"></label>
+        <label>page_size <input id="k-size" value="50" size="4"></label>
+        <button id="k-load">载入</button>
+        <span class="spacer"></span>
+        <span class="mono">page_size ≤ 200</span>
+      </div>
+      <div class="panel-body">
+        <div id="k-summary" class="summary">尚未载入。</div>
+        <div id="k-table" class="tablewrap tall"></div>
+        <div class="pager">
+          <button id="k-prev">上一页</button>
+          <span id="k-pos"></span>
+          <button id="k-next">下一页</button>
+        </div>
+      </div>
     </div>
-    <div id="k-detail" class="panel" hidden></div>
   </section>
 
   <!-- ── 8 · 构建包（REQ-159）· 已按 ADR-013 迁到 Studio ── -->
   <section id="v-bundles" class="view" hidden>
+    <div class="view-head">
+      <h2>构建包</h2>
+      <p>REQ-159 的 8 条端点（建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效）。<strong>已按 ADR-013 迁到 Studio</strong>，本页保留为参考实现与本机直连库时的入口。</p>
+    </div>
     <div class="panel" style="border-color:var(--warn)">
       <div class="note" style="color:var(--warn);font-weight:600">
         ⚠️ 此流程已迁到 Studio（<code>/studio</code>）：本页的「构建包」入口仅为历史保留，新流程请在 Studio 里做。
@@ -395,91 +587,113 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
     </div>
     <div id="b-msg"></div>
 
-    <div class="panel">
-      <h2>1 · 上传并校验（POST …/bundles，application/octet-stream）</h2>
-      <p class="note">包是构建端产出的 .ontokbundle 文件；页面只把**文件字节原样** POST 上去（⛔ 不套 JSON），服务端校验 sha256 与组件清单后回 state / bundle_id。</p>
-      <div class="bar">
-        <label>选包 <input id="b-file" type="file" accept=".ontokbundle"></label>
-        <button id="b-upload">上传并校验</button>
-      </div>
-      <div id="b-state" class="summary">还没有上传。</div>
-      <div id="b-components"></div>
-
-      <details style="margin-top:12px">
-        <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
-        <div class="bar" style="margin-top:8px">
-          <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符/下划线" autocomplete="off"></label>
-          <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
-          <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
-          <button id="b-new-submit">建立项目并生成 key</button>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>1 · 上传并校验（POST …/bundles，application/octet-stream）</span></div>
+      <div class="panel-body">
+        <p class="note">包是构建端产出的 .ontokbundle 文件；页面只把<strong>文件字节原样</strong> POST 上去（⛔ 不套 JSON），服务端校验 sha256 与组件清单后回 state / bundle_id。</p>
+        <div class="bar">
+          <label>选包 <input id="b-file" type="file" accept=".ontokbundle"></label>
+          <button id="b-upload">上传并校验</button>
         </div>
-        <p class="note">项目名只许小写字母 / 数字 / 连字符 / 下划线（首字符字母或数字，2–63 位；大写、空格、斜杠、点都不行）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
-        <div id="b-new-out"></div>
-      </details>
+        <div id="b-state" class="summary">还没有上传。</div>
+        <div id="b-components"></div>
+
+        <details style="margin-top:12px">
+          <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
+          <div class="bar" style="margin-top:8px">
+            <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符/下划线" autocomplete="off"></label>
+            <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
+            <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
+            <button id="b-new-submit">建立项目并生成 key</button>
+          </div>
+          <p class="note">项目名只许小写字母 / 数字 / 连字符 / 下划线（首字符字母或数字，2–63 位；大写、空格、斜杠、点都不行）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
+          <div id="b-new-out"></div>
+        </details>
+      </div>
     </div>
 
-    <div id="b-dsn" class="panel" hidden>
-      <h2>2 · 目标库连接（requires_dsn = true 时才需要）</h2>
-      <p class="note">DSN 由本页按 postgresql 形式拼（user / password 走 encodeURIComponent）；口令**只在这一次 PUT 里出现**，保存成功后只清空口令框：不回显、不记录、不进 sessionStorage。</p>
-      <div class="bar">
-        <label>host <input id="b-dsn-host" size="18" placeholder="数据库主机"></label>
-        <label>port <input id="b-dsn-port" size="6" value="5432"></label>
-        <label>库 <input id="b-dsn-db" size="14" placeholder="库名"></label>
+    <div id="b-dsn" class="panel panel-flush" hidden>
+      <div class="panel-head"><span>2 · 目标库连接（requires_dsn = true 时才需要）</span></div>
+      <div class="panel-body">
+        <p class="note">DSN 由本页按 postgresql 形式拼（user / password 走 encodeURIComponent）；口令<strong>只在这一次 PUT 里出现</strong>，保存成功后只清空口令框：不回显、不记录、不进 sessionStorage。</p>
+        <div class="bar">
+          <label>host <input id="b-dsn-host" size="18" placeholder="数据库主机"></label>
+          <label>port <input id="b-dsn-port" size="6" value="5432"></label>
+          <label>库 <input id="b-dsn-db" size="14" placeholder="库名"></label>
+        </div>
+        <div class="bar">
+          <label>user <input id="b-dsn-user" size="14" autocomplete="off"></label>
+          <label>password <input id="b-dsn-pass" type="password" autocomplete="new-password"></label>
+          <label>sslmode
+            <select id="b-dsn-ssl">
+              <option value="disable">disable</option>
+              <option value="require">require</option>
+              <option value="prefer">prefer</option>
+            </select>
+          </label>
+        </div>
+        <div class="bar">
+          <button id="b-dsn-save">保存 DSN</button>
+          <button id="b-dsn-test">测试连通</button>
+          <span class="note">PUT …/database 的回执只有 database_id / host / database / user（⛔ 响应里没有 dsn，本页也不显示）；测试打的是服务端<strong>已保存</strong>的那份连接。</span>
+        </div>
+        <div id="b-dsn-out"></div>
       </div>
-      <div class="bar">
-        <label>user <input id="b-dsn-user" size="14" autocomplete="off"></label>
-        <label>password <input id="b-dsn-pass" type="password" autocomplete="new-password"></label>
-        <label>sslmode
-          <select id="b-dsn-ssl">
-            <option value="disable">disable</option>
-            <option value="require">require</option>
-            <option value="prefer">prefer</option>
-          </select>
-        </label>
-      </div>
-      <div class="bar">
-        <button id="b-dsn-save">保存 DSN</button>
-        <button id="b-dsn-test">测试连通</button>
-        <span class="note">PUT …/database 的回执只有 database_id / host / database / user（⛔ 响应里没有 dsn，本页也不显示）；测试打的是服务端**已保存**的那份连接。</span>
-      </div>
-      <div id="b-dsn-out"></div>
     </div>
 
-    <div class="panel">
-      <h2>3 · 解析入库（POST …/bundles/&lt;id&gt;/import）</h2>
-      <div class="bar">
-        <button id="b-import" disabled>解析入库</button>
-        <span class="note">条件没满足时按钮是灰的：先上传拿到 bundle_id；requires_dsn 的包还要 DSN 保存 + 连通测试通过。</span>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>3 · 解析入库（POST …/bundles/&lt;id&gt;/import）</span></div>
+      <div class="panel-body">
+        <div class="bar">
+          <button id="b-import" disabled>解析入库</button>
+          <span class="note">条件没满足时按钮是灰的：先上传拿到 bundle_id；requires_dsn 的包还要 DSN 保存 + 连通测试通过。</span>
+        </div>
+        <div id="b-import-out"></div>
       </div>
-      <div id="b-import-out"></div>
     </div>
 
-    <div class="panel">
-      <h2>4 · 待确认清单（GET /api/review?proposal=p1）</h2>
-      <p class="note">本 tab 只做**汇总与门禁**：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。待确认条数取服务端的 `progress.pending`（= total − signed，两轨都定了才算签完）、阻断条数取 `progress.vetoed`；只有**待确认 0 条**时「冻结并切流量」才可点。</p>
-      <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
-      <div id="b-checklist" class="summary">尚未载入。</div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>4 · 待确认清单（GET /api/review?proposal=p1）</span></div>
+      <div class="panel-body">
+        <p class="note">本 tab 只做<strong>汇总与门禁</strong>：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。待确认条数取服务端的 <code>progress.pending</code>（= total − signed，两轨都定了才算签完）、阻断条数取 <code>progress.vetoed</code>；只有<strong>待确认 0 条</strong>时「冻结并切流量」才可点。</p>
+        <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
+        <div id="b-checklist" class="summary">尚未载入。</div>
+      </div>
     </div>
 
-    <div class="panel">
-      <h2>5 · 生效（冻结并切流量）· key</h2>
-      <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 可以**随时再次查看**（`GET …/key`），本页只在内存里放着这一次拿到的明文供复制，不落任何浏览器存储。</p>
-      <div class="bar">
-        <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
-        <button id="b-rotate" class="danger">换 key…</button>
-        <button id="b-key-view">查看 key</button>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>5 · 生效（冻结并切流量）· key</span></div>
+      <div class="panel-body">
+        <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 可以<strong>随时再次查看</strong>（<code>GET …/key</code>），本页只在内存里放着这一次拿到的明文供复制，不落任何浏览器存储。</p>
+        <div class="bar">
+          <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
+          <button id="b-rotate" class="danger">换 key…</button>
+          <button id="b-key-view">查看 key</button>
+        </div>
+        <div class="note">本次查看会记一条审计（action=reveal_key）—— 这是「能再次查看」的唯一补偿，别把它删掉。</div>
+        <div id="b-key" hidden>
+          <div class="note">key 明文（按需拉取；只留在本页内存里，供复制）：</div>
+          <div id="b-key-val" class="mono"></div>
+          <div id="b-key-meta" class="note"></div>
+          <div class="bar"><button id="b-key-copy">复制 key</button></div>
+        </div>
+        <div id="b-key-out"></div>
       </div>
-      <div class="note">本次查看会记一条审计（action=reveal_key）—— 这是「能再次查看」的唯一补偿，别把它删掉。</div>
-      <div id="b-key" hidden>
-        <div class="note">key 明文（按需拉取；只留在本页内存里，供复制）：</div>
-        <div id="b-key-val" class="mono"></div>
-        <div id="b-key-meta" class="note"></div>
-        <div class="bar"><button id="b-key-copy">复制 key</button></div>
-      </div>
-      <div id="b-key-out"></div>
     </div>
   </section>
-</main>
+  </div>
+  </main>
+</div>
+
+<!-- 右侧抽屉：目录详情的落点（默认收起；点表格某行滑出，Esc / 遮罩 / ✕ 关闭） -->
+<div id="drawer-mask" hidden></div>
+<aside id="drawer" aria-hidden="true" aria-label="条目详情">
+  <div class="drawer-head">
+    <span id="dr-title">条目详情</span>
+    <button id="dr-close" class="btn-icon" aria-label="关闭抽屉">✕</button>
+  </div>
+  <div class="drawer-body"><div id="k-detail" class="panel" hidden></div></div>
+</aside>
 
 <div id="modal" hidden>
   <div id="mbox" role="dialog" aria-modal="true">
@@ -624,6 +838,13 @@ function json(path, opts) {
 function post(path, body, useQuery) {
   return json(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery });
 }
+// 文本端点（REQ-161 追加修复）：`POST /api/r2rml` 走 `respond_text`，回的是 **text/turtle**，
+// 不是 JSON。⛔ 别用 post()：它会 JSON.parse 一份 Turtle ⇒ 必抛 BAD_JSON，还把
+// 「服务端返回了 Turtle」说成「去看服务端日志」。正文由 request() 的 {text} 直接给。
+function postText(path, body, useQuery) {
+  return request(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery })
+    .then(function (r) { return r.text; });
+}
 
 // ══════════════════════════════════════════════════════════
 // 错误 / 回执渲染（code / message / hint 三件都显示）
@@ -735,7 +956,7 @@ function cellNode(c) {
   } else txt(td, (c === null || c === undefined) ? "—" : c);
   return td;
 }
-function makeTable(head, rows, emptyText) {
+function makeTable(head, rows, emptyText, opts) {
   if (!rows || !rows.length) return el("div", "empty", emptyText || "没有数据。");
   var t = el("table");
   var thead = el("thead"), tr = el("tr");
@@ -743,9 +964,25 @@ function makeTable(head, rows, emptyText) {
   thead.appendChild(tr);
   t.appendChild(thead);
   var tb = el("tbody");
-  rows.forEach(function (row) {
+  rows.forEach(function (row, idx) {
     var r = el("tr");
     row.forEach(function (c) { r.appendChild(cellNode(c)); });
+    // 可选：整行可点（目录浏览用它开抽屉）。点名字那个 button 由它自己的 onclick 处理，
+    // 这里跳过，避免一次点击发两条 describe 请求。
+    if (opts && opts.onRow) {
+      r.className = "can-open";
+      r.onclick = function (ev) {
+        if (ev && ev.target && ev.target.tagName === "BUTTON") return;
+        var sibs = r.parentNode ? r.parentNode.children : null;
+        if (sibs) {
+          for (var i = 0; i < sibs.length; i++) {
+            if (sibs[i].classList) sibs[i].classList.remove("is-sel");
+          }
+        }
+        if (r.classList) r.classList.add("is-sel");
+        opts.onRow(idx);
+      };
+    }
     tb.appendChild(r);
   });
   t.appendChild(tb);
@@ -903,7 +1140,7 @@ function reviewCard(it, d) {
   var card = el("article", "item" + ((it.biz === "rejected" || it.model === "rejected") ? " vetoed" : ""));
   var hd = el("div", "hd");
   hd.appendChild(el("span", "idx", "#" + it.item));
-  hd.appendChild(el("span", "target", it.target));
+  hd.appendChild(el("span", "target key", it.target));
   hd.appendChild(el("span", "kind", it.kind));
   hd.appendChild(badge("建议：" + (SUGG[sg.kind] || sg.kind), sg.kind === "conflict" ? "bad" : (sg.kind === "reject" ? "bad" : (sg.kind === "accept" ? "ok" : "warn"))));
   if (it.confidence && typeof it.confidence.score === "number") {
@@ -1035,8 +1272,9 @@ function exportR2rml() {
   var body = { project: project, version: version, schema: schema, include_inherit: $("e2-inherit").checked };
   var ex = $("e2-exclude").value.trim();
   if (ex) body.exclude = ex;
-  post("api/r2rml", body).then(function (r) {
+  postText("api/r2rml", body).then(function (r) {
     clear(out);
+    // 服务端回的是 text/turtle 原文（与 `ontok r2rml generate` 逐字节相同）：⛔ 页面不加工。
     var text = typeof r === "string" ? r : JSON.stringify(r);
     var name = project + "-v" + version + ".r2rml.ttl";
     out.appendChild(okBox(["R2RML 已生成：" + fmtBytes(text.length)]));
@@ -1138,7 +1376,12 @@ function renderAudit() {
   clear(box);
   var view = rows.slice(-1000);
   box.appendChild(makeTable(["时间", "token（摘要）", "动作", "目标", "结果", "耗时(ms)"], view.map(function (e) {
-    return [e.ts || "—", e.token || "—", e.action || "—", e.target || "—", e.result || "—", e.elapsed_ms];
+    return [
+      { text: e.ts || "—", cls: "mono" },
+      { text: e.token || "—", cls: "key" },
+      { text: e.action || "—", cls: "key" },
+      e.target || "—", e.result || "—", e.elapsed_ms
+    ];
   }), "还没有审计行（写操作与鉴权失败才会记）。"));
 }
 
@@ -1293,7 +1536,8 @@ function renderCatalog() {
   var box = $("k-table");
   clear(box);
   var rows = (d.items || []).map(function (it) {
-    var name = el("button", null, it.name);
+    // key / IRI 一律等宽（`.key`）：靠视觉模式识别，比例字体读起来慢。
+    var name = el("button", "key keylink", it.name);
     name.onclick = function () { describeName(it.name); };
     var detail;
     if (it.kind === "class") {
@@ -1308,7 +1552,13 @@ function renderCatalog() {
     }
     return [badge(it.kind, it.kind === "class" ? "acc" : (it.kind === "relation" ? "warn" : "")), name, detail];
   });
-  box.appendChild(makeTable(["类型", "名字（点开看详情）", "概要"], rows, "这一页没有条目。"));
+  box.appendChild(makeTable(["类型", "名字（点开看详情）", "概要"], rows, "这一页没有条目。", {
+    // 点任意一行 ⇒ 右侧抽屉看这一类 / 属性 / 关系的详情（抽屉不遮表格，方便对照）。
+    onRow: function (idx) {
+      var hit = (d.items || [])[idx];
+      if (hit) describeName(hit.name);
+    }
+  }));
   if ((d.skipped_classes || []).length) {
     var p = el("div", "panel");
     p.appendChild(el("h2", null, "没有 TriplesMap 的类（不可查，但不是静默少了几张表）"));
@@ -1324,25 +1574,50 @@ function describeName(name) {
     var box = $("k-detail");
     clear(box);
     box.hidden = false;
-    box.appendChild(el("h2", null, "详情：" + d.name + "（" + d.kind + "）"));
+    // 标题只在抽屉头显示（`openDrawer` 设），这里不再重复一个 h2 —— 460px 宽的抽屉里
+    // 两行一样的标题纯属占地方。
     if (d.kind === "class") {
       box.appendChild(kvList([
         ["源表", d.table], ["主键", d.primary_key], ["说明", d.description || "—"],
         ["租户口径", (d.tenant ? (d.tenant.mode + (d.tenant.column ? ("（列 " + d.tenant.column + "）") : "") +
           (d.tenant.coverage ? (" · 覆盖面 " + d.tenant.coverage) : "") + (d.tenant.reason ? (" · " + d.tenant.reason) : "")) : "—")]
       ]));
+      // 抽屉只有 460px：属性 / 关系用**紧凑列表**（名字等宽 + 一行摘要），别塞 7 列表格
+      // —— 那样每列只剩几十像素，必须横向拖着看（样机同样用列表）。
       box.appendChild(el("h3", null, "属性（" + (d.properties || []).length + "）"));
-      box.appendChild(makeTable(["名字", "列", "类型", "可空", "枚举值", "样例", "说明"], (d.properties || []).map(function (p) {
-        return [p.name, p.column, p.datatype, p.nullable === null || p.nullable === undefined ? "—" : yesNo(p.nullable),
-          p.enum_values || "—", p.sample === null || p.sample === undefined ? "—" : p.sample, p.note || "—"];
-      })));
+      var plist = el("div", "list");
+      (d.properties || []).forEach(function (p) {
+        var row = el("div", "row2");
+        row.appendChild(el("span", "k key", p.name));
+        row.appendChild(el("span", "t", [
+          p.column ? ("列 " + p.column) : "",
+          p.datatype || "",
+          p.nullable === null || p.nullable === undefined ? "" : (p.nullable ? "可空" : "非空"),
+          p.enum_values ? ("枚举 " + p.enum_values) : "",
+          p.sample === null || p.sample === undefined ? "" : ("例 " + p.sample),
+          p.note || ""
+        ].filter(Boolean).join(" · ")));
+        plist.appendChild(row);
+      });
+      box.appendChild(plist);
       box.appendChild(el("h3", null, "关系（" + (d.relations || []).length + "）"));
-      box.appendChild(makeTable(["名字", "反向", "边", "证据等级", "可查", "基数", "证据"], (d.relations || []).map(function (r) {
-        return [r.name, r.inverse, r.from + " → " + r.to + " · 列 " + r.column,
-          badge(r.evidence_level, r.evidence_level === "true" ? "ok" : (r.evidence_level === "false" ? "bad" : "warn")),
-          r.queryable ? badge("可查", "ok") : badge("不可查", "bad"),
-          r.cardinality || "—", r.evidence || "—"];
-      })));
+      var rlist = el("div", "list");
+      (d.relations || []).forEach(function (r) {
+        var row = el("div", "row2");
+        row.appendChild(el("span", "k key", r.name));
+        row.appendChild(el("span", "t", [
+          r.from + " → " + r.to,
+          r.column ? ("列 " + r.column) : "",
+          r.inverse ? ("反向 " + r.inverse) : "",
+          r.cardinality ? ("基数 " + r.cardinality) : "",
+          r.evidence || ""
+        ].filter(Boolean).join(" · ")));
+        row.appendChild(badge("证据 " + (r.evidence_level || "—"),
+          r.evidence_level === "true" ? "ok" : (r.evidence_level === "false" ? "bad" : "warn")));
+        row.appendChild(r.queryable ? badge("可查", "ok") : badge("不可查", "bad"));
+        rlist.appendChild(row);
+      });
+      box.appendChild(rlist);
     } else {
       box.appendChild(kvList([
         ["类", d.class], ["名字", d.name], ["列", d.column], ["类型", d.datatype],
@@ -1352,11 +1627,33 @@ function describeName(name) {
         ["说明", d.note || "—"]
       ]));
     }
+    // 详情渲染完再开抽屉：先有内容再滑出，避免「空抽屉闪一下」。
+    openDrawer("详情：" + d.name + "（" + d.kind + "）");
   }).catch(function (e) {
     var box = $("k-detail");
     box.hidden = false;
     showErr(box, e);
+    openDrawer("详情读取失败");
   });
+}
+// ── 目录详情抽屉：默认收起；点表格某行 / 点名字打开，Esc、遮罩、✕ 三条路关闭 ──
+// 复用 `#k-detail`（JS 的渲染点一行没改），只是把它的落点从页面底部搬到右侧抽屉里：
+// 看目录时要**对照**着读，弹窗会遮住表格。
+function openDrawer(title) {
+  var d = $("dr-title");
+  if (d) txt(d, title || "条目详情");
+  var box = $("drawer");
+  if (box && box.classList) box.classList.add("is-on");
+  if (box) box.setAttribute("aria-hidden", "false");
+  var mask = $("drawer-mask");
+  if (mask) mask.hidden = false;
+}
+function closeDrawer() {
+  var box = $("drawer");
+  if (box && box.classList) box.classList.remove("is-on");
+  if (box) box.setAttribute("aria-hidden", "true");
+  var mask = $("drawer-mask");
+  if (mask) mask.hidden = true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1942,9 +2239,15 @@ function switchTab(name) {
   S.tab = name;
   TABS.forEach(function (t) {
     $("v-" + t).hidden = (t !== name);
+    // 左导航：`is-on` 只是视觉态，⛔ 别整段重写 className（会把 nav-item 一起抹掉）。
     var btn = $("tab-" + t);
-    btn.className = (t === name) ? "on" : "";
+    if (btn.classList) btn.classList.toggle("is-on", t === name);
+    else btn.className = (t === name) ? "nav-item is-on" : "nav-item";
   });
+  var host = $("views");
+  if (host) host.scrollTop = 0;
+  // 离开目录浏览就收起抽屉：否则它会挂在新视图上，看起来像「详情属于这一页」。
+  if (name !== "catalog") closeDrawer();
   if (name === "review" && !S.review) loadReview().catch(function () {});
   if (name === "audit" && !S.audit) loadAudit().catch(function () {});
   if (name === "export" && !S.projects) loadProjects().catch(function () {});
@@ -1971,6 +2274,13 @@ $("c-kind").onchange = function () { loadConfig().catch(function () {}); };
 $("a-load").onclick = function () { loadAudit().catch(function () {}); };
 $("a-action").onchange = function () { if (S.audit) renderAudit(); };
 $("q-go").onclick = runQuery;
+// 抽屉的三条关闭路径：✕ / 遮罩 / Esc。
+$("dr-close").onclick = closeDrawer;
+$("drawer-mask").onclick = closeDrawer;
+// Esc 挂在 document 上（焦点可能停在表格里）；假 DOM 桩没有 addEventListener，所以先判存在。
+if (document.addEventListener) {
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDrawer(); });
+}
 $("k-load").onclick = function () { loadCatalog(parseInt($("k-page").value, 10) || 1).catch(function () {}); };
 $("k-prev").onclick = function () { loadCatalog(Math.max(1, S.catalogPage - 1)).catch(function () {}); };
 $("k-next").onclick = function () { if (S.catalog && S.catalog.has_more) loadCatalog(S.catalogPage + 1).catch(function () {}); };
@@ -2400,6 +2710,296 @@ mod tests {
         assert!(
             CONSOLE_HTML.contains("连字符 / 下划线"),
             "报错与说明文案必须与 pattern 同步提到下划线"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // REQ-161 · 换皮：左导航 / 密度 / 等宽 key / 抽屉 / 端点集合冻结
+    // ══════════════════════════════════════════════════════════
+
+    /// 左导航 + 单一主区（AC-001）。
+    ///
+    /// 换皮前是顶栏 8 个并列 tab（`#tabs`）；换皮后是左侧窄导航 + 单一主区。
+    /// 「8 个入口一个都不许少」在这里逐项钉死：视图容器 `v-*` 与按钮 `tab-*` 的 id
+    /// **没有改名**（只是从顶栏搬进左导航），所以 `ac004` 的数法一行都不用改。
+    #[test]
+    fn the_shell_uses_a_left_nav_with_all_eight_entries() {
+        assert!(CONSOLE_HTML.contains("id=\"nav\""), "缺左导航容器 #nav");
+        assert!(CONSOLE_HTML.contains("id=\"nav-list\""), "缺导航列表 #nav-list");
+        assert!(
+            CONSOLE_HTML.contains("id=\"views\""),
+            "缺单一主区滚动容器 #views（左导航 + 单主区是这次换皮的结构）"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("id=\"tabs\""),
+            "顶栏 #tabs 必须移除：8 个入口已经搬到左导航（AC-001）"
+        );
+        assert_eq!(
+            CONSOLE_HTML.matches("class=\"nav-item").count(),
+            8,
+            "左导航必须恰好 8 个入口（项目与版本/评审/导出/声明编辑/审计/查询台/目录浏览/构建包）"
+        );
+        for (tab, num, title) in [
+            ("projects", "01", "项目与版本"),
+            ("review", "02", "评审"),
+            ("export", "03", "导出"),
+            ("config", "04", "声明编辑"),
+            ("audit", "05", "审计"),
+            ("query", "06", "查询台"),
+            ("catalog", "07", "目录浏览"),
+            ("bundles", "08", "构建包"),
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(&format!("id=\"tab-{tab}\" class=\"nav-item")),
+                "左导航缺入口 {title}"
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!("data-tab=\"{tab}\"")),
+                "{title} 缺 data-tab={tab}（导航切换靠它）"
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!(">{num}</span>{title}</button>")),
+                "{title} 的序号 / 文案与样机不一致（应为 {num} {title}）"
+            );
+        }
+    }
+
+    /// 目录详情是**右侧抽屉**，默认收起（AC-001）：看目录时要对照着读，弹窗会遮住表格。
+    #[test]
+    fn the_catalog_detail_is_a_drawer_that_starts_closed() {
+        assert!(CONSOLE_HTML.contains("id=\"drawer\""), "缺右侧抽屉 #drawer");
+        assert!(
+            CONSOLE_HTML.contains("id=\"drawer\" aria-hidden=\"true\""),
+            "抽屉默认必须是收起状态（aria-hidden=true）"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("id=\"drawer\" hidden"),
+            "抽屉不是用 hidden 藏的：默认收起靠 CSS 的 translateX，滑出才是 is-on"
+        );
+        assert!(CONSOLE_HTML.contains("id=\"drawer-mask\""), "缺抽屉遮罩");
+        assert!(CONSOLE_HTML.contains("id=\"dr-close\""), "缺抽屉关闭按钮");
+        assert!(CONSOLE_HTML.contains("id=\"dr-title\""), "缺抽屉标题");
+        // 详情容器搬进抽屉（渲染点 `#k-detail` 本身一字没改）。
+        let at = CONSOLE_HTML.find("id=\"drawer\"").expect("缺 #drawer");
+        assert!(
+            CONSOLE_HTML[at..].contains("id=\"k-detail\""),
+            "目录详情容器必须在抽屉里（不再占页面底部）"
+        );
+        for fun in ["function openDrawer(", "function closeDrawer("] {
+            assert!(CONSOLE_HTML.contains(fun), "缺 {fun}");
+        }
+        // 三条关闭路径：✕ / 遮罩 / Esc。
+        assert!(
+            CONSOLE_HTML.contains("$(\"dr-close\").onclick"),
+            "✕ 必须能关抽屉"
+        );
+        assert!(
+            CONSOLE_HTML.contains("$(\"drawer-mask\").onclick"),
+            "遮罩必须能关抽屉"
+        );
+        assert!(
+            CONSOLE_HTML.contains("\"Escape\""),
+            "Esc 必须能关抽屉"
+        );
+        // 默认收起的 CSS 依据（否则「默认隐藏」只是 aria 上的一句话）。
+        assert!(
+            CONSOLE_HTML.contains("transform:translateX(102%)"),
+            "抽屉默认应滑出屏外"
+        );
+        assert!(
+            CONSOLE_HTML.contains("#drawer.is-on{transform:translateX(0)}"),
+            "is-on 才把抽屉滑进来"
+        );
+        // 点表格某一行就能开（不是只能点名字那个小按钮）。
+        assert!(
+            CONSOLE_HTML.contains("onRow: function (idx)"),
+            "目录表必须支持「点一行看详情」"
+        );
+    }
+
+    /// key / IRI 一律等宽（`.key`），**三处**必须覆盖：目录浏览 / 审计 / 评审（AC-002）。
+    #[test]
+    fn key_and_iri_are_monospace_in_catalog_audit_and_review() {
+        assert!(
+            CONSOLE_HTML.contains(".key{font-family:var(--mono)"),
+            "CSS 必须定义 .key 等宽类"
+        );
+        // 目录浏览：类名 / 属性名 / 关系名（仍是可点的 button，点名字看详情的行为不变）。
+        assert!(
+            CONSOLE_HTML.contains("el(\"button\", \"key keylink\", it.name)"),
+            "目录浏览的类名必须带 .key"
+        );
+        // 审计：token 摘要与动作（靠视觉模式识别 sha 前缀 / action）。
+        assert!(
+            CONSOLE_HTML.contains("{ text: e.token || \"—\", cls: \"key\" }"),
+            "审计的 token 摘要必须带 .key"
+        );
+        assert!(
+            CONSOLE_HTML.contains("{ text: e.action || \"—\", cls: \"key\" }"),
+            "审计的动作必须带 .key"
+        );
+        // 评审：条目 target（对象名 / 关系名 / IRI）。
+        assert!(
+            CONSOLE_HTML.contains("el(\"span\", \"target key\", it.target)"),
+            "评审的 target 必须带 .key"
+        );
+        assert!(
+            CONSOLE_HTML.contains(".keylink{"),
+            "目录里的类名是可点的（.keylink 得有自己的样式）"
+        );
+    }
+
+    /// 表格是**内部工具**的密度：表头 sticky、行高 32px（AC-002）。
+    ///
+    /// 这两条只能靠 CSS 源码断言（进程内不起浏览器）；真浏览器里是否生效由 BA 的 Playwright harness 看。
+    #[test]
+    fn tables_are_dense_with_a_sticky_header() {
+        assert!(
+            CONSOLE_HTML.contains("thead th{position:sticky;top:0"),
+            "表头必须 sticky（滚动时不丢列名）"
+        );
+        assert!(
+            CONSOLE_HTML.contains("tbody td{height:32px"),
+            "表格行高必须是 32px（一屏 20+ 行）"
+        );
+        assert!(
+            CONSOLE_HTML.contains("class=\"tablewrap"),
+            "表体得有滚动容器（sticky 才有参照物）"
+        );
+    }
+
+    /// 端点集合冻结（AC-004）：页面里出现的 `/api/…` 路径集合必须与本单之前**逐字相等**。
+    ///
+    /// 提取口径：从 `api/` 起、由小写字母 / 数字 / `_` `.` `/` `-` 组成的路径，
+    /// 去掉尾斜杠后去重（`api/projects/` 与 `api/projects` 视为同一条基路径）。
+    /// 清单是**本单开工前**从 `CONSOLE_HTML` 里跑出来的；改一个都得先回答「为什么端点变了」。
+    #[test]
+    fn the_api_path_set_is_frozen() {
+        const FROZEN: [&str; 12] = [
+            "api/apply",
+            "api/audit",
+            "api/catalog",
+            "api/config",
+            "api/decide",
+            "api/describe",
+            "api/export/ttl",
+            "api/freeze",
+            "api/projects",
+            "api/r2rml",
+            "api/review",
+            "api/sparql",
+        ];
+        let mut found: Vec<String> = Vec::new();
+        let mut rest: &str = CONSOLE_HTML;
+        while let Some(at) = rest.find("api/") {
+            let tail = &rest[at..];
+            let end = tail
+                .find(|c: char| {
+                    !(c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '_'
+                        || c == '/'
+                        || c == '.'
+                        || c == '-')
+                })
+                .unwrap_or(tail.len());
+            let path = tail[..end].trim_end_matches('/').to_string();
+            if path != "api" && !found.contains(&path) {
+                found.push(path);
+            }
+            rest = &rest[at + 4..];
+        }
+        found.sort();
+        let mut want: Vec<String> = FROZEN.iter().map(|s| (*s).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            found, want,
+            "页面里的 /api/* 路径集合变了：换皮只许动壳，端点集合必须与本单之前逐字相等（AC-004）"
+        );
+    }
+
+    /// 体积预算（S6）：单文件 ≤ 300 KB；下限自证页面没被截断。
+    ///
+    /// 上界比 `tests/test_req125_page.rs::ac002`（< 200 KB）更宽，那是另一道更严的闸；
+    /// 这条按需求 S6 的数字登记，防止「换皮顺手塞了几个内联图片」这种膨胀。
+    #[test]
+    fn the_shell_stays_under_the_size_budget() {
+        let bytes = CONSOLE_HTML.len();
+        assert!(
+            bytes <= 300 * 1024,
+            "单文件必须 ≤ 300 KB（S6），实际 {bytes} 字节"
+        );
+        assert!(bytes > 80 * 1024, "页面太小，可能被截断了：{bytes} 字节");
+    }
+
+    /// ADR-013 的「已迁到 Studio」提示条**必须留着**：删掉它，客户侧会继续在 console 里找入口。
+    #[test]
+    fn the_adr013_studio_notice_is_kept() {
+        assert!(
+            CONSOLE_HTML.contains("已迁到 Studio"),
+            "构建包视图必须保留 ADR-013 的迁移提示（REQ-161 §五 / AC-003）"
+        );
+        assert!(CONSOLE_HTML.contains("/studio"), "提示里要给出口 /studio");
+        assert!(
+            CONSOLE_HTML.contains("仅为历史保留"),
+            "提示要写清「仅历史保留」，不能只说「已迁走」"
+        );
+        assert!(
+            CONSOLE_HTML.contains("id=\"v-bundles\""),
+            "构建包视图本身也要留着（ADR-013 只标已迁，不删代码）"
+        );
+    }
+
+    /// `POST /api/r2rml` 回的是 **text/turtle**，页面必须按文本取正文（REQ-161 追加修复）。
+    ///
+    /// 基线缺陷（不是换皮引入，但长在「导出」视图里）：`exportR2rml()` 当时走 `post()`
+    /// ⇒ `json()` ⇒ `JSON.parse` 一份 Turtle ⇒ **必抛 `BAD_JSON`**，还把「服务端返回的
+    /// 是 Turtle」说成「去看服务端日志」—— FDE 点一次「生成 R2RML」就永远失败。
+    ///
+    /// 钉四件事：
+    /// 1. `postText()` 存在**且真被调用**（写了没人调 = 没修）；
+    /// 2. `exportR2rml()` 里**不再**出现 `post("api/r2rml"`（回退即红）；
+    /// 3. `postText` 别用过头：apply / decide / sparql 仍是 JSON 端点；
+    /// 4. 别顺手把 TTL 也改了（它本来就是文本路径，走 `request()` 的 `r.text`）。
+    #[test]
+    fn r2rml_is_read_as_text_not_parsed_as_json() {
+        assert!(
+            CONSOLE_HTML.contains("function postText(path, body, useQuery)"),
+            "缺 postText()：文本端点要有一个不走 JSON.parse 的发包口"
+        );
+        let at = CONSOLE_HTML
+            .find("function exportR2rml()")
+            .expect("缺 exportR2rml()");
+        // 取到这个函数体结尾（按行首的 `}` 切）—— 别用固定字节数：中文注释会切在字符中间。
+        let tail = &CONSOLE_HTML[at..];
+        let end = tail
+            .find("\n}")
+            .map(|n| n + 2)
+            .expect("exportR2rml 没有函数体结尾");
+        let body = &tail[..end];
+        assert!(
+            body.contains("postText(\"api/r2rml\""),
+            "exportR2rml() 必须走 postText()：服务端回的是 text/turtle"
+        );
+        assert!(
+            !body.contains("post(\"api/r2rml\""),
+            "⛔ 别再走 post()：它会把 Turtle 当 JSON 解析 ⇒ 必抛 BAD_JSON"
+        );
+        // ⛔ postText 不许用过头：这三个端点回的确实是 JSON。
+        for needle in [
+            "post(\"api/apply\"",
+            "post(\"api/decide\"",
+            "post(\"api/sparql\"",
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(needle),
+                "JSON 端点 {needle:?} 必须继续走 post()/json()"
+            );
+        }
+        // ⛔ TTL 本来就是文本路径，别顺手改。
+        assert!(
+            CONSOLE_HTML.contains("request(q).then(function (r) {"),
+            "TTL 走 request() 取正文（不经 postText / json）"
         );
     }
 }
