@@ -138,6 +138,15 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --check \
 
 本次实测：UAT 那份 AM 8 个 source **全缺 `service`** ⇒ 直接换镜像会**起不来**；补完后 `0 error`。
 
+### ⛔ 两个"缺了就不可用"的前置（都是本次踩到的）
+
+| 前置 | 缺了会怎样 | 怎么 provision |
+| --- | --- | --- |
+| **`ONTOK_SECRET_KEY`**（64 hex） | `query serve` **拒绝启动**（CrashLoopBackOff）—— 它要加密 DSN 与 query key | Secret `ontok-write` / 键 `secret-key`；⛔ 不进库。**丢了 ⇒ 已加密的 DSN/key 不可解**（v1 不做轮换） |
+| **admin token**（`kind: "admin"`） | 服务能起，但 Studio 的**写面**（建项目/传包/解析/激活/查看 key）全 **403 `key.not_admin`** | `ontok-secrets` 里的 `query-tokens.json` 追加一条 `{label, token, kind:"admin"}`；⛔ **不能绑 `project`**（绑了整份表被拒）；`ontology-only` 下 ⛔ 不能有 `tenant` |
+
+> 合作方/数字员工用 **query key**（缺省 kind），只能读；**admin key 只给 FDE**。
+
 ### 发版内容
 
 | 项 | 值 |
