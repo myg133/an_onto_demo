@@ -421,7 +421,7 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
 
     <div class="panel">
       <h2>4 · 待确认清单（GET /api/review?proposal=p1）</h2>
-      <p class="note">本 tab 只做**汇总与门禁**：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。只有**待确认 0 条**时「冻结并切流量」才可点。</p>
+      <p class="note">本 tab 只做**汇总与门禁**：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。待确认条数取服务端的 `progress.pending`（= total − signed，两轨都定了才算签完）、阻断条数取 `progress.vetoed`；只有**待确认 0 条**时「冻结并切流量」才可点。</p>
       <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
       <div id="b-checklist" class="summary">尚未载入。</div>
     </div>
@@ -469,7 +469,8 @@ var S = {
   projects: null, review: null, reviewProposal: "", reviewPage: 1,
   declKind: "exclusions", audit: null, query: null,
   catalog: null, catalogPage: 1,
-  // 构建包（REQ-159）：bundle 是上传回执 + 入库后补的 version；pendingCount = 待确认条数
+  // 构建包（REQ-159）：bundle = 上传回执 + 入库后补的 version；
+  // pendingCount = 待确认条数（来源：/api/review 的 progress.pending，缺 progress 时按条目估算）
   bundle: null, needDsn: false, dsnOk: false, checklist: null, pendingCount: null
 };
 
@@ -1528,19 +1529,39 @@ function importBundle() {
   });
 }
 
-// 待确认：`decision` 为空 / pending 的都算未决；阻断 = 服务端标了 blocking，
-// 或者带了阻断原因，或者建议是 conflict / reject（这三种都不该放行生效）。
+// 待确认清单的口径**以服务端的聚合为准**（`GET /api/review` 的 `progress`，见 review_ui）：
+//
+// | 数 | 取哪 | 为什么不能自己数 |
+// | --- | --- | --- |
+// | 待确认 N | `progress.pending`（= total − signed） | `signed` 的语义是**两轨都定了**；自己按单字段数会把「只签了一轨」漏掉 |
+// | 阻断 M | `progress.vetoed` | 某轨被否才是阻断；页面**没有** item 级的 `blocking` / `decision` 字段 |
+//
+// item 的真实字段只有：`item`（序号）/ `kind` / `target` / `biz` / `model` / `state` /
+// `reason`（仅 state=="vetoed" 时有值）/ `confidence` / `suggestion{kind,reason}` / `evidence` /
+// `decided_at{biz,model}` / `via{biz,model}` / `payload`。
+//
+// ⛔ `item.decision` 这个字段**不存在**，别再造一个；单条是否未决只看两轨。
 function isPendingItem(it) {
   if (!it) return false;
-  var d = it.decision;
-  return d === undefined || d === null || d === "" || d === "pending";
+  return it.biz === "pending" || it.model === "pending";
 }
-function isBlockingItem(it) {
-  if (!it) return false;
-  if (it.blocking === true) return true;
-  if (it.reason && String(it.reason).trim()) return true;
-  var kind = suggOf(it).kind;
-  return kind === "conflict" || kind === "reject";
+// 汇总：老服务端没有 `progress` 时退化成「按条目数」，并把这件事写在行里 ——
+// ⛔ 不许静默当成 0（那会让门禁误开，且没人知道数是估的）。
+function checklistSummary(d) {
+  var items = (d && d.items) || [];
+  var progress = (d && d.progress) ? d.progress : null;
+  if (progress && typeof progress.pending === "number") {
+    return {
+      n: progress.pending,
+      m: (typeof progress.vetoed === "number") ? progress.vetoed : 0,
+      estimated: false
+    };
+  }
+  return {
+    n: items.filter(isPendingItem).length,
+    m: items.filter(function (it) { return it && it.state === "vetoed"; }).length,
+    estimated: true
+  };
 }
 function loadChecklist() {
   var box = $("b-checklist");
@@ -1562,26 +1583,44 @@ function renderChecklist() {
   clear(box);
   var d = S.checklist;
   if (!d) { txt(box, "尚未载入。"); S.pendingCount = null; renderBundleGates(); return; }
-  var items = (d.items || []).filter(isPendingItem);
-  var blocking = items.filter(isBlockingItem);
-  S.pendingCount = items.length;
-  box.appendChild(el("b", null, "待确认 " + items.length + " 条（其中阻断 " + blocking.length + " 条）"));
+  var items = d.items || [];
+  var todo = items.filter(isPendingItem);
+  var sum = checklistSummary(d);
+  S.pendingCount = sum.n;   // 门禁只看这一个数（来源：progress.pending）
+  box.appendChild(el("b", null, "待确认 " + sum.n + " 条（其中阻断 " + sum.m + " 条）"));
   box.appendChild(el("span", null, " · 提案 " + (d.proposal || "—") +
-    " · 基于第 " + (d.base_version === undefined ? "—" : d.base_version) + " 版"));
-  if (!items.length) {
+    " · 基于第 " + (d.base_version === undefined ? "—" : d.base_version) + " 版" +
+    (d.frozen ? " · 已冻结" : "")));
+  if (sum.estimated) {
+    box.appendChild(el("div", "note",
+      "服务端没给 progress，按条目估算（" + todo.length + " 条未决）—— 这是估算，不是服务端签过的数。"));
+  }
+  if (!sum.n) {
     box.appendChild(el("div", "note", "待确认 0 条：门禁已放开，可以「冻结并切流量」。"));
     renderBundleGates();
     return;
   }
   box.appendChild(el("div", "note", "本 tab 只汇总与门禁：逐条裁决在「评审」tab 做（点「去评审」）。"));
   var list = el("div");
-  items.forEach(function (it) {
+  todo.forEach(function (it) {
+    var sg = suggOf(it);
     var row = el("div", "hd");
+    row.appendChild(el("span", "idx", "#" + (it.item === undefined ? "—" : it.item)));
     row.appendChild(el("span", "target", it.target || "—"));
-    row.appendChild(el("span", "kind", suggOf(it).kind || "none"));
-    if (isBlockingItem(it)) row.appendChild(badge("阻断", "bad"));
+    if (sg.kind) {
+      row.appendChild(badge("建议：" + (SUGG[sg.kind] || sg.kind),
+        sg.kind === "conflict" || sg.kind === "reject" ? "bad"
+          : (sg.kind === "accept" || sg.kind === "lean_accept" ? "ok" : "warn")));
+    }
+    ["biz", "model"].forEach(function (track) {
+      var v = it[track];
+      row.appendChild(el("span", "st " + (v || "pending"),
+        (track === "biz" ? "业务轨：" : "建模轨：") +
+        (v === "accepted" ? "已接受" : (v === "rejected" ? "已拒绝" : "未签"))));
+    });
+    if (it.state === "vetoed") row.appendChild(badge("被否", "bad"));
     var go = el("button", null, "去评审");
-    go.onclick = function () { gotoReview(it.proposal || d.proposal || "p1"); };
+    go.onclick = function () { gotoReview(d.proposal || "p1"); };
     row.appendChild(go);
     list.appendChild(row);
   });
@@ -1594,7 +1633,8 @@ function gotoReview(proposal) {
   switchTab("review");
 }
 
-// 门禁：入库要看 bundle_id（+ 需要库时 DSN 连通）；生效还要「待确认 0 条」。
+// 门禁：入库要看 bundle_id（+ 需要库时 DSN 连通）；生效还要「待确认 0 条」
+// （`pendingCount` 只有一个来源：`progress.pending`，见 checklistSummary）。
 function renderBundleGates() {
   var b = S.bundle || {};
   var imported = !!(b.version || b.state === "imported");
@@ -1609,7 +1649,7 @@ function activateBundle() {
   if (!p || !b.bundle_id) { setMsg("先上传并解析入库。", "bad"); return; }
   if (S.pendingCount !== 0) {
     setMsg("门禁：待确认清单" + (S.pendingCount === null || S.pendingCount === undefined
-      ? "还没载入" : ("还有 " + S.pendingCount + " 条")) + "，不能激活。", "bad");
+      ? "还没载入" : ("还有 " + S.pendingCount + " 条（progress.pending）")) + "，不能激活。", "bad");
     return;
   }
   return guarded({
@@ -1945,6 +1985,10 @@ mod tests {
             "id=\"b-key-copy\"",
             "待确认 ",
             "其中阻断 ",
+            // 汇总口径**必须**取服务端聚合：自己数 items 会把「只签了一轨」漏掉
+            "progress.pending",
+            "progress.vetoed",
+            "it.biz === \"pending\" || it.model === \"pending\"",
         ] {
             assert!(
                 CONSOLE_HTML.contains(needle),
