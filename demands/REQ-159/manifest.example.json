@@ -29,10 +29,26 @@
     }
   },
   "files": [
-    { "path": "manifest.json",             "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX", "bytes": 1234 },
-    { "path": "ontology/snapshot.json",    "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX", "bytes": 987654 },
-    { "path": "am/access-mapping.json",    "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX", "bytes": 4567 },
-    { "path": "db/schema.json",            "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX", "bytes": 3210 },
-    { "path": "README.txt",                "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX", "bytes": 210 }
-  ]
+    {
+      "path": "ontology/snapshot.json",
+      "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX",
+      "bytes": 987654
+    },
+    {
+      "path": "am/access-mapping.json",
+      "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX",
+      "bytes": 4567
+    },
+    {
+      "path": "db/schema.json",
+      "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX",
+      "bytes": 3210
+    },
+    {
+      "path": "README.txt",
+      "sha256": "REPLACE_WITH_REAL_SHA256_64_HEX",
+      "bytes": 210
+    }
+  ],
+  "_comment_files": "files[] 只列 manifest.json 之外的文件 —— manifest 无法自指（写自己的 sha256 物理上不可能）"
 }

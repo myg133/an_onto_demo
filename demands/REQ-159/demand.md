@@ -64,7 +64,7 @@ bundle.zip
 | # | 规则 |
 | --- | --- |
 | 1 | `manifest.json` 必须能解析；缺字段 ⇒ 拒（不猜默认值） |
-| 2 | `files[]` 覆盖包里**每一个**文件；服务端逐个核 sha256，**任一不符即整包拒** |
+| 2 | `files[]` 覆盖包里**除 `manifest.json` 自身之外**的每一个文件（**manifest 不能自指**：写自己的 sha256 物理上不可能）。出现在 `files[]` 里 ⇒ `bundle.files.mismatch`。服务端逐个核 sha256，**任一不符即整包拒** |
 | 3 | `project` 必须与**接收的项目**同名；不同名 ⇒ 拒（防串包） |
 | 4 | `components.db.requires_dsn=true` ⇒ 服务端**必须**先拿到可用 DSN 才允许解析 |
 | 5 | 包里**不许**出现任何凭据（密码/私钥/token）；服务端扫描到可疑字段 ⇒ 告警（v1 只告警不拒） |
@@ -323,7 +323,7 @@ pub struct LinkTypeView { key, from_type, to_type, cardinality, semantic }   // 
 | # | 检查 | 判据 |
 | --- | --- | --- |
 | 1 | manifest 能按 `manifest.schema.json` 校验通过 | 用任意 JSON Schema 校验器 |
-| 2 | `files[]` **覆盖包内每一个文件**（漏一个都不行） | 集合相等 |
+| 2 | `files[]` **覆盖除 `manifest.json` 外的每个文件**（漏一个都不行；列了自己也算错） | 集合相等 |
 | 3 | `files[].sha256` 与真实文件一致 | 逐文件算 |
 | 4 | `snapshot.json` 里 `link_types[*].evidence` **存在**（哪怕是空数组） | 抽 1 条断言 |
 | 5 | 包里**搜不到** `password` / `dsn` / `postgres://` / `mysql://` | 正则扫全文 |
@@ -333,7 +333,7 @@ pub struct LinkTypeView { key, from_type, to_type, cardinality, semantic }   // 
 | # | 情况 | 错误码 | 我能给你的提示 |
 | --- | --- | --- | --- |
 | 1 | manifest 缺字段 / 类型不符 | `bundle.manifest.invalid` | 报**具体字段路径** |
-| 2 | `files[]` 与包内实际文件不一致 | `bundle.files.mismatch` | 列出**多/少/不符**的文件名 |
+| 2 | `files[]` 与包内实际文件不一致（含**列了 manifest.json 自己**） | `bundle.files.mismatch` | 列出**多/少/不符**的文件名 |
 | 3 | 任一文件 sha256 不符 | `bundle.sha256.mismatch` | 点名文件 |
 | 4 | `project` 与接收项目不同名 | `bundle.project.mismatch` | 两边名字都回显 |
 | 5 | `bundle_version` 不认识 | `bundle.version.unsupported` | 我支持的版本列表 |
@@ -659,3 +659,40 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 
 > 构建端手写 zip writer（不引 `zip` crate，遵守"不新增依赖"）。标准工具都能读；
 > **我这边的验证不只看他的自述，会用 Python `zipfile` 独立解一遍。**
+
+
+---
+
+## 十九 · **manifest 不能自指**（2026-10-27 修订 · lion 抓到的真矛盾）
+
+### 问题
+
+我最初的 `manifest.example.json` 在 `files[]` 里**列了 `manifest.json` 自己**：
+
+```json
+{ "path": "manifest.json", "sha256": "…", "bytes": 1234 }   ← ❌ 自指
+```
+
+`manifest.json` 要写自己的 sha256 —— **物理上不可能满足**（写完才能算，算完又要改）。
+
+**后果**：构建端按「`files[]` = 除自身外每个文件」实现，于是**两边对同一个包给出相反结论**
+（他判 `bundle.files.mismatch`，我这边若不判就会放过）。
+
+### 定稿规则
+
+| # | 规则 |
+| --- | --- |
+| 1 | `files[]` 覆盖包里**除 `manifest.json` 自身之外**的每一个文件 |
+| 2 | **`files[]` 里出现 `manifest.json` ⇒ `bundle.files.mismatch`**（明确判错，⛔ 不静默忽略） |
+| 3 | 校验顺序不变：体积 → zip 合法性 → 路径安全 → manifest 可解析 → `files[]` sha256 → project 同名 → 组件计数 |
+
+**已改的三处**：`manifest.example.json`（删掉那行）、`manifest.schema.json`（`files` 描述）、
+本文件 §三-2 / §十一-3 / §十一-4。
+
+### 附带确认（lion 提出）
+
+| # | 事实 |
+| --- | --- |
+| 1 | `bundle.project.mismatch` 与 `db.dsn.missing` **构建端判不出来**（它不知道收件项目、包里永远不该有 DSN）⇒ 这两个码**只有服务端会判** |
+| 2 | 包是 **store-only zip**（method=0）· 无 data descriptor · 时间戳固定 `1980-01-01` · `manifest.json` 恒为第一条 entry · 其余按 path 升序 |
+| 3 | 构建端**不校验 zip CRC32**（完整性判据是逐文件 sha256） |

@@ -49,7 +49,7 @@
     "files": {
       "type": "array",
       "minItems": 1,
-      "description": "必须覆盖包内每一个文件（含 manifest 自身以外的全部）。服务端逐个核 sha256，任一不符 => 整包拒。",
+      "description": "必须覆盖包里**除 manifest.json 自身之外**的每一个文件。manifest 无法自指（写自己的 sha256 物理上不可能）—— 出现在 files[] 里 => bundle.files.mismatch。服务端逐个核 sha256，任一不符 => 整包拒。",
       "items": {
         "type": "object",
         "additionalProperties": false,
