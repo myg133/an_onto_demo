@@ -226,6 +226,39 @@ pre{margin:6px 0 0;padding:8px;background:rgba(0,0,0,.28);border:1px solid var(-
 #m-rows dt{color:var(--mut)}
 #m-rows dd{margin:0;word-break:break-all}
 #mbox .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:6px}
+/* ── 视图头 / 分块面板（检查点 2：信息密度） ─────────── */
+.view-head{margin:0 0 12px;max-width:980px}
+.view-head h2{margin:0 0 4px;font-size:15px;font-weight:600;letter-spacing:.2px}
+.view-head p{margin:0;color:var(--mut-2);font-size:12px}
+.view-head strong{color:var(--mut);font-weight:600}
+code{font:11.5px/1 var(--mono);color:var(--acc);background:rgba(110,200,255,.09);padding:1px 4px;border-radius:4px}
+.panel-flush{padding:0;overflow:hidden}
+.panel-head{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--line-2);font-size:12px;color:var(--mut);background:rgba(255,255,255,.018);flex-wrap:wrap}
+.panel-body{padding:11px}
+.panel-body>*:last-child{margin-bottom:0}
+.panel-head>h2{font-size:12px;margin:0;color:var(--fg);font-weight:600}
+.spacer{margin-left:auto}
+label{display:inline-flex;gap:6px;align-items:center;color:var(--mut-2);font-size:11.5px}
+/* ── 表格：行高 32px + 表头 sticky + key/IRI 等宽 ─────── */
+.tablewrap{overflow:auto;max-height:calc(100vh - 300px);border:1px solid var(--line-2);border-radius:8px}
+.tablewrap.tall{max-height:calc(100vh - 250px)}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+thead th{position:sticky;top:0;z-index:1;text-align:left;font-weight:500;color:var(--mut-2);font-size:11.5px;height:30px;padding:0 10px;background:var(--bg-2);border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{height:32px;padding:0 10px;border-bottom:1px solid var(--line-2);color:var(--mut);vertical-align:middle;white-space:nowrap}
+tbody tr:hover td{background:rgba(255,255,255,.026);color:var(--fg)}
+tbody tr.is-sel td{background:rgba(110,200,255,.09);color:var(--fg)}
+tbody tr.can-open{cursor:pointer}
+td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
+.key{font-family:var(--mono);font-size:12px;color:#cfe6ff;word-break:break-all}
+.keylink{height:auto;padding:0;border:0;background:transparent;color:#cfe6ff;font:12px/1 var(--mono);cursor:pointer;text-align:left;white-space:normal}
+.keylink:hover{color:var(--acc);text-decoration:underline}
+/* ── 校验清单（声明编辑：把「保存前校验」说清） ──────── */
+.checks{display:grid;gap:7px;font-size:12px}
+.chk{display:flex;gap:8px;align-items:flex-start;color:var(--mut)}
+.chk::before{content:"○";color:var(--mut-2);flex:none}
+.chk.ok::before{content:"✓";color:var(--ok)}
+.chk.bad::before{content:"✕";color:var(--bad)}
+.chk .why{color:var(--mut-2)}
 /* ── 滚动条 ───────────────────────────────────────────── */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -274,152 +307,237 @@ pre{margin:6px 0 0;padding:8px;background:rgba(0,0,0,.28);border:1px solid var(-
 
     <div id="views">  <!-- ── 1 · 项目与版本 ─────────────────────────────────── -->
   <section id="v-projects" class="view">
-    <div class="bar">
-      <button id="p-refresh">刷新</button>
-      <span class="note">GET /api/projects —— 项目 / 版本 / 冻结状态 / 对象·关系计数；本服务只服务启动时指定的那一个项目。</span>
+    <div class="view-head">
+      <h2>项目与版本</h2>
+      <p>版本是<strong>不可变</strong>的：冻结后不能改，只能出新版本；导出与查询都只认已冻结版本。</p>
     </div>
-    <div id="p-summary" class="summary">尚未载入。</div>
-    <div id="p-table"></div>
-    <div class="panel" style="margin-top:12px">
-      <h2>应用提案（apply）</h2>
-      <p class="note">apply 会把审核过的提案写成**新版本**（对象 / 关系落库）。已应用的提案再 apply ⇒ 409；基版本已冻结也 ⇒ 409。此动作不可撤销。</p>
-      <div class="bar">
-        <label>提案别名 <input id="p-alias" value="p1" size="10"></label>
-        <button id="p-apply" class="danger">应用提案…</button>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <span>版本与冻结状态</span>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/projects</span>
+        <button id="p-refresh">刷新</button>
       </div>
-      <div id="p-apply-out"></div>
+      <div class="panel-body">
+        <div id="p-summary" class="summary">尚未载入。</div>
+        <div id="p-table" class="tablewrap"></div>
+      </div>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>应用提案（apply）</span><span class="spacer"></span><span class="mono">POST /api/apply</span></div>
+      <div class="panel-body">
+        <p class="note">apply 会把审核过的提案写成<strong>新版本</strong>（对象 / 关系落库）。已应用的提案再 apply ⇒ 409；基版本已冻结也 ⇒ 409。此动作不可撤销。</p>
+        <div class="bar">
+          <label>提案别名 <input id="p-alias" value="p1" size="10"></label>
+          <button id="p-apply" class="danger">应用提案…</button>
+        </div>
+        <div id="p-apply-out"></div>
+      </div>
     </div>
   </section>
 
   <!-- ── 2 · 评审 ───────────────────────────────────────── -->
   <section id="v-review" class="view" hidden>
-    <div class="bar">
-      <label>提案 <input id="r-proposal" value="p1" size="8"></label>
-      <button id="r-load">载入</button>
-      <span class="note">GET /api/review?proposal=…（p1 = 该项目内最近导入的提案）；逐条签走 POST /api/decide。</span>
+    <div class="view-head">
+      <h2>评审</h2>
+      <p>AI 出的提案逐条过，<strong>两轨都要签</strong>（业务轨 + 建模轨）；决策记在审计里，改不回来只能再提一轮。</p>
     </div>
-    <div id="r-summary" class="summary">尚未载入。</div>
-    <div id="r-list"></div>
-    <div class="pager" id="r-pager"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>提案 <input id="r-proposal" value="p1" size="8"></label>
+        <button id="r-load">载入</button>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/review?proposal=… · POST /api/decide</span>
+      </div>
+      <div class="panel-body">
+        <div id="r-summary" class="summary">尚未载入。</div>
+        <div id="r-list"></div>
+        <div class="pager" id="r-pager"></div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 3 · 导出 ───────────────────────────────────────── -->
   <section id="v-export" class="view" hidden>
+    <div class="view-head">
+      <h2>导出</h2>
+      <p>客户视图与建模视图<strong>不是同一份</strong>；页面不加工正文，<strong>字节与 CLI 产物逐字节相同</strong>（sha256 可对拍）。</p>
+    </div>
     <div class="grid2">
-      <div class="panel">
-        <h2>TTL（GET /api/export/ttl）</h2>
-        <p class="note">与 `ontok ontology export` 是同一份字节（sha256 应相等）。</p>
-        <div class="bar">
-          <label>版本 <select id="e-version"></select></label>
-          <label><input type="checkbox" id="e-model"> 建模视图（model_view=1）</label>
+      <div class="panel panel-flush">
+        <div class="panel-head"><span>TTL</span><span class="spacer"></span><span class="mono">GET /api/export/ttl</span></div>
+        <div class="panel-body">
+          <p class="note">与 <code>ontok ontology export</code> 是同一份字节（sha256 应相等）。</p>
+          <div class="bar">
+            <label>版本 <select id="e-version"></select></label>
+            <label><input type="checkbox" id="e-model"> 建模视图（model_view=1）</label>
+          </div>
+          <div class="bar">
+            <label>schema <input id="e-schema" placeholder="留空 = 服务端默认" size="26"></label>
+          </div>
+          <div class="bar">
+            <label>tenancy <input id="e-tenancy" placeholder="留空 = 不传" size="26"></label>
+          </div>
+          <div class="bar"><button id="e-ttl">导出 TTL</button></div>
+          <div id="e-ttl-out"></div>
         </div>
-        <div class="bar">
-          <label>schema <input id="e-schema" placeholder="留空 = 服务端默认" size="26"></label>
-        </div>
-        <div class="bar">
-          <label>tenancy <input id="e-tenancy" placeholder="留空 = 不传" size="26"></label>
-        </div>
-        <div class="bar"><button id="e-ttl">导出 TTL</button></div>
-        <div id="e-ttl-out"></div>
       </div>
-      <div class="panel">
-        <h2>R2RML（POST /api/r2rml）</h2>
-        <p class="note">与 `ontok r2rml generate` 是同一份字节；`include_inherit` 决定继承边要不要生成 join。</p>
-        <div class="bar">
-          <label>版本 <select id="e2-version"></select></label>
-          <label><input type="checkbox" id="e2-inherit"> include_inherit</label>
+      <div class="panel panel-flush">
+        <div class="panel-head"><span>R2RML</span><span class="spacer"></span><span class="mono">POST /api/r2rml</span></div>
+        <div class="panel-body">
+          <p class="note">与 <code>ontok r2rml generate</code> 是同一份字节；<code>include_inherit</code> 决定继承边要不要生成 join。</p>
+          <div class="bar">
+            <label>版本 <select id="e2-version"></select></label>
+            <label><input type="checkbox" id="e2-inherit"> include_inherit</label>
+          </div>
+          <div class="bar">
+            <label>schema（必填，服务端路径） <input id="e2-schema" placeholder="如 code/out/schema.json" size="26"></label>
+          </div>
+          <div class="bar">
+            <label>排除文件（可选） <input id="e2-exclude" placeholder="服务端路径" size="26"></label>
+          </div>
+          <div class="bar"><button id="e2-go">生成 R2RML</button></div>
+          <div id="e2-out"></div>
         </div>
-        <div class="bar">
-          <label>schema（必填，服务端路径） <input id="e2-schema" placeholder="如 code/out/schema.json" size="26"></label>
-        </div>
-        <div class="bar">
-          <label>排除文件（可选） <input id="e2-exclude" placeholder="服务端路径" size="26"></label>
-        </div>
-        <div class="bar"><button id="e2-go">生成 R2RML</button></div>
-        <div id="e2-out"></div>
       </div>
     </div>
   </section>
 
   <!-- ── 4 · 声明编辑 ───────────────────────────────────── -->
   <section id="v-config" class="view" hidden>
-    <div class="bar">
-      <label>声明
-        <select id="c-kind">
-          <option value="exclusions">exclusions（排除）</option>
-          <option value="policy">policy（租户口径）</option>
-          <option value="tenancy">tenancy（租户列标注）</option>
-        </select>
-      </label>
-      <button id="c-load">载入</button>
-      <button id="c-save" class="danger">保存…</button>
-      <span class="note">PUT 是整份替换：服务端先按 schema 校验表 / 列，失败 ⇒ 400 且原文件一个字节都不变。</span>
+    <div class="view-head">
+      <h2>声明编辑</h2>
+      <p>保存前<strong>按真实 schema 校验</strong>表 / 列：<code>main_only</code> 与 <code>publicDimensions</code> 必须带 <code>reason</code>；校验失败 ⇒ 原文件一个字节都不变。</p>
     </div>
-    <div id="c-meta" class="note"></div>
-    <textarea id="c-text" spellcheck="false" placeholder="点「载入」读取当前声明原文；保存失败时这里的内容不会被清空或回滚。"></textarea>
-    <div id="c-out"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>声明
+          <select id="c-kind">
+            <option value="exclusions">exclusions（排除）</option>
+            <option value="policy">policy（租户口径）</option>
+            <option value="tenancy">tenancy（租户列标注）</option>
+          </select>
+        </label>
+        <button id="c-load">载入</button>
+        <button id="c-save" class="danger">保存…</button>
+        <span class="spacer"></span>
+        <span class="mono">GET / PUT /api/config/…</span>
+      </div>
+      <div class="panel-body">
+        <div id="c-meta" class="note"></div>
+        <textarea id="c-text" spellcheck="false" placeholder="点「载入」读取当前声明原文；保存失败时这里的内容不会被清空或回滚。"></textarea>
+        <div id="c-out"></div>
+      </div>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>保存前会发生什么（校验在后端，失败一个字节都不落盘）</span></div>
+      <div class="panel-body">
+        <div class="checks">
+          <div class="chk"><span>表 / 列必须存在</span><span class="why">— 服务端按 schema 校验，对不上 ⇒ 400</span></div>
+          <div class="chk"><span><code>main_only</code> / <code>publicDimensions</code> 必须带 <code>reason</code></span><span class="why">— 缺 reason ⇒ 400</span></div>
+          <div class="chk"><span>PUT 是整份替换</span><span class="why">— 校验通过才落盘，失败时编辑器内容原样保留</span></div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 5 · 审计 ───────────────────────────────────────── -->
   <section id="v-audit" class="view" hidden>
-    <div class="bar">
-      <label>最近 <input id="a-limit" value="100" size="5"> 条</label>
-      <label>动作
-        <select id="a-action">
-          <option value="">全部</option>
-          <option value="import">import</option>
-          <option value="apply">apply</option>
-          <option value="freeze">freeze</option>
-          <option value="export">export</option>
-          <option value="r2rml">r2rml</option>
-          <option value="config">config</option>
-          <option value="decide">decide</option>
-          <option value="auth">auth</option>
-        </select>
-      </label>
-      <button id="a-load">刷新</button>
-      <span class="note">GET /api/audit?limit=（服务端上限 1000，返回顺序 oldest_first）。筛选在页面里做，只影响显示。</span>
+    <div class="view-head">
+      <h2>审计</h2>
+      <p>每个写操作一行，<strong>含失败</strong>；令牌只记 <code>sha256</code> 前 12 位——不记原文。</p>
     </div>
-    <div id="a-summary" class="summary">尚未载入。</div>
-    <div id="a-table"></div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>最近 <input id="a-limit" value="100" size="5"> 条</label>
+        <label>动作
+          <select id="a-action">
+            <option value="">全部</option>
+            <option value="import">import</option>
+            <option value="apply">apply</option>
+            <option value="freeze">freeze</option>
+            <option value="export">export</option>
+            <option value="r2rml">r2rml</option>
+            <option value="config">config</option>
+            <option value="decide">decide</option>
+            <option value="auth">auth</option>
+          </select>
+        </label>
+        <button id="a-load">刷新</button>
+        <span class="spacer"></span>
+        <span class="mono">GET /api/audit?limit=（上限 1000，oldest_first）</span>
+      </div>
+      <div class="panel-body">
+        <div id="a-summary" class="summary">尚未载入。</div>
+        <div id="a-table" class="tablewrap tall"></div>
+        <div class="note">筛选在页面里做，只影响显示，不影响服务端返回。</div>
+      </div>
+    </div>
   </section>
 
   <!-- ── 6 · 查询台 ─────────────────────────────────────── -->
   <section id="v-query" class="view" hidden>
-    <div class="panel">
-      <h2>SPARQL（POST /api/sparql）</h2>
-      <p class="note">查询服务只认 query token（租户由口令决定）。⭐ 服务**默认**回执是 JSON-LD 上下文子图；本页要表格，所以请求里显式带 <code>format:"rows"</code>（字节与旧的默认回执相同）。结果区**必须**同时给出 warnings / coverage / join_states / truncated —— 只给表格等于把「可能漏数据」藏起来。</p>
-      <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
-      <div class="bar" style="margin-top:8px">
-        <label>max_rows <input id="q-max" value="200" size="6"></label>
-        <button id="q-go">执行</button>
-        <span class="note">行数上限由 token 决定；页面最多渲染 200 行。</span>
+    <div class="view-head">
+      <h2>查询台</h2>
+      <p>本体模式下 <strong>api 源</strong>的类会返回 <code>@graph: []</code> + <code>@pending[]</code>——平台<strong>不执行</strong> API 调用，配方给你自己取；默认回执是 JSON-LD，本页显式要 rows。</p>
+    </div>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <span>SPARQL</span>
+        <span class="spacer"></span>
+        <span class="mono">POST /api/sparql（format:"rows"）</span>
+      </div>
+      <div class="panel-body">
+        <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
+        <div class="bar" style="margin-top:8px">
+          <label>max_rows <input id="q-max" value="200" size="6"></label>
+          <button id="q-go">执行</button>
+          <span class="note">行数上限由 token 决定；页面最多渲染 200 行。</span>
+        </div>
       </div>
     </div>
-    <div id="q-meta"></div>
+    <div class="panel panel-flush" style="border-color:rgba(230,180,85,.3)">
+      <div class="panel-head"><span>查询元信息（先看这四段，再看表格）</span><span class="spacer"></span><span class="mono">warnings · coverage · join_states · truncated</span></div>
+      <div class="panel-body" style="padding:0">
+        <div id="q-meta"></div>
+      </div>
+    </div>
     <div id="q-table"></div>
   </section>
 
   <!-- ── 7 · 目录浏览 ───────────────────────────────────── -->
   <section id="v-catalog" class="view" hidden>
-    <div class="bar">
-      <label>page <input id="k-page" value="1" size="4"></label>
-      <label>page_size <input id="k-size" value="50" size="4"></label>
-      <button id="k-load">载入</button>
-      <span class="note">GET /api/catalog?page=&amp;page_size=（page_size ≤ 200）；点名字看 GET /api/describe?name=… 的详情。</span>
+    <div class="view-head">
+      <h2>目录浏览</h2>
+      <p>分页读 <code>GET /api/catalog</code>；<strong>点任意一行</strong>在右侧抽屉里看 <code>GET /api/describe</code> 的详情——抽屉不遮表格，方便对照着读。</p>
     </div>
-    <div id="k-summary" class="summary">尚未载入。</div>
-    <div id="k-table"></div>
-    <div class="pager">
-      <button id="k-prev">上一页</button>
-      <span id="k-pos"></span>
-      <button id="k-next">下一页</button>
+    <div class="panel panel-flush">
+      <div class="panel-head">
+        <label>page <input id="k-page" value="1" size="4"></label>
+        <label>page_size <input id="k-size" value="50" size="4"></label>
+        <button id="k-load">载入</button>
+        <span class="spacer"></span>
+        <span class="mono">page_size ≤ 200</span>
+      </div>
+      <div class="panel-body">
+        <div id="k-summary" class="summary">尚未载入。</div>
+        <div id="k-table" class="tablewrap tall"></div>
+        <div class="pager">
+          <button id="k-prev">上一页</button>
+          <span id="k-pos"></span>
+          <button id="k-next">下一页</button>
+        </div>
+      </div>
     </div>
     <div id="k-detail" class="panel" hidden></div>
   </section>
 
   <!-- ── 8 · 构建包（REQ-159）· 已按 ADR-013 迁到 Studio ── -->
   <section id="v-bundles" class="view" hidden>
+    <div class="view-head">
+      <h2>构建包</h2>
+      <p>REQ-159 的 8 条端点（建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效）。<strong>已按 ADR-013 迁到 Studio</strong>，本页保留为参考实现与本机直连库时的入口。</p>
+    </div>
     <div class="panel" style="border-color:var(--warn)">
       <div class="note" style="color:var(--warn);font-weight:600">
         ⚠️ 此流程已迁到 Studio（<code>/studio</code>）：本页的「构建包」入口仅为历史保留，新流程请在 Studio 里做。
@@ -439,88 +557,98 @@ pre{margin:6px 0 0;padding:8px;background:rgba(0,0,0,.28);border:1px solid var(-
     </div>
     <div id="b-msg"></div>
 
-    <div class="panel">
-      <h2>1 · 上传并校验（POST …/bundles，application/octet-stream）</h2>
-      <p class="note">包是构建端产出的 .ontokbundle 文件；页面只把**文件字节原样** POST 上去（⛔ 不套 JSON），服务端校验 sha256 与组件清单后回 state / bundle_id。</p>
-      <div class="bar">
-        <label>选包 <input id="b-file" type="file" accept=".ontokbundle"></label>
-        <button id="b-upload">上传并校验</button>
-      </div>
-      <div id="b-state" class="summary">还没有上传。</div>
-      <div id="b-components"></div>
-
-      <details style="margin-top:12px">
-        <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
-        <div class="bar" style="margin-top:8px">
-          <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符/下划线" autocomplete="off"></label>
-          <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
-          <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
-          <button id="b-new-submit">建立项目并生成 key</button>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>1 · 上传并校验（POST …/bundles，application/octet-stream）</span></div>
+      <div class="panel-body">
+        <p class="note">包是构建端产出的 .ontokbundle 文件；页面只把<strong>文件字节原样</strong> POST 上去（⛔ 不套 JSON），服务端校验 sha256 与组件清单后回 state / bundle_id。</p>
+        <div class="bar">
+          <label>选包 <input id="b-file" type="file" accept=".ontokbundle"></label>
+          <button id="b-upload">上传并校验</button>
         </div>
-        <p class="note">项目名只许小写字母 / 数字 / 连字符 / 下划线（首字符字母或数字，2–63 位；大写、空格、斜杠、点都不行）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
-        <div id="b-new-out"></div>
-      </details>
+        <div id="b-state" class="summary">还没有上传。</div>
+        <div id="b-components"></div>
+
+        <details style="margin-top:12px">
+          <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
+          <div class="bar" style="margin-top:8px">
+            <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符/下划线" autocomplete="off"></label>
+            <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
+            <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
+            <button id="b-new-submit">建立项目并生成 key</button>
+          </div>
+          <p class="note">项目名只许小写字母 / 数字 / 连字符 / 下划线（首字符字母或数字，2–63 位；大写、空格、斜杠、点都不行）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
+          <div id="b-new-out"></div>
+        </details>
+      </div>
     </div>
 
-    <div id="b-dsn" class="panel" hidden>
-      <h2>2 · 目标库连接（requires_dsn = true 时才需要）</h2>
-      <p class="note">DSN 由本页按 postgresql 形式拼（user / password 走 encodeURIComponent）；口令**只在这一次 PUT 里出现**，保存成功后只清空口令框：不回显、不记录、不进 sessionStorage。</p>
-      <div class="bar">
-        <label>host <input id="b-dsn-host" size="18" placeholder="数据库主机"></label>
-        <label>port <input id="b-dsn-port" size="6" value="5432"></label>
-        <label>库 <input id="b-dsn-db" size="14" placeholder="库名"></label>
+    <div id="b-dsn" class="panel panel-flush" hidden>
+      <div class="panel-head"><span>2 · 目标库连接（requires_dsn = true 时才需要）</span></div>
+      <div class="panel-body">
+        <p class="note">DSN 由本页按 postgresql 形式拼（user / password 走 encodeURIComponent）；口令<strong>只在这一次 PUT 里出现</strong>，保存成功后只清空口令框：不回显、不记录、不进 sessionStorage。</p>
+        <div class="bar">
+          <label>host <input id="b-dsn-host" size="18" placeholder="数据库主机"></label>
+          <label>port <input id="b-dsn-port" size="6" value="5432"></label>
+          <label>库 <input id="b-dsn-db" size="14" placeholder="库名"></label>
+        </div>
+        <div class="bar">
+          <label>user <input id="b-dsn-user" size="14" autocomplete="off"></label>
+          <label>password <input id="b-dsn-pass" type="password" autocomplete="new-password"></label>
+          <label>sslmode
+            <select id="b-dsn-ssl">
+              <option value="disable">disable</option>
+              <option value="require">require</option>
+              <option value="prefer">prefer</option>
+            </select>
+          </label>
+        </div>
+        <div class="bar">
+          <button id="b-dsn-save">保存 DSN</button>
+          <button id="b-dsn-test">测试连通</button>
+          <span class="note">PUT …/database 的回执只有 database_id / host / database / user（⛔ 响应里没有 dsn，本页也不显示）；测试打的是服务端<strong>已保存</strong>的那份连接。</span>
+        </div>
+        <div id="b-dsn-out"></div>
       </div>
-      <div class="bar">
-        <label>user <input id="b-dsn-user" size="14" autocomplete="off"></label>
-        <label>password <input id="b-dsn-pass" type="password" autocomplete="new-password"></label>
-        <label>sslmode
-          <select id="b-dsn-ssl">
-            <option value="disable">disable</option>
-            <option value="require">require</option>
-            <option value="prefer">prefer</option>
-          </select>
-        </label>
-      </div>
-      <div class="bar">
-        <button id="b-dsn-save">保存 DSN</button>
-        <button id="b-dsn-test">测试连通</button>
-        <span class="note">PUT …/database 的回执只有 database_id / host / database / user（⛔ 响应里没有 dsn，本页也不显示）；测试打的是服务端**已保存**的那份连接。</span>
-      </div>
-      <div id="b-dsn-out"></div>
     </div>
 
-    <div class="panel">
-      <h2>3 · 解析入库（POST …/bundles/&lt;id&gt;/import）</h2>
-      <div class="bar">
-        <button id="b-import" disabled>解析入库</button>
-        <span class="note">条件没满足时按钮是灰的：先上传拿到 bundle_id；requires_dsn 的包还要 DSN 保存 + 连通测试通过。</span>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>3 · 解析入库（POST …/bundles/&lt;id&gt;/import）</span></div>
+      <div class="panel-body">
+        <div class="bar">
+          <button id="b-import" disabled>解析入库</button>
+          <span class="note">条件没满足时按钮是灰的：先上传拿到 bundle_id；requires_dsn 的包还要 DSN 保存 + 连通测试通过。</span>
+        </div>
+        <div id="b-import-out"></div>
       </div>
-      <div id="b-import-out"></div>
     </div>
 
-    <div class="panel">
-      <h2>4 · 待确认清单（GET /api/review?proposal=p1）</h2>
-      <p class="note">本 tab 只做**汇总与门禁**：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。待确认条数取服务端的 `progress.pending`（= total − signed，两轨都定了才算签完）、阻断条数取 `progress.vetoed`；只有**待确认 0 条**时「冻结并切流量」才可点。</p>
-      <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
-      <div id="b-checklist" class="summary">尚未载入。</div>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>4 · 待确认清单（GET /api/review?proposal=p1）</span></div>
+      <div class="panel-body">
+        <p class="note">本 tab 只做<strong>汇总与门禁</strong>：逐条裁决仍在「评审」tab 做（⛔ 这里不调 /api/decide —— 两套裁决入口等于两套口径）。待确认条数取服务端的 <code>progress.pending</code>（= total − signed，两轨都定了才算签完）、阻断条数取 <code>progress.vetoed</code>；只有<strong>待确认 0 条</strong>时「冻结并切流量」才可点。</p>
+        <div class="bar"><button id="b-checklist-refresh">刷新清单</button></div>
+        <div id="b-checklist" class="summary">尚未载入。</div>
+      </div>
     </div>
 
-    <div class="panel">
-      <h2>5 · 生效（冻结并切流量）· key</h2>
-      <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 可以**随时再次查看**（`GET …/key`），本页只在内存里放着这一次拿到的明文供复制，不落任何浏览器存储。</p>
-      <div class="bar">
-        <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
-        <button id="b-rotate" class="danger">换 key…</button>
-        <button id="b-key-view">查看 key</button>
+    <div class="panel panel-flush">
+      <div class="panel-head"><span>5 · 生效（冻结并切流量）· key</span></div>
+      <div class="panel-body">
+        <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 可以<strong>随时再次查看</strong>（<code>GET …/key</code>），本页只在内存里放着这一次拿到的明文供复制，不落任何浏览器存储。</p>
+        <div class="bar">
+          <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
+          <button id="b-rotate" class="danger">换 key…</button>
+          <button id="b-key-view">查看 key</button>
+        </div>
+        <div class="note">本次查看会记一条审计（action=reveal_key）—— 这是「能再次查看」的唯一补偿，别把它删掉。</div>
+        <div id="b-key" hidden>
+          <div class="note">key 明文（按需拉取；只留在本页内存里，供复制）：</div>
+          <div id="b-key-val" class="mono"></div>
+          <div id="b-key-meta" class="note"></div>
+          <div class="bar"><button id="b-key-copy">复制 key</button></div>
+        </div>
+        <div id="b-key-out"></div>
       </div>
-      <div class="note">本次查看会记一条审计（action=reveal_key）—— 这是「能再次查看」的唯一补偿，别把它删掉。</div>
-      <div id="b-key" hidden>
-        <div class="note">key 明文（按需拉取；只留在本页内存里，供复制）：</div>
-        <div id="b-key-val" class="mono"></div>
-        <div id="b-key-meta" class="note"></div>
-        <div class="bar"><button id="b-key-copy">复制 key</button></div>
-      </div>
-      <div id="b-key-out"></div>
     </div>
   </section>
     </div>
@@ -950,7 +1078,7 @@ function reviewCard(it, d) {
   var card = el("article", "item" + ((it.biz === "rejected" || it.model === "rejected") ? " vetoed" : ""));
   var hd = el("div", "hd");
   hd.appendChild(el("span", "idx", "#" + it.item));
-  hd.appendChild(el("span", "target", it.target));
+  hd.appendChild(el("span", "target key", it.target));
   hd.appendChild(el("span", "kind", it.kind));
   hd.appendChild(badge("建议：" + (SUGG[sg.kind] || sg.kind), sg.kind === "conflict" ? "bad" : (sg.kind === "reject" ? "bad" : (sg.kind === "accept" ? "ok" : "warn"))));
   if (it.confidence && typeof it.confidence.score === "number") {
@@ -1185,7 +1313,12 @@ function renderAudit() {
   clear(box);
   var view = rows.slice(-1000);
   box.appendChild(makeTable(["时间", "token（摘要）", "动作", "目标", "结果", "耗时(ms)"], view.map(function (e) {
-    return [e.ts || "—", e.token || "—", e.action || "—", e.target || "—", e.result || "—", e.elapsed_ms];
+    return [
+      { text: e.ts || "—", cls: "mono" },
+      { text: e.token || "—", cls: "key" },
+      { text: e.action || "—", cls: "key" },
+      e.target || "—", e.result || "—", e.elapsed_ms
+    ];
   }), "还没有审计行（写操作与鉴权失败才会记）。"));
 }
 
@@ -1340,7 +1473,8 @@ function renderCatalog() {
   var box = $("k-table");
   clear(box);
   var rows = (d.items || []).map(function (it) {
-    var name = el("button", null, it.name);
+    // key / IRI 一律等宽（`.key`）：靠视觉模式识别，比例字体读起来慢。
+    var name = el("button", "key keylink", it.name);
     name.onclick = function () { describeName(it.name); };
     var detail;
     if (it.kind === "class") {
