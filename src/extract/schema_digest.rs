@@ -515,10 +515,10 @@ impl SchemaView {
             self.foreign_key_count,
         ));
         if !excluded.is_empty() {
-            // ⚠️ 只报**张数**、⛔ 不点名：名字进 prompt 反而会把模型引到那些表上
-            //（AC-5 的判据也是「`_volc_dts_pg_ddl_*` 不出现」）。名字进屏幕/stats。
+            // ⚠️ 只报**张数 + 类别**、⛔ 不点名：名字进 prompt 反而会把模型引到那些表上
+            //（R4 的判据是「垃圾表名不出现在摘要里」；具体名字只进屏幕/stats）。
             out.push_str(&format!(
-                "已排除 {} 张非业务表（`_*` 前缀 / alembic_version / DTS 复制 / 迁移类）—— \
+                "已排除 {} 张非业务表（迁移 / 复制 / 备份产物：下划线前缀、版本表、DTS 中间表等）—— \
                  它们**不在**下面的清单里，⛔ 别往上标。\n",
                 excluded.len(),
             ));
