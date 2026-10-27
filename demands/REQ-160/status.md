@@ -57,7 +57,15 @@ AC-005 只绑回环 · AC-006 acp 一条命令到审核台 · AC-007 不自动�
 | `skills/ontok-extract/SKILL.md` | 新增 **§十 抽完之后：交给人审核**（你的任务到此为止、交接口径、**四条不许代签**） |
 
 **顺带修了一处会直接坑人的陈旧**：两份 skill 里的构建命令还写着 `ontok doc ingest` / `ontok ontology export`，
-而 REQ-152 之后它们在 `ontok-builder` ⇒ **21 处命令已改**（只剩 `ontok console serve` 这类服务面命令仍是 `ontok`，正确）。
+而 REQ-152 之后它们在 `ontok-builder` ⇒ **21 处命令已改**。
+
+> ⚠️ **更正（join 2026-10-27 11:17 实证，我原先写错）**：`console` **也是构建面** ——
+> `ontok console serve` 不存在，正确写法是 **`ontok-builder console serve`**。
+> `ontok`（服务面）的子命令只有 **`query` / `mcp-server` / `serve`** 三个。
+> skill 里那两处由 join 在 `Deploy 38f50e0` 修正；本条 status 原先写的「`console` 仍是服务面」是错的。
+>
+> **根因**：`console` 名字像控制面，实际在 REQ-152 拆二进制时和构建面一起搬走了 ——
+> 判断「哪个二进制」要按**清单**，不能按名字像什么。
 
 ⇒ AC-008（skill 与二进制同版本 / 无「自动接受」指令）**现在可判**：两份 skill 里 `--accept-all` 只出现在「⛔ 不许」的上下文。
 
