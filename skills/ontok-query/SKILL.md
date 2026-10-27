@@ -515,16 +515,21 @@ $FETCH --mapping <am.json> --entity <entity id> \
 | 版本 | 是什么 · 脚本怎么对待 |
 | --- | --- |
 | `1` | **原始契约**：`auth` 只声明 `mode` + `credential_env`；`signed_headers` / `timestamp` / `scope` / `content_type` 由**签名器默认值**兜底（`--check` 末尾会提示正在用默认值）。 |
-| `2` | **契约增量只有一个**：`auth` 可显式声明 `signed_headers` / `timestamp` / `scope`（+ `content_type`）。⚠️ 数据侧差异（**不是契约差异**）：v2 的 AM 数据里用上了 `operation.path` / `.headers` / `.vars`，并把 `Region` 从 `request.template` 挪进 `operation.headers` 的 `{region}` 占位符。**脚本对两版一视同仁**，这三个键两版都读、缺了按兜底（见 [`AM-FIELDS.md`](AM-FIELDS.md) §3.2）。 |
+| `2` | **三条契约增量，全部可选**（⇒ v1 映射照常加载、行为逐字节不变）：① `operation` 泛化成 `headers{}` + `vars{}`（厂商概念降级成 header 模板，字段名里不再出现厂商名词）；② `auth` 可显式声明 `signed_headers` / `timestamp` / `scope`（+ `content_type`）；③ `@pending.get` 允许给**完整取数配方**（v1 只认 4 键 `class` / `filter` / `pushdown` / `ref`，一个不多）。⚠️ 数据侧差异（**不是契约差异**）：v2 的数据里用上了 `operation.path` / `.headers` / `.vars`，并把 `Region` 从 `request.template` 挪进 `operation.headers` 的 `{region}` 占位符；**脚本对两版一视同仁**，这几个键两版都读、缺了按兜底（见 [`AM-FIELDS.md`](AM-FIELDS.md) §3.2）。 |
 | `3` 及以上 / 非整数 | ⛔ **一律拒绝**：`am.invalid`（退出 2），消息**列出支持的版本**（`1, 2`）。⛔ 不「尽力解析」、不按最新版硬读。 |
 
-两条最容易误读的点：
+三条最容易误读的点：
 
 1. **脚本读哪些键，与版本无关**：两版读的是同一组 `auth` 键 —— `mode` · `credential_env` · `service` 必填
    （`service` 由签名器要求显式），`signed_headers` · `timestamp` · `scope` · `content_type` 可缺（缺则签名器默认）。
    版本只决定「契约**期望**你写不写」，⛔ **不要因为 AM 是 v2 就在调用侧加分支**。
 2. **显式写 ≠ 改签名**：v2 把四件套写进 AM 后，签出的 `Authorization` 必须与走签名器默认值时**逐字节相同**
    （`--selftest` 用同一签名向量对拍：同一份 `Signature`，否则就是「换个写法把签名签坏了」）。
+3. **v2 是「允许写」，不是「必须写」**：v2 映射里缺某个新字段 ⇒ 那一项**就是不出现**，
+   ⛔ **不要按 `auth.mode` 猜一个默认值**。源码注释说得很直接：
+   「**猜出来的签名头是错的，而错签名比没签名更难查**」。
+   ⇒ 缺 `auth.service`（`tc3` 的必填项）时脚本**直接拒**（`am.invalid`），不会替你补。
+
 
 #### ③ 必填 vs 可选
 
