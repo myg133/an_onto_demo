@@ -709,7 +709,9 @@ pub fn fetch_network_capturing(
     }
     let host = host_of(base_url);
     let url = format!("{base_url}/");
-    let service = opts.service.clone().unwrap_or_else(|| service_of(&host));
+    // ⭐ REQ-166 · service 只从「调用方显式值 / 契约 auth.service」来；
+    // `tc3-hmac-sha256` 拿不到就拒（⛔ 不从 host 首段猜）。
+    let service = resolve_service(source, opts.service.as_deref(), &host)?;
     let timestamp = opts
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
@@ -1610,6 +1612,50 @@ fn service_of(host: &str) -> String {
     host.split('.').next().unwrap_or(host).to_string()
 }
 
+/// ⭐ REQ-166 · 本次签名到底用哪个 `service` —— **⛔ TC3 不从 host 猜**。
+///
+/// 优先级：
+/// 1. 调用方显式 [`NetworkOptions::service`]（测试 / 自检钉值；生产 CLI 不设它）；
+/// 2. 契约 `sources[].auth.service`（作者按 API 文档写死的那一段）。
+///
+/// `tc3-hmac-sha256` 下两者都没有 ⇒ [`CODE_SCHEMA`] **拒绝**（fail-closed）。
+/// 其它 `mode` 保留旧行为 `service_of(host)`：那些 mode 本来就走不到签名
+/// （[`Credentials::resolve`] 会先报 [`CODE_AUTH_MODE_UNSUPPORTED`]）。
+pub fn resolve_service(
+    source: &Source,
+    override_service: Option<&str>,
+    host: &str,
+) -> Result<String, AccessError> {
+    let mode = source.auth.as_ref().map(|a| a.mode.as_str()).unwrap_or("none");
+    let picked = override_service
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            source
+                .auth
+                .as_ref()
+                .and_then(|a| a.service.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(s) = picked {
+        return Ok(s.to_string());
+    }
+    if mode.eq_ignore_ascii_case("tc3-hmac-sha256") {
+        return Err(AccessError::new(
+            CODE_SCHEMA,
+            format!(
+                "source `{}` 的 `auth.mode` 是 `tc3-hmac-sha256`，但拿不到 `auth.service`。\n\
+                 它是签名串 `{{date}}/{{service}}/tc3_request` 的一段，也是派生签名密钥的输入 —— \
+                 ⛔ 本实现**不会**退回去拿 `base_url` 首段猜（猜错只会签出一个错的 `Authorization`）。\n\
+                 改法：在 AM 的 `sources[].auth` 里显式写 `\"service\": \"<该接口所属产品名>\"`。",
+                source.id
+            ),
+        ));
+    }
+    Ok(service_of(host))
+}
+
 // ══════════════════════════════════════════════════════════════
 // 传输层错误 → 码 的映射（复审点名的边界）
 // ══════════════════════════════════════════════════════════════
@@ -1862,5 +1908,63 @@ mod tests {
         ));
         assert_eq!(e.code, CODE_SCHEMA, "{e}");
         assert!(e.message.contains("不是整数"), "{e}");
+    }
+
+    // ── ⭐ REQ-166 · service 只从契约来（⛔ 不从 host 首段猜）────────────
+
+    fn source_with(mode: &str, service: Option<&str>) -> Source {
+        Source {
+            id: "s1".to_string(),
+            kind: "http-json".to_string(),
+            base_url: "https://api.example.com".to_string(),
+            auth: Some(crate::access::Auth {
+                mode: mode.to_string(),
+                credential_env: Vec::new(),
+                service: service.map(str::to_string),
+                signed_headers: None,
+                timestamp: None,
+                scope: None,
+            }),
+            defaults: BTreeMap::new(),
+        }
+    }
+
+    /// ① tc3 有 `auth.service` ⇒ 签的就是它；`host` 首段（`api`）**不参与**。
+    #[test]
+    fn req166_tc3_service_comes_from_the_contract_not_the_host() {
+        let s = source_with("tc3-hmac-sha256", Some("cvm"));
+        assert_eq!(
+            resolve_service(&s, None, "api.example.com").unwrap(),
+            "cvm",
+            "host 首段是 `api` —— 若还从 host 推，这里会拿到 `api`"
+        );
+        // 显式 override（测试/自检钉值）仍然优先。
+        assert_eq!(
+            resolve_service(&s, Some("cbs"), "api.example.com").unwrap(),
+            "cbs"
+        );
+        // 空白 override 不算数（与 `pick` 的口径一致）。
+        assert_eq!(
+            resolve_service(&s, Some("   "), "api.example.com").unwrap(),
+            "cvm"
+        );
+    }
+
+    /// ② tc3 **拿不到** service ⇒ 网络层也 fail-closed（⛔ 回落 `service_of`）。
+    #[test]
+    fn req166_tc3_without_service_is_refused_at_the_network_layer() {
+        let s = source_with("tc3-hmac-sha256", None);
+        let e = resolve_service(&s, None, "api.example.com").unwrap_err();
+        assert_eq!(e.code, CODE_SCHEMA, "{e}");
+        assert!(e.message.contains("auth.service"), "要点名：{e}");
+        assert!(e.message.contains("tc3"), "要说清哪一种签名：{e}");
+        assert!(e.message.contains("不会"), "要说明不从 host 猜：{e}");
+    }
+
+    /// ③ 非 tc3 模式保留旧行为（host 首段）——⛔ 不一刀切。
+    #[test]
+    fn req166_non_tc3_keeps_the_old_host_fallback() {
+        let s = source_with("none", None);
+        assert_eq!(resolve_service(&s, None, "api.example.com").unwrap(), "api");
     }
 }

@@ -477,6 +477,16 @@ pub struct RequestSpec {
     pub paging_offset: Option<String>,
     /// 同上，limit。
     pub paging_limit: Option<String>,
+    /// ⭐ REQ-166 · **请求级**单页上限（`request.paging.max_limit`）。
+    ///
+    /// 与实体级 [`Paging::max_limit`] 不是同一件事但值同源：实体级管「一页取多少行」的循环，
+    /// 这里声明**写进请求体的那个值**。join 的取数脚本按
+    /// `paging.max_limit → request.paging.max_limit → 100` 取值 ——
+    /// 所以「契约写了它就必须被承载」，⛔ 静默忽略等于两套真相。
+    ///
+    /// `None` ⇒ 该键不出现（客户端退到实体级 `paging.max_limit`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_limit: Option<u32>,
     /// 页码写到哪个路径（`PageNumber`）。与 [`RequestSpec::paging_offset`] **互斥**。
     ///
     /// 有它 ⇒ 分页器发的是**页码**（`已取页数 + offset_base`，
@@ -1438,6 +1448,21 @@ fn parse_request_spec(
                 out.paging_limit = opt_str(p, "limit");
                 out.paging_page = opt_str(p, "page");
 
+                // ⭐ REQ-166 · 请求级分页上限（正整数；0 / 非数字都点名，⛔ 不静默当 100）。
+                if let Some(v) = p.get("max_limit") {
+                    match v.as_u64() {
+                        Some(n) if n >= 1 && n <= u32::MAX as u64 => out.max_limit = Some(n as u32),
+                        _ => problems.push(Problem::new(
+                            CODE_SCHEMA,
+                            format!("{ploc}.max_limit"),
+                            format!(
+                                "必须是 ≥ 1 的整数（收到 {v}）—— 0 意味着一页也取不到；\
+                                 这个值会原样写进请求体。⛔ 不静默当成默认 100。"
+                            ),
+                        )),
+                    }
+                }
+
                 // `offset` 与 `page` 是对同一件事的两种读法 —— 同时写就是语义打架。
                 if out.paging_offset.is_some() && out.paging_page.is_some() {
                     problems.push(Problem::new(
@@ -1496,6 +1521,17 @@ fn parse_request_spec(
                 format!("{loc} 字段 request.paging"),
                 "必须是对象：`{\"offset\":\"Offset\",\"limit\":\"Limit\"}`（值是**路径**）。",
             )),
+        }
+    }
+
+    // ⭐ REQ-166 · 序列化形态是**扁平**的（`paging_offset` / `max_limit` …，见 [`RequestSpec`] 的
+    // `Serialize`）。这里只为 `max_limit` 做一次镜像读取 ⇒ 「解析 → 序列化 → 再解析」不丢字段。
+    // ⚠️ 其它扁平键没有消费方，不做无谓双读。
+    if out.max_limit.is_none() {
+        if let Some(n) = obj.get("max_limit").and_then(Value::as_u64) {
+            if (1..=u32::MAX as u64).contains(&n) {
+                out.max_limit = Some(n as u32);
+            }
         }
     }
 
@@ -2727,7 +2763,8 @@ mod tests {
     // | 3 | 非 tc3 缺 `service` ⇒ **不**拒（防一刀切） | 一刀切时这里红 |
     // | 4 | `shape: array` 的绑定序列化/反序列化不丢 | 丢字段时这里红 |
     // | 5 | 两份 fixture 都能通过 validate | 数据没跟上时这里红 |
-    // | 6 | 每个有 `iterator` 的 entity 都**显式**写了 paging | 有人删掉/靠默认值时这里红 |
+    // | 6 | 每个有 `iterator` 的 entity 都**显式**写了 paging（两层） | 有人删掉/靠默认值时这里红 |
+    // | 7 | `request.paging.max_limit` 解析承载 + 序列化写出 + 往返 | 静默忽略时这里红 |
 
     fn repo_root() -> std::path::PathBuf {
         // 单测在 crate 根目录跑（cargo test 的 CWD）⇒ 夹具用运行期定位即可。
@@ -2843,6 +2880,43 @@ mod tests {
         assert_eq!(m3.entities[0].request.bindings["ids"].shape(), BindingShape::Scalar);
     }
 
+    /// ⑦ `request.paging.max_limit`：解析要承载、序列化要写出（⛔ 静默忽略 = 两套真相）。
+    #[test]
+    fn req166_request_paging_max_limit_round_trips() {
+        let text = with_request(serde_json::json!({
+            "template": { "Constant": "x" },
+            "paging": { "offset": "Offset", "limit": "Limit", "max_limit": 20, "value_type": "string" }
+        }));
+        let m = parse(&text).expect("`request.paging.max_limit` 应当被接受");
+        let spec = &m.entities[0].request;
+        assert_eq!(spec.max_limit, Some(20), "解析后必须承载（⛔ 静默忽略）");
+        assert_eq!(spec.paging_value_type, PagingValueType::String);
+        assert_eq!(spec.paging_offset.as_deref(), Some("Offset"));
+
+        // 序列化：写了就必须写出来（否则客户端/脚本只能退回默认 100）。
+        let wire = serde_json::to_value(spec).expect("RequestSpec 可序列化");
+        assert_eq!(wire["max_limit"], serde_json::json!(20), "{wire}");
+
+        // 再解析：往返不丢（扁平 `max_limit` 是序列化形态，解析端做镜像读取）。
+        let mut problems = Vec::new();
+        let back = parse_request_spec(Some(&wire), "entities[0]", &mut problems);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.max_limit, Some(20), "序列化 → 解析 之后必须还在");
+        // 其它扁平分页键没有消费方 ⇒ 不做镜像（这里只钉 max_limit 这一条）。
+
+        // 0 / 负数 / 字符串都要点名，⛔ 不静默当成 100。
+        for bad in [serde_json::json!(0), serde_json::json!(-5), serde_json::json!("100")] {
+            let bad_text = with_request(serde_json::json!({ "paging": { "max_limit": bad } }));
+            let errs = parse(&bad_text).unwrap_err();
+            assert!(
+                errs.iter().any(|p| {
+                    p.code == CODE_SCHEMA && p.location.contains("request.paging.max_limit")
+                }),
+                "必须点名 max_limit：{errs:?}"
+            );
+        }
+    }
+
     /// ⑤ 交付的两份 fixture 都能**通过 validate**（数据跟上契约，否则取数直接跑不了）。
     #[test]
     fn req166_fixtures_pass_validation() {
@@ -2883,6 +2957,18 @@ mod tests {
             for s in tc3 {
                 let svc = s.auth.as_ref().and_then(|a| a.service.as_deref()).unwrap_or("");
                 assert!(!svc.trim().is_empty(), "{name} 的 source `{}` 缺 service", s.id);
+            }
+
+            // 请求级分页上限必须被契约**承载**（写了却被静默忽略 = 两套真相）。
+            for e in &m.entities {
+                if e.iterator.trim().is_empty() {
+                    continue;
+                }
+                assert!(
+                    e.request.max_limit.is_some_and(|n| n >= 1),
+                    "{name} · entity `{}` 的 request.paging.max_limit 没被解析承载",
+                    e.id
+                );
             }
 
             let r = super::validate::validate(&m, &ontology, &mapping_dir);

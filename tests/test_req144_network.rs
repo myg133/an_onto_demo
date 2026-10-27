@@ -499,6 +499,43 @@ fn normal_two_pages_with_all_signed_headers() {
     );
 }
 
+/// ⭐ REQ-166 · 签名用的 `service` 来自 AM 的 `auth.service`，**⛔ 不从 host 首段推**。
+///
+/// 假端点的 host 是 `127.0.0.1:PORT`（首段 `127`）—— 旧实现会把 service 推成 `127`，
+/// 于是 `Credential=…/127/tc3_request`；这条判据把「确实用了 AM 的值」钉死。
+#[test]
+fn req166_signing_service_comes_from_the_mapping_not_the_host() {
+    let server = FakeServer::start(vec![Scripted::Respond(200, page(&["ins-1"], 1))]);
+    let (_path, mapping) = temp_mapping("req166-service", &server.url(), 5000);
+    // 关键：**不**在 NetworkOptions 里钉 service（生产 CLI 也不钉）。
+    let opts = NetworkOptions {
+        service: None,
+        ..options(50)
+    };
+
+    let doc = net::fetch_network(&mapping, &ontology_iri(), "cvm_instance", &opts, &creds())
+        .expect("AM 有 auth.service ⇒ 应当能签、能取");
+    let rec = doc.meta.network.as_ref().expect("meta.network");
+    assert_eq!(
+        rec.service, "cvm",
+        "service 必须来自 AM 的 auth.service（host 首段是 `127`）"
+    );
+
+    let seen = server.seen();
+    assert_eq!(seen.len(), 1);
+    let auth = seen[0]
+        .header("authorization")
+        .expect("必须有 Authorization 头");
+    assert!(
+        auth.starts_with(&format!(
+            "TC3-HMAC-SHA256 Credential={ID}/2021-05-03/cvm/tc3_request"
+        )),
+        "签名 scope 必须是 AM 的 service（`cvm`），不是 host 推出来的 `127`：{auth}"
+    );
+    // 并且签名与它自己发的 body 仍然自洽（换了 service 来源不等于换了签名算法）。
+    assert_eq!(auth, expected_authorization(&seen[0].body, &server.addr));
+}
+
 // ══════════════════════════════════════════════════════════════
 // 用例 1b · F4：**通用请求模板**（任意 JSON 形状 + 占位符绑定）
 //
