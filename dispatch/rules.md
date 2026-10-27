@@ -958,3 +958,26 @@ commit message 里带一句「改写清单：BA/.local/dispatch/…」。
 3. 要主张因果，至少要一条**反证**：不做这个操作是否仍然失败？（对照实验）
 
 > 这条与「改代码迎合守卫」是同一类毛病的两面：**叙述比事实多走了一步**。
+
+---
+
+## 长驻服务**不要**用 target 目录里的 exe 跑（2026-10-27，第二次被咬）
+
+**现象**：`ontok-builder console serve` 从 `.local/cargo-162/debug/ontok-builder.exe` 起，
+过几分钟**静默退出（exit 1、无任何报错）**。两次都发生在「同一 target 里有 `cargo` 重新链接」之后。
+
+**两种互害**：
+
+| 方向 | 后果 |
+| --- | --- |
+| 服务在跑 ⇒ 你要 `cargo test` | cargo 无法替换 exe ⇒ `拒绝访问 (os error 5)`，测试红 |
+| `cargo` 在链 ⇒ 服务在跑 | 服务被静默干掉（**没有任何错误输出**，最难查的那种） |
+
+**硬规定**：要跑长驻服务（console / query serve / review open），先把 exe **复制出去**：
+
+```powershell
+Copy-Item .local\cargo-XXX\debug\ontok-builder.exe .local\console-ui\ontok-builder-XXX.exe -Force
+& .local\console-ui\ontok-builder-XXX.exe console serve --dir <工作目录> --bind 127.0.0.1:8899
+```
+
+> 这正是「基线比对用复制 exe、不要再建 target」那条的同源做法 —— **产物要跟构建目录解耦**。
