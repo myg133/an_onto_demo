@@ -98,6 +98,21 @@ pub enum Cmd {
     /// 指纹缓存也是本地文件（默认 `<out>.cache.json`）。
     #[command(verbatim_doc_comment)]
     Doc { #[command(subcommand)] cmd: DocCmd },
+    /// ⭐ REQ-160 · **构建端一条命令跑到审核台**：抽取 → 合并 → 导入 → 起审核台
+    ///
+    /// | 段 | 做什么 | 连库？ |
+    /// | --- | --- | --- |
+    /// | ① `doc ingest` | 文档 → 带证据的断言 JSONL（ACP 子进程逐块抽取） | 否 |
+    /// | ② `doc merge` | 断言 → 机械并进一份提案（同 `proposal.json` 形状） | 否 |
+    /// | ③ `proposal import` | 提案 → 元数据库（与 `import` / `POST /api/import` 同一个函数） | 是 |
+    /// | ④ `review open` | **起审核台**，人看到待审清单（本需求的共同出口） | 是 |
+    ///
+    /// ⛔ **不自动 apply / freeze**：终点是「人在页面上看到待审清单」，不是「本体已生效」。
+    /// ⚠️ 每一段都仍然可以单独跑（`--work-dir` 留着中间产物，重跑命中缓存即 0 token）；
+    /// 本命令只是**便利入口**，不是唯一入口。
+    /// ⚠️ 只做**文档路径**：库路径（`introspect` / `propose`）是另一条链，不在本命令里。
+    #[command(verbatim_doc_comment)]
+    Build { #[command(subcommand)] cmd: BuildCmd },
     /// REQ-118 · **名字提案**（决策点一：表名 / 属性名的中文名）
     ///
     /// ADR-005：涉及决策的先让 AI 提案，**提案永不权威**。本命令只产出提案文件，
@@ -1330,6 +1345,93 @@ pub enum ReviewCmd {
     },
 }
 
+/// ⭐ REQ-160 · 构建端的**编排入口**（`ontok-builder build <子命令>`）。
+///
+/// 今天只有一个子命令 `run`。为什么不做成 `--all` 开关挂在 `doc ingest` 上：
+/// 「抽取」与「编排」的失败面完全不同（前者是模型 / 预算，后者是库 / 端口），
+/// 合成一个命令会让「只想重跑合并」也被迫走一遍抽取（demand §九-风险 2）。
+#[derive(Subcommand)]
+pub enum BuildCmd {
+    /// 文档 → 抽取 → 合并 → 导入 → **起审核台**（⛔ 不 apply / freeze）
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder build run --project demo --input docs/ --agent acp --agent-command pi-acp --agent-skill Deploy/skills/ontok-extract/SKILL.md
+    ///
+    /// # 四条裁定
+    ///
+    /// | 裁定 | 行为 |
+    /// | --- | --- |
+    /// | R1 | **任一阶段失败即整体失败**（退出码非 0），且**不留下半成品**：后面的段一个都不跑 |
+    /// | R2 | 末尾**自动**起审核台；`--no-browser` 只影响开不开浏览器，不影响起不起来 |
+    /// | R3 | ⛔ **不自动 apply / freeze** —— 决策只在页面上由人做 |
+    /// | R4 | 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑；指纹缓存命中即 0 token |
+    ///
+    /// ⚠️ 基版本：项目不存在会新建（幂等），一版都没有会建 v1（**不冻结**）——
+    /// 这是为了让「从零开始」也能一条命令跑通；最新版**已冻结**时不会自动开新版本
+    /// （那是人的决定），报错并给出 `version new` 的写法。
+    /// ⚠️ 不给 `--proposal` 时会在工作目录里生成一份**空提案**并自动打开纯文档通路
+    /// （REQ-143）：新建实体 / 关系的档位是 `low`、`reviewed_by: null`，仍需人签。
+    /// ⚠️ 退出码：`0` 正常；`1` 环境 / 库错（含 agent 连不上）；`2` 入参不合法。
+    #[command(verbatim_doc_comment)]
+    Run {
+        /// 项目名（不存在会新建；与 `import` 同一个 `get_or_create`）
+        #[arg(long)]
+        project: String,
+        /// 输入：一个 `.md` / `.txt` 文件，或一个目录（递归）。⛔ `.pdf` / `.docx` 直接报错
+        #[arg(long)]
+        input: PathBuf,
+        /// 抽取实现。**只认 `acp`**（R5：本命令只做文档路径）
+        #[arg(long)]
+        agent: String,
+        /// ACP 子进程命令行（如 `pi-acp`）。⛔ 没有默认值
+        #[arg(long)]
+        agent_command: String,
+        /// 抽取契约（skill）的路径 —— 一份 `.md`，或装着 `SKILL.md` 的目录
+        #[arg(long)]
+        agent_skill: PathBuf,
+        /// ACP 单轮往返截止（秒）。省略 = `doc ingest` 的默认值（180）
+        #[arg(long)]
+        agent_timeout_secs: Option<u64>,
+        /// 有块失败 / 回答不可用率 > 20% ⇒ 退出码非 0 且**一个产物都不写**（R1 的同一口径）
+        #[arg(long)]
+        strict_deterministic: bool,
+        /// 中间产物的落点。默认 `.ontok-build/`
+        #[arg(long, default_value = crate::review_open::build_run::DEFAULT_WORK_DIR)]
+        work_dir: PathBuf,
+        /// 基础提案（省略 = 生成空提案 + 打开纯文档通路）
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// 强制打开 `doc merge --allow-doc-only`（给了 `--proposal` 时默认**关**）
+        #[arg(long)]
+        allow_doc_only: bool,
+        /// 基版本序号（省略 = 最新一版；一版都没有就建 v1）
+        #[arg(long)]
+        base_version: Option<i32>,
+        /// 真实 schema（`doc merge` 的严格校验 + 审核台的声明校验）
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// 审核台的监听地址。默认 `127.0.0.1:0`
+        #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
+        bind: String,
+        /// 审核台允许绑非回环地址（⛔ 不加就只能绑回环）
+        #[arg(long)]
+        allow_public: bool,
+        /// 不自动打开浏览器（只影响浏览器，不影响起不起来 —— R2）
+        #[arg(long)]
+        no_browser: bool,
+        /// 审核台一次性口令的有效期
+        #[arg(long, default_value = crate::review_open::DEFAULT_TOKEN_TTL)]
+        token_ttl: String,
+        /// IRI 基（透传给审核台）
+        #[arg(long)]
+        base: Option<String>,
+        /// 审核审计落点（**追加**写；省略时只写 stdout）
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum ProposalCmd {
     /// 应用提案，产生新版本
@@ -2158,6 +2260,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cmd => Cmd::Review { cmd },
         },
+        // ⭐ REQ-160 · `build run` 的**入参**也在连库之前判一遍（命令整体仍走下面那条路：
+        // ③④ 段要元数据库）。不这样做，没配库的机器上 `--input` 打错也只会看到
+        // 「ONTOK_DATABASE_URL 未设置」——报错指向错的原因，退出码也从 2 变成 1。
+        Cmd::Build { cmd } => {
+            crate::review_open::finish(crate::review_open::build_run::validate(&build_options(&cmd)))?;
+            Cmd::Build { cmd }
+        }
         cmd => cmd,
     };
 
@@ -2181,6 +2290,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
         // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化；⛔ 只暴露既有流程）
         Cmd::Console { cmd } => console_cmd(&pool, cmd).await,
+        // ⭐ REQ-160 · 一条命令跑到审核台（① ② 段不碰库，③ ④ 段要元数据库 ⇒
+        // 放在连库之后；两段的失败面在 `review_open::build_run` 里各自点名）。
+        Cmd::Build { cmd } => build_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -6931,6 +7043,62 @@ async fn console_cmd(pool: &PgPool, cmd: ConsoleCmd) -> anyhow::Result<()> {
         base,
     };
     crate::console::serve::serve(pool, args).await
+}
+
+/// ⭐ REQ-160 · `BuildCmd` → [`crate::review_open::build_run::Options`]。
+///
+/// **唯一**的映射点：连库之前先判入参那一路（[`run`] 的开头）也用它，
+/// 否则「CLI 的字段」会有两份抄写，改一个忘一个。
+fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
+    let BuildCmd::Run {
+        project,
+        input,
+        agent,
+        agent_command,
+        agent_skill,
+        agent_timeout_secs,
+        strict_deterministic,
+        work_dir,
+        proposal,
+        allow_doc_only,
+        base_version,
+        schema,
+        bind,
+        allow_public,
+        no_browser,
+        token_ttl,
+        base,
+        audit_out,
+    } = cmd;
+    crate::review_open::build_run::Options {
+        project: project.clone(),
+        input: input.clone(),
+        agent: agent.clone(),
+        agent_command: agent_command.clone(),
+        agent_skill: agent_skill.clone(),
+        agent_timeout_secs: *agent_timeout_secs,
+        strict_deterministic: *strict_deterministic,
+        work_dir: work_dir.clone(),
+        schema: schema.clone(),
+        proposal: proposal.clone(),
+        allow_doc_only: *allow_doc_only,
+        base_version: *base_version,
+        bind: bind.clone(),
+        allow_public: *allow_public,
+        no_browser: *no_browser,
+        token_ttl: token_ttl.clone(),
+        base: base.clone(),
+        audit_out: audit_out.clone(),
+    }
+}
+
+/// ⭐ REQ-160 · `ontok-builder build run` 的装配点。
+///
+/// 本函数**只做参数映射**：四段的实现、失败语义（R1）、「不自动签」（R3）全在
+/// [`crate::review_open::build_run`]，因为那里能被单测直接跑（①② 段不需要库）。
+/// 收尾走 [`crate::review_open::finish`]：入参不合法 ⇒ 退出码 2。
+async fn build_cmd(pool: &PgPool, cmd: BuildCmd) -> anyhow::Result<()> {
+    crate::review_open::finish(crate::review_open::build_run::run(pool, build_options(&cmd)).await)
 }
 
 // ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。

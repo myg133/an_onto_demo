@@ -56,6 +56,8 @@
 //! - `--schema` 缺省时声明校验**无所对照**（见 [`load_schema`]）：页面照常能审，
 //!   但 `PUT /api/config/*` 会被拒绝 —— 这是刻意的 fail-closed，⛔ 不造一个假 schema。
 
+pub mod build_run;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -553,14 +555,50 @@ pub async fn resolve_target(
     Ok((proj, vrow))
 }
 
-/// 起审核台（**前台**，Ctrl-C 退出即失效）。
+/// `review open` 里**不需要数据库**就能判完的那部分（纯函数）。
+///
+/// 为什么把它单独拿出来：`--bind 0.0.0.0:8899` 不带 `--allow-public` 是**入参错**（exit 2），
+/// 而「元数据库连不上」是**环境错**（exit 1）。若先连库，未配库的机器上永远看不到
+/// 那条「地址写错了」——报错会指向错的原因（与 `doc ingest` 在连库之前分派同一条纪律）。
+#[derive(Debug, Clone, Copy)]
+pub struct Prepared {
+    pub addr: SocketAddr,
+    pub verdict: crate::console::serve::BindVerdict,
+    pub ttl: Duration,
+}
+
+/// 判入参（地址 + 回环闸 + TTL）。**零 I/O、零数据库**。
+pub fn prepare(args: &OpenArgs) -> Result<Prepared, anyhow::Error> {
+    let (addr, verdict) = check_listen_addr(&args.bind, args.allow_public)?;
+    let ttl = parse_token_ttl(&args.token_ttl).map_err(bad)?;
+    Ok(Prepared { addr, verdict, ttl })
+}
+
+/// 起审核台：**先判入参，再连库**（见 [`Prepared`]），然后走 [`open_with`]。
+///
+/// ⛔ 本命令**不跑迁移**：它只读（项目 / 版本 / 提案）——「读不动就提示先跑一次迁移」，
+/// 而不是替用户改库。这也是 demand §三-1「只读，不迁移、不写」的落点。
+pub async fn open(args: OpenArgs) -> Result<(), anyhow::Error> {
+    prepare(&args)?;
+    let url = crate::config::require_env(crate::config::DATABASE_URL_ENV)
+        .or_else(|_| crate::config::require_env(crate::config::TEST_DATABASE_URL_ENV))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{e}\n  审核台要读元数据库（项目 / 版本 / 提案），没有内存替身。\n  \
+                 （⛔ 本命令不连源库：它审的是元数据库里的提案与版本。）"
+            )
+        })?;
+    let pool = crate::db::pool::connect(&url).await?;
+    open_with(&pool, args).await
+}
+
+/// 已经拿到连接池的入口（`build run` 用它：那一路本来就连着库）。
 ///
 /// 顺序见模块头「绑定与端口」一节；每一步失败都在**绑 socket 之前**报出来
 /// （除了绑本身），与 `console::serve` 同一条纪律。
-pub async fn open(pool: &PgPool, args: OpenArgs) -> Result<(), anyhow::Error> {
-    // ── ① 地址 + 回环闸（复用 check_bind）──────────────────────
-    let (want_addr, verdict) = check_listen_addr(&args.bind, args.allow_public)?;
-    let ttl = parse_token_ttl(&args.token_ttl).map_err(bad)?;
+pub async fn open_with(pool: &PgPool, args: OpenArgs) -> Result<(), anyhow::Error> {
+    // ── ① 地址 + 回环闸（复用 check_bind）／TTL ────────────────
+    let Prepared { addr: want_addr, verdict, ttl } = prepare(&args)?;
 
     // ── ② 项目 / 版本存在（只读）──────────────────────────────
     let (proj, vrow) = resolve_target(pool, &args.project, args.version).await?;
