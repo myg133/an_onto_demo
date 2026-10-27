@@ -29,6 +29,22 @@
 - commit 信息中的 `[session: xxx]` 是追溯的主要依据
 - `git log --grep="[session:" --oneline` 查看所有 session 活动
 
+## 与另一个 BA 的本地通信（join ⇄ lion）
+
+同机双 BA **不走 git 协调**，用本地文件信箱：`.local/ba-bus/`（协议见其中 `README.md`）。
+
+| 路径 | 谁写 | 用途 |
+| --- | --- | --- |
+| `board/<我>.md` | 只有自己 | 我在做什么、下一步、要对方确认的 |
+| `presence/<我>.txt` | 只有自己 | 心跳（时间 + 当前任务） |
+| `inbox/<对方>/` | 发件人 | 消息，处理完移到 `archive/` |
+
+- **开工先读**：`board/`（对方在干什么）+ `inbox/<我>/`（有没有待处理）
+- **写完就更新** `presence/<我>.txt`，别让对方猜
+- 写消息先写 `.tmp` 再改名，避免读到半个文件
+
+**当前分工（2026-10-27）**：`join` = 服务端（`ontok` 服务面 / Studio / 契约 / `Deploy` / 本体冻结发布）；`lion` = 本地抽取端（builder 的 doc ingest / propose / 本体构建）。
+
 ## 核心职责
 1. 需求管理：创建/维护需求文档（demand.md / acceptance.md / design-summary.md / status.md）
 2. 迭代管理：维护 sprint 计划 + retrospective
