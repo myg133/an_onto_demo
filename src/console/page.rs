@@ -396,12 +396,12 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
       <details style="margin-top:12px">
         <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
         <div class="bar" style="margin-top:8px">
-          <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符" autocomplete="off"></label>
+          <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符/下划线" autocomplete="off"></label>
           <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
           <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
           <button id="b-new-submit">建立项目并生成 key</button>
         </div>
-        <p class="note">项目名只许小写字母 / 数字 / 连字符（首字符字母或数字，2–63 位）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
+        <p class="note">项目名只许小写字母 / 数字 / 连字符 / 下划线（首字符字母或数字，2–63 位；大写、空格、斜杠、点都不行）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
         <div id="b-new-out"></div>
       </details>
     </div>
@@ -1408,16 +1408,23 @@ function loadBundles() {
 // 新建项目：POST /api/projects（建项目 + 发 key）。端点是**路径作用域** `:p`，不读 svc.project，
 // 所以建出来的项目与 console 启动参数无关，可以立刻接着上传 / 解析 / 激活。
 // 前端先校验，不合格**就地报错、不发请求**（省一次 400）。`key_label` 必填（审计归属）。
+// 项目名的唯一校验点，口径与 `manifest.project` 的 pattern 完全一致：
+// `^[a-z0-9][a-z0-9_-]{1,62}$` —— 小写字母 / 数字 / 连字符 / **下划线**，
+// 首字符必须是字母或数字，2–63 位。大写 / 空格 / 斜杠 / 点 / `..` 仍然全禁。
+// ⚠️ 改这条正则必须**同时**改下面 BAD_PROJECT_NAME 的文案，否则用户会看到「说得比做的严」。
+function projectNameOk(name) {
+  return /^[a-z0-9][a-z0-9_-]{1,62}$/.test(name);
+}
 function createProject() {
   var name = $("b-new-project").value.trim();
   var label = $("b-new-label").value.trim();
   var keyLabel = $("b-new-key-label").value.trim();
   var out = $("b-new-out");
   clear(out);
-  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(name)) {
+  if (!projectNameOk(name)) {
     out.appendChild(errBox(wbError(400, "BAD_PROJECT_NAME",
       "项目名不合法：" + (name || "（空）"),
-      "只许小写字母 / 数字 / 连字符，首字符是字母或数字，长度 2–63（例如两个单词用连字符连起来）。")));
+      "只许小写字母 / 数字 / 连字符 / 下划线，首字符是字母或数字，长度 2–63（例如两个词用连字符或下划线连起来；大写、空格、斜杠、点都不行）。")));
     setMsg("项目名不合法：没有发出任何请求。", "bad");
     return;
   }
@@ -2339,6 +2346,45 @@ mod tests {
             CONSOLE_HTML.matches("[\"后果\"").count(),
             5,
             "每个确认框都要写后果"
+        );
+    }
+
+    /// 项目名允许**下划线**（F-1）：前端校验必须与 `manifest.project` 的 pattern 同一口径。
+    ///
+    /// 钉两件事：
+    /// 1. 字符类里有 `_`（⛔ 别退回旧的 `[a-z0-9-]`，那会把 `ops_team` 判成非法）；
+    /// 2. 校验只有**一个**实现点 `projectNameOk()`，`createProject()` 必须调它 ——
+    ///    否则「代码放行、文案拦下」或反过来，用户看到的就是自相矛盾的报错。
+    ///
+    /// 大写 / 空格 / 斜杠 / 点仍然必须被拒（`A-Z` 不许回到字符类里）。
+    #[test]
+    fn the_project_name_pattern_allows_underscore() {
+        assert!(
+            CONSOLE_HTML.contains("a-z0-9_-"),
+            "项目名 pattern 必须允许下划线（首字符字母或数字，其后可含 _）"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("a-z0-9-]"),
+            "别留着旧字符类 [a-z0-9-]：那会把带下划线的项目名判成非法"
+        );
+        assert!(
+            CONSOLE_HTML.contains("function projectNameOk(name)"),
+            "项目名校验要有唯一实现点 projectNameOk()"
+        );
+        assert!(
+            CONSOLE_HTML.contains("!projectNameOk(name)"),
+            "createProject() 必须走 projectNameOk()（⛔ 别再加一条内联正则）"
+        );
+        let at = CONSOLE_HTML
+            .find("function projectNameOk(name)")
+            .expect("缺 projectNameOk()");
+        let body = &CONSOLE_HTML[at..(at + 240).min(CONSOLE_HTML.len())];
+        assert!(!body.contains("A-Z"), "大写字母必须继续被拒：{body}");
+        assert!(body.contains("_"), "字符类里必须有下划线：{body}");
+        // 代码与文案一起改：报错 / 说明里都要提到下划线，否则「说得比做的严」。
+        assert!(
+            CONSOLE_HTML.contains("连字符 / 下划线"),
+            "报错与说明文案必须与 pattern 同步提到下划线"
         );
     }
 }
