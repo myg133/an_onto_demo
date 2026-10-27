@@ -496,3 +496,21 @@
 | 验证 | `console::page` **11/11** · `test_req125_page` **8/8** · `check --lib` 绿 |
 | 回收 | worktree + 分支已删 |
 | 背景 | ADR-013：REQ-159 的 8 条端点从 console（builder，不部署）迁到 query serve（Studio） |
+
+## 2026-10-27 13:18 · 磁盘清理（lion，用户要求「占用硬盘有些多」）
+
+**根因不是 worktree（每个才 9 MB），而是 .local/cargo-* 这些 target 目录** —— 多个需求各自一个 target，累积 80+ GB。
+
+| 删掉的 target | 大小 | 为什么可以删 |
+| --- | --- | --- |
+| `.local/cargo-159-builder` | 10.5 GB | 构建端分支已合并并回收 |
+| `.local/cargo-159-console` | 11.7 GB | 页面分支已合并并回收 |
+| `.local/cargo-160` | 21.3 GB | REQ-160 已合入 develop |
+| `.local/cargo-dbg2` | 0.07 GB | 我误建的一次性冷编译目录 |
+
+**释放 36.5 GB**（D 盘剩余 72.1 → 108.6 GB）。
+
+**保留**：`cargo-develop`（31.5 GB，跑 develop 回归的热 target，重建约 20 分钟）、`cargo-161`（REQ-161 Dev 在用）、`t159c` / `t159c-base-t2`（join 的 P1c 在用）。
+
+**worktree 状态**：`BA` / `code` / `Deploy` / `feature-REQ-161`（我在用）/ `feature-REQ-159c`（join 在用）保持；
+`feature-REQ-159b` 已并入 develop（`merge-base --is-ancestor` exit 0）⇒ **待 join 回收**；`.local/t159c-base` 是 join 的临时 detached worktree，我不动。
