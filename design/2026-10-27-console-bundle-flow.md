@@ -149,17 +149,24 @@ ontok-builder bundle verify --file x.ontokbundle [--manifest-schema <path>]
 
 | 保证 | 做法 |
 | --- | --- |
-| `snapshot.json` 是本体重建的唯一事实源 | `PgStore` 读出 `Snapshot` 结构体直接 `serde_json::to_vec`，**中间不过任何 view/projection** |
+| `snapshot.json` 是本体重建的唯一事实源 | `PgStore::get_snapshot(version_id) -> Option<Snapshot>`（`src/db/snapshot_store.rs:94`）直出 `serde_json::to_vec`，**中间不过任何 view/projection** |
 | 两次打包除 `built_at` 外逐字节相同 | 固定字段顺序 + 固定文件顺序 + `--built-at` 可钉 |
 | 包里没有凭据 | 打包前正则扫 `password|dsn|postgres://|mysql://`；`db/schema.json` 只含表/列/类型/注释 |
 | 自检 5 条（REQ-159 §十一-3） | `bundle verify` 逐条给「过/不过 + 具体文件」 |
 
+**现状核对（2026-10-27）**：`Snapshot` 结构体（`src/domain/snapshot.rs`）本身就带 `extracted_by` / `link_types[].evidence`，
+`get_snapshot` 返回的就是入库那份原文 —— ⇒ **打包不需要新写一条读取路径**，只缺「选文件、算 sha256、写容器」这层壳。
+
 ---
 
-## 八 · 待拍板（3 个，挡前面的是第 1 和第 2）
+## 八 · 待拍板（3 个 → 2 个已归 join 契约、1 个已定）
 
-| # | 问题 | 选项 | 我的建议 |
-| --- | --- | --- | --- |
-| 1 | 用户说的「DB 都要支持」指什么 | (a) 打包**源库 schema 描述**（表/列/关系），数据不进包<br>(b) 把数据也打进包<br>(c) 构建端能从 DB 构建（DB 是输入不是产物） | **(a)**；若 (c) 也要，那是另一条（REQ-003 已覆盖） |
-| 2 | **配好的 DSN 谁来用** | (a) 服务端真的连客户库查数据（⇒ 项目级连接池，架构变化）<br>(b) 只做连通性校验，证明客户环境可达（⇒ DSN 只存不用） | **(b) v1**，(a) 等「普通模式对外部署」再开（ADR-007 的 D4 触发条件） |
-| 3 | key 怎么生效 | (a) 写回 `tokens.json` + 重启<br>(b) 元数据库存 key 摘要，查询服务运行期查 | **(b)**，但 v1 可先 (a) 并显式登记「需重启」 |
+| # | 问题 | 状态 |
+| --- | --- | --- |
+| 1 | 用户说的「DB 都要支持」指什么（源库描述 / 数据 / 从 DB 构建） | **归 join 的契约**（用户 2026-10-27：已与 join 对齐，写在 REQ-159 里） |
+| 2 | **配好的 DSN 谁来用**（只校验 / 服务端真连） | **归 join 的契约**（同上） |
+| 3 | key 怎么生效 | ✅ **已定（用户 2026-10-27 拍板）**：**元数据库存 key 摘要 + 查询服务运行期查**，新建项目免重启即生效；代价是每次校验多一次库查询（可缓存） |
+
+> #3 的连带影响（写给 join）：`tokens.json` 那条「启动读一次、不热加载」的边界（`src/console/tokens.rs:21-29`）
+> 只对 **admin** token 保留；**query key 必须改成运行期从元数据库取**。这两套凭据的生命周期从此不同 ——
+> 建议在代码里显式标注，否则下一个人会以为「改 token 要重启」对 query key 也成立。
