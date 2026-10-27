@@ -435,6 +435,12 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
         o.strict_deterministic,
         schema_path.clone(), // ⭐ REQ-170：库结构（None ⇒ 与 REQ-163 逐字节相同）
         None,                // 表数闸：用 doc ingest 的默认值（DEFAULT_MAX_TABLES）
+        // ⭐ REQ-171 · 选表策略三件套：全表阈值 / 追加垃圾表模式 / 是否保留垃圾表。
+        // `build run` 不另设开关 —— 与单独跑 `doc ingest` 用**同一套默认值**
+        // （小库全表清单、垃圾表排除），否则同一条链在第 ① 段与第 ② 段会看到不同的表。
+        crate::extract::schema_digest::DEFAULT_FULL_LIST_MAX,
+        Vec::new(),
+        false,
     )
     .await
     .map_err(|e| {

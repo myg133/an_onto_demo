@@ -140,17 +140,26 @@ pub const UNSUPPORTED_FORMATS: &[&str] = &["pdf", "docx", "doc"];
 
 /// 结构词黑名单：⛔ 关系谓词不许退化成 schema 里的结构词（AC-004 的第一道闸）。
 ///
-/// 只收**英文结构词 + `belongs_to`**：中文动词（「属于」「关联」）不在黑名单里 ——
+/// 只收**真无信息量的英文结构词**：中文动词（「属于」「关联」）不在黑名单里 ——
 /// 它们在真实业务文档里可能真的是谓词，误杀比漏杀更贵（AC-004 的分布统计可见）。
+///
+/// # ⭐ REQ-171 · 为什么 `belongs_to` / `references` **不在**这张表里
+///
+/// 它们是契约（`Deploy/skills/ontok-extract/SKILL.md` §5.2）里 **16 个合法主键**中的两个：
+/// 「X 属于 Y」「引用另一份配置」是真实业务关系，不是「模型退化成结构词」。
+///
+/// 实测（真 UAT 文档 + 真 ACP，4 块）：这一闸每轮丢 11~13 条，**比活下来的还多**
+/// （A：原始 19 / 活 8 / 丢 11，其中 belongs_to 3 + references 8；B：27/14/13；
+/// C：21/10/11）—— 而契约同时说它们是合法谓词，两套规则正面冲突。
+/// 结果是 `belongs_to_share`（AC-004 的判据）**恒 0**：它只统计活下来的关系。
+///
+/// 现在放行这两个词（含它们的常见写法 `belongs-to` / `belongsto` / `reference`）；
+/// `has_many` / `related_to` / `is_a` 这类**真的没有业务信息量**的仍留在闸里
+/// （契约 §5.2 的禁用清单里也有 `related_to` / `has_many`）。
 pub const STRUCTURAL_PREDICATES: &[&str] = &[
-    "belongs_to",
-    "belongs-to",
-    "belongsto",
     "has_one",
     "has_many",
     "has_many_to_many",
-    "references",
-    "reference",
     "related_to",
     "is_a",
 ];
@@ -762,6 +771,47 @@ pub struct ConceptAssertion {
     /// `false` = 不可用于对齐（`future` / `example`）。
     pub alignable: bool,
     pub evidence: Evidence,
+    /// ⭐ REQ-171 · **这个概念落在哪张表**（可选列）—— `doc merge` 的消费契约。
+    ///
+    /// | 情形 | 值 |
+    /// | --- | --- |
+    /// | 给了 `--schema` 且表（与给了的列）都在 schema 里 | `Some({table, column?})` |
+    /// | 没给 `--schema` | `None`（⛔ 不吃模型给的 `maps_to`，产物里也不许出现） |
+    /// | 给了但形状不对 / 查不到表 / 对上多张 / 查不到列 | 该条**概念整条丢弃**并计数（`stats.maps_to.concepts.*`） |
+    ///
+    /// ⚠️ 与关系上的 `maps_to` **不是同一个形状**，也不是同一件事：
+    /// 概念 = 这张概念是哪张表（`{table, column?}`）；关系 = 这条边由哪两列实现
+    /// （`{child:{table,column},parent:{…}}`）。⛔ 别混写 —— 两边的解析器都会拒。
+    ///
+    /// ⚠️ 读回是**宽容**的（形状坏掉的 `maps_to` 不让整行反序列化失败），与关系同一条纪律。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_concept_maps_to"
+    )]
+    pub maps_to: Option<ConceptMapsTo>,
+}
+
+/// ⭐ REQ-171 · 概念的 `maps_to` 形状：`{table, column?}`。
+///
+/// `column` 可省：概念是**整行**（不是某个字段）时只给表。
+/// 校验与落表在 [`crate::extract::schema_digest::SchemaView::resolve_concept_maps_to`]；
+/// 消费端 `doc_merge` 只要 `table`（`doc_merge::read_maps_to` 读同一个 JSON 对象，
+/// 多出来的 `column` 按未知字段忽略 —— 旧产物 / 新产物都能读）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConceptMapsTo {
+    pub table: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+}
+
+/// 概念 `maps_to` 的**宽容**读法：任何形状问题 ⇒ `None`（⛔ 不让整行 parse 失败）。
+fn lenient_concept_maps_to<'de, D>(d: D) -> std::result::Result<Option<ConceptMapsTo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(raw.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 /// 一条关系断言。`predicate` 是**文档里的动词**（这是本需求存在的理由，AC-004）。
@@ -876,6 +926,12 @@ pub struct RawConcept {
     pub quote: String,
     #[serde(default)]
     pub modality: Option<String>,
+    /// ⭐ REQ-171 · 这个概念落在哪张表（`{table, column?}`）。
+    ///
+    /// 收成 `Value` 而不是强类型：形状不对时只该丢**这一条概念**并计数，
+    /// 不该让整块回答被 [`Rejection::Parse`] 作废（那块里别的断言是好的）。
+    #[serde(default)]
+    pub maps_to: Option<serde_json::Value>,
 }
 
 /// 一块要被模型回答的「原始关系」。
@@ -1068,6 +1124,46 @@ pub fn validate_with_schema(
             .description
             .map(|d| d.trim().to_string())
             .filter(|d| !d.is_empty());
+        // ── ⭐ REQ-171 · 概念的 `maps_to`（概念 → 表，可选列）──
+        //
+        // 与关系同一条纪律：**查不到就丢这条**（⛔ 不猜表、不编列），并且**分类计数**。
+        // 区别在于丢的粒度：关系丢「这一条边」，概念丢「这一条概念」
+        //（一条「落在不存在的表上」的概念，下游只会把它记成 `doc_unmapped`，
+        //  留着它等于让一条假映射以「有映射」的样子混进合并统计）。
+        let maps_to = match (&c.maps_to, schema) {
+            (None, _) => None,
+            (Some(_), None) => {
+                // 没给 schema：⛔ 产物里不许出现概念 maps_to（与关系同一条纪律）。
+                // 只丢这一个字段、概念照留 —— 否则「不给 --schema 时产物不变」不成立。
+                stats.concept_maps_to_dropped_no_schema += 1;
+                if stats.concept_maps_to_samples.len() < 3 {
+                    stats.concept_maps_to_samples.push(format!(
+                        "{}：concept「{name}」带了 maps_to，但本轮没有 --schema ⇒ 映射不落地",
+                        chunk.chunk_id
+                    ));
+                }
+                None
+            }
+            (Some(raw_maps), Some(sv)) => match sv.resolve_concept_maps_to(&name, raw_maps) {
+                Ok(m) => {
+                    stats.concept_maps_to_kept += 1;
+                    Some(m)
+                }
+                Err(p) => {
+                    stats.count_concept_maps_to_drop(p.reject);
+                    if stats.concept_maps_to_samples.len() < 3 {
+                        stats.concept_maps_to_samples.push(format!(
+                            "{}：concept「{name}」的 maps_to 被丢（{}）：{}",
+                            chunk.chunk_id,
+                            p.reject.label(),
+                            p.detail
+                        ));
+                    }
+                    // ⛔ 整条概念丢弃（不是只丢 maps_to）。
+                    continue;
+                }
+            },
+        };
         stats.concepts += 1;
         stats.concept_names.insert(name.clone());
         out.push(Assertion::Concept(ConceptAssertion {
@@ -1077,6 +1173,7 @@ pub fn validate_with_schema(
             modality,
             alignable: modality.alignable(),
             evidence,
+            maps_to,
         }));
     }
 
@@ -1438,6 +1535,21 @@ pub struct DocStats {
     pub maps_to_dropped_column: usize,
     /// `maps_to` 丢弃样例（最多 3 条；⛔ 不混进 `rejection_samples` 的五类计数）。
     pub maps_to_samples: Vec<String>,
+    // ── ⭐ REQ-171 · **概念**的 `maps_to`（概念 → 表，与关系那一组合**分开**计）──
+    /// 概念断言里带上了 `maps_to` 并通过对账的条数。
+    pub concept_maps_to_kept: usize,
+    /// 模型给了概念 `maps_to`，但本轮没有 schema ⇒ 不落地（概念照留）。
+    pub concept_maps_to_dropped_no_schema: usize,
+    /// 形状不对（不是对象 / 缺 table / 混进 child·parent）⇒ **整条概念**丢弃。
+    pub concept_maps_to_dropped_shape: usize,
+    /// 表查不到（表名与中文名都对不上）⇒ 整条概念丢弃。
+    pub concept_maps_to_dropped_table: usize,
+    /// 表对上多张 ⇒ 整条概念丢弃（⛔ 不挑一个最像的）。
+    pub concept_maps_to_dropped_ambiguous: usize,
+    /// 表定了但列不在那张表里 ⇒ 整条概念丢弃。
+    pub concept_maps_to_dropped_column: usize,
+    /// 概念 `maps_to` 丢弃样例（最多 3 条，与关系那组分开）。
+    pub concept_maps_to_samples: Vec<String>,
 }
 
 /// **比例 + 分子分母**（只报百分比会把「分母是 0」藏起来）。
@@ -1541,6 +1653,21 @@ impl DocStats {
         }
     }
 
+    /// ⭐ REQ-171 · 记一条**概念** `maps_to` 丢弃（同一套四类码，另一个计数器）。
+    ///
+    /// 为什么要分开：概念与关系的丢弃码语义相同但**对象不同**（一个是表，一个是 join 两列）。
+    /// 混成一个数会让人分不清「概念落不了表」还是「关系找不到 join 列」——
+    /// 而这两件事的修法完全不同（前者是选表/摘要，后者是列名单）。
+    fn count_concept_maps_to_drop(&mut self, why: crate::extract::schema_digest::MapsToReject) {
+        use crate::extract::schema_digest::MapsToReject as R;
+        match why {
+            R::BadShape => self.concept_maps_to_dropped_shape += 1,
+            R::TableUnknown => self.concept_maps_to_dropped_table += 1,
+            R::TableAmbiguous => self.concept_maps_to_dropped_ambiguous += 1,
+            R::ColumnAbsent => self.concept_maps_to_dropped_column += 1,
+        }
+    }
+
     /// ⭐ REQ-170 · 本轮被丢掉的 `maps_to` 条数（不含「没给 schema」那种 —— 那不叫丢，
     /// 叫没落地；两类都报，但别混成一个数）。
     pub fn maps_to_dropped(&self) -> usize {
@@ -1548,6 +1675,14 @@ impl DocStats {
             + self.maps_to_dropped_table
             + self.maps_to_dropped_ambiguous
             + self.maps_to_dropped_column
+    }
+
+    /// ⭐ REQ-171 · 概念 `maps_to` 的四类丢弃合计（与关系那组分开）。
+    pub fn concept_maps_to_dropped(&self) -> usize {
+        self.concept_maps_to_dropped_shape
+            + self.concept_maps_to_dropped_table
+            + self.concept_maps_to_dropped_ambiguous
+            + self.concept_maps_to_dropped_column
     }
 }
 
@@ -1811,6 +1946,9 @@ pub struct StatsReport {
 }
 
 /// ⭐ REQ-170 · `maps_to` 的四类丢弃 + 落地数（稳定码与 [`MapsToReject::code`] 同源）。
+///
+/// ⭐ REQ-171：**关系**那一组仍在顶层（字段名与 REQ-170 完全一致 ⇒ 旧读数不破），
+/// **概念**那一组在 [`MapsToStats::concepts`] 子对象里（`stats.maps_to.concepts.*`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MapsToStats {
     /// 带上了并通过对账的关系条数。
@@ -1818,6 +1956,25 @@ pub struct MapsToStats {
     /// 模型给了 `maps_to` 但本轮没有 schema ⇒ 不落地（关系照留）。
     pub dropped_no_schema: usize,
     /// 四类丢弃合计。
+    pub dropped: usize,
+    pub dropped_shape: usize,
+    pub dropped_table_unknown: usize,
+    pub dropped_table_ambiguous: usize,
+    pub dropped_column_absent: usize,
+    /// 丢弃样例（最多 3 条，人话）。
+    pub samples: Vec<String>,
+    /// ⭐ REQ-171 · **概念 → 表** 的这一组（与上面那组同一套四类码，另一个计数器）。
+    pub concepts: ConceptMapsToStats,
+}
+
+/// ⭐ REQ-171 · 概念 `maps_to` 的落地 / 丢弃（`stats.maps_to.concepts`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConceptMapsToStats {
+    /// 概念断言里带上了并通过对账的条数。
+    pub kept: usize,
+    /// 给了但本轮没有 schema ⇒ 不落地（概念照留、产物里没有 `maps_to`）。
+    pub dropped_no_schema: usize,
+    /// 四类丢弃合计（每一条都意味着**整条概念**被丢弃）。
     pub dropped: usize,
     pub dropped_shape: usize,
     pub dropped_table_unknown: usize,
@@ -1905,6 +2062,16 @@ pub fn render_stats(
                 dropped_table_ambiguous: stats.maps_to_dropped_ambiguous,
                 dropped_column_absent: stats.maps_to_dropped_column,
                 samples: stats.maps_to_samples.clone(),
+                concepts: ConceptMapsToStats {
+                    kept: stats.concept_maps_to_kept,
+                    dropped_no_schema: stats.concept_maps_to_dropped_no_schema,
+                    dropped: stats.concept_maps_to_dropped(),
+                    dropped_shape: stats.concept_maps_to_dropped_shape,
+                    dropped_table_unknown: stats.concept_maps_to_dropped_table,
+                    dropped_table_ambiguous: stats.concept_maps_to_dropped_ambiguous,
+                    dropped_column_absent: stats.concept_maps_to_dropped_column,
+                    samples: stats.concept_maps_to_samples.clone(),
+                },
             })
         } else {
             None
@@ -2265,6 +2432,151 @@ mod tests {
         assert!(json.contains("\"dropped_column_absent\": 1"), "{json}");
     }
 
+    // ── ⭐ REQ-171 · **概念** → 表（`{table, column?}`）──────────────
+
+    fn concept_answer(maps_to: Option<Value>) -> Value {
+        let mut c = serde_json::json!({
+            "name": "云硬盘", "quote": "云硬盘挂载到云主机", "modality": "fact"
+        });
+        if let Some(m) = maps_to {
+            c["maps_to"] = m;
+        }
+        serde_json::json!({"concepts": [c], "relations": []})
+    }
+
+    /// **给了 schema 且对得上** ⇒ 概念带 `maps_to.table`（可选 `column`），
+    /// 并且这一行能被 `doc_merge` **原样读回**（它的 `read_maps_to` 只认 `table`，
+    /// 多出来的 `column` 按未知字段忽略 —— 旧读取端不用改）。
+    #[test]
+    fn with_schema_a_concept_lands_on_a_table_and_is_readable_by_doc_merge() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let mut stats = DocStats::default();
+        let sv = maps_schema();
+        let got = validate_with_schema(
+            &c,
+            raw(concept_answer(Some(serde_json::json!({"table":"cloud_disk","column":"id"})))),
+            &mut stats,
+            Some(&sv),
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        let Assertion::Concept(con) = &got[0] else { panic!("应当是概念断言") };
+        let m = con.maps_to.as_ref().expect("对得上 ⇒ 必须落地");
+        assert_eq!(m.table, "cloud_disk");
+        assert_eq!(m.column.as_deref(), Some("id"));
+        assert_eq!(stats.concept_maps_to_kept, 1);
+        assert_eq!(stats.concept_maps_to_dropped(), 0);
+        // 概念 `maps_to` 里**没有** child/parent（那是关系的形状）
+        let value = serde_json::to_value(con).unwrap();
+        let line = serde_json::to_string(&value).unwrap();
+        assert!(!line.contains("child"), "概念的 maps_to 不许带 child/parent：{line}");
+        // `doc merge` 的读取端照样读得懂（只取 table）
+        let read = crate::extract::doc_merge::read_maps_to(&value["maps_to"])
+            .expect("doc merge 必须认得概念的 maps_to");
+        assert_eq!(read.table.as_deref(), Some("cloud_disk"));
+        assert!(read.child.is_none() && read.parent.is_none());
+        // stats.json：概念那一节在 `maps_to.concepts`
+        let docs = [doc("# 云硬盘\n\n云硬盘挂载到云主机。\n")];
+        let chunks = chunk_all(&docs);
+        let json = render_stats("docs", &docs, &chunks, &stats, None, "m", "p").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["maps_to"]["concepts"]["kept"], 1, "{json}");
+        assert_eq!(v["maps_to"]["concepts"]["dropped"], 0, "{json}");
+        // 关系那一组的字段名与 REQ-170 完全一致（旧读数不破）
+        assert_eq!(v["maps_to"]["kept"], 0, "{json}");
+        assert!(v["maps_to"]["dropped_column_absent"].is_number(), "{json}");
+    }
+
+    /// ⭐ 四类反例：**整条概念**被丢掉（不是只丢 `maps_to`）+ 分类计数 +1。
+    #[test]
+    fn the_four_concept_maps_to_errors_drop_the_whole_concept_and_count() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let sv = maps_schema();
+        // `(maps_to, 该落在哪个计数器上, 期望样例里出现的字样)`
+        let cases: [(Value, fn(&DocStats) -> usize, &str); 3] = [
+            (serde_json::json!("cloud_disk.id"), |s| s.concept_maps_to_dropped_shape, "形状"),
+            (
+                serde_json::json!({"table":"no_such_table"}),
+                |s| s.concept_maps_to_dropped_table,
+                "no_such_table",
+            ),
+            (
+                serde_json::json!({"table":"cloud_disk","column":"no_such_col"}),
+                |s| s.concept_maps_to_dropped_column,
+                "no_such_col",
+            ),
+        ];
+        for (i, (m, counter, needle)) in cases.into_iter().enumerate() {
+            let mut stats = DocStats::default();
+            let got = validate_with_schema(&c, raw(concept_answer(Some(m.clone()))), &mut stats, Some(&sv));
+            assert!(got.is_empty(), "反例 {i} 必须**整条概念**丢弃：{got:?}");
+            assert_eq!(stats.concepts, 0, "丢弃的概念不许算进 concepts");
+            assert_eq!(stats.concept_maps_to_kept, 0);
+            assert_eq!(counter(&stats), 1, "反例 {i} 的计数器没加一：{stats:?}");
+            assert_eq!(stats.concept_maps_to_dropped(), 1);
+            assert!(
+                stats.concept_maps_to_samples.iter().any(|s| s.contains(needle)),
+                "反例 {i} 的样例要点名原因（{needle}）：{:?}",
+                stats.concept_maps_to_samples
+            );
+        }
+        // ③ 「对上多张」：概念名同时是两张表的中文名 ⇒ TableAmbiguous
+        let amb = crate::extract::schema_digest::SchemaView::from_json(
+            r#"{"tables":[
+              {"name":"disks","comment":"云硬盘","columns":[{"name":"id","data_type":"text"}]},
+              {"name":"disk_snapshots","comment":"云硬盘","columns":[
+                 {"name":"id","data_type":"text"}]}]}"#,
+        )
+        .unwrap();
+        let mut stats = DocStats::default();
+        let got = validate_with_schema(
+            &c,
+            raw(concept_answer(Some(serde_json::json!({"table":"云硬盘"})))),
+            &mut stats,
+            Some(&amb),
+        );
+        assert!(got.is_empty(), "{got:?}");
+        assert_eq!(stats.concept_maps_to_dropped_ambiguous, 1);
+        assert_eq!(stats.concept_maps_to_dropped(), 1);
+    }
+
+    /// **没给 schema**：概念 `maps_to` **不落地**，概念照留（于是产物与 REQ-163 一样）。
+    #[test]
+    fn without_schema_a_concept_maps_to_never_reaches_the_jsonl() {
+        let c = chunk_of("# 云硬盘\n\n云硬盘挂载到云主机。\n");
+        let mut stats = DocStats::default();
+        let got = validate(
+            &c,
+            raw(concept_answer(Some(serde_json::json!({"table":"cloud_disk","column":"id"})))),
+            &mut stats,
+        );
+        assert_eq!(got.len(), 1, "概念本身要留下：{got:?}");
+        let Assertion::Concept(con) = &got[0] else { panic!("应当是概念断言") };
+        assert!(con.maps_to.is_none(), "⛔ 没 schema 不许输出概念 maps_to");
+        let line = serde_json::to_string(con).unwrap();
+        assert!(!line.contains("maps_to"), "那一行不许出现 maps_to：{line}");
+        assert_eq!(stats.concept_maps_to_dropped_no_schema, 1);
+        assert_eq!(stats.concept_maps_to_kept, 0);
+    }
+
+    /// 读回是**宽容**的：坏掉的 `maps_to` 不让整行反序列化失败（与关系同一条纪律）。
+    #[test]
+    fn a_broken_concept_maps_to_does_not_break_the_line() {
+        for bad in [
+            serde_json::json!({"kind":"concept","name":"云硬盘","modality":"fact","alignable":true,
+              "evidence":{"file":"a.md","chunk_id":"x:0-1","quote":"云硬盘","span":[0,3]},
+              "maps_to": "cloud_disk.id"}),
+            serde_json::json!({"kind":"concept","name":"云硬盘","modality":"fact","alignable":true,
+              "evidence":{"file":"a.md","chunk_id":"x:0-1","quote":"云硬盘","span":[0,3]},
+              "maps_to": {"child":{"table":"a","column":"b"}}}),
+        ] {
+            let line = serde_json::to_string(&bad).unwrap();
+            let a: Assertion = serde_json::from_str(&line)
+                .unwrap_or_else(|e| panic!("坏 maps_to 不该让整行读不出来（{e}）：{line}"));
+            let Assertion::Concept(c) = a else { panic!("应当是概念") };
+            assert!(c.maps_to.is_none(), "坏形状 ⇒ None：{line}");
+        }
+    }
+
     /// 摘要进 `prompt_sha`：**换 schema ⇒ 缓存整体失效**（与换 skill 同一条纪律）。
     #[test]
     fn the_schema_digest_enters_the_prompt_sha_so_changing_it_invalidates_the_cache() {
@@ -2289,15 +2601,18 @@ mod tests {
         assert_eq!(same, Prompts::standard());
     }
 
-    /// 谓词退化成结构词 ⇒ 丢弃（AC-004），且**原始分布里必须留痕**（N-2）。
+    /// 谓词退化成**真无信息量**的结构词 ⇒ 丢弃（AC-004），且**原始分布里必须留痕**（N-2）。
+    ///
+    /// ⚠️ REQ-171：`belongs_to` / `references` **不再**在这张黑名单里（契约 §5.2 把它们
+    /// 列为合法主键），所以这里换成 `related_to` 来验证这道闸还活着。
     #[test]
-    fn structural_predicates_are_rejected_but_counted_raw() {        let c = chunk_of("# 关系\n\n订单属于客户。\n");
+    fn structural_predicates_are_rejected_but_counted_raw() {        let c = chunk_of("# 关系\n\n订单关联到客户。\n");
         let mut stats = DocStats::default();
         let got = validate(
             &c,
             raw(serde_json::json!({
-                "relations": [{"subject": "订单", "predicate": "belongs_to", "object": "客户",
-                               "quote": "订单属于客户", "modality": "fact"}]
+                "relations": [{"subject": "订单", "predicate": "related_to", "object": "客户",
+                               "quote": "订单关联到客户", "modality": "fact"}]
             })),
             &mut stats,
         );
@@ -2305,21 +2620,57 @@ mod tests {
         assert_eq!(stats.rejected_predicate, 1);
         // ⭐ N-2：过闸之前的原始分布里必须有它，否则 AC-004 的占比恒为 0。
         assert_eq!(stats.rejected_by_predicate_gate, 1);
-        assert_eq!(stats.rejected_predicate_counts.get("belongs_to"), Some(&1));
-        assert_eq!(stats.raw_predicate_counts.get("belongs_to"), Some(&1));
+        assert_eq!(stats.rejected_predicate_counts.get("related_to"), Some(&1));
+        assert_eq!(stats.raw_predicate_counts.get("related_to"), Some(&1));
         assert_eq!(stats.raw_relations(), 1);
-        assert_eq!(stats.raw_predicate_share("belongs_to").share, Some(1.0));
+        assert_eq!(stats.raw_predicate_share("related_to").share, Some(1.0));
         // 活下来的那一份里当然没有它（两份数**必须**分得开）
-        assert_eq!(stats.predicate_counts.get("belongs_to"), None);
-        assert_eq!(stats.predicate_share("belongs_to").share, None);
+        assert_eq!(stats.predicate_counts.get("related_to"), None);
+        assert_eq!(stats.predicate_share("related_to").share, None);
     }
 
-    /// ★ N-2 的**核心判据**：同一批回答里既有合法关系、又有 `belongs_to` ⇒
+    /// ⭐ REQ-171 · R3 的核心：`belongs_to` / `references` **不再被谓词闸丢掉**。
+    ///
+    /// 放行前后（同一份回答）：`predicate_counts` 里 0 条 → 2 条；
+    /// `belongs_to_share.alive`（AC-004 的判据）0/1 → 1/2（不再恒 0）。
+    #[test]
+    fn belongs_to_and_references_survive_the_predicate_gate() {
+        let c = chunk_of("# 关系\n\n旗舰模型属于平台，账户引用配置。\n");
+        let mut stats = DocStats::default();
+        let got = validate(
+            &c,
+            raw(serde_json::json!({
+                "relations": [
+                    {"subject": "旗舰模型", "predicate": "belongs_to", "object": "平台",
+                     "quote": "旗舰模型属于平台", "modality": "fact"},
+                    {"subject": "账户", "predicate": "references", "object": "配置",
+                     "quote": "账户引用配置", "modality": "fact"},
+                    {"subject": "订单", "predicate": "related_to", "object": "客户",
+                     "quote": "旗舰模型属于平台", "modality": "fact"}
+                ]
+            })),
+            &mut stats,
+        );
+        assert_eq!(got.len(), 2, "belongs_to / references 都该活着：{got:?}");
+        assert_eq!(stats.relations, 2);
+        assert_eq!(stats.predicate_counts.get("belongs_to"), Some(&1));
+        assert_eq!(stats.predicate_counts.get("references"), Some(&1));
+        // 只有真结构词（related_to）还在这道闸上
+        assert_eq!(stats.rejected_by_predicate_gate, 1);
+        assert_eq!(stats.rejected_predicate_counts.get("related_to"), Some(&1));
+        // AC-004 的判据：`belongs_to_share.alive` 不再恒 0
+        let alive = stats.predicate_share("belongs_to");
+        assert_eq!((alive.count, alive.total), (1, 2));
+        assert_eq!(alive.share, Some(0.5), "放行之后 alive 不再恒 0");
+        assert_eq!(stats.raw_predicate_share("belongs_to").count, 1);
+    }
+
+    /// ★ N-2 的**核心判据**：同一批回答里既有合法关系、又有被闸丢的结构词 ⇒
     /// 「原始占比」**不再是 0**，而「活下来的占比」仍是 0。
     /// （只看活下来那份时，这两个数会都是 0 ⇒ AC-004 恒真。）
     #[test]
-    fn raw_belongs_to_share_is_not_structurally_zero() {
-        let c = chunk_of("# 关系\n\n客户下单，订单属于客户。\n");
+    fn raw_share_is_kept_separate_from_alive_share_for_gated_words() {
+        let c = chunk_of("# 关系\n\n客户下单，订单关联到客户。\n");
         let mut stats = DocStats::default();
         let got = validate(
             &c,
@@ -2327,22 +2678,21 @@ mod tests {
                 "relations": [
                     {"subject": "客户", "predicate": "下单", "object": "订单",
                      "quote": "客户下单", "modality": "fact"},
-                    {"subject": "订单", "predicate": "belongs_to", "object": "客户",
-                     "quote": "订单属于客户", "modality": "fact"}
+                    {"subject": "订单", "predicate": "related_to", "object": "客户",
+                     "quote": "订单关联到客户", "modality": "fact"}
                 ]
             })),
             &mut stats,
         );
         assert_eq!(got.len(), 1, "只有「下单」能活下来：{got:?}");
-        let alive = stats.predicate_share("belongs_to");
-        let raw = stats.raw_predicate_share("belongs_to");
+        let alive = stats.predicate_share("related_to");
+        let raw = stats.raw_predicate_share("related_to");
         assert_eq!((alive.count, alive.total), (0, 1));
         assert_eq!(alive.share, Some(0.0));
         assert_eq!((raw.count, raw.total), (1, 2), "原始分母是 2 条（含被丢的那条）");
         assert_eq!(raw.share, Some(0.5), "原始占比 50% —— 非 0 才说明判据活着");
         assert_ne!(alive.share, raw.share, "两个占比必须能分开，否则 N-2 没修");
     }
-
     /// 模态缺失/越界 ⇒ 丢弃（R4：模态不是可选项）。
     #[test]
     fn missing_or_unknown_modality_is_rejected() {

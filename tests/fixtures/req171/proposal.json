@@ -1,0 +1,35 @@
+{
+  "project": "req171_concept_maps",
+  "base_version": 1,
+  "items": [
+    {
+      "kind": "add_entity_type",
+      "target": "模型",
+      "payload": {
+        "key": "llm_models",
+        "display_name": "模型",
+        "band": "low",
+        "reviewed_by": null,
+        "properties": [
+          { "name": "模型编号", "column": "id" },
+          { "name": "模型名", "column": "model_name" },
+          { "name": "单价", "column": "price_per_1k" }
+        ]
+      }
+    },
+    {
+      "kind": "add_entity_type",
+      "target": "客户",
+      "payload": {
+        "key": "customers",
+        "display_name": "客户",
+        "band": "low",
+        "reviewed_by": null,
+        "properties": [
+          { "name": "客户编号", "column": "id" },
+          { "name": "邮箱", "column": "email" }
+        ]
+      }
+    }
+  ]
+}

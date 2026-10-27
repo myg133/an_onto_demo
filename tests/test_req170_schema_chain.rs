@@ -804,7 +804,10 @@ async fn a_read_only_role_still_sees_primary_keys_so_r2rml_maps_the_tables() {
         .expect("schema.json 要能被摘要视图读回");
     let digest = view.digest(
         "云硬盘挂载到云主机：云硬盘的 server_id 指向云主机的主键 id。",
-        40,
+        &ontok::extract::schema_digest::DigestOptions {
+            max_tables: 40,
+            ..ontok::extract::schema_digest::DigestOptions::default()
+        },
     );
     assert!(
         !digest.text.contains("主键：无") && !digest.text.contains("未勘明"),

@@ -546,8 +546,9 @@ pub enum DocCmd {
         ///
         /// 摘要的内容进 `prompt_sha` ⇒ **换 schema 就让缓存整体失效**（与换 skill 同一条纪律）。
         ///
-        /// 大库**不会全塞**：按本轮文档里的概念名给表打分、只带 top-N（见
-        /// `--schema-max-tables`），屏幕上报「带了多少 / 共多少」。
+        /// 选表走哪条路由 `--schema-full-list-max` 决定：表数 ≤ 阈值（默认 200）⇒
+        /// **给全表清单**（表名 + 主键 + 一行注释，不做 top-N）；更大的库才按文档打分挑
+        /// top-N（见 `--schema-max-tables`）。屏幕上报的是哪条路、带了几张、排除了几张。
         ///
         /// ⛔ 不给 ⇒ 产物与 REQ-147 **逐字节相同**（这是零回归的判据）。
         #[arg(long)]
@@ -559,6 +560,29 @@ pub enum DocCmd {
         /// 0 张表等于「不给模型看库结构」，那会与「不传 `--schema`」混淆。
         #[arg(long, value_parser = parse_schema_max_tables)]
         schema_max_tables: Option<usize>,
+        /// ⭐ REQ-171 · **小库阈值**：表数 ≤ 它 ⇒ **直接给全表清单**（⛔ 不做 top-N，默认 200）。
+        ///
+        /// 为什么需要它：真实中文库上（96 张表、表注释只有 25/96 非空）打分 96 张里
+        /// 只有 1 张 > 0 ⇒ top-N 只能拿「分数并列 0」的表凑数，退化成按表名字典序取前 12，
+        /// 选出来的还是 `_volc_dts_pg_ddl_*` 这种复制产物。紧凑全表清单（96 张：名 + 主键 +
+        /// 一行注释）只要 ≈3.5 KB，比 top-N 更便宜也更全。
+        ///
+        /// `0` = **永不走全表**（总是按打分挑 top-N，即 REQ-170 的老行为）。
+        #[arg(long, value_parser = parse_schema_full_list_max, default_value_t = crate::extract::schema_digest::DEFAULT_FULL_LIST_MAX)]
+        schema_full_list_max: usize,
+        /// ⭐ REQ-171 · **追加**垃圾匹配式（逗号分隔，可多次给），语法见
+        /// `schema_digest::JUNK_TABLE_PATTERNS`：`*` 是任意串、其余按字面、大小写不敏感。
+        ///
+        /// 内置清单：`_*` / `alembic_version` / `schema_migrations` / `flyway_schema_history` /
+        /// `django_migrations` / `*dts_pg_ddl*` / `*_bak` / `*_backup` / `*_old` / `*_copy` / `*_tmp`
+        /// （真实 UAT 库上排掉 4 张：3 张 DTS 复制产物 + `alembic_version`）。
+        #[arg(long = "schema-exclude-tables", value_delimiter = ',', value_name = "PATTERN")]
+        schema_exclude_tables: Option<Vec<String>>,
+        /// ⭐ REQ-171 · **不禁**垃圾表：内置清单整个失效（只留 `--schema-exclude-tables`）。
+        ///
+        /// 用在「我的业务表真的叫 `_foo`」这种情形 —— 默认会把它当迁移产物藏起来。
+        #[arg(long)]
+        schema_keep_junk: bool,
     },
     /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
     ///
@@ -2444,6 +2468,9 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
             strict_deterministic,
             schema,
             schema_max_tables,
+            schema_full_list_max,
+            schema_exclude_tables,
+            schema_keep_junk,
         } => {
             return doc_ingest_cmd(
                 input,
@@ -2460,6 +2487,9 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
                 strict_deterministic,
                 schema,
                 schema_max_tables,
+                schema_full_list_max,
+                schema_exclude_tables.unwrap_or_default(),
+                schema_keep_junk,
             )
             .await
         }
@@ -2653,11 +2683,26 @@ fn parse_schema_max_tables(s: &str) -> std::result::Result<usize, String> {
     Ok(n)
 }
 
+/// ⭐ REQ-171 · `--schema-full-list-max` 的入参闸（clap 值解析器）。
+///
+/// 与 `--schema-max-tables` 的区别：这里 `0` 是**合法**的，意思是「永不走全表清单，
+/// 总是按打分挑 top-N」（= REQ-170 的老行为）。它不是「不给模型看库结构」，
+/// 所以不该按 `--schema-max-tables` 那条规则拒掉。
+fn parse_schema_full_list_max(s: &str) -> std::result::Result<usize, String> {
+    s.trim()
+        .parse()
+        .map_err(|_| format!("要一个非负整数（收到 {s:?}；0 = 永不走全表清单）"))
+}
+
 /// REQ-116 · `ontok doc ingest` 的装配点（唯一一个调模型的 `doc` 子命令）。
 ///
 /// ⭐ REQ-147：本函数多了一个**岔口**（`--agent acp`），但默认那一支**一行没改** ——
 /// 不给 `--agent` 时走的还是 REQ-116 的原路（三件套 / `Prompts::standard()` /
 /// `max_tokens` 口径全部不变），所以产物与基线**逐字节相同**（R1 的判据是 sha256 对拍）。
+// ⚠️ 参数确实多（17 个）：它们是三条互不相干的口径（输入/预算 · 抽取实现 · 库结构），
+// 硬塞进一个 struct 只会把「谁给了什么」藏进一层间接里 —— 与 `ingest_all_with_schema`
+// 同一条取舍（那里也是 `allow(too_many_arguments)`）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn doc_ingest_cmd(
     input: PathBuf,
     out: PathBuf,
@@ -2673,6 +2718,9 @@ pub(crate) async fn doc_ingest_cmd(
     strict_deterministic: bool,
     schema: Option<PathBuf>,
     schema_max_tables: Option<usize>,
+    schema_full_list_max: usize,
+    schema_exclude_tables: Vec<String>,
+    schema_keep_junk: bool,
 ) -> anyhow::Result<()> {
     use crate::extract::doc_ingest as di;
 
@@ -2711,7 +2759,14 @@ pub(crate) async fn doc_ingest_cmd(
             let max = schema_max_tables
                 .unwrap_or(crate::extract::schema_digest::DEFAULT_MAX_TABLES);
             let corpus: String = docs.iter().map(|d| d.text.as_str()).collect::<Vec<_>>().join("\n");
-            let digest = view.digest(&corpus, max);
+            // ⭐ REQ-171 · 选表策略（R4）：表数 ≤ 阈值 ⇒ 全表清单；垃圾表先剔掉并报数。
+            let opts = crate::extract::schema_digest::DigestOptions {
+                max_tables: max,
+                full_list_max: schema_full_list_max,
+                extra_excludes: schema_exclude_tables.clone(),
+                keep_junk: schema_keep_junk,
+            };
+            let digest = view.digest(&corpus, &opts);
             Some((view, digest))
         }
     };
@@ -3057,25 +3112,35 @@ pub(crate) async fn doc_ingest_cmd(
         eprintln!("  quote 校验  : {}", crate::extract::doc_acp::quote_pass_line(&stats));
     }
     // ⭐ REQ-170：给了 --schema 才打印这两块（不给 ⇒ 屏幕输出与 REQ-163 逐字节相同）。
+    // ⭐ REQ-171：多报一条「走的是哪条路」（全表 / 按打分）与「排除了几张垃圾表」。
     if let (Some((_, digest)), Some(path)) = (&schema_loaded, &schema) {
         eprintln!(
-            "  库结构      : {}（带 **{}** / 共 {} 张表 · 按文档概念匹配到 {} 张 · \
-             上限 {} 张 · 摘要 sha256 {}…）",
+            "  库结构      : {}（{} / 共 {} 张表 · 列明细 {} 张 · 命中候选 {} 张 · \
+             跳过垃圾表 {} 张 · 摘要 sha256 {}…）",
             path.display(),
-            digest.included,
+            digest.selection_line(),
             digest.total,
+            digest.detail_tables,
             digest.matched,
-            digest.max_tables,
+            digest.excluded,
             &digest.sha256()[..12],
         );
+        if !digest.excluded_samples.is_empty() {
+            eprintln!(
+                "                排除了 {} 张（例：{}）—— `_*` 前缀 / alembic_version / DTS 复制 / 迁移类；\
+                 要保留请加 --schema-keep-junk",
+                digest.excluded,
+                digest.excluded_samples.join(" · ")
+            );
+        }
         if digest.included == 0 {
             eprintln!(
-                "                ⚠ 一张表都没对上文档的概念名 ⇒ 本轮 **不会**有 maps_to\
+                "                ⚠ 一张表都没带（大库打分命中 0）⇒ 本轮 **不会**有 maps_to\
                  （⛔ 不拿无关的表凑数，⛔ 不按名字猜表）"
             );
         }
         eprintln!(
-            "  maps_to     : 落地 {} 条 · 丢弃 {} 条（形状 {} · 查不到表 {} · 对上多张 {} · \
+            "  maps_to     : 关系 落地 {} 条 · 丢弃 {} 条（形状 {} · 查不到表 {} · 对上多张 {} · \
              查不到列 {}）{}",
             stats.maps_to_kept,
             stats.maps_to_dropped(),
@@ -3090,6 +3155,28 @@ pub(crate) async fn doc_ingest_cmd(
             },
         );
         for s in stats.maps_to_samples.iter().take(3) {
+            eprintln!("                {s}");
+        }
+        // ⭐ REQ-171 · 概念 → 表（与关系那组分开报：两件事、两组计数）。
+        eprintln!(
+            "  maps_to(概念): 落地 {} 条 · 丢弃 {} 条（形状 {} · 查不到表 {} · 对上多张 {} · \
+             查不到列 {}）{}",
+            stats.concept_maps_to_kept,
+            stats.concept_maps_to_dropped(),
+            stats.concept_maps_to_dropped_shape,
+            stats.concept_maps_to_dropped_table,
+            stats.concept_maps_to_dropped_ambiguous,
+            stats.concept_maps_to_dropped_column,
+            if stats.concept_maps_to_dropped_no_schema > 0 {
+                format!(
+                    " · 另有 {} 条因没有 schema 未落地",
+                    stats.concept_maps_to_dropped_no_schema
+                )
+            } else {
+                String::new()
+            },
+        );
+        for s in stats.concept_maps_to_samples.iter().take(3) {
             eprintln!("                {s}");
         }
     }

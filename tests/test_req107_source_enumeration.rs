@@ -1889,6 +1889,13 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "parse_schema_max_tables",
         "clap 值解析器（REQ-170：`--schema-max-tables` 必须 ≥1；0 按**入参错** exit 2）",
     ),
+    // ⭐ REQ-171 · `--schema-full-list-max` 的入参闸（同样是 clap 值解析器，
+    // 但这里的 `0` 是**合法**的：0 = 永不走全表清单，总是按打分挑 top-N）。
+    (
+        "src/cli.rs",
+        "parse_schema_full_list_max",
+        "clap 值解析器（REQ-171：`--schema-full-list-max` 非负；0 = 永不走全表）",
+    ),
     // ⚠️ REQ-159 的 6 个 bundle 函数登记在下面（develop 侧已补齐，REQ-160 不再重复登记）。
     // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
     (
