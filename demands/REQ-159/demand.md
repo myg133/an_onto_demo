@@ -340,6 +340,12 @@ pub struct LinkTypeView { key, from_type, to_type, cardinality, semantic }   // 
 | 6 | 路径含 `..` / 绝对路径 / 符号链接 | `bundle.path.illegal` | 点名路径 |
 | 7 | `requires_dsn=true` 但没配 DSN 就 import | `db.dsn.missing` | 提示先配 DSN |
 | 8 | 包体积超上限（默认 100 MB） | `bundle.too_large` | 报实际大小与上限 |
+| **9** | **zip entry 的压缩方法不是 0（store）** | **`bundle.unsupported.compression`** | 报第几个 entry、实际 method |
+
+> ⚠️ **第 9 个码两边都会报**（2026-10-27 补）：
+> **服务端**在解包时、**构建端**在 `bundle verify` 时。
+> 码表若只写"服务端会报"，下一个人会以为构建端漏了。
+> 背景：契约规定包是 store-only；外部工具用 `zip -9` 重压过的包必须**明确拒绝**而不是"尽量解压"。
 
 ### 5 · 联调顺序（别一次全上）
 
