@@ -41,7 +41,7 @@
 //! | 审计 | `GET /api/audit` |
 //! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
 //! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
-//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate` · `POST /api/projects/<p>/key/rotate` |
+//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate` · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate` |
 //!
 //! 前四组由 `console serve` 自己提供；查询台与目录浏览是 **REQ-123 的查询服务**
 //! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
@@ -60,13 +60,15 @@
 //! 标记：HTTP **404** ⇒ 在对应区域显示一行
 //! 「服务端未就绪：该端点还不存在（REQ-159 服务端在并行开发中）」，
 //! 并且**不登出、不清口令** —— 404 在这里是「服务端还没这个路径」，不是「口令不对」。
-//! 只有 **401 / 403** 才走既有的清口令 + 回登录态（安全语义不变）。
+//! 只有 **401 / 403** 才走既有的清口令 + 回登录态（安全语义不变）；
+//! 唯一的例外是 `GET …/key` 的 **403 `key.not_admin`**：那是「口令**类型**不对」
+//! （拿 query key 来看管理端点），页面只提示「需要 admin token」，**不清口令**。
 //!
 //! 两条只在本 tab 成立的纪律：
 //!
 //! | 规则 | 为什么 |
 //! | --- | --- |
-//! | key **只放内存**（`LAST_KEY`），⛔ 不进 sessionStorage / 任何输入框 | 「只显示一次」的反面是不许留痕；写下来就不再是一次性 |
+//! | key **按需拉取**（`GET …/key`），明文只放内存（`LAST_KEY`），⛔ 不进 sessionStorage / 输入框 | 能再次查看 ⇒ 每次查看必须留痕：服务端写一条 `reveal_key` 审计，页面把这句话**固定在按钮下面** |
 //! | DSN 口令框保存成功后**只清 value**，不回显、不记录 | 页面没有回读 DSN 的端点，回显等于凭空造一份明文 |
 //!
 //! 上传走 `fetch` 的**原始字节**（`Content-Type: application/octet-stream`），
@@ -428,16 +430,20 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
 
     <div class="panel">
       <h2>5 · 生效（冻结并切流量）· key</h2>
-      <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 只在生成它的那次回执里出现**一次**，本页只放在内存里展示，关掉页面就没了。</p>
+      <p class="note">激活 = 把这一版冻结、并让查询服务切过去；不可撤销。key 可以**随时再次查看**（`GET …/key`），本页只在内存里放着这一次拿到的明文供复制，不落任何浏览器存储。</p>
       <div class="bar">
         <button id="b-activate" class="danger" disabled>冻结并切流量…</button>
         <button id="b-rotate" class="danger">换 key…</button>
+        <button id="b-key-view">查看 key</button>
       </div>
+      <div class="note">本次查看会记一条审计（action=reveal_key）—— 这是「能再次查看」的唯一补偿，别把它删掉。</div>
       <div id="b-key" hidden>
-        <div class="note">新 key（只显示这一次；离开页面就再也看不到）：</div>
+        <div class="note">key 明文（按需拉取；只留在本页内存里，供复制）：</div>
         <div id="b-key-val" class="mono"></div>
+        <div id="b-key-meta" class="note"></div>
         <div class="bar"><button id="b-key-copy">复制 key</button></div>
       </div>
+      <div id="b-key-out"></div>
     </div>
   </section>
 </main>
@@ -545,6 +551,12 @@ function request(path, opts) {
         err.code = "ENDPOINT_NOT_READY";
         err.message = NOT_READY_MSG;
         err.hint = NOT_READY_HINT;
+      } else if (opts.needAdmin && r.status === 403) {
+        // 403 key.not_admin = 「口令**类型**不对」（拿 query key 看管理端点），不是口令过期。
+        // ⇒ 只说清该用 admin token，⛔ 不清口令、不登出（与查询端点那条同一条教训）。
+        err.code = "KEY_NOT_ADMIN";
+        err.message = "需要 admin token（key.not_admin）：查看 key 是管理端点，query key 调不了。";
+        err.hint = "在页面顶部第一个输入框填管理口令（admin token）后重试；⛔ 页面不会清掉你已经填的口令。";
       } else if (opts.query && (r.status === 404 || r.status === 403)) {
         // ⛔ **不清任何口令**：L-1 拓扑下两个口令都填了也还是 403，清掉就再也填不回来。
         err.code = "QUERY_NOT_WIRED";
@@ -1317,7 +1329,9 @@ function describeName(name) {
 // ══════════════════════════════════════════════════════════
 // 这一组的端点在服务端是**并行开发**的：本 tab 的每次请求都带 notReady，
 // 404 ⇒ 「服务端未就绪」并且**不登出**（见上面的 request 层）。
-var LAST_KEY = null;   // ⭐ key 只在内存：⛔ 不进 sessionStorage、不回填任何输入框
+// key 明文**按需拉取**（GET …/key），只放在内存里供复制：
+// ⛔ 不进 sessionStorage、不写长期存储、不回填任何输入框（能再次查看靠的是「再拉一次」，不是缓存）。
+var LAST_KEY = null;
 
 function bundleProject() { return (S.projects && S.projects.project) ? S.projects.project : ""; }
 function bundlePath(suffix) {
@@ -1672,29 +1686,62 @@ function activateBundle() {
     ]));
     b.state = r.state || "active";
     S.bundle = b;
-    if (r.key) showKey(r.key);   // 回执里带 key 就按「只显示一次」处理
     setMsg("已冻结并切流量。", "ok");
     renderBundleGates();
+    // 激活成功后**自动拉一次** key（服务端会为这次查看写一条 reveal_key 审计），
+    // 不再从内存/回执里打印；`quiet` 表示别覆盖上面那条「已生效」状态。
+    // 拉失败只影响 key 区块（显示 code/message + 按钮还在），不影响激活结果。
+    return viewKey(true);
   }).catch(function (e) {
     showErr($("b-import-out"), e);
     setMsg("激活失败：" + e.message, "bad");
   });
 }
 
-// key 只进内存变量 + 一个只读展示块：⛔ 不写 sessionStorage、不回填输入框。
-function showKey(k) {
-  LAST_KEY = k || "";
+// key 是**按需拉取**的：明文只放内存变量 `LAST_KEY`（给复制用），⛔ 不写 sessionStorage、
+// 不写长期存储、不回填输入框。能再次查看的代价是每次查看都要留痕 —— 服务端写 reveal_key 审计。
+function showKey(row) {
+  row = row || {};
+  LAST_KEY = row.key || "";
   $("b-key").hidden = !LAST_KEY;
-  txt($("b-key-val"), LAST_KEY || "（这一次回执里没有 key）");
+  txt($("b-key-val"), LAST_KEY || "（服务端这次没有返回 key）");
+  var meta = $("b-key-meta");
+  clear(meta);
+  if (row.label) meta.appendChild(el("span", null, "label：" + row.label + " · "));
+  if (row.created_at) meta.appendChild(el("span", null, "创建于 " + row.created_at + " · "));
+  if (row.revoked_at) {
+    meta.appendChild(badge("已吊销", "bad"));
+    meta.appendChild(el("span", null, " 吊销于 " + row.revoked_at));
+  }
   return LAST_KEY;
 }
+// 查看 key：GET …/key（每次调用服务端都记一条 reveal_key 审计）。
+// `quiet`：激活后自动拉取时用 —— 别把「已生效」那条状态栏消息覆盖掉。
+function viewKey(quiet) {
+  var p = bundleProject();
+  var out = $("b-key-out");
+  if (!p) { setMsg("先载入项目（点「刷新」）。", "bad"); return; }
+  clear(out);
+  out.appendChild(el("div", "note", "读取中…（这一次查看会被记进审计）"));
+  return json(bundlePath("/key"), { notReady: true, needAdmin: true }).then(function (r) {
+    clear(out);
+    showKey(r || {});
+    if (!quiet) setMsg("已读取 key（服务端记了一条 reveal_key 审计）。", "ok");
+    return r;
+  }).catch(function (e) {
+    // 404 ⇒ request 已改成「服务端未就绪」；403 ⇒ 「需要 admin token」。
+    // 两种情况都**不动**内存里上一次拿到的值，也不假装拿到 key。
+    showErr(out, e);
+    setMsg((quiet ? "已冻结并切流量；但读 key 失败：" : "读不到 key：") + e.message, quiet ? "" : "bad");
+  });
+}
 function copyKey() {
-  if (!LAST_KEY) { setMsg("还没有可复制的 key（先在「换 key」里生成）。", "bad"); return; }
+  if (!LAST_KEY) { setMsg("还没有可复制的 key（先点「查看 key」）。", "bad"); return; }
   if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(LAST_KEY).then(function () {
       setMsg("key 已复制到剪贴板（仍然只在内存里）。", "ok");
     }).catch(function () {
-      setMsg("复制被浏览器拒绝：请手动选中 key 那一行复制；离开页面就没了。", "bad");
+      setMsg("复制被浏览器拒绝：请手动选中 key 那一行复制。", "bad");
     });
   } else {
     setMsg("这个浏览器不给剪贴板权限：请手动选中 key 那一行复制。", "bad");
@@ -1707,7 +1754,7 @@ function rotateKey() {
     title: "换 key（项目 " + p + "）",
     rows: [
       ["目标", "项目 " + p + " 的访问 key（key/rotate）"],
-      ["后果", "旧 key **立刻失效**：还在用旧 key 的调用方会 401；新 key 只在这一次回执里出现，关掉页面就再也拿不到（只能再换一次）。"]
+      ["后果", "旧 key **立刻失效**：还在用旧 key 的调用方会 401；新 key 可以随时用「查看 key」再看到（每次查看写一条 reveal_key 审计），但旧 key 换不回来。"]
     ],
     ok: "换 key"
   }, function () {
@@ -1715,10 +1762,10 @@ function rotateKey() {
   }).then(function (r) {
     if (r === null) { setMsg("已取消：没有发出任何请求。", ""); return; }
     r = r || {};
-    showKey(r.key);
+    showKey(r);
     var out = $("b-import-out");
-    if (r.key_digest) out.appendChild(el("div", "note", "key_digest：" + r.key_digest + "（摘要可以留档；key 本身只显示一次）"));
-    setMsg("已换 key：新 key 只显示这一次。", "ok");
+    if (r.key_digest) out.appendChild(el("div", "note", "key_digest：" + r.key_digest + "（摘要可留档；明文可以随时「查看 key」再取）"));
+    setMsg("已换 key（新明文已显示，也可以随时「查看 key」）。", "ok");
   }).catch(function (e) {
     showErr($("b-import-out"), e);
     setMsg("换 key 失败：" + e.message, "bad");
@@ -1774,6 +1821,7 @@ $("b-checklist-refresh").onclick = function () { loadChecklist().catch(function 
 $("b-activate").onclick = activateBundle;
 $("b-rotate").onclick = rotateKey;
 $("b-key-copy").onclick = copyKey;
+$("b-key-view").onclick = function () { viewKey(); };
 
 restore();
 
@@ -1971,14 +2019,18 @@ mod tests {
             // 端点（逐字：服务端并行实现的就是这几条）
             "/bundles",
             "/database/test",
+            "/key",
             "key/rotate",
+            // key 能再次查看 ⇒ 每次查看都要留痕：审计提示是这条需求的唯一补偿，不许删
+            "reveal_key",
+            "id=\"b-key-view\"",
             // 上传必须是原始字节，不能走会 JSON 化的 post()
             "application/octet-stream",
             "ctype",
             // 目标库面板：口令框只支持新密码、不回填
             "b-dsn-pass",
             "new-password",
-            // 门禁与一次性 key
+            // 门禁与 key 展示
             "id=\"b-import\"",
             "id=\"b-activate\"",
             "id=\"b-rotate\"",
@@ -2005,6 +2057,7 @@ mod tests {
             "importBundle()",
             "loadChecklist()",
             "activateBundle()",
+            "viewKey()",
             "showKey(",
             "rotateKey()",
         ] {
