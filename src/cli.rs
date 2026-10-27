@@ -1227,6 +1227,71 @@ pub enum ReviewCmd {
         #[arg(long)]
         confidence: bool,
     },
+    /// ⭐ REQ-160 · **起本机审核台**：构建端两种模式（agent / acp）**共同**的出口。
+    ///
+    /// 抽完之后由人在这一个页面上审、确认、签字。为什么是「所有模式同一个出口」：
+    /// 出口一分叉，就一定会出现「agent 模式跳过了人签」或「acp 模式产物形状不同」
+    /// 两种事故（demand §二）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder review open --project demo --bind 127.0.0.1:0
+    ///
+    /// 然后浏览器打开它打印的 URL（`--bind` 给 `:0` 时由内核分配端口，
+    /// 具体端口被占用会自动顺延 —— 打印的**就是**真实端口）。
+    ///
+    /// # 安全边界（写在这里，因为 `--help` 是唯一必定被人读到的地方）
+    ///
+    /// | # | 规则 |
+    /// | --- | --- |
+    /// | S1 | **只绑回环**（127.0.0.1 / ::1）。任何非回环地址（含 `0.0.0.0` 与内网）必须显式 `--allow-public`，否则**启动即失败** |
+    /// | S2 | 口令是**一次性**的：随机生成、只在本进程内存里、**不落盘**、**不进 URL**、**不进日志 / 审计原文**（审计只记 sha256 前 12 位）；进程退出即失效 |
+    /// | S3 | 页面的既有纪律一字不变：壳内零数据、禁 `localStorage`、CSP 自包含（`src/console/page.rs`） |
+    ///
+    /// ⚠️ 口令只在终端打印**一次**：把它粘贴到页面的口令框（页面只存 sessionStorage）。
+    /// ⛔ 不要贴进浏览器地址栏、不要复制到共享文档 / 聊天工具 / 截图。
+    /// ⚠️ 前台运行，**没有**后台常驻（daemon）形态：Ctrl-C 结束即失效。
+    /// ⚠️ 起的是与 `console serve` **同一个**控制面（同一份路由表），区别只有
+    /// 「凭据从哪来」：那边读 `--tokens <文件>`，这边是内存里的一次性口令。
+    /// ⚠️ 需要 `ONTOK_SECRET_KEY`（控制面无条件持有 DSN 加密器，与 `console serve` 同一条纪律）。
+    /// ⚠️ 声明校验需要真实 schema：给 `--schema`，或用默认 `code/out/schema.json`；
+    /// 都没有时声明校验**关闭（fail-closed）**，页面审阅照常可用。
+    ///
+    /// 退出码：`0` 正常结束（含 TTL 到点）；`1` 环境 / 库错；`2` 入参不合法
+    /// （项目 / 版本不存在、`--bind` 不是回环却没给 `--allow-public`、`--schema` 读不动 …）。
+    #[command(verbatim_doc_comment)]
+    Open {
+        /// 项目名（必须是**已存在**的项目：本命令只读，不建项目）
+        #[arg(long)]
+        project: String,
+        /// 第几版。省略 = 该项目**最新**版本。
+        /// 一版都没有时照常起（页面上只有待审提案 —— `build run` 的产物就是这个形状）
+        #[arg(long)]
+        version: Option<i32>,
+        /// 监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配；具体端口被占会自动顺延）
+        #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
+        bind: String,
+        /// 允许绑非回环地址（`0.0.0.0` / 内网 / 公网）。⛔ 不加就只能绑回环
+        #[arg(long)]
+        allow_public: bool,
+        /// 不自动打开浏览器（CI / 远程 SSH / 无桌面环境）。⚠️ 只影响开不开浏览器，服务照起
+        #[arg(long)]
+        no_browser: bool,
+        /// 一次性口令的有效期（`4h` / `30m` / `45s`，裸数字按秒）。到点即关；进程退出也即失效
+        #[arg(long, default_value = crate::review_open::DEFAULT_TOKEN_TTL)]
+        token_ttl: String,
+        /// 真实 schema（`ontok-introspect` 产物）—— 声明校验的「表 / 列必须存在」只能来自它。
+        /// 省略时找默认落点 `code/out/schema.json`（工作树里会向上一级找）
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
+        #[arg(long)]
+        base: Option<String>,
+        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**；
+        /// 给了它 = stdout **+** 这个文件（同时写）
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+    },
     /// ⭐ REQ-111 · 起一个**本地审核界面**（在 HTML 里做双轨审核）
     ///
     /// 与 `serve` 是**两个命令**，不是给 `serve` 加一个开关：
@@ -2061,6 +2126,38 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // ⇒ 若把这条挪到下面那个 match（连库之后），`bundle verify` 会先被
         // 「连不上库」挡住，报错指向的原因就错了。
         Cmd::Bundle { cmd } => return bundle_cmd(cmd).await,
+        // ⭐ REQ-160 · `review open` 也在**连库之前**分派（理由与 `doc ingest` 同一条）：
+        // 它**先判入参**（`--bind 0.0.0.0:8899` 不带 `--allow-public` 是**入参错** ⇒ exit 2），
+        // 判完才自己连库（[`crate::review_open::open`]）。若留到下面那个 match（先连库），
+        // 没配库的机器上永远先看到「ONTOK_DATABASE_URL 未设置」——
+        // 报错指向错的原因，AC-005 的两条退出码判据也就无从跑起。
+        Cmd::Review { cmd } => match cmd {
+            ReviewCmd::Open {
+                project,
+                version,
+                bind,
+                allow_public,
+                no_browser,
+                token_ttl,
+                schema,
+                base,
+                audit_out,
+            } => {
+                let args = crate::review_open::OpenArgs {
+                    project,
+                    version,
+                    bind,
+                    allow_public,
+                    no_browser,
+                    token_ttl,
+                    schema,
+                    base,
+                    audit_out,
+                };
+                return crate::review_open::finish(crate::review_open::open(args).await);
+            }
+            cmd => Cmd::Review { cmd },
+        },
         cmd => cmd,
     };
 
@@ -2365,7 +2462,7 @@ fn build_doc_transport(
 /// ⭐ REQ-147：本函数多了一个**岔口**（`--agent acp`），但默认那一支**一行没改** ——
 /// 不给 `--agent` 时走的还是 REQ-116 的原路（三件套 / `Prompts::standard()` /
 /// `max_tokens` 口径全部不变），所以产物与基线**逐字节相同**（R1 的判据是 sha256 对拍）。
-async fn doc_ingest_cmd(
+pub(crate) async fn doc_ingest_cmd(
     input: PathBuf,
     out: PathBuf,
     stats_path: Option<PathBuf>,
@@ -2799,7 +2896,7 @@ async fn doc_ingest_cmd(
 ///
 /// 它是**机械对齐**：输入是两份本地文件，判断依据全是文件里的字段（`maps_to` /
 /// 名字 / 别名）。⛔ 没有一次网络调用，所以没有 token 可花，也就没有预算闸。
-async fn doc_merge_cmd(
+pub(crate) async fn doc_merge_cmd(
     assertions: &std::path::Path,
     proposal: &std::path::Path,
     out: &std::path::Path,
@@ -5653,6 +5750,34 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
                 .decide_item(p, item, t, d, crate::db::proposal::VIA_CLI)
                 .await?;
             println!("item {} 的 {} 轨 → {}", item, track, d.as_str());
+        }
+        ReviewCmd::Open {
+            project,
+            version,
+            bind,
+            allow_public,
+            no_browser,
+            token_ttl,
+            schema,
+            base,
+            audit_out,
+        } => {
+            // ⚠️ 正常路径**走不到这里**：`run()` 在连库之前就把 `review open` 分派出去了
+            // （它先判入参、自己连库）。这一段是**兜底**：万一将来有人删掉那个提前返回，
+            // 得到的仍是同一个实现（[`crate::review_open::open_with`]），而不是「命令不存在」。
+            // 收尾在**边界**做（`finish` 只在这里翻译退出码：入参不合法 ⇒ 2，环境 / 库错 ⇒ 1）。
+            let args = crate::review_open::OpenArgs {
+                project,
+                version,
+                bind,
+                allow_public,
+                no_browser,
+                token_ttl,
+                schema,
+                base,
+                audit_out,
+            };
+            return crate::review_open::finish(crate::review_open::open_with(pool, args).await);
         }
         ReviewCmd::Serve { project, proposal, bind, token } => {
             // 绑地址先解析：给错格式要报人话，不要把 axum 的栈倒给用户。
