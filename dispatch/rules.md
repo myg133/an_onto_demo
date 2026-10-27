@@ -765,3 +765,25 @@ Rust 测试框架于是把它算成 **passed**。
 | 3 | **报错文案也要验**：字段路径 / 错误码 / 点名对象，肉眼核一次（REQ-159 的 F-01 就是「路径被拼成 `manifest.json.manifest.json.files[0].sha256`」，测试红、文案也错，但没人看文案） |
 | 4 | 交付报告里的测试数字要写**命令原文**，不许只写「全部通过」 |
 | 5 | QA 退回后必须**回给同一个 QA 复验**，不许自己判「已修」就合 |
+
+---
+
+## 需要数据库时（2026-10-27 用户口径）
+
+**要用库，优先用 podman 构建；⛔ 不要在 WSL 里装/建库。**
+
+| 项 | 值 |
+| --- | --- |
+| 容器 | **`ontok-pg`**（`docker.io/library/postgres:16`，`--network host`，本机已长跑） |
+| 宿主地址 | `127.0.0.1:5432`（**实测可达**，不是只能容器内访问） |
+| 口令 / 用户 | `postgres` / `postgres` |
+| 建库 | `podman exec ontok-pg psql -U postgres -c "CREATE DATABASE <你专用的库名>"` |
+| 用库 | `$env:ONTOK_TEST_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/<库名>"`（**同时**设 `ONTOK_DATABASE_URL`） |
+| 密钥 | `ONTOK_SECRET_KEY` = 64 位 hex（`review open` / console 的 DSN 加密列需要） |
+
+**纪律**：
+
+1. **一个会话一个库**（如 `ontok_lion_dev` / `ontok_qa_req160`）—— 复用别人的库会让两边迁移/数据互相污染
+2. ⛔ 不要 `podman rm` / 重建容器：它有 3 天的历史库，重建等于把所有人的现场清掉
+3. ⛔ 不要把「造数据用的 `review decide --accept-all`」当成产品流程 —— 那是为了让 `apply` 有可应用条目
+4. **别再写「本机无元数据库 ⇒ 未验」**：库是有的。真跑不了的，写清具体是哪一步、报什么错
