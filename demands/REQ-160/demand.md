@@ -150,13 +150,17 @@ ontok-builder build run \
 - 判据：两条命令的退出码
 
 ### AC-006 · acp 模式一条命令到审核台
-- `build run --agent acp ...` ⇒ 一次运行后：断言 JSONL、提案、版本都产出，且审核台已起
+- `build run --agent acp ...` ⇒ 一次运行后：**断言 JSONL + 提案已导入 + 项目/基版本存在**，且审核台已起
 - 中途失败（agent 连不上）⇒ **退出码非 0 且零产物**（不产出断言文件、不建版本）
 - 判据：成功/失败各一次，看产物与版本数
 
+> **订正（2026-10-27，Dev 指出我写错）**：原文写「**版本**都产出」是错的 —— `proposal import` **不产新版本**（`apply` 才产）。
+> `build run` 的正确终点是「提案已导入、项目与基版本就绪、**未 apply 未 freeze**」。
+> 与 AC-007 连起来看：这条链的语义是「把东西准备好，等人在审核台上签字」，不是「一键生效」。
+
 ### AC-007 · ⛔ 不自动签
-- 跑完 `build run` 后：新版本存在但 **未冻结**、提案条目**决策为空**
-- 判据：`review show` 输出 + `ontology versions`
+- 跑完 `build run` 后：**版本未被冻结**、提案条目**决策为空**
+- 判据：`review show` 输出 + `ontology versions`（无库时用结构判据：源码里不得出现 apply/freeze/set_decision 调用）
 
 ### AC-008 · skill 与收口一致（**人分发**，不验导出）
 - `skills/ontok-extract/SKILL.md` 与 `skills/ontok-build/SKILL.md` 末尾都有收口命令 `ontok-builder review open`

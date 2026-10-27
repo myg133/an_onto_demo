@@ -44,12 +44,40 @@ AC-005 只绑回环 · AC-006 acp 一条命令到审核台 · AC-007 不自动�
 ## 待办
 
 - [x] **skill 部分**（用户 11:20 直接点出「skill 里需要一个审核的流程或操作项」）—— 已做，见下
-- [ ] **等 REQ-159 两条支线落地再派**（用户拍板：不并行开第三路，避免三路冷编译挤一台机器）
-- [ ] 派 Dev：`review open` + `build run`
-      （`skill export` **已取消** —— 用户口径：skill 就在 `skills/` 目录里、由人分发）
+- [x] **等 REQ-159 落地再派**（已落地：`e7c29aa`）
+- [x] 派 Dev：`review open` + `build run` —— 已交付 4 个 commit（`183003e` / `c24fd2d` / `2067d6d` / `4cb83dd`）
+- [ ] **Q4 判据修正**（`no_zip_crate_was_added` 与 `flate2` 冲突）—— 已派回 Dev
 - [ ] QA：重点 AC-002（URL 无口令）/ AC-004（不落盘）/ AC-007（不自动签）
 
-## skill 部分已完成（2026-10-27，workspace `7cdf241`）
+## 交付与我的复核（2026-10-27 12:0x）
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check --lib` | 绿 |
+| `cargo test --lib review_open` | **20 passed / 0 failed**（我复跑） |
+| `cargo test --test test_req160_review_open` | **7 passed / 0 failed**（我复跑） |
+| `cargo test --test test_req159_bundle` | **32/33** —— 唯一红是 `no_zip_crate_was_added`，见 Q4 |
+
+## 六个问题的裁定（BA）
+
+| # | 问题 | 裁定 |
+| --- | --- | --- |
+| **Q4** | `no_zip_crate_was_added` 与 `Cargo.toml` 的 `flate2 = "1"` 冲突 | **允许 `flate2`，⛔ 禁止 `zip` 库**。理由：`flate2` 早就在依赖树里（`ureq` 的 gzip feature 带进来，Cargo.toml 已登记同版本同 feature）；服务端读第三方 `zip -9` 的包**需要 deflate**。「不新增 crate」的本意是不往依赖树加东西，不是不许出现二进制解析。改判据（改名 + 只查 `zip` + `flate2` 必须有「依赖树」注释），⛔ 不删依赖 |
+| **Q1** | `review open` 是否必须 `ONTOK_SECRET_KEY` | **v1 保持要求**（`ConsoleService` 无条件持有 DSN 加密器；为审核降级会把启动 fail-fast 变成运行时 500）。把这条写进 `--help`；「没密钥也能审」记后续单 |
+| **Q2** | 最新版已冻结时 | **保持报错**，⛔ 不自动 `version new` —— 悄悄造版本比报错危险 |
+| **Q3** | 口令要人手动粘进页面 | **接受**。这是 S2 的直接后果：口令只进终端一行 + 页面 sessionStorage |
+| **Q5** | AC-006「版本都产出」 | **我写错了，已订正**：`proposal import` 不产版本（`apply` 才产）；正确终点是「断言 + 提案已导入 + 项目/基版本就绪，**未 apply 未 freeze**」 |
+| **Q6** | 审核台算不算「出口」 | **不算**：只绑回环、只打印到本机终端、不产生客户可见数据 ⇒ 不进 t5 出口登记；要求在模块头写明理由 |
+
+## 未验（⛔ 不许当通过）
+
+| 项 | 原因 |
+| --- | --- |
+| 完整 `review open` 真起服务 + 浏览器里看到待审清单 | 本机无元数据库 |
+| `build run` 成功路径（含 import 落库） | 同上 |
+| AC-007 的「版本真的未冻结」（运行时） | 同上；目前只有结构判据（源码无 apply/freeze） |
+
+## skill 部分已完成（2026-10-27）
 
 | 文件 | 改了什么 |
 | --- | --- |
