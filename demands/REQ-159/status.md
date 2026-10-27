@@ -20,7 +20,9 @@
 | --- | --- | --- |
 | **P1a** | 表结构 + 7 端点 + 包校验（8 错误码）+ 解析入库 + 人工激活 | 🟡 已派 Dev（worktree `feature-REQ-159`） |
 | P1b | `query serve` 多项目（按 key 反查 → active_version → 按 version_id 缓存） | ✅ **已合 `1c418ce`**（8/8，干净态回归全绿） |
-| **P1b-2** | AM 落库 · `GET /api/projects/:p` · `key/rotate` · **版本选择三端点（列/看/激活回滚）** | ⬜ 等 P1b 合入后再派 |
+| **P1c-1** | 8 条端点从 console **搬到 `query serve`** + `kind: admin` + `ONTOK_SECRET_KEY` fail-fast | 🟡 本次派单 |
+| **P1c-2** | **Studio UI**：＋ 建项目 / 上传 / 解析 / 激活 / 查看 key（形态见 `BA/design/bundle-prototype`） | ⬜ 等 P1c-1 |
+| **P1c-3** | 版本三端点（列/看/激活回滚）+ `GET /api/projects/:p` + `key/rotate` + AM 落库 | ⬜ 最后 |
 | P1c | 前端页面（**由 lion 的面**：`src/console/page.rs`，他已完成，等我端点合完联调） | 🟡 他那侧完成 |
 
 ## 现存表（已确认，不用新建）

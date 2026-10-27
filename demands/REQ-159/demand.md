@@ -899,3 +899,32 @@ anspire_real · req129_ac006_22140_1793033086208 · req113 …
 `bundle verify` 的 `credential.suspect` 对**列名为 `password`** 的库稳定误报。
 **同意收紧判据**：只认「键 + 有值」的形态（如 `"password": "…"`），或排除列名数组；
 ⛔ 不要因为误报就把这条告警关掉（它是"包里混进凭据"的唯一信号）。
+
+
+---
+
+## 二十五 · 归属变更：8 条端点搬到 `query serve`（Studio 调用）
+
+**用户 2026-10-27 13:0x 指出**：「建项目/上传/解析/激活 这些在 studio 里呀」。
+
+而我最初把它们实现在 **console**（CLI 在 `ontok-builder` 里）—— **builder 不部署到服务器** ⇒ 这套能力部署不出去。
+
+**决定**：8 条端点挂到 `query serve`，由 **Studio**（`/studio`）调用。详见 [`ADR-013`](../../decisions/ADR-013-service-plane-becomes-writable.md)。
+
+| 项 | 变更 |
+| --- | --- |
+| 部署形态 | **不变**：仍只有 `ontok`（`query serve`）。⛔ 不部署 builder、⛔ 不新增进程 |
+| 新增环境变量 | **`ONTOK_SECRET_KEY`**（32 字节 hex；缺了 `query serve` 启动即失败） |
+| 鉴权 | `query serve` 的 token 表**加 `kind: admin|query`**；8 条写端点只认 `admin`；数字员工 key ⇒ **403 `key.not_admin`** |
+| 读路径 | catalog/describe/sparql/TTL/MCP **行为与鉴权一个字节不变** |
+| 写面 | 只写元数据库；⛔ 不碰客户源库（`database/test` 只连一次、只 `SELECT version()`） |
+| 前端 | console 的「构建包」tab **撤掉**；改在 `src/studio/studio.js` |
+| 迁移成本 | `provision.rs` **零引用 ConsoleService**（全是 `(pool, cipher, …)`）⇒ 只搬路由 + 换 state + 加 admin 门 |
+
+### 分段（取代原 P1b-2 的拆分）
+
+| 段 | 内容 |
+| --- | --- |
+| **P1c-1（后端）** | 8 条路由搬到 `query::http`；`query::tokens` 加 `kind`；`ONTOK_SECRET_KEY` fail-fast；审计；403 门 |
+| **P1c-2（前端）** | Studio 加「＋ 建项目 / 上传 / 解析 / 激活 / 查看 key」（形态见 `BA/design/bundle-prototype`） |
+| **P1c-3（收尾）** | 版本三端点（列/看/激活回滚）+ `GET /api/projects/:p` + `key/rotate` + AM 落库 |
