@@ -7,7 +7,7 @@
 //! | AC-001 | 拿 `secretproj` / 第 7 版 / `绝密对象` 起服务，`GET /` 正文里 grep ⇒ **0 命中** |
 //! | AC-002 | 零外部依赖（`<script src=` / `<link href=` / `https://` / `@import` / `integrity=` = 0）且 < 200 KB |
 //! | AC-003 | 壳里只有 `sessionStorage`；⛔ `localStorage` / URL / 源码里的 token |
-//! | AC-004 | 七个视图的容器都在，且**只**调既有 `/api/*` |
+//! | AC-004 | 八个视图的容器都在，且**只**调既有 `/api/*`（第 8 个「构建包」是 REQ-159 加的） |
 //! | AC-005 | `GET /` 不碰数据；`/api/*` 仍然要 token（没有因为加页面而开洞） |
 //! | AC-010 | 用户数据一律 `textContent`：壳里 `innerHTML` = 0 |
 //! | AC-011 | 三个响应头逐项在 |
@@ -298,7 +298,7 @@ async fn ac002_zero_external_dependency_and_under_200kb() {
         "单文件必须 < 200 KB，实际 {} 字节",
         body.len()
     );
-    // 体积下限自证：页面不是空壳（七个 tab + 内联 CSS/JS 都在）。
+    // 体积下限自证：页面不是空壳（八个 tab + 内联 CSS/JS 都在）。
     assert!(body.len() > 20 * 1024, "页面太小，可能被截断了：{}", body.len());
     assert_eq!(body, CONSOLE_HTML);
 }
@@ -334,13 +334,15 @@ async fn ac003_the_token_never_goes_to_long_term_storage_or_the_url() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// AC-004 / AC-005 · 七个视图只消费既有 /api/*
+// AC-004 / AC-005 · 八个视图只消费登记过的 /api/*
 // ══════════════════════════════════════════════════════════════
 
 #[test]
-fn ac004_the_seven_views_consume_only_the_existing_endpoints() {
-    // 七个视图容器。
-    for view in ["projects", "review", "export", "config", "audit", "query", "catalog"] {
+fn ac004_the_eight_views_consume_only_the_known_endpoints() {
+    // 八个视图容器（第 8 个「构建包」= REQ-159）。
+    for view in [
+        "projects", "review", "export", "config", "audit", "query", "catalog", "bundles",
+    ] {
         assert!(
             CONSOLE_HTML.contains(&format!("id=\"v-{view}\"")),
             "缺视图容器 v-{view}"
@@ -351,7 +353,8 @@ fn ac004_the_seven_views_consume_only_the_existing_endpoints() {
         );
     }
 
-    // 视图消费的**每一条**端点都是既有端点（REQ-124 的 10 组 + REQ-123 的 3 个读端点）。
+    // 视图消费的**每一条**端点都是登记过的（REQ-124 的 10 组 + REQ-123 的 3 个读端点
+    // + REQ-159 的 5 条构建包端点）。新增端点在这里留一条痕迹：页面偷偷打别的路径会当场红。
     for endpoint in [
         "api/projects",
         "api/apply",
@@ -365,6 +368,12 @@ fn ac004_the_seven_views_consume_only_the_existing_endpoints() {
         "api/sparql",
         "api/catalog",
         "api/describe",
+        // REQ-159 · 构建包
+        "api/projects/",
+        "/bundles",
+        "/database",
+        "/database/test",
+        "key/rotate",
     ] {
         assert!(
             CONSOLE_HTML.contains(endpoint),
@@ -374,10 +383,16 @@ fn ac004_the_seven_views_consume_only_the_existing_endpoints() {
 
     // ⛔ 页面里只有一个 fetch 调用点（其余全走 `request` / `json` / `post`）——
     // 这样「某个视图偷偷直连数据库 / 读文件」在结构上没有位置。
+    // REQ-159 的上传**没有**另开出口：它给 `request` 传 `body`（文件句柄）+ `ctype`
+    // （application/octet-stream），所以这一条数法仍然是 1。
     assert_eq!(
         CONSOLE_HTML.matches("fetch(").count(),
         1,
-        "页面只应有一个 fetch 调用点（request 层）"
+        "页面只应有一个 fetch 调用点（request 层；上传也走它）"
+    );
+    assert!(
+        CONSOLE_HTML.contains("application/octet-stream"),
+        "上传必须显式声明 octet-stream（不能发 JSON）"
     );
     // 所有请求都走相对路径（同源）。出现绝对 URL 就是外部依赖（AC-002 已判）或绕过 CSP。
     assert!(!CONSOLE_HTML.contains("\"//"), "不许出现协议相对 URL");
@@ -422,8 +437,8 @@ fn the_served_page_is_the_committed_constant() {
         src.contains("pub const CSP"),
         "CSP 必须是登记过的常量（测试逐字对）"
     );
-    // 常量里确实有七个视图的标题（防止有人把 HTML 换成空串还全绿）。
-    for title in ["项目与版本", "评审", "导出", "声明编辑", "审计", "查询台", "目录浏览"] {
+    // 常量里确实有八个视图的标题（防止有人把 HTML 换成空串还全绿）。
+    for title in ["项目与版本", "评审", "导出", "声明编辑", "审计", "查询台", "目录浏览", "构建包"] {
         assert!(CONSOLE_HTML.contains(title), "壳里缺标题 {title}");
     }
 }
