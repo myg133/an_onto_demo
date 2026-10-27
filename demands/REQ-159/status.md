@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**已就绪 · P1a 已派单**（2026-10-27 10:10）
+**P1a 已完成并合入 develop（`a4faf2d`）· P1b 开发中**（2026-10-27 11:20）
 
 ## 决策（全部已定）
 
@@ -19,8 +19,8 @@
 | 刀 | 内容 | 状态 |
 | --- | --- | --- |
 | **P1a** | 表结构 + 7 端点 + 包校验（8 错误码）+ 解析入库 + 人工激活 | 🟡 已派 Dev（worktree `feature-REQ-159`） |
-| P1b | `query serve` 多项目（按 key 反查 → active_version → 懒加载 registry） | ⬜ 等 P1a |
-| P1c | Studio ＋ 建项目 / 上传向导（前端） | ⬜ 等 P1a |
+| P1b | `query serve` 多项目（按 key 反查 → active_version → 按 version_id 缓存） | 🟡 已派 Dev（`feature-REQ-159b`） |
+| P1c | 前端页面（**由 lion 的面**：`src/console/page.rs`，他已完成，等我端点合完联调） | 🟡 他那侧完成 |
 
 ## 现存表（已确认，不用新建）
 
