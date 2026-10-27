@@ -2,36 +2,38 @@
 
 ## 当前状态
 
-**草稿 · 待拍板**（2026-10-27 · join）
+**已就绪 · P1a 已派单**（2026-10-27 10:10）
 
-## 起点
+## 决策（全部已定）
 
-用户给的流程（第一版）：
+| # | 决策 | 结论 |
+| --- | --- | --- |
+| 1 | 包签名 | **v1 不做**（只 sha256） |
+| 2 | key 与项目 | **一项目一把**（query key，绑项目） |
+| 3 | DSN 存储 | **元数据库加密列** |
+| 4 | 生效方式 | **解析后人工激活** |
+| 5 | 安全强度 | 保留最小鉴权与串包防护，放弃签名/限流/密钥托管 |
 
-> 构建端构建本体、AM、DB 都需要支持，构建完成后打包。
-> 服务端创建项目、生成 key，用户手动上传构建包；
-> 如果包含 db，弹窗进行 db 配置；完成后服务端检查 db 连通性；
-> 没问题后解析构建包，展示 key。
+## 三刀
 
-## 契约要点（已写进 demand.md）
+| 刀 | 内容 | 状态 |
+| --- | --- | --- |
+| **P1a** | 表结构 + 7 端点 + 包校验（8 错误码）+ 解析入库 + 人工激活 | 🟡 已派 Dev（worktree `feature-REQ-159`） |
+| P1b | `query serve` 多项目（按 key 反查 → active_version → 懒加载 registry） | ⬜ 等 P1a |
+| P1c | Studio ＋ 建项目 / 上传向导（前端） | ⬜ 等 P1a |
 
-| 块 | 内容 |
-| --- | --- |
-| 包格式 | zip + `manifest.json`（含每文件 sha256）+ `ontology/snapshot.json` + 可选 `am/` `db/` `declarations/` |
-| 状态机 | `created → uploaded → (db_pending → db_ok)? → imported → active`，失败不阻塞旧版本 |
-| API | 9 个端点，全部 admin token；query key 一律 403 |
-| 安全 | key 只显示一次（存 sha256）；DSN 加密存、永不回显 |
+## 现存表（已确认，不用新建）
 
-## 待拍板（6 个，见 demand.md §七）
+`projects`(id,name,created_at) · `ontology_versions`(id,project_id,seq,frozen_at,created_at)
 
-1. 包内本体用**快照 JSON** 还是 TTL？→ 建议快照 JSON（TTL 有损）
-2. 包要不要**签名**？→ 建议 v1 只 sha256
-3. key 一项目一把还是多租户多把？→ 建议 v1 一项目一把
-4. key 何时发？→ 建议创建时
-5. DSN 存哪？→ 建议元数据库加密列
-6. "包内含 db" 怎么判？→ 建议看 `requires_dsn`
+**要新增**：`project_keys` · `project_bundles` · `project_databases`
+**要加列**：`projects.label` · `projects.active_version_id`
+
+## 消费方
+
+- **数字员工**用 `query` key（一 key 绑一项目），服务端从 key 反查项目与生效版本
+- **FDE** 用 `admin` key 做建项目/上传/配 DSN/激活
 
 ## 关联
 
-- 复用 **REQ-124** 控制面（admin/query token、`/api/import|apply|freeze|export|config|audit`）
-- 若采纳"服务端解析写库" ⇒ **服务面首次获得写元数据库能力**，要补 ADR
+REQ-124（控制面 API）· REQ-157（本体 v5）· ADR-012（服务面首次获得写能力，待写）
