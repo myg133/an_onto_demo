@@ -1040,3 +1040,19 @@ Copy-Item .local\cargo-XXX\debug\ontok-builder.exe .local\console-ui\ontok-build
 
 **硬规定**：说"某组件应该…"之前，**先证明它有 `--help` / grep 命中 / 目录存在**，成本 10 秒。
 ⛔ 「按道理应该有个生成器」不算依据。
+
+### 删别人的 worktree / 分支 / target 之前，先发「我要删 X」（2026-10-27，join 在我们合并进行中删了 `feature-REQ-163`）
+
+**事件**：我 `git merge --no-ff feature/REQ-163` 期间，join 按"已合并就删"的规矩删了该 worktree + 分支 + `cargo-163`。
+这次没炸，只因为 **merge 恰好已经落盘**；换个时序就是一次坏合并（分支被删 ⇒ `Not a valid object name`）。
+
+**表格（10 秒可查）**：
+
+| 想删的东西 | 先看什么 |
+| --- | --- |
+| worktree | `git -C <wt> status` 是否干净、`<wt>/.git/MERGE_HEAD` 是否存在、`git log -1 --format=%cd` 有多新 |
+| 分支 | `git worktree list`（有没有人指着它）、`git branch -vv` 上游 |
+| target | 有没有 `cargo`/`rustc` 在跑、`debug/` 的 mtime 是不是几分钟内 |
+
+**硬规定**：删**别人的** worktree / 分支 / target 之前，先发一条「我要删 X，10 秒内没异议我就删」。
+⛔ 「已合并」≠「没人正在用它做合并/验证」—— 前者是历史，后者是当下。
