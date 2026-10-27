@@ -441,7 +441,7 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
                                 shown.join("、")
                             ),
                             "这份快照像是**视图**（`LinkTypeView` 只有 5 个字段，没有 evidence/table/column）。\
-                             包里的快照必须是 `PgStore::get_snapshot` 读出的 `Snapshot` **原文**，\
+                             包里的快照必须是 `get_snapshot` 从库里读出的 `Snapshot` **原文**，\
                              中间不许经过任何 view / filter / projection",
                         ));
                     }
