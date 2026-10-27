@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="1022" viewBox="0 0 1320 1022">
+<defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8a8a8a"/></marker></defs>
+<rect width="1320" height="1022" fill="#fdfdfd"/>
+<text x="24" y="40" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="22" font-weight="800" fill="#111">ontok · 从构建到消费的完整流程（v0.3.0）</text>
+<text x="24" y="64" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="12.5" fill="#555">实线 = 主路径。跨阶段两条箭头：构建端 → 服务端 = <tspan font-weight="700">人工上传构建包</tspan>；服务端 → 消费端 = <tspan font-weight="700">HTTPS + query key</tspan>。$ 开头为命令，# 开头为判据或注意。</text>
+<rect x="24" y="84" width="408" height="918" rx="14" fill="#eaf3fa" stroke="#2f6f9f" stroke-width="1"/>
+<text x="38" y="110" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="14.5" font-weight="800" fill="#2f6f9f">①  构建端 · ontok-builder（FDE 本机，不部署）</text>
+<rect x="456" y="84" width="408" height="918" rx="14" fill="#eaf6ee" stroke="#2f7d4f" stroke-width="1"/>
+<text x="470" y="110" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="14.5" font-weight="800" fill="#2f7d4f">②  服务端 · ontok（服务器 / k8s）</text>
+<rect x="888" y="84" width="408" height="918" rx="14" fill="#fbf3e6" stroke="#8a5a1f" stroke-width="1"/>
+<text x="902" y="110" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="14.5" font-weight="800" fill="#8a5a1f">③  消费端 · 数字员工（客户沙箱）</text>
+<rect x="40" y="124" width="376" height="60" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="143" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">输入（二选一）</text>
+<text x="51" y="157" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">文档目录（PDF/MD/docx）  或  源库只读连接串</text>
+<text x="51" y="172" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 源库只读；文档不连库</text>
+<rect x="40" y="200" width="376" height="105" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="219" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">① 抽取 → 草稿（一条命令）</text>
+<text x="51" y="233" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder build run --input &lt;dir&gt; \</text>
+<text x="51" y="248" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --work-dir &lt;work&gt; --project &lt;p&gt; --agent acp \</text>
+<text x="51" y="263" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --agent-command &lt;cli&gt; --agent-skill &lt;skill路径&gt; \</text>
+<text x="51" y="278" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --strict-deterministic</text>
+<text x="51" y="293" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 纯本地：不连产品库、不 apply、不定版</text>
+<rect x="40" y="321" width="376" height="75" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="340" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">①&#x27; 或分步（等价）</text>
+<text x="51" y="354" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder doc ingest --input &lt;dir&gt; --out out/</text>
+<text x="51" y="369" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder import --proposal out/proposal.json</text>
+<text x="51" y="384" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder review decide --proposal &lt;id&gt; …</text>
+<rect x="40" y="412" width="376" height="75" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="431" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">② 人签 → 定版</text>
+<text x="51" y="445" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder console serve --dir &lt;work&gt;</text>
+<text x="51" y="460" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 浏览器：草稿 → 逐条人签 → 定版（vN 冻结）</text>
+<text x="51" y="475" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># agent 生成的是草稿，人批过才是定版</text>
+<rect x="40" y="503" width="376" height="105" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="522" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">③ 打包（只收定版）</text>
+<text x="51" y="536" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder bundle pack --dir &lt;work&gt; \</text>
+<text x="51" y="551" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --project &lt;p&gt; --version vN --out a.ontokbundle \</text>
+<text x="51" y="566" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    [--am am-tencent.json] [--db-schema schema.json] \</text>
+<text x="51" y="581" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    [--requires-dsn] [--db-dialect postgres]</text>
+<text x="51" y="596" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># store-only zip；⛔ 不带数据</text>
+<rect x="40" y="624" width="376" height="75" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="643" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">④ 自检（出厂闸）</text>
+<text x="51" y="657" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok-builder bundle verify --file a.ontokbundle</text>
+<text x="51" y="672" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># exit 0 才发；清单须覆盖每个文件（除 manifest 本身）</text>
+<text x="51" y="687" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 非 store 压缩 ⇒ bundle.unsupported.compression</text>
+<rect x="40" y="715" width="376" height="60" rx="9" fill="#fff" stroke="#2f6f9f" stroke-width="1.4"/>
+<text x="51" y="734" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f6f9f">产物</text>
+<text x="51" y="748" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">a.ontokbundle</text>
+<text x="51" y="763" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 本体 snapshot + AM + 源库描述（无数据）</text>
+<rect x="472" y="124" width="376" height="90" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="143" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">部署（读面 + 写面同一进程）</text>
+<text x="483" y="157" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ ontok query serve --bind 0.0.0.0:8800 \</text>
+<text x="483" y="172" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --tokens /etc/ontok/secrets/query-tokens.json \</text>
+<text x="483" y="187" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --ontology-only  [--project &lt;p&gt; --version vN]</text>
+<text x="483" y="202" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 环境：ONTOK_DATABASE_URL + ONTOK_SECRET_KEY(64hex)</text>
+<rect x="472" y="230" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="249" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">① 建项目 + 发 key（admin）</text>
+<text x="483" y="263" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects</text>
+<text x="483" y="278" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  {&quot;name&quot;:&quot;&lt;p&gt;&quot;,&quot;label&quot;:&quot;…&quot;,&quot;key_label&quot;:&quot;…&quot;}</text>
+<text x="483" y="293" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 201 一次性 key（kind=query，一 key 一项目）</text>
+<rect x="472" y="321" width="376" height="90" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="340" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">② 上传构建包</text>
+<text x="483" y="354" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects/&lt;p&gt;/bundles</text>
+<text x="483" y="369" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  Content-Type: application/octet-stream</text>
+<text x="483" y="384" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  body = a.ontokbundle 的原始字节</text>
+<text x="483" y="399" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 201 bundle_id + sha256_verified=true</text>
+<rect x="472" y="427" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="446" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">③ 配 DSN（仅 requires_dsn）</text>
+<text x="483" y="460" font-family="Consolas,monospace" font-size="11.2" fill="#123">PUT  /api/projects/&lt;p&gt;/database  {&quot;dsn&quot;:&quot;…&quot;}</text>
+<text x="483" y="475" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects/&lt;p&gt;/database/test</text>
+<text x="483" y="490" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 失败也 200（看 ok 字段）；DSN 加密列存储</text>
+<rect x="472" y="518" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="537" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">④ 解析入库</text>
+<text x="483" y="551" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects/&lt;p&gt;/bundles/&lt;id&gt;/import</text>
+<text x="483" y="566" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 200 version=vN（frozen=false）</text>
+<text x="483" y="581" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 已导入 ⇒ 200 + already_imported:true（幂等）</text>
+<rect x="472" y="609" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="628" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">⑤ 冻结 + 激活（生效）</text>
+<text x="483" y="642" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects/&lt;p&gt;/bundles/&lt;id&gt;/activate</text>
+<text x="483" y="657" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 200 frozen=true · active_version_id 指向它</text>
+<text x="483" y="672" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 不激活 ⇒ 对外 503 project.no_active_version</text>
+<rect x="472" y="700" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
+<text x="483" y="719" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">对外服务面</text>
+<text x="483" y="733" font-family="Consolas,monospace" font-size="11.2" fill="#123">GET /api/health · /api/catalog · /api/describe</text>
+<text x="483" y="748" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/sparql · GET /api/ontology.ttl · /mcp</text>
+<text x="483" y="763" font-family="Consolas,monospace" font-size="11.2" fill="#123">Studio: /studio（admin key 才能写）</text>
+<rect x="904" y="124" width="376" height="75" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="143" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">连接（部署注入，不写进 skill）</text>
+<text x="915" y="157" font-family="Consolas,monospace" font-size="11.2" fill="#123">ONTOK_BASE_URL=https://&lt;host&gt;</text>
+<text x="915" y="172" font-family="Consolas,monospace" font-size="11.2" fill="#123">ONTOK_TOKEN=&lt;query key&gt;（只读）</text>
+<text x="915" y="187" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 平台注入的凭据是 SKILL_CREDENTIAL_*</text>
+<rect x="904" y="215" width="376" height="60" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="234" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">① 探路：先看模式</text>
+<text x="915" y="248" font-family="Consolas,monospace" font-size="11.2" fill="#123">GET /api/health ⇒ mode</text>
+<text x="915" y="263" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># ontology-only（不接库）/ 普通模式（接库）</text>
+<rect x="904" y="291" width="376" height="75" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="310" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">② 查本体：拿到取数配方</text>
+<text x="915" y="324" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/sparql</text>
+<text x="915" y="339" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  {&quot;query&quot;:&quot;SELECT ?s WHERE { ?s a &lt;ns#class&gt; } LIMIT 1&quot;}</text>
+<text x="915" y="354" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 200  @graph:[] + @pending[].get</text>
+<rect x="904" y="382" width="376" height="105" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="401" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">③ 配方内容（v2 契约）</text>
+<text x="915" y="415" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">get = {class, ref, source{base_url,auth_mode},</text>
+<text x="915" y="430" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">       operation{action,method,path,headers,vars},</text>
+<text x="915" y="445" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">       request{template,paging,defaults},</text>
+<text x="915" y="460" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">       iterator, fields, auth{credential_env,service}}</text>
+<text x="915" y="475" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># v1 只有 class/filter/pushdown/ref ⇒ 要 AM 文件</text>
+<rect x="904" y="503" width="376" height="90" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="522" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">④ 凭据桥接（平台沙箱）</text>
+<text x="915" y="536" font-family="Consolas,monospace" font-size="11.2" fill="#123">TENCENT_SECRET_ID=&quot;$SKILL_CREDENTIAL_SECRETID&quot; \</text>
+<text x="915" y="551" font-family="Consolas,monospace" font-size="11.2" fill="#123">TENCENT_SECRET_KEY=&quot;$SKILL_CREDENTIAL_SECRETKEY&quot; \</text>
+<text x="915" y="566" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  python scripts/access_fetch.py …</text>
+<text x="915" y="581" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 必须同一命令内；值不落盘不回显</text>
+<rect x="904" y="609" width="376" height="105" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="628" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">⑤ 取数（配方直接喂脚本）</text>
+<text x="915" y="642" font-family="Consolas,monospace" font-size="11.2" fill="#123">$ python scripts/access_fetch.py --recipe - \</text>
+<text x="915" y="657" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --entity &lt;配方里的 class&gt; \</text>
+<text x="915" y="672" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --id-property &lt;fields 里的属性名&gt; \</text>
+<text x="915" y="687" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">    --format rows --out rows.json</text>
+<text x="915" y="702" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># 缺 --id-property ⇒ 每行被 skipped_no_identity 丢掉（0 行）</text>
+<rect x="904" y="730" width="376" height="60" rx="9" fill="#fff" stroke="#8a5a1f" stroke-width="1.4"/>
+<text x="915" y="749" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#8a5a1f">产物</text>
+<text x="915" y="763" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">rows.json / JSON-LD</text>
+<text x="915" y="778" font-family="Consolas,monospace" font-size="11.2" fill="#7a5a00"># meta.rows / pages / truncated；truncated ⇒ exit 8</text>
+<polyline points="422,745 448,745 448,345 464,345" fill="none" stroke="#8a8a8a" stroke-width="1.6" marker-end="url(#arw)"/>
+<polyline points="854,724 880,724 880,255 896,255" fill="none" stroke="#8a8a8a" stroke-width="1.6" marker-end="url(#arw)"/>
+<rect x="24" y="814" width="1272" height="188" rx="12" fill="#fff8e6" stroke="#b8860b" stroke-width="1.2"/>
+<text x="40" y="840" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="14.5" font-weight="800" fill="#7a5a00">发版 / 出厂的四道闸（缺任何一道都会「看起来成功、实际不可用」）</text>
+<text x="40" y="864" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="12.5" font-weight="700" fill="#7a5a00">① AM 校验</text>
+<text x="140" y="864" font-family="Consolas,monospace" font-size="11.5" fill="#123">$ python Deploy/tools/check_am.py</text>
+<text x="140" y="880" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11" fill="#7a5a00">非 0 ⇒ 卡住不发（AM 是人写的，没有生成器兜底）</text>
+<text x="676" y="864" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="12.5" font-weight="700" fill="#7a5a00">② 两个前置</text>
+<text x="776" y="864" font-family="Consolas,monospace" font-size="11.5" fill="#123">ONTOK_SECRET_KEY(64hex) + admin token</text>
+<text x="776" y="880" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11" fill="#7a5a00">缺前者拒绝启动；缺后者 Studio 写面全 403</text>
+<text x="40" y="928" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="12.5" font-weight="700" fill="#7a5a00">③ 同 tag 重建</text>
+<text x="140" y="928" font-family="Consolas,monospace" font-size="11.5" fill="#123">imagePullPolicy: Always</text>
+<text x="140" y="944" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11" fill="#7a5a00">否则老 pod 静默跑旧镜像（tag/pod 名都一样）</text>
+<text x="676" y="928" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="12.5" font-weight="700" fill="#7a5a00">④ 脚本自检</text>
+<text x="776" y="928" font-family="Consolas,monospace" font-size="11.5" fill="#123">$ python scripts/access_fetch.py --selftest</text>
+<text x="776" y="944" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11" fill="#7a5a00">98 passed / 0 failed（离线，不联网不要凭据）</text>
+<text x="40" y="984" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11" fill="#555">取数脚本 9+1 个退出码：am.invalid / am.unsigned / param.not_pushdown / auth.unsupported (2) · credential.missing (3) · auth.rejected (4) · api.throttled (5) · api.invalid (6) · net.timeout / net.error (7) · rows.truncated (8)</text>
+</svg>
