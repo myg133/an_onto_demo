@@ -123,6 +123,14 @@ function apiResponse(method, pathname) {
   check('requires_dsn=true 时 DSN 面板出现', await page.isVisible('#b-dsn'));
   check('am 行显示「P1b 生效」而不是「已生效」', /P1b 生效/.test(comp), comp.slice(0, 200));
 
+  // 组件表逐格核对（契约形状 ⇒ 人话摘要；无 requires_dsn 的组件必须显示 —）
+  const rows = await page.$$eval('#b-components table tr', trs => trs.map(tr => [...tr.children].map(td => td.textContent.trim())));
+  const rowOf = (k) => rows.find(r => r[0] === k) || [];
+  const oRow = rowOf('ontology'), amRow = rowOf('am'), dbRow = rowOf('db');
+  check('ontology 计数=30 类 / 34 关系 / 752 属性', /30 类/.test(oRow[1] || '') && /34 关系/.test(oRow[1] || '') && /752 属性/.test(oRow[1] || ''), JSON.stringify(oRow));
+  check('am 计数=3 实体 / 1 源', /3 实体/.test(amRow[1] || '') && /1 源/.test(amRow[1] || ''), JSON.stringify(amRow));
+  check('ontology/am 的 requires_dsn 显示 —（契约无该字段）', oRow[2] === '—' && amRow[2] === '—', JSON.stringify([oRow[2], amRow[2]]));
+  check('db 的 requires_dsn 显示 是', dbRow[2] === '是', JSON.stringify(dbRow));
   // ⑥ DSN：测试连通 + 保存
   await page.fill('#b-dsn-host', 'db.example');
   await page.fill('#b-dsn-port', '5432');
