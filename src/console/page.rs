@@ -30,7 +30,7 @@
 //!
 //! 401 / 403 ⇒ 清掉口令 + 回登录态 + **显示服务端给的 `code` / `message` / `hint`**。
 //!
-//! # 八个视图消费的端点（⛔ 本文件没有、也不许有新的数据端点）
+//! # 六个视图消费的端点（⛔ 本文件没有、也不许有新的数据端点）
 //!
 //! | 视图 | 端点 |
 //! | --- | --- |
@@ -39,19 +39,36 @@
 //! | 导出 | `GET /api/export/ttl` · `POST /api/r2rml` |
 //! | 声明编辑 | `GET/PUT /api/config/{exclusions,policy,tenancy}` |
 //! | 审计 | `GET /api/audit` |
-//! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
-//! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
 //! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects`（建项目 + 发 key，`key_label` 必填；路径作用域 `:p`，不读启动参数） · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import`（重复调用 ⇒ `200` + `already_imported:true`，幂等） · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate`（成功后固定写一句「对外服务等 P1b」） · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate`（P1a 未实现 ⇒ 404 ⇒ 显示「服务端未就绪」）。`GET /api/projects/<p>` 在 P1a **未实现，页面不调它**（不依赖）。 |
 //!
-//! 前四组由 `console serve` 自己提供；查询台与目录浏览是 **REQ-123 的查询服务**
-//! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
-//! 本页只按**同源**路径调用（`connect-src 'self'`）。⇒ 部署时把控制面与查询服务
-//! 放在**一个源**后面（反向代理按路径分流）；直连两个端口时浏览器会用同源策略拦掉，
-//! 页面会**明确**报「查询服务未接入」+ 接法（本机 `tests/fixtures/req125/dev_proxy.ps1`），
-//! 而不是把 404/403 说成「口令不对」——那两个状态在这条拓扑下**不是口令问题**，
-//! 所以查询端点出错时页面**不清任何口令**（清掉就是死循环）；管理端点仍按 401/403
-//! 清口令回登录态。开发期用 `tests/fixtures/req125/dev_proxy.ps1`（同一个分流口径）。
-//! 最后一组（构建包）由 **REQ-159 的服务端**提供，见下一节。
+//! 六组**全部**由 `console serve` 自己提供（本机 FDE 直连本机元数据库）——
+//! 页面里**没有任何一个端点属于别的进程 / 别的服务**。判据：`request()` 只发
+//! **同源**相对路径（`connect-src 'self'`），且没有 query token 这条旁路。
+//!
+//! ## REQ-161b · 为什么删掉了两个视图（不是「隐藏」，是删除）
+//!
+//! 三条理由（2026-10-27 与 join 对齐，⛔ 别再把它们加回来）：
+//!
+//! 1. **console 的定位是「本机构建工作台」**（抽取 / 评审 / 冻结 / 导出 / 打包），
+//!    查数不是它的职责；
+//! 2. 留一个指向 `query serve`（另一个进程）的入口 = 在 console 里放一个**跨服务半成品**：
+//!    要另一把 key、另一个地址、另一套错误语义；
+//! 3. FDE 要查数有 **Studio（`/studio`）**，或者直接 `curl` query serve。
+//!
+//! 用户的原话是「不属于我们范围的先去掉 / 我们的返回都是本地操作」。于是 REQ-161b 把
+//! 这两个视图（查询台 / 目录浏览）、它们的导航入口、右侧详情抽屉、专用 CSS/JS、以及
+//! 那三条只服务查询服务的错误分支 **整段删除**。
+//!
+//! ```text
+//! 查询台 / 目录浏览 已于 2026-10-27 移除：它们打的是 query serve 的
+//! 三个读端点（SPARQL 查询 / 目录分页 / 条目详情），不属于「本机构建工作台」的范围。
+//! 要查数据请用 Studio（/studio）或直接 curl query serve。
+//! ```
+//!
+//! 为什么上面那条注释里**不写那三条路径的字面量**：本单的验收口径是
+//! 「本文件里 grep 那四个禁用词（小写路径词根，见派单简报 §3）= 0」。
+//! 字面量点名叫在 `tests/test_req125_page.rs::ac004b_the_removed_views_leave_no_detail_panel`
+//! （那里逐条断言它们**不存在**）—— 原因写在人话里，路径写在判据里，两边都不漏。
 //!
 //! # 构建包 tab：端点不存在时先说「服务端未就绪」，⛔ 不把它当口令错
 //!
@@ -85,13 +102,6 @@
 //! 即便如此，整页仍然**只有一个 `fetch(` 调用点**（`request()` 里的那一处，
 //! 上传只是给它传 `body` + `ctype`），`tests/test_req125_page.rs::ac004` 的数法不变。
 //!
-//! # 查询台**必须**显示四件事（AC-008）
-//!
-//! `warnings`（可能漏数据）、`coverage[]`、`join_states[]` 里 `used=false` 的边、
-//! `truncated` —— 只给结果表格 = 不合格。这四段由 [`CONSOLE_HTML`] 里的
-//! `metaLines()` **一处**产出（纯函数：输入回执 JSON，输出要显示的文案 + 样式），
-//! 于是「页面漏了一条警告」在 `tests/fixtures/req125/page_probe.js` 里当场红。
-//!
 //! # XSS
 //!
 //! 服务端返回的每一个字符串都走 `textContent`（`el()` / `txt()` 两个助手）；
@@ -101,25 +111,21 @@
 //!
 //! # 大结果集
 //!
-//! 评审 40 条/页、审计默认 100（服务端上限 1000，页面最多渲染 1000）、
-//! 目录按服务端分页（`page_size` ≤ 200）、查询结果最多渲染 200 行并写明
-//! 「只显示前 N 行 / 共 M 行」。⛔ 不一次渲染上万行。
+//! 评审 40 条/页、审计默认 100（服务端上限 1000，页面最多渲染 1000）。⛔ 不一次渲染上万行。
 //!
-//! # 壳（REQ-161 换皮）：左导航 + 单一主区、32px 行高 / sticky 表头、key·IRI 等宽、目录右侧抽屉
-//!
-//! 换的**只有壳**，视图 / 端点 / 逻辑三不变（判据见 `mod tests` 与 `tests/test_req125_page.rs`）：
+//! # 壳（REQ-161 换皮 / REQ-161b 收口）：左导航 + 单一主区、32px 行高 / sticky 表头、key·IRI 等宽
 //!
 //! | 结构 | 判据 |
 //! | --- | --- |
-//! | 左导航 `#nav` 里 8 个 `.nav-item`；顶栏 `#tabs` 不再存在 | 按钮 id 仍是 `tab-*`，`switchTab` 的口径没变 |
+//! | 左导航 `#nav` 里 6 个 `.nav-item`（REQ-161b：查询台 / 目录浏览已移除）；顶栏 `#tabs` 不再存在 | 按钮 id 仍是 `tab-*`，`switchTab` 的口径没变 |
+//! | 顺序：01 项目与版本 / 02 构建包 / 03 评审 / 04 导出 / 05 声明编辑 / 06 审计 | 构建包是用户每天第一件事（上传包），所以在第 2 位 |
 //! | 单一主区 `#views` 是**唯一**滚动容器 | 视图容器 `v-*` 一个不少 |
-//! | `thead` sticky + `tbody td` 行高 32px | 表体在 `.tablewrap` 里滚动 |
-//! | key / IRI 一律等宽 `.key`（目录浏览 / 审计 / 评审三处） | CSS 有定义 + 三处确实在用 |
-//! | 目录详情在右侧抽屉 `#drawer`（默认收起；Esc / 遮罩 / ✕ 关闭） | `#k-detail` 在抽屉里，不再占页面底部 |
-//! | `已迁到 Studio` 的 ADR-013 提示条保留 | 构建包视图 |
+//! | `thead` sticky + `tbody td` 行高 32px | 表体在 `.tablewrap` 里滚动（审计表是最长的那张） |
+//! | key / IRI 一律等宽 `.key`（审计 / 评审 / 项目三处） | CSS 有定义 + 三处确实在用 |
+//! | 构建包是**本机主入口**，ADR-013 只在视图底部留一行中性说明 | ⛔ 不再写「仅为历史保留 / 请在 Studio 里做」 |
 //!
-//! ⛔ 换皮不许改的事实：`/api/*` 路径集合与本单之前**逐字相等**
-//! （`the_api_path_set_is_frozen`），壳内仍然零数据、零外部资源。
+//! ⛔ 换皮不许改的事实：`/api/*` 路径集合（REQ-161b 之后 9 条，见
+//! `the_api_path_set_is_frozen`），壳内仍然零数据、零外部资源。
 
 use axum::http::{HeaderName, HeaderValue};
 
@@ -262,12 +268,8 @@ table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
 thead th{position:sticky;top:0;z-index:1;text-align:left;font-weight:500;color:var(--mut-2);font-size:11.5px;height:30px;padding:0 10px;background:var(--bg-2);border-bottom:1px solid var(--line);white-space:nowrap}
 tbody td{height:32px;padding:0 10px;border-bottom:1px solid var(--line-2);color:var(--mut);vertical-align:middle;white-space:nowrap}
 tbody tr:hover td{background:rgba(255,255,255,.026);color:var(--fg)}
-tbody tr.is-sel td{background:rgba(110,200,255,.09);color:var(--fg)}
-tbody tr.can-open{cursor:pointer}
 td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 .key{font-family:var(--mono);font-size:12px;color:#cfe6ff;word-break:break-all}
-.keylink{height:auto;padding:0;border:0;background:transparent;color:#cfe6ff;font:12px/1 var(--mono);cursor:pointer;text-align:left;white-space:normal}
-.keylink:hover{color:var(--acc);text-decoration:underline}
 /* ── 校验清单（声明编辑：把「保存前校验」说清） ──────── */
 .checks{display:grid;gap:7px;font-size:12px}
 .chk{display:flex;gap:8px;align-items:flex-start;color:var(--mut)}
@@ -275,21 +277,6 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 .chk.ok::before{content:"✓";color:var(--ok)}
 .chk.bad::before{content:"✕";color:var(--bad)}
 .chk .why{color:var(--mut-2)}
-/* ── 右侧抽屉（目录详情；默认收起，不遮表格） ────────── */
-#drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,92vw);display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--bg-2);box-shadow:-18px 0 50px rgba(0,0,0,.45);transform:translateX(102%);transition:transform .26s var(--ease);z-index:20}
-#drawer.is-on{transform:translateX(0)}
-#drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:19}
-.drawer-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--line);font:12.5px/1 var(--mono);color:var(--fg)}
-.drawer-head span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.drawer-head .btn-icon{margin-left:auto;width:26px;height:26px;padding:0;border-color:var(--line);background:transparent;color:var(--mut)}
-.drawer-head .btn-icon:hover{color:var(--fg);border-color:var(--line)}
-.drawer-body{flex:1;min-height:0;overflow:auto;padding:12px 13px}
-#k-detail{margin:0;border:0;padding:0;background:transparent;overflow-x:auto}
-/* 抽屉里的属性 / 关系：紧凑列表（名字等宽 + 一行摘要），不是 7 列表格 */
-.list{display:grid;gap:5px;margin-top:4px}
-.row2{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;line-height:1.5}
-.row2 .k{color:#cfe6ff}
-.row2 .t{color:var(--mut-2);word-break:break-word}
 /* ── 滚动条 ───────────────────────────────────────────── */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -308,16 +295,13 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     <nav id="nav-list">
       <div class="nav-group">建库</div>
       <button id="tab-projects" class="nav-item is-on" data-tab="projects"><span class="nav-i">01</span>项目与版本</button>
-      <button id="tab-review" class="nav-item" data-tab="review"><span class="nav-i">02</span>评审</button>
-      <button id="tab-export" class="nav-item" data-tab="export"><span class="nav-i">03</span>导出</button>
-      <div class="nav-group">运维</div>
-      <button id="tab-config" class="nav-item" data-tab="config"><span class="nav-i">04</span>声明编辑</button>
-      <button id="tab-audit" class="nav-item" data-tab="audit"><span class="nav-i">05</span>审计</button>
-      <div class="nav-group">查询</div>
-      <button id="tab-query" class="nav-item" data-tab="query"><span class="nav-i">06</span>查询台</button>
-      <button id="tab-catalog" class="nav-item" data-tab="catalog"><span class="nav-i">07</span>目录浏览</button>
-      <div class="nav-group">构建</div>
-      <button id="tab-bundles" class="nav-item" data-tab="bundles"><span class="nav-i">08</span>构建包</button>
+      <div class="nav-group">入库</div>
+      <button id="tab-bundles" class="nav-item" data-tab="bundles"><span class="nav-i">02</span>构建包</button>
+      <div class="nav-group">签与交付</div>
+      <button id="tab-review" class="nav-item" data-tab="review"><span class="nav-i">03</span>评审</button>
+      <button id="tab-export" class="nav-item" data-tab="export"><span class="nav-i">04</span>导出</button>
+      <button id="tab-config" class="nav-item" data-tab="config"><span class="nav-i">05</span>声明编辑</button>
+      <button id="tab-audit" class="nav-item" data-tab="audit"><span class="nav-i">06</span>审计</button>
     </nav>
     <div id="nav-foot">
       <div class="kv"><span>连接</span><b id="who">未连接</b></div>
@@ -327,10 +311,9 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 
   <main id="main">
     <header id="topbar">
-      <span class="ctx-label">管理口令 / 查询口令</span>
+      <span class="ctx-label">管理口令</span>
       <span id="login">
         <input id="token" type="password" placeholder="管理口令（admin token）" autocomplete="off">
-        <input id="qtoken" type="password" placeholder="查询口令（query token，可选）" autocomplete="off">
         <button id="go">载入</button>
       </span>
     </header>
@@ -367,7 +350,7 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     </div>
   </section>
 
-  <!-- ── 2 · 评审 ───────────────────────────────────────── -->
+  <!-- ── 3 · 评审 ───────────────────────────────────────── -->
   <section id="v-review" class="view" hidden>
     <div class="view-head">
       <h2>评审</h2>
@@ -388,7 +371,7 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     </div>
   </section>
 
-  <!-- ── 3 · 导出 ───────────────────────────────────────── -->
+  <!-- ── 4 · 导出 ───────────────────────────────────────── -->
   <section id="v-export" class="view" hidden>
     <div class="view-head">
       <h2>导出</h2>
@@ -434,7 +417,7 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     </div>
   </section>
 
-  <!-- ── 4 · 声明编辑 ───────────────────────────────────── -->
+  <!-- ── 5 · 声明编辑 ───────────────────────────────────── -->
   <section id="v-config" class="view" hidden>
     <div class="view-head">
       <h2>声明编辑</h2>
@@ -472,7 +455,7 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     </div>
   </section>
 
-  <!-- ── 5 · 审计 ───────────────────────────────────────── -->
+  <!-- ── 6 · 审计 ───────────────────────────────────────── -->
   <section id="v-audit" class="view" hidden>
     <div class="view-head">
       <h2>审计</h2>
@@ -506,79 +489,19 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
     </div>
   </section>
 
-  <!-- ── 6 · 查询台 ─────────────────────────────────────── -->
-  <section id="v-query" class="view" hidden>
-    <div class="view-head">
-      <h2>查询台</h2>
-      <p>本体模式下 <strong>api 源</strong>的类会返回 <code>@graph: []</code> + <code>@pending[]</code>——平台<strong>不执行</strong> API 调用，配方给你自己取；默认回执是 JSON-LD，本页显式要 rows。</p>
-    </div>
-    <div class="panel panel-flush">
-      <div class="panel-head">
-        <span>SPARQL</span>
-        <span class="spacer"></span>
-        <span class="mono">POST /api/sparql（format:"rows"）</span>
-      </div>
-      <div class="panel-body">
-        <textarea id="q-text" spellcheck="false" placeholder="SELECT ?s WHERE { ?s a :&lt;类名&gt; }"></textarea>
-        <div class="bar" style="margin-top:8px">
-          <label>max_rows <input id="q-max" value="200" size="6"></label>
-          <button id="q-go">执行</button>
-          <span class="note">行数上限由 token 决定；页面最多渲染 200 行。</span>
-        </div>
-      </div>
-    </div>
-    <div class="panel panel-flush" style="border-color:rgba(230,180,85,.3)">
-      <div class="panel-head"><span>查询元信息（先看这四段，再看表格）</span><span class="spacer"></span><span class="mono">warnings · coverage · join_states · truncated</span></div>
-      <div class="panel-body" style="padding:0">
-        <div id="q-meta"></div>
-      </div>
-    </div>
-    <div id="q-table"></div>
-  </section>
+  <!--
+    查询台 / 目录浏览 已于 2026-10-27 移除（REQ-161b）：它们打的是 query serve 的
+    三个读端点（SPARQL 查询 / 目录分页 / 条目详情），不属于「本机构建工作台」的范围。
+    要查数据请用 Studio（/studio）或直接 curl query serve。
+    ⛔ 别加回来：留一个指向另一个进程的入口 = 在 console 里放一个跨服务半成品
+    （要另一把 key、另一个地址、另一套错误语义）。理由详见本文件头部 §REQ-161b。
+  -->
 
-  <!-- ── 7 · 目录浏览 ───────────────────────────────────── -->
-  <section id="v-catalog" class="view" hidden>
-    <div class="view-head">
-      <h2>目录浏览</h2>
-      <p>分页读 <code>GET /api/catalog</code>；<strong>点任意一行</strong>在右侧抽屉里看 <code>GET /api/describe</code> 的详情——抽屉不遮表格，方便对照着读。</p>
-    </div>
-    <div class="panel panel-flush">
-      <div class="panel-head">
-        <label>page <input id="k-page" value="1" size="4"></label>
-        <label>page_size <input id="k-size" value="50" size="4"></label>
-        <button id="k-load">载入</button>
-        <span class="spacer"></span>
-        <span class="mono">page_size ≤ 200</span>
-      </div>
-      <div class="panel-body">
-        <div id="k-summary" class="summary">尚未载入。</div>
-        <div id="k-table" class="tablewrap tall"></div>
-        <div class="pager">
-          <button id="k-prev">上一页</button>
-          <span id="k-pos"></span>
-          <button id="k-next">下一页</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── 8 · 构建包（REQ-159）· 已按 ADR-013 迁到 Studio ── -->
+  <!-- ── 2 · 构建包（REQ-159）· 本机 FDE 主入口 ─────────── -->
   <section id="v-bundles" class="view" hidden>
     <div class="view-head">
       <h2>构建包</h2>
-      <p>REQ-159 的 8 条端点（建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效）。<strong>已按 ADR-013 迁到 Studio</strong>，本页保留为参考实现与本机直连库时的入口。</p>
-    </div>
-    <div class="panel" style="border-color:var(--warn)">
-      <div class="note" style="color:var(--warn);font-weight:600">
-        ⚠️ 此流程已迁到 Studio（<code>/studio</code>）：本页的「构建包」入口仅为历史保留，新流程请在 Studio 里做。
-      </div>
-      <div class="note" style="margin-top:6px">
-        原因：这 8 条端点原先挂在 console（`ontok-builder` 的 CLI，不部署到服务器），客户侧点不到；
-        已按 ADR-013 迁到 `query serve` 并由 Studio 调用。
-        <b>本页代码保留</b>：门禁（requires_dsn + 测通才允许 import）、`already_imported` 当成功、
-        404 降级、key 查看与 `reveal_key` 审计提示 —— 这套逻辑是 Studio 的参考实现，
-        且 FDE 在本机直连库时仍可用。
-      </div>
+      <p>本机 FDE 操作：建项目 → 上传包 → 配目标库（需要时）→ 解析入库 → 待确认 → 生效。<strong>全部走本机 console</strong>（本地元数据库），不依赖任何外部服务。</p>
     </div>
     <div class="bar">
       <button id="b-refresh">刷新</button>
@@ -680,20 +603,11 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
         <div id="b-key-out"></div>
       </div>
     </div>
+    <p class="note">客户侧平台（Studio）另有同一套流程（ADR-013）；本页是 FDE 本机入口。</p>
   </section>
   </div>
   </main>
 </div>
-
-<!-- 右侧抽屉：目录详情的落点（默认收起；点表格某行滑出，Esc / 遮罩 / ✕ 关闭） -->
-<div id="drawer-mask" hidden></div>
-<aside id="drawer" aria-hidden="true" aria-label="条目详情">
-  <div class="drawer-head">
-    <span id="dr-title">条目详情</span>
-    <button id="dr-close" class="btn-icon" aria-label="关闭抽屉">✕</button>
-  </div>
-  <div class="drawer-body"><div id="k-detail" class="panel" hidden></div></div>
-</aside>
 
 <div id="modal" hidden>
   <div id="mbox" role="dialog" aria-modal="true">
@@ -713,15 +627,12 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 // 状态：口令只在内存 + sessionStorage（键名固定，刷新后同一标签页可恢复）
 // ══════════════════════════════════════════════════════════
 var ADMIN_KEY = "ontok.console.admin";
-var QUERY_KEY = "ontok.console.query";
 var PAGE_SIZE_REVIEW = 40;
-var UI_MAX_ROWS = 200;
 
 var S = {
-  at: "", qt: "", connected: false, tab: "projects",
+  at: "", connected: false, tab: "projects",
   projects: null, review: null, reviewProposal: "", reviewPage: 1,
-  declKind: "exclusions", audit: null, query: null,
-  catalog: null, catalogPage: 1,
+  declKind: "exclusions", audit: null,
   // 构建包（REQ-159）：bundle = 上传回执 + 入库后补的 version；
   // pendingCount = 待确认条数（来源：/api/review 的 progress.pending，缺 progress 时按条目估算）；
   // projectOverride = 本页新建的项目名（非空时它就是「当前项目」，别被 GET /api/projects 冲掉）
@@ -764,28 +675,19 @@ function netError(e) {
   var why = (e && e.message) ? e.message : String(e);
   return wbError(0, "NETWORK",
     "无法连接服务：" + why,
-    "确认服务还在跑（端口 / 进程）；本页只允许同源 /api/*（CSP connect-src 'self'）——" +
-    "查询台与目录浏览需要控制面与查询服务在同一个源后面（反向代理按路径分流）。");
+    "确认服务还在跑（端口 / 进程）；本页只允许同源 /api/*（CSP connect-src 'self'）。");
 }
-function authHeader(useQuery) {
-  var t = useQuery ? (S.qt || S.at) : S.at;
-  return t ? { "Authorization": "Bearer " + t } : {};
+function authHeader() {
+  return S.at ? { "Authorization": "Bearer " + S.at } : {};
 }
-// 查询端点「没接入」时的**固定文案**（404 与 403 共用）。
-// 为什么两个状态说同一句话：直连 :8899 时，只填管理口令 ⇒ 404（console 没有这个路径）；
-// 两个口令都填 ⇒ 403（console 认得 query token，但不接受它调管理端点）。两者都不是
-// 「口令填错」，而是「查询端点不在此服务」——把用户引去改口令是死循环（L-1）。
-var QUERY_WIRING = "查询服务未接入：这三个端点属于 query serve（另一进程）。" +
-  "请把 query serve 挂到同源 /api/sparql、/api/catalog、/api/describe 下" +
-  "（本机可用 tests/fixtures/req125/dev_proxy.ps1，部署指南见 BA/runbook/ontology-e2e.md §7.3）";
 // 构建包 tab 的端点（REQ-159）可能还没上线：这类请求带 `notReady`，404 说同一句话。
-// 与 QUERY_WIRING 同一条教训：**把「服务端没有这个路径」说成「口令不对」是死循环**。
+// **把「服务端没有这个路径」说成「口令不对」是死循环**（REQ-125 · L-1 那条教训）。
 var NOT_READY_MSG = "服务端未就绪：该端点还不存在（REQ-159 服务端在并行开发中）";
 var NOT_READY_HINT = "这不是口令问题：页面**不会**清空口令、也不会退回登录态。" +
-  "等服务端把这一组端点上线后重试；在那之前本页其余七个视图照常可用。";
+  "等服务端把这一组端点上线后重试；在那之前本页其余五个视图照常可用。";
 function request(path, opts) {
   opts = opts || {};
-  var headers = authHeader(!!opts.query);
+  var headers = authHeader();
   if (opts.json) headers["Content-Type"] = "application/json";
   // 上传：body 是文件句柄本身（原始字节），内容类型由调用点指定 —— 仍然走下面这**唯一**一处 fetch。
   if (opts.ctype) headers["Content-Type"] = opts.ctype;
@@ -802,21 +704,10 @@ function request(path, opts) {
         err.hint = NOT_READY_HINT;
       } else if (opts.needAdmin && r.status === 403) {
         // 403 key.not_admin = 「口令**类型**不对」（拿 query key 看管理端点），不是口令过期。
-        // ⇒ 只说清该用 admin token，⛔ 不清口令、不登出（与查询端点那条同一条教训）。
+        // ⇒ 只说清该用 admin token，⛔ 不清口令、不登出（与 404 那条同一条教训）。
         err.code = "KEY_NOT_ADMIN";
         err.message = "需要 admin token（key.not_admin）：查看 key 是管理端点，query key 调不了。";
         err.hint = "在页面顶部第一个输入框填管理口令（admin token）后重试；⛔ 页面不会清掉你已经填的口令。";
-      } else if (opts.query && (r.status === 404 || r.status === 403)) {
-        // ⛔ **不清任何口令**：L-1 拓扑下两个口令都填了也还是 403，清掉就再也填不回来。
-        err.code = "QUERY_NOT_WIRED";
-        err.message = QUERY_WIRING;
-        err.hint = "这不是口令问题：管理口令仍然有效，页面不会清空任何口令。" +
-          "（用 query token 直连控制面时，控制面会以 403 拒绝「query token 调管理端点」——同上处理。）";
-      } else if (opts.query && r.status === 401) {
-        // 查询服务真的在、但缺 / 错 query token：只提示，**不动管理口令**。
-        err.code = "QUERY_UNAUTHORIZED";
-        err.message = "查询服务拒绝了这张口令（401）：查询台 / 目录浏览要的是 query token（含租户）。";
-        err.hint = "在页面顶部第二个输入框填入 query token 后重试；⛔ 不会清掉你已经填的管理口令。";
       } else if (r.status === 401 || r.status === 403) {
         // 管理端点：照旧——清口令 + 回登录态 + 显示原因（安全语义不变）。
         logout("口令无效或权限不够（HTTP " + r.status + " " + err.code + "）：" + err.message);
@@ -835,14 +726,14 @@ function json(path, opts) {
     }
   });
 }
-function post(path, body, useQuery) {
-  return json(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery });
+function post(path, body) {
+  return json(path, { method: "POST", json: true, body: JSON.stringify(body) });
 }
 // 文本端点（REQ-161 追加修复）：`POST /api/r2rml` 走 `respond_text`，回的是 **text/turtle**，
 // 不是 JSON。⛔ 别用 post()：它会 JSON.parse 一份 Turtle ⇒ 必抛 BAD_JSON，还把
 // 「服务端返回了 Turtle」说成「去看服务端日志」。正文由 request() 的 {text} 直接给。
-function postText(path, body, useQuery) {
-  return request(path, { method: "POST", json: true, body: JSON.stringify(body), query: !!useQuery })
+function postText(path, body) {
+  return request(path, { method: "POST", json: true, body: JSON.stringify(body) })
     .then(function (r) { return r.text; });
 }
 
@@ -869,26 +760,23 @@ function showErr(node, e) { clear(node); node.appendChild(errBox(e)); }
 function remember() {
   try {
     sessionStorage.setItem(ADMIN_KEY, S.at);
-    if (S.qt) sessionStorage.setItem(QUERY_KEY, S.qt); else sessionStorage.removeItem(QUERY_KEY);
   } catch (e) { /* 隐私模式下可能不可用：内存里的口令仍然有效 */ }
 }
 function forget() {
-  try { sessionStorage.removeItem(ADMIN_KEY); sessionStorage.removeItem(QUERY_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(ADMIN_KEY); } catch (e) {}
 }
 function logout(reason) {
-  S.at = ""; S.qt = ""; S.connected = false;
+  S.at = ""; S.connected = false;
   forget();
   $("login").hidden = false;
   $("token").value = "";
-  $("qtoken").value = "";
   txt($("who"), "未连接");
   setMsg(reason || "已退回登录态。", "bad");
 }
 function enter(fromStore) {
   var at = fromStore ? S.at : $("token").value.trim();
-  var qt = fromStore ? S.qt : $("qtoken").value.trim();
   if (!at) { setMsg("先填管理口令（admin token）。", "bad"); return; }
-  S.at = at; S.qt = qt; S.connected = true;
+  S.at = at; S.connected = true;
   if (!fromStore) remember();
   $("login").hidden = true;
   txt($("who"), "已连接 · 口令只在本标签页");
@@ -900,10 +788,9 @@ function enter(fromStore) {
 function restore() {
   try {
     S.at = sessionStorage.getItem(ADMIN_KEY) || "";
-    S.qt = sessionStorage.getItem(QUERY_KEY) || "";
-  } catch (e) { S.at = ""; S.qt = ""; }
-  if (S.at) { $("token").value = S.at; $("qtoken").value = S.qt; enter(true); }
-  else setMsg("未连接：填管理口令后点「载入」。网友导航带不了 Authorization 头，所以页面壳先给你登录框。", "");
+  } catch (e) { S.at = ""; }
+  if (S.at) { $("token").value = S.at; enter(true); }
+  else setMsg("未连接：填管理口令后点「载入」。浏览器导航带不了 Authorization 头，所以页面壳先给你登录框。", "");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -956,7 +843,7 @@ function cellNode(c) {
   } else txt(td, (c === null || c === undefined) ? "—" : c);
   return td;
 }
-function makeTable(head, rows, emptyText, opts) {
+function makeTable(head, rows, emptyText) {
   if (!rows || !rows.length) return el("div", "empty", emptyText || "没有数据。");
   var t = el("table");
   var thead = el("thead"), tr = el("tr");
@@ -964,25 +851,9 @@ function makeTable(head, rows, emptyText, opts) {
   thead.appendChild(tr);
   t.appendChild(thead);
   var tb = el("tbody");
-  rows.forEach(function (row, idx) {
+  rows.forEach(function (row) {
     var r = el("tr");
     row.forEach(function (c) { r.appendChild(cellNode(c)); });
-    // 可选：整行可点（目录浏览用它开抽屉）。点名字那个 button 由它自己的 onclick 处理，
-    // 这里跳过，避免一次点击发两条 describe 请求。
-    if (opts && opts.onRow) {
-      r.className = "can-open";
-      r.onclick = function (ev) {
-        if (ev && ev.target && ev.target.tagName === "BUTTON") return;
-        var sibs = r.parentNode ? r.parentNode.children : null;
-        if (sibs) {
-          for (var i = 0; i < sibs.length; i++) {
-            if (sibs[i].classList) sibs[i].classList.remove("is-sel");
-          }
-        }
-        if (r.classList) r.classList.add("is-sel");
-        opts.onRow(idx);
-      };
-    }
     tb.appendChild(r);
   });
   t.appendChild(tb);
@@ -1024,7 +895,8 @@ function renderProjects() {
   clear(sum);
   if (!d) { txt(sum, "尚未载入。"); return; }
   var latest = d.versions && d.versions.length ? d.versions[d.versions.length - 1] : null;
-  sum.appendChild(el("b", null, d.project));
+  // 项目名是标识符（进 `:p` 路径），一律等宽 `.key`：靠视觉模式识别，比例字体读起来慢。
+  sum.appendChild(el("b", "key", d.project));
   sum.appendChild(el("span", null, " · 共 " + ((d.versions || []).length) + " 版" +
     (latest ? (" · 最新第 " + latest.version + " 版" + (latest.frozen ? "（已冻结）" : "（未冻结）")) : " · 还没有任何版本")));
   var rows = (d.versions || []).map(function (v) {
@@ -1091,7 +963,7 @@ function applyProposal() {
 }
 
 // ══════════════════════════════════════════════════════════
-// 2 · 评审
+// 3 · 评审
 // ══════════════════════════════════════════════════════════
 var SUGG = { accept: "接受", lean_accept: "倾向接受", review: "人工核对", reject: "拒绝", conflict: "冲突", none: "无建议" };
 function suggOf(it) { return (it && it.suggestion) ? it.suggestion : { kind: "none", reason: "" }; }
@@ -1196,7 +1068,7 @@ function decideItem(d, it, track, decision) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 3 · 导出
+// 4 · 导出
 // ══════════════════════════════════════════════════════════
 function fillVersionSelects() {
   var d = S.projects;
@@ -1293,7 +1165,7 @@ function requestText(path, opts) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 4 · 声明编辑
+// 5 · 声明编辑
 // ══════════════════════════════════════════════════════════
 function loadConfig() {
   var kind = $("c-kind").value;
@@ -1346,7 +1218,7 @@ function saveConfig() {
 }
 
 // ══════════════════════════════════════════════════════════
-// 5 · 审计
+// 6 · 审计
 // ══════════════════════════════════════════════════════════
 function loadAudit() {
   var limit = Math.max(1, Math.min(1000, parseInt($("a-limit").value, 10) || 100));
@@ -1386,279 +1258,14 @@ function renderAudit() {
 }
 
 // ══════════════════════════════════════════════════════════
-// 6 · 查询台 —— 四件元信息**一处**产出（AC-008）
+// 2 · 构建包（REQ-159）—— 建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效
 // ══════════════════════════════════════════════════════════
-// 纯函数：回执 JSON → 要显示的文案数组（{cls, text}）。
-// 这不碰 DOM，所以 tests/fixtures/req125/page_probe.js 能直接用真实回执跑它。
-function metaLines(r) {
-  var out = [];
-  if (!r) { out.push({ cls: "bad", text: "没有回执。" }); return out; }
-  var warnings = r.warnings || [];
-  if (warnings.length) {
-    warnings.forEach(function (w) {
-      out.push({ cls: "warn", text: "⚠ 可能漏数据（warnings）：" + w });
-    });
-  } else {
-    out.push({ cls: "", text: "warnings：0 条（服务端没说可能漏数据）。" });
-  }
-  var coverage = r.coverage || [];
-  coverage.forEach(function (c) {
-    if (c && c.coverage === "main_only") {
-      out.push({ cls: "warn", text: "⚠ 覆盖面 main_only：表 " + c.table + " —— 子账号产生的数据不在结果内，金额 / 条数可能偏小。" });
-    }
-  });
-  var joins = r.join_states || [];
-  var unused = joins.filter(function (j) { return j && j.used === false; });
-  if (unused.length) {
-    out.push({
-      cls: "warn",
-      text: "⚠ 涉及但未用的边（join_states[].used=false）共 " + unused.length + " 条：" +
-        unused.map(function (j) { return j.from + " → " + j.to + "（" + j.predicate + "）"; }).join("；") +
-        " —— 这些边在本次查询里**没有走到**（范围是「涉及的表之间的全部边」，不是实走边）。"
-    });
-  } else {
-    out.push({ cls: "", text: "join_states[].used=false：0 条（本次查询涉及的边上，没有「涉及但未用」的）。" });
-  }
-  out.push({
-    cls: r.truncated ? "bad" : "",
-    text: "truncated：" + (r.truncated ? "是 —— 结果被截断（row_count=" + r.row_count + "）" : "否（row_count=" + (r.row_count || 0) + "）")
-  });
-  if (r.limits) {
-    out.push({ cls: "", text: "limits：max_rows=" + r.limits.max_rows + " · token 上限=" + r.limits.token_max_rows + " · timeout_ms=" + r.limits.timeout_ms });
-  }
-  return out;
-}
-function renderQueryMeta(r) {
-  var box = $("q-meta");
-  clear(box);
-  var warnBox = el("div", "panel");
-  warnBox.appendChild(el("h2", null, "查询元信息（必须看：可能漏数据 / 覆盖面 / 未用的边 / 是否截断）"));
-  var ul = el("ul", "warns");
-  metaLines(r).forEach(function (l) {
-    var li = el("li", l.cls || "", l.text);
-    ul.appendChild(li);
-  });
-  warnBox.appendChild(ul);
-
-  warnBox.appendChild(el("div", "note", "coverage："));
-  warnBox.appendChild(makeTable(["表", "覆盖面"], (r.coverage || []).map(function (c) {
-    return [c.table, badge(c.coverage, c.coverage === "main_only" ? "warn" : "ok")];
-  }), "coverage 为空（查询没落到任何表？）。"));
-
-  warnBox.appendChild(el("div", "note", "join_states（范围：" + (r.join_states_scope || "—") + "）："));
-  warnBox.appendChild(makeTable(["边", "谓词", "状态", "本次用到", "证据"], (r.join_states || []).map(function (j) {
-    return [
-      j.from + " → " + j.to, j.predicate,
-      badge(j.state, j.state === "true" ? "ok" : (j.state === "false" ? "bad" : "warn")),
-      j.used ? badge("used", "ok") : badge("未使用", "warn"),
-      j.evidence || "—"
-    ];
-  }), "join_states 为空（涉及的表之间没有映射边）。"));
-  if (r.join_states_scope_note) warnBox.appendChild(el("div", "note", "范围说明：" + r.join_states_scope_note));
-  warnBox.appendChild(el("div", "note", "tables：" + ((r.tables || []).join("、") || "—")));
-  if (r.tenant_applied && r.tenant_applied.length) {
-    warnBox.appendChild(el("div", "note", "tenant_applied：" + r.tenant_applied.map(function (t) {
-      return JSON.stringify(t);
-    }).join(" · ")));
-  }
-  if (r.public_dimensions && r.public_dimensions.length) {
-    warnBox.appendChild(el("div", "note", "public_dimensions：" + r.public_dimensions.map(function (t) {
-      return JSON.stringify(t);
-    }).join(" · ")));
-  }
-  box.appendChild(warnBox);
-}
-function runQuery() {
-  var q = $("q-text").value;
-  if (!q.trim()) { setMsg("写一条 SPARQL 再执行。", "bad"); return; }
-  var max = parseInt($("q-max").value, 10);
-  // ⭐ REQ-142：查询服务的**默认**回执已翻转为 JSON-LD 上下文子图（@context/@graph/…）；
-  // 工作台的「结果」区渲染的是行回执（columns/rows/row_count + 警告面板），所以这里
-  // **显式**要 rows。⛔ 不写 format 会让页面拿到图、表格空转。
-  var body = { query: q, format: "rows" };
-  if (max > 0) body.max_rows = max;
-  post("api/sparql", body, true).then(function (r) {
-    S.query = r;
-    renderQueryMeta(r);
-    renderQueryTable(r);
-    setMsg("查询完成：" + r.row_count + " 行" + (r.truncated ? "（已截断）" : ""), r.truncated ? "" : "ok");
-  }).catch(function (e) {
-    S.query = null;
-    showErr($("q-meta"), e);
-    clear($("q-table"));
-    setMsg("查询失败：" + e.message, "bad");
-  });
-}
-function renderQueryTable(r) {
-  var box = $("q-table");
-  clear(box);
-  var cols = r.columns || [];
-  var rows = (r.rows || []).slice(0, UI_MAX_ROWS);
-  var panel = el("div", "panel");
-  panel.appendChild(el("h2", null, "结果（" + (r.row_count || 0) + " 行" + (r.truncated ? " · 已截断" : "") + "）"));
-  if ((r.rows || []).length > UI_MAX_ROWS) {
-    panel.appendChild(el("div", "note", "只显示前 " + UI_MAX_ROWS + " 行（共 " + (r.rows || []).length + " 行）；要更多请缩小查询或加 LIMIT。"));
-  }
-  panel.appendChild(makeTable(cols, rows.map(function (row) {
-    return row.map(function (v) { return (v === null || v === undefined) ? "—" : v; });
-  }), "0 行。"));
-  box.appendChild(panel);
-}
-
-// ══════════════════════════════════════════════════════════
-// 7 · 目录浏览
-// ══════════════════════════════════════════════════════════
-function loadCatalog(page) {
-  var p = page || parseInt($("k-page").value, 10) || 1;
-  var size = Math.max(1, Math.min(200, parseInt($("k-size").value, 10) || 50));
-  $("k-page").value = String(p);
-  $("k-size").value = String(size);
-  return json("api/catalog?page=" + p + "&page_size=" + size, { query: true }).then(function (d) {
-    S.catalog = d; S.catalogPage = p;
-    renderCatalog();
-    return d;
-  }).catch(function (e) {
-    S.catalog = null;
-    showErr($("k-table"), e);
-    txt($("k-summary"), "载入失败。");
-    throw e;
-  });
-}
-function renderCatalog() {
-  var d = S.catalog, sum = $("k-summary");
-  clear(sum);
-  if (!d) { txt(sum, "尚未载入。"); return; }
-  var c = d.counts || {};
-  sum.appendChild(el("b", null, d.project + " · 第 " + d.version + " 版"));
-  sum.appendChild(el("span", null, " · 类 " + c.classes + " · 属性 " + c.properties + " · 关系 " + c.relations +
-    " · 不可查关系 " + c.excluded_relations + " · 没有映射的类 " + c.skipped_classes +
-    " · 本页 " + (d.items || []).length + "/" + d.total_items + " 条"));
-  var box = $("k-table");
-  clear(box);
-  var rows = (d.items || []).map(function (it) {
-    // key / IRI 一律等宽（`.key`）：靠视觉模式识别，比例字体读起来慢。
-    var name = el("button", "key keylink", it.name);
-    name.onclick = function () { describeName(it.name); };
-    var detail;
-    if (it.kind === "class") {
-      detail = "表 " + it.table + " · 主键 " + it.primary_key + " · " + it.property_count + " 属性 / " + it.relation_count + " 关系" +
-        (it.description ? (" · " + it.description) : "");
-    } else if (it.kind === "property") {
-      detail = "类 " + it.class + " · 列 " + it.column + " · " + it.datatype +
-        (it.enum_values ? (" · 枚举值 " + it.enum_values) : " · 枚举值 —（注释里没写）");
-    } else {
-      detail = it.from + " → " + it.to + " · 列 " + it.column + " · 反向 " + it.inverse +
-        " · 证据等级 " + it.evidence_level + (it.cardinality ? (" · 基数 " + it.cardinality) : "");
-    }
-    return [badge(it.kind, it.kind === "class" ? "acc" : (it.kind === "relation" ? "warn" : "")), name, detail];
-  });
-  box.appendChild(makeTable(["类型", "名字（点开看详情）", "概要"], rows, "这一页没有条目。", {
-    // 点任意一行 ⇒ 右侧抽屉看这一类 / 属性 / 关系的详情（抽屉不遮表格，方便对照）。
-    onRow: function (idx) {
-      var hit = (d.items || [])[idx];
-      if (hit) describeName(hit.name);
-    }
-  }));
-  if ((d.skipped_classes || []).length) {
-    var p = el("div", "panel");
-    p.appendChild(el("h2", null, "没有 TriplesMap 的类（不可查，但不是静默少了几张表）"));
-    p.appendChild(makeTable(["表", "原因"], d.skipped_classes.map(function (s) { return [s.table, s.reason]; })));
-    box.appendChild(p);
-  }
-  txt($("k-pos"), "第 " + d.page + " / " + d.total_pages + " 页（page_size=" + d.page_size + "）");
-  $("k-prev").disabled = d.page <= 1;
-  $("k-next").disabled = !d.has_more;
-}
-function describeName(name) {
-  json("api/describe?name=" + encodeURIComponent(name), { query: true }).then(function (d) {
-    var box = $("k-detail");
-    clear(box);
-    box.hidden = false;
-    // 标题只在抽屉头显示（`openDrawer` 设），这里不再重复一个 h2 —— 460px 宽的抽屉里
-    // 两行一样的标题纯属占地方。
-    if (d.kind === "class") {
-      box.appendChild(kvList([
-        ["源表", d.table], ["主键", d.primary_key], ["说明", d.description || "—"],
-        ["租户口径", (d.tenant ? (d.tenant.mode + (d.tenant.column ? ("（列 " + d.tenant.column + "）") : "") +
-          (d.tenant.coverage ? (" · 覆盖面 " + d.tenant.coverage) : "") + (d.tenant.reason ? (" · " + d.tenant.reason) : "")) : "—")]
-      ]));
-      // 抽屉只有 460px：属性 / 关系用**紧凑列表**（名字等宽 + 一行摘要），别塞 7 列表格
-      // —— 那样每列只剩几十像素，必须横向拖着看（样机同样用列表）。
-      box.appendChild(el("h3", null, "属性（" + (d.properties || []).length + "）"));
-      var plist = el("div", "list");
-      (d.properties || []).forEach(function (p) {
-        var row = el("div", "row2");
-        row.appendChild(el("span", "k key", p.name));
-        row.appendChild(el("span", "t", [
-          p.column ? ("列 " + p.column) : "",
-          p.datatype || "",
-          p.nullable === null || p.nullable === undefined ? "" : (p.nullable ? "可空" : "非空"),
-          p.enum_values ? ("枚举 " + p.enum_values) : "",
-          p.sample === null || p.sample === undefined ? "" : ("例 " + p.sample),
-          p.note || ""
-        ].filter(Boolean).join(" · ")));
-        plist.appendChild(row);
-      });
-      box.appendChild(plist);
-      box.appendChild(el("h3", null, "关系（" + (d.relations || []).length + "）"));
-      var rlist = el("div", "list");
-      (d.relations || []).forEach(function (r) {
-        var row = el("div", "row2");
-        row.appendChild(el("span", "k key", r.name));
-        row.appendChild(el("span", "t", [
-          r.from + " → " + r.to,
-          r.column ? ("列 " + r.column) : "",
-          r.inverse ? ("反向 " + r.inverse) : "",
-          r.cardinality ? ("基数 " + r.cardinality) : "",
-          r.evidence || ""
-        ].filter(Boolean).join(" · ")));
-        row.appendChild(badge("证据 " + (r.evidence_level || "—"),
-          r.evidence_level === "true" ? "ok" : (r.evidence_level === "false" ? "bad" : "warn")));
-        row.appendChild(r.queryable ? badge("可查", "ok") : badge("不可查", "bad"));
-        rlist.appendChild(row);
-      });
-      box.appendChild(rlist);
-    } else {
-      box.appendChild(kvList([
-        ["类", d.class], ["名字", d.name], ["列", d.column], ["类型", d.datatype],
-        ["枚举值", d.enum_values || "—（注释里没写）"],
-        ["可空", d.nullable === null || d.nullable === undefined ? "—" : yesNo(d.nullable)],
-        ["样例", d.sample === null || d.sample === undefined ? "—" : d.sample],
-        ["说明", d.note || "—"]
-      ]));
-    }
-    // 详情渲染完再开抽屉：先有内容再滑出，避免「空抽屉闪一下」。
-    openDrawer("详情：" + d.name + "（" + d.kind + "）");
-  }).catch(function (e) {
-    var box = $("k-detail");
-    box.hidden = false;
-    showErr(box, e);
-    openDrawer("详情读取失败");
-  });
-}
-// ── 目录详情抽屉：默认收起；点表格某行 / 点名字打开，Esc、遮罩、✕ 三条路关闭 ──
-// 复用 `#k-detail`（JS 的渲染点一行没改），只是把它的落点从页面底部搬到右侧抽屉里：
-// 看目录时要**对照**着读，弹窗会遮住表格。
-function openDrawer(title) {
-  var d = $("dr-title");
-  if (d) txt(d, title || "条目详情");
-  var box = $("drawer");
-  if (box && box.classList) box.classList.add("is-on");
-  if (box) box.setAttribute("aria-hidden", "false");
-  var mask = $("drawer-mask");
-  if (mask) mask.hidden = false;
-}
-function closeDrawer() {
-  var box = $("drawer");
-  if (box && box.classList) box.classList.remove("is-on");
-  if (box) box.setAttribute("aria-hidden", "true");
-  var mask = $("drawer-mask");
-  if (mask) mask.hidden = true;
-}
-
-// ══════════════════════════════════════════════════════════
-// 8 · 构建包（REQ-159）—— 建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效
-// ══════════════════════════════════════════════════════════
+// ⚠️ 查询台 / 目录浏览 的整段 JS（SPARQL 编辑器、四段元信息、分页目录、条目详情面板）
+// 已于 2026-10-27 随视图一起移除（REQ-161b）：它们打的是 query serve 的三个读端点，
+// 不属于「本机构建工作台」的范围。要查数据请用 Studio（/studio）或直接 curl query serve。
+// 段号 = 左导航序号（用户看到的顺序），⛔ 不是文件里的先后：构建包这一段**留在文件末尾**，
+// 好让「这个 tab 不许自己发裁决请求」能在这个标记之后一刀切
+// （判据：the_bundles_view_declares_its_contract —— 它从本行往下扫，扫到裁决端点即红）。
 // 这一组的端点在服务端是**并行开发**的：本 tab 的每次请求都带 notReady，
 // 404 ⇒ 「服务端未就绪」并且**不登出**（见上面的 request 层）。
 // 激活成功后的**固定警示**（契约原文，⛔ 一个字都别改）：
@@ -2234,7 +1841,7 @@ function rotateKey() {
 // ══════════════════════════════════════════════════════════
 // tab 切换（无 URL 状态：地址栏永远不带口令）
 // ══════════════════════════════════════════════════════════
-var TABS = ["projects", "review", "export", "config", "audit", "query", "catalog", "bundles"];
+var TABS = ["projects", "bundles", "review", "export", "config", "audit"];
 function switchTab(name) {
   S.tab = name;
   TABS.forEach(function (t) {
@@ -2246,12 +1853,9 @@ function switchTab(name) {
   });
   var host = $("views");
   if (host) host.scrollTop = 0;
-  // 离开目录浏览就收起抽屉：否则它会挂在新视图上，看起来像「详情属于这一页」。
-  if (name !== "catalog") closeDrawer();
   if (name === "review" && !S.review) loadReview().catch(function () {});
   if (name === "audit" && !S.audit) loadAudit().catch(function () {});
   if (name === "export" && !S.projects) loadProjects().catch(function () {});
-  if (name === "catalog" && !S.catalog) loadCatalog(1).catch(function () {});
   if (name === "bundles") loadBundles().catch(function () {});
 }
 
@@ -2260,7 +1864,6 @@ function switchTab(name) {
 // ══════════════════════════════════════════════════════════
 $("go").onclick = function () { enter(false); };
 $("token").addEventListener("keydown", function (e) { if (e.key === "Enter") enter(false); });
-$("qtoken").addEventListener("keydown", function (e) { if (e.key === "Enter") enter(false); });
 TABS.forEach(function (t) { $("tab-" + t).onclick = function () { switchTab(t); }; });
 $("p-refresh").onclick = function () { loadProjects().catch(function () {}); };
 $("p-apply").onclick = applyProposal;
@@ -2273,17 +1876,6 @@ $("c-save").onclick = saveConfig;
 $("c-kind").onchange = function () { loadConfig().catch(function () {}); };
 $("a-load").onclick = function () { loadAudit().catch(function () {}); };
 $("a-action").onchange = function () { if (S.audit) renderAudit(); };
-$("q-go").onclick = runQuery;
-// 抽屉的三条关闭路径：✕ / 遮罩 / Esc。
-$("dr-close").onclick = closeDrawer;
-$("drawer-mask").onclick = closeDrawer;
-// Esc 挂在 document 上（焦点可能停在表格里）；假 DOM 桩没有 addEventListener，所以先判存在。
-if (document.addEventListener) {
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDrawer(); });
-}
-$("k-load").onclick = function () { loadCatalog(parseInt($("k-page").value, 10) || 1).catch(function () {}); };
-$("k-prev").onclick = function () { loadCatalog(Math.max(1, S.catalogPage - 1)).catch(function () {}); };
-$("k-next").onclick = function () { if (S.catalog && S.catalog.has_more) loadCatalog(S.catalogPage + 1).catch(function () {}); };
 $("b-refresh").onclick = function () { loadBundles().catch(function () {}); };
 $("b-new-submit").onclick = createProject;
 $("b-upload").onclick = uploadBundle;
@@ -2299,10 +1891,9 @@ $("b-key-view").onclick = function () { viewKey(); };
 restore();
 
 // ⭐ 纯函数 / 可注入点的唯一出口：`tests/fixtures/req125/page_probe.js` 从这里跑
-// metaLines（AC-008）、guarded（取消不发请求）、el / makeTable（XSS）、remember（sessionStorage）。
+// guarded（取消不发请求）、el / makeTable（XSS）、remember（sessionStorage）。
 if (typeof window !== "undefined") {
   window.WBCORE = {
-    metaLines: metaLines,
     guarded: guarded,
     setConfirm: setConfirm,
     el: el,
@@ -2453,24 +2044,32 @@ mod tests {
         }
     }
 
-    /// 八个视图都在（AC-004）。
+    /// 六个视图都在（AC-004）。
+    ///
+    /// REQ-161b：原先的「查询台」「目录浏览」两个视图整段移除（它们打的是 `query serve`，
+    /// 不是本地操作），所以 8 → 6。**视图少了两项，但每一项都得在** —— 这条判据没有放松。
     #[test]
     fn the_shell_has_all_views() {
         for needle in [
             "项目与版本",
+            "构建包",
             "评审",
             "导出",
             "声明编辑",
             "审计",
-            "查询台",
-            "目录浏览",
-            "构建包",
         ] {
             assert!(CONSOLE_HTML.contains(needle), "页面缺视图 {needle:?}");
         }
-        for tab in [
-            "projects", "review", "export", "config", "audit", "query", "catalog", "bundles",
-        ] {
+        // REQ-161b：这两个视图已删除 —— 判据反过来钉住「不许回来」。
+        // 判的是**视图标题**（`<h2>`），不是「这几个字出现过」：删除处的注释里
+        // 当然会写「查询台 / 目录浏览 已于…移除」，那正是要留给人看的原因。
+        for gone in ["<h2>查询台</h2>", "<h2>目录浏览</h2>"] {
+            assert!(
+                !CONSOLE_HTML.contains(gone),
+                "{gone} 已按 REQ-161b 移除（非本地操作），⛔ 别加回来"
+            );
+        }
+        for tab in ["projects", "bundles", "review", "export", "config", "audit"] {
             assert!(
                 CONSOLE_HTML.contains(&format!("id=\"v-{tab}\"")),
                 "缺视图容器 v-{tab}"
@@ -2480,6 +2079,18 @@ mod tests {
                 "缺 tab 按钮 tab-{tab}"
             );
         }
+        // REQ-161b：视图容器与导航按钮各 6 个，且被删的两个不再留空壳。
+        // （「别加回来」的逐条判据在 `tests/test_req125_page.rs::ac004`：那边点名那三条非本地端点。）
+        assert_eq!(
+            CONSOLE_HTML.matches("<section id=\"v-").count(),
+            6,
+            "视图容器必须恰好 6 个（查询台 / 目录浏览已移除）"
+        );
+        assert_eq!(
+            CONSOLE_HTML.matches("data-tab=\"").count(),
+            6,
+            "导航按钮必须恰好 6 个（多一个就是有人把删掉的视图加回来了）"
+        );
     }
 
     /// 构建包 tab 的 DOM 契约 + 请求契约（REQ-159）。
@@ -2534,13 +2145,22 @@ mod tests {
             "progress.pending",
             "progress.vetoed",
             "it.biz === \"pending\" || it.model === \"pending\"",
-            // ⭐ ADR-013：这扇门已迁到 Studio —— 删掉这句提示，客户侧会继续在 console 里找入口
-            "已迁到 Studio",
-            "/studio",
+            // ⭐ REQ-161b：构建包是**本机主入口**，不是「历史遗留」——
+            // 视图头必须把六步流程写全，ADR-013 只在底部留一行中性说明。
+            "本机 FDE 操作：建项目 → 上传包 → 配目标库（需要时）→ 解析入库 → 待确认 → 生效。",
+            "客户侧平台（Studio）另有同一套流程（ADR-013）；本页是 FDE 本机入口。",
+            "不依赖任何外部服务",
         ] {
             assert!(
                 CONSOLE_HTML.contains(needle),
                 "构建包视图缺少 {needle:?}（REQ-159 的契约）"
+            );
+        }
+        // REQ-161b：把「已迁走、别在这用」的措辞删掉 —— 用户看到那条黄条以为这功能没了。
+        for gone in ["仅为历史保留", "请在 Studio 里做", "已迁到 Studio", "⚠️ 此流程已迁到"] {
+            assert!(
+                !CONSOLE_HTML.contains(gone),
+                "构建包视图里不许再有 {gone:?}（REQ-161b：它就是本机主入口）"
             );
         }
         for fun in [
@@ -2565,7 +2185,8 @@ mod tests {
         }
         // 待确认清单只汇总 + 门禁：⛔ 这个 tab 里不许出现裁决请求，
         // 否则「评审」tab 与「构建包」tab 会有两套裁决入口。
-        let bundles_at = CONSOLE_HTML.find("// 8 · 构建包").expect("缺构建包 JS 段");
+        // （段号是**左导航序号**，构建包的 JS 块留在文件末尾，所以这一刀仍然只切到它自己。）
+        let bundles_at = CONSOLE_HTML.find("// 2 · 构建包").expect("缺构建包 JS 段");
         assert!(
             !CONSOLE_HTML[bundles_at..].contains("api/decide"),
             "构建包 tab 不许自己调 /api/decide（裁决留在评审 tab）"
@@ -2639,13 +2260,26 @@ mod tests {
         );
     }
 
-    /// 查询台的四段元信息由同一处产出（AC-008）。
+    /// REQ-161b：查询台移除后，**不许**有任何回执元信息渲染残留（AC-008 随视图一起退休）。
+    ///
+    /// 原判据（`the_query_view_declares_all_four_meta_fields`）钉的是查询台必须显示
+    /// `warnings / coverage / join_states / truncated` 四段。视图本身就是这次要删的东西
+    /// （它打的是 `query serve`，不是本地操作），所以判据反过来：这四段的渲染点
+    /// 一处都不许留在本页 —— 否则就是「视图删了、代码还在偷偷跑」。
     #[test]
-    fn the_query_view_declares_all_four_meta_fields() {
-        for needle in ["warnings", "coverage", "join_states", "used === false", "truncated"] {
+    fn the_removed_query_view_leaves_no_meta_rendering_behind() {
+        for gone in ["function metaLines(", "renderQueryMeta(", "renderQueryTable(", "function runQuery("] {
             assert!(
-                CONSOLE_HTML.contains(needle),
-                "查询台缺少 {needle:?} 的处理（AC-008：只显示表格 = 不合格）"
+                !CONSOLE_HTML.contains(gone),
+                "{gone} 是查询台的渲染点，随 REQ-161b 一起删（视图没了，逻辑也别留）"
+            );
+        }
+        // `warnings` 例外：构建包的回执 warnings[] 仍在用（AM 只校验不落库那条），
+        // 所以只钉「查询台独有的那两段」+ 四个函数。
+        for gone in ["join_states", "truncated"] {
+            assert!(
+                !CONSOLE_HTML.contains(gone),
+                "查询回执的 {gone:?} 处理已随查询台移除（REQ-161b）"
             );
         }
     }
@@ -2714,16 +2348,18 @@ mod tests {
     }
 
     // ══════════════════════════════════════════════════════════
-    // REQ-161 · 换皮：左导航 / 密度 / 等宽 key / 抽屉 / 端点集合冻结
+    // REQ-161 · 换皮：左导航 / 密度 / 等宽 key / 端点集合冻结
+    // （REQ-161b 收口：8 视图 → 6，目录抽屉随视图移除）
     // ══════════════════════════════════════════════════════════
 
     /// 左导航 + 单一主区（AC-001）。
     ///
     /// 换皮前是顶栏 8 个并列 tab（`#tabs`）；换皮后是左侧窄导航 + 单一主区。
-    /// 「8 个入口一个都不许少」在这里逐项钉死：视图容器 `v-*` 与按钮 `tab-*` 的 id
-    /// **没有改名**（只是从顶栏搬进左导航），所以 `ac004` 的数法一行都不用改。
+    /// REQ-161b 之后是 **6 个入口**，且**顺序有意义**：01 项目与版本 / 02 构建包 /
+    /// 03 评审 / 04 导出 / 05 声明编辑 / 06 审计 —— 构建包是用户每天第一件事（上传包），
+    /// 所以在第 2 位（原来排最后，用户以为没有这个功能）。
     #[test]
-    fn the_shell_uses_a_left_nav_with_all_eight_entries() {
+    fn the_shell_uses_a_left_nav_with_all_six_entries() {
         assert!(CONSOLE_HTML.contains("id=\"nav\""), "缺左导航容器 #nav");
         assert!(CONSOLE_HTML.contains("id=\"nav-list\""), "缺导航列表 #nav-list");
         assert!(
@@ -2732,22 +2368,20 @@ mod tests {
         );
         assert!(
             !CONSOLE_HTML.contains("id=\"tabs\""),
-            "顶栏 #tabs 必须移除：8 个入口已经搬到左导航（AC-001）"
+            "顶栏 #tabs 必须移除：入口已经搬到左导航（AC-001）"
         );
         assert_eq!(
             CONSOLE_HTML.matches("class=\"nav-item").count(),
-            8,
-            "左导航必须恰好 8 个入口（项目与版本/评审/导出/声明编辑/审计/查询台/目录浏览/构建包）"
+            6,
+            "左导航必须恰好 6 个入口（项目与版本/构建包/评审/导出/声明编辑/审计）"
         );
         for (tab, num, title) in [
             ("projects", "01", "项目与版本"),
-            ("review", "02", "评审"),
-            ("export", "03", "导出"),
-            ("config", "04", "声明编辑"),
-            ("audit", "05", "审计"),
-            ("query", "06", "查询台"),
-            ("catalog", "07", "目录浏览"),
-            ("bundles", "08", "构建包"),
+            ("bundles", "02", "构建包"),
+            ("review", "03", "评审"),
+            ("export", "04", "导出"),
+            ("config", "05", "声明编辑"),
+            ("audit", "06", "审计"),
         ] {
             assert!(
                 CONSOLE_HTML.contains(&format!("id=\"tab-{tab}\" class=\"nav-item")),
@@ -2762,72 +2396,67 @@ mod tests {
                 "{title} 的序号 / 文案与样机不一致（应为 {num} {title}）"
             );
         }
-    }
-
-    /// 目录详情是**右侧抽屉**，默认收起（AC-001）：看目录时要对照着读，弹窗会遮住表格。
-    #[test]
-    fn the_catalog_detail_is_a_drawer_that_starts_closed() {
-        assert!(CONSOLE_HTML.contains("id=\"drawer\""), "缺右侧抽屉 #drawer");
-        assert!(
-            CONSOLE_HTML.contains("id=\"drawer\" aria-hidden=\"true\""),
-            "抽屉默认必须是收起状态（aria-hidden=true）"
-        );
-        assert!(
-            !CONSOLE_HTML.contains("id=\"drawer\" hidden"),
-            "抽屉不是用 hidden 藏的：默认收起靠 CSS 的 translateX，滑出才是 is-on"
-        );
-        assert!(CONSOLE_HTML.contains("id=\"drawer-mask\""), "缺抽屉遮罩");
-        assert!(CONSOLE_HTML.contains("id=\"dr-close\""), "缺抽屉关闭按钮");
-        assert!(CONSOLE_HTML.contains("id=\"dr-title\""), "缺抽屉标题");
-        // 详情容器搬进抽屉（渲染点 `#k-detail` 本身一字没改）。
-        let at = CONSOLE_HTML.find("id=\"drawer\"").expect("缺 #drawer");
-        assert!(
-            CONSOLE_HTML[at..].contains("id=\"k-detail\""),
-            "目录详情容器必须在抽屉里（不再占页面底部）"
-        );
-        for fun in ["function openDrawer(", "function closeDrawer("] {
-            assert!(CONSOLE_HTML.contains(fun), "缺 {fun}");
+        // 分组：建库（01）/ 入库（02）/ 签与交付（03–06）；「查询」整组消失。
+        for group in ["建库", "入库", "签与交付"] {
+            assert!(
+                CONSOLE_HTML.contains(&format!("<div class=\"nav-group\">{group}</div>")),
+                "导航分组缺 {group:?}"
+            );
         }
-        // 三条关闭路径：✕ / 遮罩 / Esc。
         assert!(
-            CONSOLE_HTML.contains("$(\"dr-close\").onclick"),
-            "✕ 必须能关抽屉"
+            !CONSOLE_HTML.contains(">运维</div>") && !CONSOLE_HTML.contains(">查询</div>")
+                && !CONSOLE_HTML.contains(">构建</div>"),
+            "旧分组（运维 / 查询 / 构建）必须消失（REQ-161b 只留三组）"
         );
+        // 顺序：02 就是构建包（按 id 在文档里的先后判，别只判「存在」）。
+        let bar = CONSOLE_HTML.find("id=\"tab-bundles\"").expect("缺构建包入口");
+        let bar_icon = &CONSOLE_HTML[bar..];
         assert!(
-            CONSOLE_HTML.contains("$(\"drawer-mask\").onclick"),
-            "遮罩必须能关抽屉"
+            bar_icon.contains(">02</span>构建包"),
+            "构建包必须是 02（第 2 位）：用户第一件事是把包传上来"
         );
-        assert!(
-            CONSOLE_HTML.contains("\"Escape\""),
-            "Esc 必须能关抽屉"
-        );
-        // 默认收起的 CSS 依据（否则「默认隐藏」只是 aria 上的一句话）。
-        assert!(
-            CONSOLE_HTML.contains("transform:translateX(102%)"),
-            "抽屉默认应滑出屏外"
-        );
-        assert!(
-            CONSOLE_HTML.contains("#drawer.is-on{transform:translateX(0)}"),
-            "is-on 才把抽屉滑进来"
-        );
-        // 点表格某一行就能开（不是只能点名字那个小按钮）。
-        assert!(
-            CONSOLE_HTML.contains("onRow: function (idx)"),
-            "目录表必须支持「点一行看详情」"
-        );
+        let review = CONSOLE_HTML.find("id=\"tab-review\"").expect("缺评审入口");
+        assert!(bar < review, "构建包必须排在评审之前（01 → 02 → 03…）");
     }
 
-    /// key / IRI 一律等宽（`.key`），**三处**必须覆盖：目录浏览 / 审计 / 评审（AC-002）。
+    /// REQ-161b：目录浏览视图已移除 ⇒ **右侧详情面板（抽屉）一并移除**。
+    ///
+    /// 原判据（目录详情是默认收起的右侧抽屉）已随视图删除：抽屉只为目录详情服务，
+    /// 视图没了它就没有存在意义。这里反过来钉住「别留半个」：面板容器、标题、关闭按钮、
+    /// 滑出的 CSS 依据，一处都不许剩。
     #[test]
-    fn key_and_iri_are_monospace_in_catalog_audit_and_review() {
+    fn the_removed_browse_view_leaves_no_detail_panel_behind() {
+        for gone in [
+            "id=\"dr-close\"",
+            "id=\"dr-title\"",
+            "id=\"k-detail\"",
+            "transform:translateX(102%)",
+        ] {
+            assert!(
+                !CONSOLE_HTML.contains(gone),
+                "{gone} 属于目录浏览的详情面板，随 REQ-161b 一起移除"
+            );
+        }
+        // 更彻底的「DOM 里没有那块面板」判据（含 id / 遮罩 / 查询服务的三条错误分支）在
+        // `tests/test_req125_page.rs::ac004b_the_removed_views_leave_no_detail_panel` ——
+        // 那边点名，这里只钉元素与样式。
+    }
+
+    /// key / IRI 一律等宽（`.key`），**三处**必须覆盖：审计 / 评审 / 项目与版本（AC-002）。
+    ///
+    /// REQ-161b：原来抽查的是「目录浏览 / 审计 / 评审」；目录视图删了 ⇒ 换成**项目与版本**
+    /// 的项目名（它进 `:p` 路径，是页面里最像 key 的东西）。⛔ 别让这条判据空过：
+    /// 三处必须各有一个**具体渲染点**，不能只留 CSS 定义。
+    #[test]
+    fn key_and_iri_are_monospace_in_audit_review_and_projects() {
         assert!(
             CONSOLE_HTML.contains(".key{font-family:var(--mono)"),
             "CSS 必须定义 .key 等宽类"
         );
-        // 目录浏览：类名 / 属性名 / 关系名（仍是可点的 button，点名字看详情的行为不变）。
+        // 项目与版本：项目名（GET /api/projects 的 project）。
         assert!(
-            CONSOLE_HTML.contains("el(\"button\", \"key keylink\", it.name)"),
-            "目录浏览的类名必须带 .key"
+            CONSOLE_HTML.contains("el(\"b\", \"key\", d.project)"),
+            "项目与版本的项目名必须带 .key"
         );
         // 审计：token 摘要与动作（靠视觉模式识别 sha 前缀 / action）。
         assert!(
@@ -2843,9 +2472,10 @@ mod tests {
             CONSOLE_HTML.contains("el(\"span\", \"target key\", it.target)"),
             "评审的 target 必须带 .key"
         );
+        // 反向自证：目录那一套（可点名字 `.keylink`）随视图一起没了，别留半套样式。
         assert!(
-            CONSOLE_HTML.contains(".keylink{"),
-            "目录里的类名是可点的（.keylink 得有自己的样式）"
+            !CONSOLE_HTML.contains(".keylink"),
+            "目录浏览的 .keylink 已随视图移除（REQ-161b）"
         );
     }
 
@@ -2866,28 +2496,35 @@ mod tests {
             CONSOLE_HTML.contains("class=\"tablewrap"),
             "表体得有滚动容器（sticky 才有参照物）"
         );
+        // REQ-161b：原来指向目录表（已删）⇒ 改指**审计表**（页面上最长的那张）。
+        assert!(
+            CONSOLE_HTML.contains("id=\"a-table\" class=\"tablewrap tall\""),
+            "审计表 #a-table 必须在 .tablewrap 里（sticky 表头 + 32px 行高就落在这张表上）"
+        );
     }
 
-    /// 端点集合冻结（AC-004）：页面里出现的 `/api/…` 路径集合必须与本单之前**逐字相等**。
+    /// 端点集合冻结（AC-004）：页面里出现的 `/api/…` 路径集合必须逐字等于清单。
     ///
     /// 提取口径：从 `api/` 起、由小写字母 / 数字 / `_` `.` `/` `-` 组成的路径，
     /// 去掉尾斜杠后去重（`api/projects/` 与 `api/projects` 视为同一条基路径）。
     /// 清单是**本单开工前**从 `CONSOLE_HTML` 里跑出来的；改一个都得先回答「为什么端点变了」。
+    ///
+    /// REQ-161b：12 → **9**。查询服务的三条读端点（原第 3 / 6 / 12 项）随两个视图一起删除：
+    /// 它们属于 `query serve`（另一个进程），不是本地操作。构建包的 `bundles` 系列是
+    /// **动态拼接**（`bundlePath` 里的 `"/bundles"`），仍在下列路径里由 `api/projects` 承载，
+    /// ⛔ 别把它当「多余的」删掉。
     #[test]
     fn the_api_path_set_is_frozen() {
-        const FROZEN: [&str; 12] = [
+        const FROZEN: [&str; 9] = [
             "api/apply",
             "api/audit",
-            "api/catalog",
             "api/config",
             "api/decide",
-            "api/describe",
             "api/export/ttl",
             "api/freeze",
             "api/projects",
             "api/r2rml",
             "api/review",
-            "api/sparql",
         ];
         let mut found: Vec<String> = Vec::new();
         let mut rest: &str = CONSOLE_HTML;
@@ -2932,22 +2569,47 @@ mod tests {
         assert!(bytes > 80 * 1024, "页面太小，可能被截断了：{bytes} 字节");
     }
 
-    /// ADR-013 的「已迁到 Studio」提示条**必须留着**：删掉它，客户侧会继续在 console 里找入口。
+    /// REQ-161b：构建包是**本机主入口**，ADR-013 只许作为底部一行中性说明存在。
+    ///
+    /// 用户的原话是「我没有看到构建包的操作」—— 因为顶上压着一条黄条写着「已迁到 Studio…
+    /// 仅为历史保留，新流程请在 Studio 里做」，读起来像「这功能废弃了」。所以判据从
+    /// 「提示必须留着」翻成四条：
+    /// 1. 视图头把六步流程写全（建项目 → 上传 → 配目标库 → 解析入库 → 待确认 → 生效）；
+    /// 2. ADR-013 那句压成**一行** `.note`，不再带 ⚠️、不再带警示色；
+    /// 3. ⛔ 不许出现「仅为历史保留 / 请在 Studio 里做」这类把人赶走的措辞；
+    /// 4. 构建包视图本身当然还在（六步面板一个不少）。
     #[test]
-    fn the_adr013_studio_notice_is_kept() {
+    fn the_adr013_studio_line_is_a_footnote_not_a_warning() {
         assert!(
-            CONSOLE_HTML.contains("已迁到 Studio"),
-            "构建包视图必须保留 ADR-013 的迁移提示（REQ-161 §五 / AC-003）"
+            CONSOLE_HTML.contains(
+                "本机 FDE 操作：建项目 → 上传包 → 配目标库（需要时）→ 解析入库 → 待确认 → 生效。"
+            ),
+            "构建包视图头必须写清六步流程（用户要一眼看到「这功能在」）"
         );
-        assert!(CONSOLE_HTML.contains("/studio"), "提示里要给出口 /studio");
         assert!(
-            CONSOLE_HTML.contains("仅为历史保留"),
-            "提示要写清「仅历史保留」，不能只说「已迁走」"
+            CONSOLE_HTML.contains("全部走本机 console"),
+            "视图头必须写明「全部走本机 console」（用户原话：我们的返回都是本地操作）"
         );
+        assert!(
+            CONSOLE_HTML.contains(
+                "<p class=\"note\">客户侧平台（Studio）另有同一套流程（ADR-013）；本页是 FDE 本机入口。</p>"
+            ),
+            "ADR-013 只能作为底部一行中性说明（.note），⛔ 不是警示框"
+        );
+        for gone in ["仅为历史保留", "请在 Studio 里做", "已迁到 Studio"] {
+            assert!(
+                !CONSOLE_HTML.contains(gone),
+                "{gone:?} 必须删除：它就是让用户以为「没有构建包操作」的那句话"
+            );
+        }
         assert!(
             CONSOLE_HTML.contains("id=\"v-bundles\""),
-            "构建包视图本身也要留着（ADR-013 只标已迁，不删代码）"
+            "构建包视图本身必须留着（它就是本机主入口）"
         );
+        // 六步面板的锚点还在（1 上传 / 2 目标库 / 3 解析入库 / 4 待确认 / 5 生效）。
+        for step in ["1 · 上传并校验", "3 · 解析入库", "4 · 待确认清单", "5 · 生效"] {
+            assert!(CONSOLE_HTML.contains(step), "构建包缺步骤 {step:?}");
+        }
     }
 
     /// `POST /api/r2rml` 回的是 **text/turtle**，页面必须按文本取正文（REQ-161 追加修复）。
@@ -2959,12 +2621,12 @@ mod tests {
     /// 钉四件事：
     /// 1. `postText()` 存在**且真被调用**（写了没人调 = 没修）；
     /// 2. `exportR2rml()` 里**不再**出现 `post("api/r2rml"`（回退即红）；
-    /// 3. `postText` 别用过头：apply / decide / sparql 仍是 JSON 端点；
+    /// 3. `postText` 别用过头：apply / decide 仍是 JSON 端点（REQ-161b：查询台删除后只剩这两条）；
     /// 4. 别顺手把 TTL 也改了（它本来就是文本路径，走 `request()` 的 `r.text`）。
     #[test]
     fn r2rml_is_read_as_text_not_parsed_as_json() {
         assert!(
-            CONSOLE_HTML.contains("function postText(path, body, useQuery)"),
+            CONSOLE_HTML.contains("function postText(path, body)"),
             "缺 postText()：文本端点要有一个不走 JSON.parse 的发包口"
         );
         let at = CONSOLE_HTML
@@ -2985,12 +2647,8 @@ mod tests {
             !body.contains("post(\"api/r2rml\""),
             "⛔ 别再走 post()：它会把 Turtle 当 JSON 解析 ⇒ 必抛 BAD_JSON"
         );
-        // ⛔ postText 不许用过头：这三个端点回的确实是 JSON。
-        for needle in [
-            "post(\"api/apply\"",
-            "post(\"api/decide\"",
-            "post(\"api/sparql\"",
-        ] {
+        // ⛔ postText 不许用过头：这两条端点回的确实是 JSON。
+        for needle in ["post(\"api/apply\"", "post(\"api/decide\""] {
             assert!(
                 CONSOLE_HTML.contains(needle),
                 "JSON 端点 {needle:?} 必须继续走 post()/json()"

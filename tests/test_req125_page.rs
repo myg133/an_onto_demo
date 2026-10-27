@@ -7,7 +7,7 @@
 //! | AC-001 | 拿 `secretproj` / 第 7 版 / `绝密对象` 起服务，`GET /` 正文里 grep ⇒ **0 命中** |
 //! | AC-002 | 零外部依赖（`<script src=` / `<link href=` / `https://` / `@import` / `integrity=` = 0）且 < 200 KB |
 //! | AC-003 | 壳里只有 `sessionStorage`；⛔ `localStorage` / URL / 源码里的 token |
-//! | AC-004 | 八个视图的容器都在，且**只**调既有 `/api/*`（第 8 个「构建包」是 REQ-159 加的） |
+//! | AC-004 | 六个视图的容器都在，且**只**调既有 `/api/*`（第 6 个「构建包」是 REQ-159 加的；REQ-161b 移除了查询台 / 目录浏览） |
 //! | AC-005 | `GET /` 不碰数据；`/api/*` 仍然要 token（没有因为加页面而开洞） |
 //! | AC-010 | 用户数据一律 `textContent`：壳里 `innerHTML` = 0 |
 //! | AC-011 | 三个响应头逐项在 |
@@ -338,11 +338,9 @@ async fn ac003_the_token_never_goes_to_long_term_storage_or_the_url() {
 // ══════════════════════════════════════════════════════════════
 
 #[test]
-fn ac004_the_eight_views_consume_only_the_known_endpoints() {
-    // 八个视图容器（第 8 个「构建包」= REQ-159）。
-    for view in [
-        "projects", "review", "export", "config", "audit", "query", "catalog", "bundles",
-    ] {
+fn ac004_the_six_views_consume_only_the_known_endpoints() {
+    // 六个视图容器（第 2 个「构建包」= REQ-159；REQ-161b 把查询台 / 目录浏览移除了）。
+    for view in ["projects", "bundles", "review", "export", "config", "audit"] {
         assert!(
             CONSOLE_HTML.contains(&format!("id=\"v-{view}\"")),
             "缺视图容器 v-{view}"
@@ -352,8 +350,22 @@ fn ac004_the_eight_views_consume_only_the_known_endpoints() {
             "缺 tab 按钮 tab-{view}"
         );
     }
+    // REQ-161b：这两个视图打的是 `query serve`（另一个进程），**不是本地操作** ⇒ 移除。
+    // 判据反过来钉住：视图容器 / 导航按钮 / 三条非本地端点，一个都不许回来。
+    for gone in ["v-query", "v-catalog", "tab-query", "tab-catalog"] {
+        assert!(
+            !CONSOLE_HTML.contains(&format!("id=\"{gone}\"")),
+            "{gone} 已按 REQ-161b 移除（非本地操作）"
+        );
+    }
+    for gone in ["api/sparql", "api/catalog", "api/describe"] {
+        assert!(
+            !CONSOLE_HTML.contains(gone),
+            "{gone} 属于 query serve（非本地操作），REQ-161b 已从页面移除"
+        );
+    }
 
-    // 视图消费的**每一条**端点都是登记过的（REQ-124 的 10 组 + REQ-123 的 3 个读端点
+    // 视图消费的**每一条**端点都是登记过的（REQ-124 的 10 组
     // + REQ-159 的 5 条构建包端点）。新增端点在这里留一条痕迹：页面偷偷打别的路径会当场红。
     for endpoint in [
         "api/projects",
@@ -365,9 +377,6 @@ fn ac004_the_eight_views_consume_only_the_known_endpoints() {
         "api/r2rml",
         "api/config/",
         "api/audit",
-        "api/sparql",
-        "api/catalog",
-        "api/describe",
         // REQ-159 · 构建包
         "api/projects/",
         "/bundles",
@@ -397,6 +406,49 @@ fn ac004_the_eight_views_consume_only_the_known_endpoints() {
     // 所有请求都走相对路径（同源）。出现绝对 URL 就是外部依赖（AC-002 已判）或绕过 CSP。
     assert!(!CONSOLE_HTML.contains("\"//"), "不许出现协议相对 URL");
     assert!(!CONSOLE_HTML.contains("XMLHttpRequest"), "不许自己造请求层");
+}
+
+/// REQ-161b · 被移除的两个视图**不留半套 DOM**。
+///
+/// 目录浏览那套右侧详情抽屉（容器 / 遮罩 / 标题 / 关闭按钮 / 打开关闭函数 / 滑出 CSS）
+/// 只为目录详情服务：视图一删，抽屉就没有存在意义。判据放在这里（而不是 page.rs 的
+/// `mod tests`）是为了让 `src/console/page.rs` 里那四个词 **一处不剩** —— 源码级 grep = 0
+/// 是这次收口的验收口径之一（REQ-161b §3）。
+#[test]
+fn ac004b_the_removed_views_leave_no_detail_panel() {
+    for gone in [
+        "id=\"drawer\"",
+        "id=\"drawer-mask\"",
+        "id=\"dr-close\"",
+        "id=\"dr-title\"",
+        "id=\"k-detail\"",
+        "function openDrawer(",
+        "function closeDrawer(",
+        "id=\"k-table\"",
+        "id=\"k-summary\"",
+    ] {
+        assert!(
+            !CONSOLE_HTML.contains(gone),
+            "{gone} 是目录浏览那套的残留，REQ-161b 必须删干净"
+        );
+    }
+    // 两条只服务查询服务的错误分支（404/403「查询服务未接入」、401「查询口令被拒」）：
+    // 查询端点没了，它们再也不会被触发 —— 留着就是让人以为「查询还在这儿」。
+    for gone in ["QUERY_WIRING", "QUERY_NOT_WIRED", "QUERY_UNAUTHORIZED", "QUERY_KEY"] {
+        assert!(
+            !CONSOLE_HTML.contains(gone),
+            "{gone} 只服务 query serve，随查询台一起删（REQ-161b）"
+        );
+    }
+    // 页面只剩一个口令框（管理口令）：查询口令那条旁路（`qtoken` / `opts.query`）也没了。
+    assert!(
+        !CONSOLE_HTML.contains("id=\"qtoken\"") && !CONSOLE_HTML.contains("opts.query"),
+        "查询口令旁路必须删除：本页只剩管理口令一个入口（所有调用都是本机管理端点）"
+    );
+    assert!(
+        CONSOLE_HTML.contains("function authHeader()"),
+        "authHeader() 不再有 useQuery 参数（只有一个管理口令）"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -437,8 +489,16 @@ fn the_served_page_is_the_committed_constant() {
         src.contains("pub const CSP"),
         "CSP 必须是登记过的常量（测试逐字对）"
     );
-    // 常量里确实有八个视图的标题（防止有人把 HTML 换成空串还全绿）。
-    for title in ["项目与版本", "评审", "导出", "声明编辑", "审计", "查询台", "目录浏览", "构建包"] {
+    // 常量里确实有六个视图的标题（防止有人把 HTML 换成空串还全绿）。
+    for title in ["项目与版本", "构建包", "评审", "导出", "声明编辑", "审计"] {
         assert!(CONSOLE_HTML.contains(title), "壳里缺标题 {title}");
+    }
+    // REQ-161b：查询台 / 目录浏览已移除（非本地操作）—— 视图**标题**也不许回来
+    // （`<h2>` 判据：删除处的注释会提到这几个字，那是有意保留的原因说明）。
+    for gone in ["<h2>查询台</h2>", "<h2>目录浏览</h2>"] {
+        assert!(
+            !CONSOLE_HTML.contains(gone),
+            "壳里不该再有 {gone}（REQ-161b 已移除该视图）"
+        );
     }
 }

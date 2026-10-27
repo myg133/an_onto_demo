@@ -1,14 +1,18 @@
 # REQ-125 · 本机调试用的**同源反向代理**（不是产品的一部分，也不进构建）
 #
-# 为什么需要它：工作台页面由 `console serve`（:8899）提供，而查询台 / 目录浏览要调的
-# `/api/sparql` `/api/catalog` `/api/describe` 属于 REQ-123 的 `query serve`（:8898）。
-# 浏览器里这是**两个源**：页面只发同源请求（CSP `connect-src 'self'`），直连会被同源策略拦住。
-# 生产上这件事由反向代理按路径分流解决；本脚本是同一口径的**本机最小版**。
+# ⚠️ REQ-161b（2026-10-27）：「查询台」与「目录浏览」两个视图已从页面移除 ——
+# 它们打的 `/api/sparql` `/api/catalog` `/api/describe` 属于 REQ-123 的 `query serve`，
+# 不属于「本机构建工作台」的范围。页面现在只打 `console serve` 自己的 `/api/*`，
+# 直连 :8899 本来就是同源，**本脚本对页面不再是必需品**。
+#
+# 它只剩下一个用途：把 `query serve` 的 `/mcp`（MCP 客户端入口，页面从不调用）
+# 与控制面放在同一个源后面。生产上这件事由反向代理按路径分流解决；本脚本是同一口径的
+# **本机最小版**。
 #
 # 用法（两个服务先各自起好）：
 #   pwsh -File tests/fixtures/req125/dev_proxy.ps1
 #   → 浏览器打开 http://127.0.0.1:8897/  （页面、/api/projects 等 → :8899）
-#                                        （/api/sparql 等      → :8898）
+#                                        （/mcp                → :8898）
 #
 # 参数：
 #   -Listen  http://127.0.0.1:8897/
@@ -25,15 +29,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 这三个前缀属于查询服务（REQ-123）；其余一律给控制面。
-$queryPrefixes = @("/api/sparql", "/api/catalog", "/api/describe", "/mcp")
+# 只有 /mcp 属于查询服务（REQ-123）——REQ-161b 起页面不再调它的三个读端点；
+# 其余一律给控制面（含 GET / 页面与全部 /api/*）。
+$queryPrefixes = @("/mcp")
 
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add($Listen)
 $listener.Start()
 Write-Host "· REQ-125 调试代理：$Listen"
 Write-Host "  → 查询服务 $Query（$($queryPrefixes -join ' ')）"
-Write-Host "  → 控制面   $Console（其余，含 / 页面）"
+Write-Host "  → 控制面   $Console（其余，含 / 页面与全部 /api/*）"
 Write-Host "  浏览器打开 $Listen ；Ctrl+C 结束。"
 
 function TargetBase([string]$path) {
