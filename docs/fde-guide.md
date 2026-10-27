@@ -1,16 +1,21 @@
----
-name: ontok-build
-description: FDE 用：把客户文档（和/或关系库）变成一套可发布的本体 —— 从摄取、合并、人签、定版到导出构建包与发布。含每步的验证方法与「失败长相」对照表。不涉及消费侧调用（那见 ontok-query）。
-category: workflow
----
+# FDE 构建指南 · 用文档（和库）造一套本体
 
-# ontok-build · 用文档（和库）造一套本体
+> **这份是给人读的**（FDE / 实施工程师）。它**不是 skill** —— 别装进 agent 的 skills 目录。
+>
+> | 目录 | 放什么 | 谁读 |
+> | --- | --- | --- |
+> | `Deploy/skills/` | agent 加载的 skill（有 `name`/`description` frontmatter） | **agent** |
+> | `Deploy/docs/`（本文件） | 给人看的流程/运维文档 | **人** |
+>
+> 抽取 agent 要的是 [`../skills/ontok-extract/SKILL.md`](../skills/ontok-extract/SKILL.md)；
+> 数字员工要的是 [`../skills/ontok-query/SKILL.md`](../skills/ontok-query/SKILL.md)。
+> 本文里出现的命令都是**你**在终端跑，⛔ 不是给 agent 的指令。
 
 > **适用工具版本**：`ontok-builder` **≥ v0.2.9**（本文件 2026-10-27 更新）。
 > ⚠️ **构建类命令在 REQ-152 之后从 `ontok` 挪到了 `ontok-builder`** —— 旧材料里的 `ontok doc ingest` / `ontok ontology export` 等写法已失效。
 > 命令对不上时**先升级工具**，别照着旧材料猜参数。
 
-> 你是 FDE。这份 skill 的目标是：**让一套本体从"客户给的资料"变成"数字员工能用的 TTL + 接口"**。
+> 你是 FDE。这份**指南**的目标是：**让一套本体从"客户给的资料"变成"数字员工能用的 TTL + 接口"**。
 > 每步都写了「**怎么验**」——⛔ 不要跳过验证，这套东西最容易出现"看起来成功了其实错了"。
 
 ---

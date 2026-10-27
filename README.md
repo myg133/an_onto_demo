@@ -6,7 +6,8 @@
 | --- | --- |
 | `compose/` | 单机 docker-compose（db + query + console） |
 | `k8s/` | Kubernetes 清单（kustomize：base + overlays/dev + overlays/prod） |
-| `skills/` | ⭐ **产品 skill**（`ontok-build` / `ontok-extract` / `ontok-query` / `mcp.example.json`）—— 给 FDE 与客户数字员工看的说明书 |
+| `skills/` | ⭐ **agent skill**（`ontok-extract` / `ontok-query` / `mcp.example.json`）—— **只放 agent 加载的东西**（有 `name`/`description` frontmatter） |
+| `docs/` | **给人读的文档**（`fde-guide.md` = FDE 构建指南）。⛔ 不是 skill，别装进 agent 目录 |
 | `.local/` | 本地临时（不跟踪） |
 
 > ⭐ **2026-10-27：skill 统一回本分支维护**（用户口径，`Deploy` 分支唯一维护处）。
