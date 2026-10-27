@@ -486,3 +486,13 @@
 | 合并后六条守卫 | `review_open` **21/21** · `test_req160` **9/9**（SKIP 0）· `source_enumeration` **10/10** · `anchor_guard` **3/3** · `test_req159_bundle` **38/38** · `check` 绿 |
 | 回收 | worktree + 分支已删（先确认 ancestor） |
 | 协作 | 合并前按规矩发「我要动 `code/`」；join 期间未做写操作 |
+
+## 2026-10-27 14:15 · ADR-013 迁移提示合并（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **b2e6b8e**（`--no-ff`）← `feature/REQ-159-studio-move` **ea51a2a** |
+| 内容 | console「构建包」tab 顶部加「已迁到 Studio（/studio）」提示 + 根因说明；代码保留作 Studio 参考实现；断言加 2 个 needle |
+| 验证 | `console::page` **11/11** · `test_req125_page` **8/8** · `check --lib` 绿 |
+| 回收 | worktree + 分支已删 |
+| 背景 | ADR-013：REQ-159 的 8 条端点从 console（builder，不部署）迁到 query serve（Studio） |
