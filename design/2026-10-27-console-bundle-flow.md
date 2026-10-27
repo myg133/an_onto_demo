@@ -4,6 +4,12 @@
 - 关联：**REQ-159**（契约由 join 起草）、REQ-124（控制面 API）、REQ-153（覆盖盘点）、ADR-007（构建/消费分离）、ADR-011（分工）
 - 状态：**提案**。凡标「建议」的是我的判断，不是已定决策；标「现状」的是代码事实（带 `path:line`）
 
+> **分工变更（2026-10-27 11:25，用户口径）**：「console 的 ui 需要做到你这端。」
+> ⇒ **`src/console/page.rs`（含内嵌 JS）归 lion**；`src/console/http.rs` + 新端点 + DB 归 join。
+> ⇒ REQ-159 变成**三个 worktree**（互不重叠）：
+> `feature-REQ-159`（join：http/端点/DB）、`feature-REQ-159-builder`（lion：`src/bundle/**` + cli）、
+> `feature-REQ-159-console`（lion：**只有** `page.rs` + `tests/test_req125_page.rs`）。
+
 ---
 
 ## 一 · 结论先行
