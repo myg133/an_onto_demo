@@ -21,17 +21,20 @@
 //! `src/review_open/mod.rs` 的单元测试里（进程内 `build_router` + 懒连接池），
 //! 件数见派单回报；⛔ 本文件**不**把「跳过」写成「通过」。
 //!
-//! # 真库判据（QA REQ-160 退回项）
+//! # ⭐ REQ-163 · `build run` 的两条判据换了前提（**不再要库**）
 //!
-//! 文件末尾那两条**要元数据库**（`ONTOK_TEST_DATABASE_URL`）+ `ONTOK_SECRET_KEY`：
+//! REQ-160 时 `build run` 的 ③ 段是 `import`（写库）、④ 段是 `review open`（要口令 + 要库），
+//! 所以文件末尾那两条必须配 `ONTOK_TEST_DATABASE_URL` + `ONTOK_SECRET_KEY` 才有意义。
+//! REQ-163 把它改成**纯本地链**（写草稿 + 起 console v2），⇒ 两条判据改成：
 //!
 //! | 判据 | 它说什么 |
 //! | --- | --- |
-//! | `a_failed_build_run_leaves_no_project_and_no_version` | 失败路径 ⇒ **项目数 / 版本数不变**（⛔ 不留空壳项目） |
-//! | `a_successful_build_run_creates_an_unfrozen_version_and_keeps_decisions_pending` | 成功路径 ⇒ +1 项目 +1 版本、`frozen_at IS NULL`、条目 `biz/model = pending`（⛔ 不自动签） |
+//! | `a_failed_build_run_leaves_no_draft_and_touches_no_db` | 失败路径 ⇒ 工作目录**零产物**（连 `out/` 都不建）；有库时**且**库计数不变（⛔ 不留空壳项目） |
+//! | `a_successful_build_run_writes_a_draft_and_signs_nothing` | 成功路径 ⇒ `out/proposal.json` 有条目、`decisions.json` / `.ontok/versions/` **都不存在**（⛔ 不自动签）、有库时库计数仍不变 |
 //!
-//! 没配环境变量时它们会**响亮的 SKIP**（打印原因并返回），⛔ 不静默当作通过 ——
-//! 所以「本机真跑过」的证据是报告里的库计数，不是这两条用例的绿。
+//! 后一条只要求 **node + 假 ACP 夹具**（不再要库 / 密钥）：真正无条件跑的那条
+//! 「`.env` 全清 → 起服务 → `/api/state` 有草稿」判据在 `tests/test_req163_local_chain.rs`。
+//! 有库时那两条仍会顺手断言「库一个字节都没变」，这就是「没有掉回旧台」的证据。
 
 mod common;
 
@@ -360,10 +363,13 @@ async fn the_console_really_binds_serves_the_shell_and_gates_the_api() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// QA 退回项 · 真库：失败零产物（**连项目名都不许被占用**）/ 成功仍不签
+// ⭐ REQ-163 · `build run` 的纯本地链：失败零产物 / 成功只写草稿（⛔ 不签、⛔ 不写库）
 // ══════════════════════════════════════════════════════════════
 
-/// 元数据库连接串；没有 ⇒ 这条用例**响亮地跳过**（⛔ 不静默通过）。
+/// 元数据库连接串；没有 ⇒ 那半条断言**响亮地跳过**（⛔ 不静默通过）。
+///
+/// ⚠️ REQ-163 起这**不再是这两条用例的前提**：`build run` 已经不连库了。
+/// 有库时顺手断言「库一个字节都没变」—— 那是「没有掉回旧台」的直接证据。
 fn db_url() -> Option<String> {
     std::env::var("ONTOK_TEST_DATABASE_URL")
         .ok()
@@ -372,9 +378,13 @@ fn db_url() -> Option<String> {
 }
 
 fn skip(what: &str) {
+    eprintln!("SKIP（{what}）：本机没有 node 或假 ACP 夹具 —— 这不是通过，这条判据**未验**。");
+}
+
+fn skip_db(what: &str) {
     eprintln!(
-        "SKIP（{what}）：需要 ONTOK_TEST_DATABASE_URL（+ ONTOK_SECRET_KEY）。\
-         这不是通过 —— 本机没配库时这两条判据**未验**。"
+        "SKIP（{what}）：没有 ONTOK_TEST_DATABASE_URL —— 「库一个字节都没变」这半条**未验**。\
+         `build run` 本身不需要库（REQ-163），其余断言照跑。"
     );
 }
 
@@ -422,18 +432,10 @@ async fn totals(pool: &sqlx::postgres::PgPool) -> (i64, i64) {
     (p, v)
 }
 
-fn unique_project(tag: &str) -> String {
-    format!(
-        "req160_{tag}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    )
-}
-
-fn db_options(dir: &std::path::Path, project: &str, agent_command: String) -> ontok::review_open::build_run::Options {
+fn draft_options(
+    dir: &std::path::Path,
+    agent_command: String,
+) -> ontok::review_open::build_run::Options {
     let docs = dir.join("docs");
     std::fs::create_dir_all(&docs).expect("建语料目录");
     std::fs::write(
@@ -442,12 +444,17 @@ fn db_options(dir: &std::path::Path, project: &str, agent_command: String) -> on
     )
     .expect("写语料");
     ontok::review_open::build_run::Options {
-        project: project.to_string(),
+        // ⭐ REQ-163：项目名缺省 = 工作目录名（`--project` 只是可选覆盖）。
+        project: None,
         input: docs,
         agent: ontok::review_open::build_run::ONLY_AGENT.to_string(),
         agent_command,
         agent_skill: skill_fixture(),
         agent_timeout_secs: Some(30),
+        // ⭐ 严格闸**开着**（QA 退回项 F1）：这是 `build run` 这条链上**唯一**走
+        //    `--strict-deterministic` 的用例。假 agent 的 "valid" 模式只混**一条**编造的
+        //    引用（AC-005 的变异，被丢弃并计数），可用率远高于 20% ⇒ 严格闸放行。
+        //    ⛔ 不要为了让它绿而把这个闸关掉 —— 那等于这条链**再无**严格闸的判据。
         strict_deterministic: true,
         work_dir: dir.join(".ontok-build"),
         schema: None,
@@ -455,129 +462,144 @@ fn db_options(dir: &std::path::Path, project: &str, agent_command: String) -> on
         allow_doc_only: false,
         base_version: None,
         bind: "127.0.0.1:0".into(),
-        allow_public: false,
         no_browser: true,
-        // 1 秒：本命令末尾会**真起审核台**，用例不能一直挂着等 Ctrl-C。
-        token_ttl: "1s".into(),
-        base: None,
-        audit_out: None,
     }
 }
 
-/// ⛔ **失败路径不许留空壳**（QA 退回项的真库判据）。
+/// ⛔ **失败路径不许留半成品**（REQ-160 的「不留空壳」换成纯本地口径）。
 ///
-/// 实测过的那一版：`get_or_create` + `new_version()` 跑在第 ① 段之前 ⇒ agent 连不上时
-/// 「文件层零产物」成立，但库里多了一个空壳项目 + v1。现在的判据是**库计数不变**，
-/// 而且**那个项目名根本没被占用**（FDE 打错一次项目名不该留下废弃物）。
+/// REQ-160 时这条钉的是「库里不许多个空壳项目 + v1」。REQ-163 删掉了那条写库动作，
+/// 但**同一条纪律**还在：①② 失败时评审台里不该出现一份半成品草稿（那会让人以为能签）。
+/// ⇒ 断言变成「工作目录零产物（连 `out/` 都不建）」；
+/// 有元数据库时**再顺手**断言库计数不变（证明它真的没掉回旧台）。
 #[tokio::test]
-async fn a_failed_build_run_leaves_no_project_and_no_version() {
-    let Some(url) = db_url() else {
-        skip("失败路径零产物（真库）");
-        return;
-    };
-    let pool = pool_and_migrate(&url).await;
-
-    let dir = temp_dir("db-fail");
-    let project = unique_project("shell");
+async fn a_failed_build_run_leaves_no_draft_and_touches_no_db() {
+    let dir = temp_dir("local-fail");
     // 一个**不存在**的 agent 命令：第 ① 段（doc ingest）必然失败。
-    let opts = db_options(&dir, &project, "ontok-no-such-agent-req160".into());
+    let opts = draft_options(&dir, "ontok-no-such-agent-req163".into());
 
-    let before = totals(&pool).await;
-    let err = ontok::review_open::build_run::run(&pool, opts).await;
-    let after = totals(&pool).await;
+    let pool = match db_url() {
+        Some(url) => Some(pool_and_migrate(&url).await),
+        None => {
+            skip_db("失败路径的库计数");
+            None
+        }
+    };
+    let before = match &pool {
+        Some(p) => Some(totals(p).await),
+        None => None,
+    };
+
+    let err = ontok::review_open::build_run::run_draft(&opts).await;
+    let after = match &pool {
+        Some(p) => Some(totals(p).await),
+        None => None,
+    };
 
     assert!(err.is_err(), "agent 连不上 ⇒ 整体失败（R1）");
-    assert_eq!(
-        (after.0 - before.0, after.1 - before.1),
-        (0, 0),
-        "⛔ 失败路径在库里留下了东西：项目 +{} / 版本 +{}（AC-006：不建版本）",
-        after.0 - before.0,
-        after.1 - before.1
-    );
-    let proj = ontok::db::project::PgProjectStore::new(pool.clone())
-        .get_by_name(&project)
-        .await
-        .expect("查项目");
-    assert!(
-        proj.is_none(),
-        "⛔ 空壳项目被建出来了：{project}（项目 / 版本只该在 ①② 段都成功之后才建）"
-    );
-    // 文件层也仍然是零产物（与失败路径的单元判据互证）。
+    if let (Some(before), Some(after)) = (before, after) {
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1),
+            (0, 0),
+            "⛔ 失败路径在元数据库里留下了东西：项目 +{} / 版本 +{}（这条链根本不该连库）",
+            after.0 - before.0,
+            after.1 - before.1
+        );
+    }
+
+    // 文件层零产物（与 `src/review_open/build_run.rs` 的单元判据互证）。
     let work = dir.join(".ontok-build");
+    for stale in ["assertions.jsonl", "merged.json", "out/proposal.json"] {
+        assert!(
+            !work.join(stale).exists(),
+            "⛔ work-dir 里留下了半成品：{}",
+            work.join(stale).display()
+        );
+    }
     assert!(
-        !work.join("assertions.jsonl").exists() && !work.join("merged.json").exists(),
-        "⛔ work-dir 里留下了半成品：{}",
-        work.display()
+        !work.join("out").exists(),
+        "⛔ 连 `out/` 都不该建（③ 段没跑过）"
     );
 
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// 成功路径：真的产出版本，但**未冻结**、决策**全 pending**（⛔ 不自动签）。
+/// 成功路径：**只**写出草稿；⛔ 不签、⛔ 不定版、⛔ 不写库。
+///
+/// 这条以前要 `ONTOK_TEST_DATABASE_URL` + `ONTOK_SECRET_KEY`（③ 导入 ④ 起审核台）。
+/// REQ-163 之后它只要 node + 假 ACP 夹具 —— 有库时再顺手核一次「库计数不变」。
 #[tokio::test]
-async fn a_successful_build_run_creates_an_unfrozen_version_and_keeps_decisions_pending() {
-    let Some(url) = db_url() else {
-        skip("成功路径仍不自动签（真库）");
-        return;
-    };
-    if std::env::var("ONTOK_SECRET_KEY").ok().filter(|s| !s.trim().is_empty()).is_none() {
-        skip("成功路径仍不自动签（缺 ONTOK_SECRET_KEY，第 ④ 段起不了审核台）");
-        return;
-    }
+async fn a_successful_build_run_writes_a_draft_and_signs_nothing() {
     if !node_ok() || !fake_acp_js().is_file() {
-        skip("成功路径仍不自动签（没有 node / 假 ACP 夹具）");
+        skip("成功路径只写草稿");
         return;
     }
-    let pool = pool_and_migrate(&url).await;
-
-    let dir = temp_dir("db-ok");
-    let project = unique_project("ok");
-    let opts = db_options(
+    let dir = temp_dir("local-ok");
+    let opts = draft_options(
         &dir,
-        &project,
         format!("node {}", fake_acp_js().display()),
     );
 
-    let before = totals(&pool).await;
-    let res = ontok::review_open::build_run::run(&pool, opts).await;
-    let after = totals(&pool).await;
-    assert!(res.is_ok(), "四段都要过（含起审核台 1 秒）：{res:?}");
-    assert_eq!(after.0 - before.0, 1, "应当**新增一个**项目");
-    assert_eq!(after.1 - before.1, 1, "应当**新增一个**版本（v1）");
+    let pool = match db_url() {
+        Some(url) => Some(pool_and_migrate(&url).await),
+        None => {
+            skip_db("成功路径的库计数");
+            None
+        }
+    };
+    let before = match &pool {
+        Some(p) => Some(totals(p).await),
+        None => None,
+    };
 
-    // 版本存在且**未冻结**（R3：本命令不 freeze）。
-    let frozen: Option<bool> = sqlx::query_scalar(
-        "SELECT v.frozen_at IS NOT NULL FROM ontology_versions v \
-         JOIN projects p ON p.id = v.project_id WHERE p.name = $1 ORDER BY v.seq DESC LIMIT 1",
-    )
-    .bind(&project)
-    .fetch_optional(&pool)
-    .await
-    .expect("查冻结状态");
-    assert_eq!(frozen, Some(false), "⛔ 版本被冻结了（R3：不自动 freeze）");
+    let art = ontok::review_open::build_run::run_draft(&opts)
+        .await
+        .expect("①②③ 都要过（④ 起服务不在 run_draft 里）");
+    let after = match &pool {
+        Some(p) => Some(totals(p).await),
+        None => None,
+    };
+    if let (Some(before), Some(after)) = (before, after) {
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1),
+            (0, 0),
+            "⛔ 成功路径也在元数据库里留下了东西：项目 +{} / 版本 +{}（REQ-163：不写库）",
+            after.0 - before.0,
+            after.1 - before.1
+        );
+    }
 
-    // 条目数 > 0，且**两条轨都还是 pending**（人还没签）。
-    let items: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM proposal_items i \
-         JOIN proposals pr ON pr.id = i.proposal_id \
-         JOIN projects p ON p.id = pr.project_id WHERE p.name = $1",
-    )
-    .bind(&project)
-    .fetch_one(&pool)
-    .await
-    .expect("数条目");
-    assert!(items > 0, "成功路径应当导入至少一条条目（实际 {items}）");
-    let decided: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM proposal_items i \
-         JOIN proposals pr ON pr.id = i.proposal_id \
-         JOIN projects p ON p.id = pr.project_id \
-         WHERE p.name = $1 AND (i.biz_status <> 'pending' OR i.model_status <> 'pending')",
-    )
-    .bind(&project)
-    .fetch_one(&pool)
-    .await
-    .expect("数已决策条目");
-    assert_eq!(decided, 0, "⛔ 有 {decided} 条条目已被决策（R3：不自动签）");
+    // ③ 的产物：草稿存在、有条目、且**逐字节**就是合并结果。
+    let draft = dir.join(".ontok-build/out/proposal.json");
+    assert_eq!(art.draft, draft, "草稿落点必须与路径表一致");
+    assert!(draft.is_file(), "⛔ 没写出草稿：{}", draft.display());
+    let bytes = std::fs::read(&draft).expect("读草稿");
+    assert_eq!(
+        bytes,
+        std::fs::read(&art.merged).expect("读合并结果"),
+        "草稿必须**逐字节**就是合并结果（重排一次就会多一个 sha ⇒ 页面莫名 stale）"
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("草稿必须是合法 JSON");
+    let items = doc["items"].as_array().expect("草稿要有 items");
+    assert!(!items.is_empty(), "成功路径应当至少抽出一条条目");
+    // 项目名缺省 = 工作目录名（`--project` 没给）。
+    assert_eq!(
+        doc["project"].as_str(),
+        Some(
+            ontok::console::local::project_name_of_workdir(&opts.work_dir).as_str()
+        ),
+        "草稿的 project 必须来自工作目录名（与页面同一个 sanitize）"
+    );
+
+    // ⛔ R3：人的动作一个都还没发生 —— 没有裁决、没有定版目录。
+    assert!(
+        !dir.join(".ontok-build/.ontok/decisions.json").exists(),
+        "⛔ 出现了裁决文件（R3：本命令不签）"
+    );
+    assert!(
+        !dir.join(".ontok-build/.ontok/versions").exists(),
+        "⛔ 出现了定版目录（R3：本命令不定版 / 不 freeze）"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

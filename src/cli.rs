@@ -251,13 +251,14 @@ pub enum Cmd {
     ///
     /// | 子命令 | 做什么 | 连库？ | 发网络？ | 调模型？ |
     /// | --- | --- | --- | --- | --- |
-    /// | `bundle pack` | 读**元数据库**里的快照 → 打 store-only zip + 生成 manifest | **是**（只读，不迁移不写） | 否 | 否 |
+    /// | `bundle pack --dir` | 读**工作目录的定版**（`.ontok/versions/v<N>/`）→ 打 store-only zip | **否**（⭐ REQ-163 的推荐路径） | 否 | 否 |
+    /// | `bundle pack --project/--version` | 读**元数据库**里的快照 → 打 store-only zip + 生成 manifest | **是**（只读，不迁移不写；旧路径，仍保留） | 否 | 否 |
     /// | `bundle verify` | 包自检（9 条判据 + 8 个拒绝码） | **否**（纯本地） | 否 | 否 |
     ///
     /// 【可以照抄的一整条】
     ///
-    /// ontok-builder bundle pack --project cloud-resource --version 5 --out out/cloud-resource-v5.ontokbundle --built-at 2026-10-27T02:30:00Z
-    /// ontok-builder bundle verify --file out/cloud-resource-v5.ontokbundle
+    /// ontok-builder bundle pack --dir demo/ --version v1 --out out/demo-v1.ontokbundle
+    /// ontok-builder bundle verify --file out/demo-v1.ontokbundle
     ///
     /// ⚠️ `ontology/snapshot.json` 是 `PgStore::get_snapshot` 读出的 `Snapshot` **原文**
     /// （`serde_json::to_vec` 直出）—— ⛔ 不是 `ontology show` 的视图：`LinkTypeView`
@@ -301,17 +302,37 @@ pub enum RelationVerbsCmd {
 /// `am/access-mapping.json` / `db/schema.json` / `declarations/<filename>`。
 #[derive(Subcommand)]
 pub enum BundleCmd {
-    /// 打包（读元数据库；⛔ 不读源库、⛔ 不调模型、⛔ 不发网络）
+    /// 打包（两种来源二选一：**工作目录的定版** 或 元数据库里的快照）
+    ///
+    /// 两种用法（**互斥**，给了 `--dir` 就不许给 `--project`）：
+    ///
+    /// 【可以照抄的一整条】（⭐ REQ-163 · 纯本地，CI / 无头环境用这条）
+    ///
+    /// ontok-builder bundle pack --dir demo/ --version v1 --out out/demo-v1.ontokbundle
+    ///
+    /// 【可以照抄的一整条】（旧 · 读库；保留但**不是**构建端的推荐路径）
+    ///
+    /// ontok-builder bundle pack --project cloud-resource --version 5 --out out/cr-v5.ontokbundle
     ///
     /// `files[]` 覆盖包内**除 `manifest.json` 自身以外**的每一个文件（按 path 升序），
     /// 每个文件带 `sha256` 与 `bytes` —— 服务端会逐个核，任一不符即整包拒。
+    ///
+    /// ⚠️ `--dir` 那份包与**页面导出**（`POST /api/bundle`）走的是**同一个函数**：
+    /// 同一个定版 + 同一个 `--built-at` ⇒ 逐字节相同（同 sha256）。
+    /// ⛔ `--dir` 只带本体：`--am` / `--db-schema` / `--declarations` 是读库那套的组件
+    /// （页面导出不带它们，带上就与页面那个包不是同一个东西了）。
+    #[command(verbatim_doc_comment)]
     Pack {
-        /// 项目名（必须符合 `^[a-z0-9][a-z0-9-]{1,62}$`，且与接收项目同名）
-        #[arg(long)]
-        project: String,
-        /// 第几版（喂 `manifest.ontology_seq`；服务端入库时会重新分配版本号）
-        #[arg(long)]
-        version: i32,
+        /// 工作目录（`<工作目录>/.ontok/versions/v<N>/snapshot.json` 出包；纯本地、不连库）
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// 项目名（**读库那套**；与 `--dir` 互斥）
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+        /// 第几版。`--dir` 模式可写 `v3` 或 `3`，省略 = 最新定版；
+        /// 读库模式**必填**（喂 `manifest.ontology_seq`；服务端入库时会重新分配版本号）
+        #[arg(long, value_name = "vN")]
+        version: Option<String>,
         /// 产物路径（约定扩展名 `.ontokbundle`；内部是 store-only zip）
         #[arg(long)]
         out: PathBuf,
@@ -332,6 +353,7 @@ pub enum BundleCmd {
         #[arg(long)]
         declarations: Option<PathBuf>,
         /// 打包时间（RFC3339）。给定它 + 同一份输入 ⇒ **两次打包逐字节相同**
+        /// （⭐ 与页面导出比对时，钉成页面那个包 manifest 里的 `built_at`）
         #[arg(long)]
         built_at: Option<String>,
     },
@@ -1308,34 +1330,47 @@ pub enum ReviewCmd {
 /// 合成一个命令会让「只想重跑合并」也被迫走一遍抽取（demand §九-风险 2）。
 #[derive(Subcommand)]
 pub enum BuildCmd {
-    /// 文档 → 抽取 → 合并 → 导入 → **起审核台**（⛔ 不 apply / freeze）
+    /// 文档 → 抽取 → 合并 → **写草稿** → **起本机评审台**（⛔ 全程不连库、⛔ 不 apply / freeze）
     ///
     /// 【可以照抄的一整条】
     ///
-    /// ontok-builder build run --project demo --input docs/ --agent acp --agent-command pi-acp --agent-skill Deploy/skills/ontok-extract/SKILL.md
+    /// ontok-builder build run --input docs/ --work-dir demo/ --agent acp --agent-command pi-acp --agent-skill Deploy/skills/ontok-extract/SKILL.md
+    ///
+    /// # 四段
+    ///
+    /// | 段 | 产物 |
+    /// | --- | --- |
+    /// | ① 抽取（`doc ingest`，ACP） | `<work-dir>/assertions.jsonl` |
+    /// | ② 合并（`doc merge`，机械对齐） | `<work-dir>/merged.json` |
+    /// | ③ 写草稿 | `<work-dir>/out/proposal.json`（评审台读的就是它） |
+    /// | ④ 起本机评审台（`console serve` 同一份实现） | 页面 URL（前台常驻，Ctrl-C 结束） |
+    ///
+    /// # ⭐ 纯本地（REQ-163）
+    ///
+    /// **一个工作目录 = 一个项目**。全程不连库、不要口令：
+    /// `ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY` 缺了也照常跑通。
+    /// 项目名缺省 = **工作目录名**（`--project` 只是可选覆盖；与页面同一个 sanitize）；
+    /// 基版本缺省 = `1` 或「最新定版 + 1」（`--base-version` 只是可选覆盖）。
     ///
     /// # 四条裁定
     ///
     /// | 裁定 | 行为 |
     /// | --- | --- |
-    /// | R1 | **任一阶段失败即整体失败**（退出码非 0），且**不留下半成品**：后面的段一个都不跑 |
-    /// | R2 | 末尾**自动**起审核台；`--no-browser` 只影响开不开浏览器，不影响起不起来 |
+    /// | R1 | **任一阶段失败即整体失败**（退出码非 0），且**不留下半成品**：后面的段一个都不跑（①② 失败 ⇒ 不写草稿、不起服务） |
+    /// | R2 | 末尾**自动**起本机评审台；`--no-browser` 只影响开不开浏览器，不影响起不起来 |
     /// | R3 | ⛔ **不自动 apply / freeze** —— 决策只在页面上由人做 |
     /// | R4 | 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑；指纹缓存命中即 0 token |
     ///
-    /// ⚠️ 基版本：项目不存在会新建（幂等），一版都没有会建 v1（**不冻结**）——
-    /// 这是为了让「从零开始」也能一条命令跑通；最新版**已冻结**时不会自动开新版本
-    /// （那是人的决定），报错并给出 `version new` 的写法。
     /// ⚠️ 不给 `--proposal` 时会在工作目录里生成一份**空提案**并自动打开纯文档通路
     /// （REQ-143）：新建实体 / 关系的档位是 `low`、`reviewed_by: null`，仍需人签。
-    /// ⚠️ 退出码：`0` 正常；`1` 环境 / 库错（含 agent 连不上）；`2` 入参不合法。
-    /// ⛔ 末尾起的是**本机**审核台（明文 HTTP，无 TLS）：生产 / 远程访问必须走
-    /// 反向代理 + TLS；一次性口令只适合**单机审核**。
+    /// ⚠️ 退出码：`0` 正常；`1` 环境错（含 agent 连不上）；`2` 入参不合法。
+    /// ⛔ 末尾起的是**本机**评审台（只绑回环 + 明文 HTTP，无 TLS）：没有 `--allow-public`。
+    /// ⛔ 本命令**不再** `import` 进元数据库；要继续走库那套请用 `import` / `propose import`。
     #[command(verbatim_doc_comment)]
     Run {
-        /// 项目名（不存在会新建；与 `import` 同一个 `get_or_create`）
+        /// 项目名**覆盖**（省略 = 工作目录名；⛔ 不再建项目、不再查库）
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         /// 输入：一个 `.md` / `.txt` 文件，或一个目录（递归）。⛔ `.pdf` / `.docx` 直接报错
         #[arg(long)]
         input: PathBuf,
@@ -1354,7 +1389,8 @@ pub enum BuildCmd {
         /// 有块失败 / 回答不可用率 > 20% ⇒ 退出码非 0 且**一个产物都不写**（R1 的同一口径）
         #[arg(long)]
         strict_deterministic: bool,
-        /// 中间产物的落点。默认 `.ontok-build/`
+        /// **工作目录**：中间产物 + 草稿（`out/proposal.json`）+ `.ontok/` 都在这里。
+        /// 默认 `.ontok-build/`；它同时是 ④ 段评审台的 `--dir`
         #[arg(long, default_value = crate::review_open::build_run::DEFAULT_WORK_DIR)]
         work_dir: PathBuf,
         /// 基础提案（省略 = 生成空提案 + 打开纯文档通路）
@@ -1363,30 +1399,20 @@ pub enum BuildCmd {
         /// 强制打开 `doc merge --allow-doc-only`（给了 `--proposal` 时默认**关**）
         #[arg(long)]
         allow_doc_only: bool,
-        /// 基版本序号（省略 = 最新一版；一版都没有就建 v1）
+        /// 基版本序号**覆盖**（省略 = 1 或「最新定版 + 1」；必须大于已定版的最新版）
         #[arg(long)]
         base_version: Option<i32>,
-        /// 真实 schema（`doc merge` 的严格校验 + 审核台的声明校验）
+        /// 真实 schema（`doc merge` 的严格校验）
         #[arg(long)]
         schema: Option<PathBuf>,
-        /// 审核台的监听地址。默认 `127.0.0.1:0`
+        /// 评审台的监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配）。
+        /// **只许回环**：非回环地址在入参闸就拒（exit 2，⛔ 不会先烧一遍 ACP token）；
+        /// 本命令**没有** `--allow-public` 这样的放行开关
         #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
         bind: String,
-        /// 审核台允许绑非回环地址（⛔ 不加就只能绑回环）
-        #[arg(long)]
-        allow_public: bool,
         /// 不自动打开浏览器（只影响浏览器，不影响起不起来 —— R2）
         #[arg(long)]
         no_browser: bool,
-        /// 审核台一次性口令的有效期
-        #[arg(long, default_value = crate::review_open::DEFAULT_TOKEN_TTL)]
-        token_ttl: String,
-        /// IRI 基（透传给审核台）
-        #[arg(long)]
-        base: Option<String>,
-        /// 审核审计落点（**追加**写；省略时只写 stdout）
-        #[arg(long)]
-        audit_out: Option<PathBuf>,
     },
 }
 
@@ -2223,13 +2249,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cmd => Cmd::Review { cmd },
         },
-        // ⭐ REQ-160 · `build run` 的**入参**也在连库之前判一遍（命令整体仍走下面那条路：
-        // ③④ 段要元数据库）。不这样做，没配库的机器上 `--input` 打错也只会看到
-        // 「ONTOK_DATABASE_URL 未设置」——报错指向错的原因，退出码也从 2 变成 1。
-        Cmd::Build { cmd } => {
-            crate::review_open::finish(crate::review_open::build_run::validate(&build_options(&cmd)))?;
-            Cmd::Build { cmd }
-        }
+        // ⭐ REQ-160 / ⭐ REQ-163 · `build run` **整条链**都在连库之前分派：
+        // 它现在是**纯本地**的（plan 读目录 → ①② 抽取/合并 → 写草稿 → 起 console v2），
+        // 一个字节都不写库、也不要口令。若留到下面那个 match（先连库），没配库的机器上
+        // 「一条命令到评审台」就根本起不来 —— 那正是 REQ-163 要消灭的口径矛盾。
+        // 入参闸也在这一路里（`build_run::validate`）：`--input` 打错时看到的是真原因，
+        // 退出码是 2 而不是 1。
+        Cmd::Build { cmd } => return build_cmd(cmd).await,
         cmd => cmd,
     };
 
@@ -2258,9 +2284,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             "内部错误：`console` 子命令应当在连库之前处理（本地评审台不碰产品库）。\
              请把 `run()` 开头的提前返回恢复回去。"
         ),
-        // ⭐ REQ-160 · 一条命令跑到审核台（① ② 段不碰库，③ ④ 段要元数据库 ⇒
-        // 放在连库之后；两段的失败面在 `review_open::build_run` 里各自点名）。
-        Cmd::Build { cmd } => build_cmd(&pool, cmd).await,
+        // ⭐ REQ-163 · `build run` 已提到连库之前（纯本地链：不连库、不要口令）。
+        // 与 `console` 同一条纪律：留一句人话，防止将来有人把提前返回删掉。
+        Cmd::Build { .. } => anyhow::bail!(
+            "内部错误：`build run` 应当在连库之前处理（纯本地链：草稿 + 本机评审台，不碰产品库）。\
+             请把 `run()` 开头的提前返回恢复回去。"
+        ),
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -4032,8 +4061,8 @@ async fn relation_verbs_check(
 /// `bundle pack` 的参数（clap 拆完原样递进来；收成一个结构体只是为了让
 /// `bundle_pack` 的签名不出现九个位置参数）。
 struct PackOpts {
-    project: String,
-    version: i32,
+    /// 快照的来源（**二选一**，由 [`bundle_cmd`] 判互斥）。
+    source: PackSource,
     out: PathBuf,
     am: Vec<PathBuf>,
     db_schema: Option<PathBuf>,
@@ -4043,11 +4072,23 @@ struct PackOpts {
     built_at: Option<String>,
 }
 
+/// ⭐ REQ-163 · 快照从哪来。
+///
+/// | 变体 | 读什么 | 连库？ | 与页面导出的包一样吗 |
+/// | --- | --- | --- | --- |
+/// | [`PackSource::Dir`] | `<dir>/.ontok/versions/v<N>/snapshot.json` | ⛔ | **是**（同一个 `local::pack_version`） |
+/// | [`PackSource::Db`] | 元数据库里的快照（旧路径） | 是（只读） | 否（它还带 am / db / declarations） |
+enum PackSource {
+    Dir { dir: PathBuf, seq: Option<i32> },
+    Db { project: String, version: i32 },
+}
+
 /// `ontok-builder bundle <…>` 的分派。
 async fn bundle_cmd(cmd: BundleCmd) -> anyhow::Result<()> {
     match cmd {
         BundleCmd::Verify { file } => bundle_verify(&file),
         BundleCmd::Pack {
+            dir,
             project,
             version,
             out,
@@ -4058,9 +4099,84 @@ async fn bundle_cmd(cmd: BundleCmd) -> anyhow::Result<()> {
             declarations,
             built_at,
         } => {
+            // `v3` / `3` 两种写法都认（`console` 的目录叫 `v3`，人手上抄过来常带 `v`）。
+            let parse_version = |spec: &str| -> Result<i32, String> {
+                let t = spec.trim();
+                let body = t.strip_prefix(['v', 'V']).unwrap_or(t);
+                body.parse::<i32>()
+                    .map_err(|_| format!("`--version {spec}` 看不懂：要写成 `v3` 或 `3`"))
+            };
+            let source = match (dir, project) {
+                (Some(dir), Some(name)) => {
+                    eprintln!(
+                        "✗ `--dir` 与 `--project` 互斥：\n  \
+                         · `--dir <工作目录>`：从**工作目录的定版**出包（纯本地，不连库）—— 推荐\n  \
+                         · `--project <名> --version <N>`：从**元数据库**里的快照出包（旧路径）\n  \
+                         两组参数只许给一组（收到 `--dir {d}` + `--project {name}`）。",
+                        d = dir.display(),
+                    );
+                    eprintln!("  （未产出任何文件：这一条在**读任何输入之前**就拒了）");
+                    std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                }
+                (Some(dir), None) => {
+                    // ⛔ `--dir` 只带本体：页面导出不带 am / db / declarations，
+                    //    带上它们出的包与页面那个包就**不是同一个东西**了（R2-3）。
+                    if !am.is_empty()
+                        || db_schema.is_some()
+                        || requires_dsn
+                        || db_dialect.is_some()
+                        || declarations.is_some()
+                    {
+                        eprintln!(
+                            "✗ `--dir` 模式只从**定版快照**出包（与页面导出逐字节相同），\
+                             不接受 `--am` / `--db-schema` / `--requires-dsn` / `--db-dialect` / \
+                             `--declarations`。\n  \
+                             要打带访问映射 / 源库描述 / 声明的包，请走读库那条：\
+                             `bundle pack --project <名> --version <N> …`。"
+                        );
+                        eprintln!("  （未产出任何文件：这一条在**读任何输入之前**就拒了）");
+                        std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                    }
+                    let seq = match version {
+                        Some(v) => match parse_version(&v) {
+                            Ok(n) => Some(n),
+                            Err(e) => {
+                                eprintln!("✗ {e}");
+                                std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                            }
+                        },
+                        None => None,
+                    };
+                    PackSource::Dir { dir, seq }
+                }
+                (None, Some(project)) => {
+                    let Some(spec) = version else {
+                        eprintln!(
+                            "✗ `--project` 必须配 `--version <N>`（从元数据库取哪一版快照）。\n  \
+                             想从**工作目录的定版**出包（不连库）请用：\
+                             `bundle pack --dir <工作目录> [--version vN] --out <路径>`。"
+                        );
+                        std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                    };
+                    match parse_version(&spec) {
+                        Ok(version) => PackSource::Db { project, version },
+                        Err(e) => {
+                            eprintln!("✗ {e}");
+                            std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                        }
+                    }
+                }
+                (None, None) => {
+                    eprintln!(
+                        "✗ `bundle pack` 要选一种来源（二选一）：\n  \
+                         · `--dir <工作目录> [--version vN]`：工作目录的**定版**（纯本地，不连库）\n  \
+                         · `--project <名> --version <N>`：元数据库里的快照（旧路径）"
+                    );
+                    std::process::exit(crate::review_open::EXIT_BAD_INPUT);
+                }
+            };
             bundle_pack(PackOpts {
-                project,
-                version,
+                source,
                 out,
                 am,
                 db_schema,
@@ -4113,7 +4229,7 @@ fn require_entry_path(flag: &str, name: &str, entry: &str) {
     }
 }
 
-/// `ontok-builder bundle pack` —— 读文件 + **只读**元数据库 → 纯函数组装 → 自检 → 落盘。
+/// `ontok-builder bundle pack` —— 取快照 → 组装（或复用 `console::local` 的打包）→ 自检 → 落盘。
 ///
 /// 顺序（每条都在防一种具体的错）：
 ///
@@ -4122,19 +4238,27 @@ fn require_entry_path(flag: &str, name: &str, entry: &str) {
 /// | 本地输入先读齐 | 「`--am` 路径写错」不该拖到连库之后才报（与 `doc` / `access` 同一条理由） |
 /// | **派生 entry 名先验** | `v1..2.json` 这类文件名在 Windows / Linux 都合法，但会打成**自检必拒**的包内路径 ⇒ 在连库之前按参数错误拒（退出码 2），⛔ 不等打完再报「打包端的 bug」 |
 /// | `--requires-dsn` 与 `--db-schema` 配对校验 | 置了它却没有 schema 描述，服务端会拿到一个「要 DSN 但没有 db 组件」的包 |
-/// | 连库取快照 | **只读**（不迁移、不写、不冻结）；查询形状照抄 `relation_verbs_check` |
+/// | 取快照 —— **按来源分岔** | `--dir`：`console::local::pack_version`（与页面导出**同一个函数**，⛔ 不在 CLI 里重打一遍）；`--project/--version`：**只读**元数据库（不迁移、不写、不冻结，形状照抄 `relation_verbs_check`） |
 /// | `assemble` | 纯函数；⚠️ 快照在这一层是**结构体**，不受任何 view 影响 |
 /// | 打完**立刻自检** | 打出一个自己都要拒的包等于没打；这一档是打包端的 bug |
 /// | 落盘 | 写不进去 ⇒ 退出 1（`problems` 一个字都没写进盘就不算「拒了」） |
+///
+/// # ⭐ REQ-163 · `--dir` 那条支路为什么不能自己拼 `PackInput`
+///
+/// 用户口径是「构建包就是个导出包的功能」：CI 出的包与人在页面上点的那个包必须是**同一个东西**。
+/// 页面那份的唯一实现是 [`crate::console::local::pack_version`]（它还管着「seq 缺省 = 最新定版」
+/// 「定版不存在 ⇒ VERSION_NOT_FOUND」这些语义）。CLI 自己拼一遍的后果不是「难看」，而是
+/// **Library 的 `builder_host` 会被塞进去**（读库那条会塞，页面不会）⇒ 同一个定版 + 同一个
+/// `built_at` 出的两个包 sha256 不同，而人只能看见「CI 的包坏了」。
 async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
     use crate::bundle::zip;
 
     // ① 时间：钉死才能保证「同一输入 ⇒ 同一输出」。
-    //    缺省 = 当前 UTC（秒级、带 Z）—— 这个默认值**由调用方**算，
-    //    纯函数 `assemble` 自己不碰时钟（否则它就不纯了）。
+    //    缺省 = 当前 UTC（秒级、带 Z）—— 与页面导出用的是**同一个** `local::now_rfc3339`
+    //    （纯函数 `assemble` 自己不碰时钟，否则它就不纯了）。
     let built_at = match o.built_at {
         Some(t) => t,
-        None => chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        None => crate::console::local::now_rfc3339(),
     };
 
     // ② 本地输入（读不到就别去连库：报错要指向真原因）。
@@ -4189,33 +4313,58 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
         eprintln!("  （--declarations 收进 {} 个文件）", declarations.len());
     }
 
-    // ③ 快照（**只读**；⚠️ 直接拿结构体，不掉进 `--model-view` 那种视图）。
-    let snapshot = snapshot_for_pack(&o.project, o.version).await?;
-
-    // ④ 组装（纯函数）。
-    let mut input =
-        crate::bundle::PackInput::new(o.project.clone(), o.version, built_at.clone(), snapshot);
-    input.builder_host = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .ok();
-    input.am = am;
-    input.db = db;
-    input.declarations = declarations;
-    let bytes = match crate::bundle::assemble(&input) {
-        Ok(b) => b,
-        // 兜底：CLI 层已经按 flag 逐个验过，走到这里说明有新的派生路径没接上闸。
-        // 仍按**参数不合法**收尾（退出码 2），⛔ 不报成「打包端的 bug」。
-        Err(e) if e.is_bad_entry_path() => {
-            eprintln!("✗ {e}");
+    // ③ 快照 + 组装 —— 按来源分岔。
+    //
+    // ⚠️ 返回值统一成 `(项目名, 版本号, 包字节)`：下游的自检 / 落盘 / 报告**只有一份**。
+    let (project, seq, bytes) = match &o.source {
+        PackSource::Dir { dir, seq } => {
+            // ⭐ 页面导出的**同一个函数**（含 seq 解析、定版校验、快照读取、组装）。
+            let console = crate::console::local::LocalConsole::open(dir).map_err(|e| {
+                anyhow::anyhow!("{}\n  改法：{}", e.message, e.hint)
+            })?;
+            let packed = crate::console::local::pack_version(&console, *seq, &built_at)
+                .map_err(|e| anyhow::anyhow!("{}\n  改法：{}", e.message, e.hint))?;
             eprintln!(
-                "  改法：换个不含 `..`、不是绝对路径、只用 [A-Za-z0-9._-] 的文件名（schema 的 `files[].path` pattern）"
+                "· 来源：工作目录 {} 的第 {} 版定版（项目 {}；纯本地，不连库）",
+                console.dir().display(),
+                packed.seq,
+                console.project()
             );
-            std::process::exit(EXIT_BUNDLE_REJECTED);
+            (
+                console.project().to_string(),
+                packed.seq,
+                packed.bytes,
+            )
         }
-        Err(e) => return Err(anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}")),
+        PackSource::Db { project, version } => {
+            // 旧路径：**只读**元数据库（⚠️ 直接拿 `Snapshot` 结构体，不掉进视图）。
+            let snapshot = snapshot_for_pack(project, *version).await?;
+            let mut input =
+                crate::bundle::PackInput::new(project.clone(), *version, built_at.clone(), snapshot);
+            input.builder_host = std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .ok();
+            input.am = am;
+            input.db = db;
+            input.declarations = declarations;
+            let bytes = match crate::bundle::assemble(&input) {
+                Ok(b) => b,
+                // 兜底：CLI 层已经按 flag 逐个验过，走到这里说明有新的派生路径没接上闸。
+                // 仍按**参数不合法**收尾（退出码 2），⛔ 不报成「打包端的 bug」。
+                Err(e) if e.is_bad_entry_path() => {
+                    eprintln!("✗ {e}");
+                    eprintln!(
+                        "  改法：换个不含 `..`、不是绝对路径、只用 [A-Za-z0-9._-] 的文件名（schema 的 `files[].path` pattern）"
+                    );
+                    std::process::exit(EXIT_BUNDLE_REJECTED);
+                }
+                Err(e) => return Err(anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}")),
+            };
+            (project.clone(), *version, bytes)
+        }
     };
 
-    // ⑤ 自检（打出来的包必须过得了自己的闸）。
+    // ④ 自检（打出来的包必须过得了自己的闸）。
     //
     // ⚠️ 这一档失败 ⇒ 退出码 **2**（与 `bundle verify` 同码）：产出的东西确实
     // 是一个会被服务端拒的包，不是「命令参数错了」。⛔ 不走 `bail!`（那是 1）。
@@ -4231,7 +4380,7 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
         std::process::exit(EXIT_BUNDLE_REJECTED);
     }
 
-    // ⑥ 落盘后把同一份自检报告打出来（人话 stderr / JSON stdout，与 `verify` 同口径）。
+    // ⑤ 落盘后把同一份自检报告打出来（人话 stderr / JSON stdout，与 `verify` 同口径）。
     write_local(&o.out, &bytes)?;
     eprint!(
         "✓ 已写出 {}（{} 字节 · {} 个 entry · 包格式 {}{}）\n",
@@ -4252,8 +4401,8 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
         "bytes": bytes.len(),
         "entries": report.summary.entries,
         "files": report.summary.files_in_manifest,
-        "project": o.project,
-        "ontology_seq": o.version,
+        "project": project,
+        "ontology_seq": seq,
         "built_at": built_at,
         "zip": {
             "method": zip::METHOD_STORE,
@@ -6998,8 +7147,7 @@ async fn console_cmd(cmd: ConsoleCmd) -> anyhow::Result<()> {
 
 /// ⭐ REQ-160 · `BuildCmd` → [`crate::review_open::build_run::Options`]。
 ///
-/// **唯一**的映射点：连库之前先判入参那一路（[`run`] 的开头）也用它，
-/// 否则「CLI 的字段」会有两份抄写，改一个忘一个。
+/// **唯一**的映射点：漏一个字段的后果是「clap 收得到、编排看不到」那种静默漂移。
 fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
     let BuildCmd::Run {
         project,
@@ -7015,11 +7163,7 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         base_version,
         schema,
         bind,
-        allow_public,
         no_browser,
-        token_ttl,
-        base,
-        audit_out,
     } = cmd;
     crate::review_open::build_run::Options {
         project: project.clone(),
@@ -7035,21 +7179,22 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         allow_doc_only: *allow_doc_only,
         base_version: *base_version,
         bind: bind.clone(),
-        allow_public: *allow_public,
         no_browser: *no_browser,
-        token_ttl: token_ttl.clone(),
-        base: base.clone(),
-        audit_out: audit_out.clone(),
     }
 }
 
-/// ⭐ REQ-160 · `ontok-builder build run` 的装配点。
+/// ⭐ REQ-160 / ⭐ REQ-163 · `ontok-builder build run` 的装配点。
 ///
-/// 本函数**只做参数映射**：四段的实现、失败语义（R1）、「不自动签」（R3）全在
-/// [`crate::review_open::build_run`]，因为那里能被单测直接跑（①② 段不需要库）。
-/// 收尾走 [`crate::review_open::finish`]：入参不合法 ⇒ 退出码 2。
-async fn build_cmd(pool: &PgPool, cmd: BuildCmd) -> anyhow::Result<()> {
-    crate::review_open::finish(crate::review_open::build_run::run(pool, build_options(&cmd)).await)
+/// 本函数**只做参数映射与收尾**：四段的实现、失败语义（R1）、「不自动签」（R3）全在
+/// [`crate::review_open::build_run`]，因为那里能被单测直接跑（①②③ 不需要库）。
+///
+/// ⚠️ 签名里**没有** `PgPool`（REQ-163）：这条链一个字节都不写库。
+/// 入参闸先跑（`--input` / `--agent` 打错 ⇒ 退出码 2，且连工作目录都不建），
+/// 之后才是整条链；两处收尾都走 [`crate::review_open::finish`]（退出码的唯一翻译点）。
+async fn build_cmd(cmd: BuildCmd) -> anyhow::Result<()> {
+    let opts = build_options(&cmd);
+    crate::review_open::finish(crate::review_open::build_run::validate(&opts))?;
+    crate::review_open::finish(crate::review_open::build_run::run(opts).await)
 }
 
 // ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
