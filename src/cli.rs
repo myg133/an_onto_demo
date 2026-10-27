@@ -1405,7 +1405,9 @@ pub enum BuildCmd {
         /// 真实 schema（`doc merge` 的严格校验）
         #[arg(long)]
         schema: Option<PathBuf>,
-        /// 评审台的监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配）
+        /// 评审台的监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配）。
+        /// **只许回环**：非回环地址在入参闸就拒（exit 2，⛔ 不会先烧一遍 ACP token）；
+        /// 本命令**没有** `--allow-public` 这样的放行开关
         #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
         bind: String,
         /// 不自动打开浏览器（只影响浏览器，不影响起不起来 —— R2）

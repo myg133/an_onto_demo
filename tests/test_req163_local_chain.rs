@@ -6,6 +6,7 @@
 //! | R2 | [`the_cli_pack_is_byte_identical_to_the_page_export`] | 同一个定版 + 同一个 `built_at` ⇒ `bundle pack --dir` 与**页面导出**的包 **sha256 相同**；`bundle verify` 退出 0 |
 //! | R2 | [`pack_dir_and_project_are_mutually_exclusive_and_named_in_the_error`] | `--dir` + `--project` ⇒ 退出 2 且**点名**两个参数（一个文件都不产出） |
 //! | R2 | [`pack_needs_a_source_and_says_so`] | 两个都没给 ⇒ 退出 2，并把两种用法写全 |
+//! | F3/F4 | [`a_non_loopback_bind_is_refused_with_exit_2_and_no_work_dir`] | 非回环 `--bind` ⇒ **退出 2**（不是 ④ 段的 1）、`--work-dir` 里**一个文件都没建**（⛔ 不白烧 token），且报错**不许**建议 `--allow-public`（本命令没有那个开关） |
 //! | — | [`the_build_run_help_describes_the_local_chain`] | `build run --help` 里不再有口令 / 审计 / 非回环那些旧开关（无库、无口令） |
 //!
 //! # 为什么是**真进程**
@@ -529,6 +530,113 @@ fn pack_dir_without_a_finalized_version_says_so() {
     assert!(err.contains("定版"), "要说明「导出的是定版，不是草稿」：{err}");
     assert!(!out.exists(), "⛔ 失败不许产出文件");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ══════════════════════════════════════════════════════════════
+// QA 退回项 F3 / F4 · `--bind` 的闸在**入参闸**里，而且不许建议一个不存在的开关
+// ══════════════════════════════════════════════════════════════
+
+/// ⭐ **F3**：非回环 `--bind` ⇒ 退出码 **2**，且 `--work-dir` 里**一个文件都没建**。
+///
+/// 为什么必须是真进程：这条要证的是「**没走** ①②③」—— 也就是「没有白烧 ACP token、
+/// 没有往盘上落断言/合并/草稿」。所以既要看退出码，也要看工作目录是否根本不存在。
+///
+/// ⚠️ 判据里还钉了两件容易退化的东西：
+/// 1. 退出码是 **2**（入参错），⛔ 不是 ④ 段那条环境错的 1；
+/// 2. 文案⛔ 不许教人「加 `--allow-public`」（**F4**：REQ-163 已把那个开关从本命令删掉）。
+#[test]
+fn a_non_loopback_bind_is_refused_with_exit_2_and_no_work_dir() {
+    let root = temp_dir("bind-gate");
+    let docs = root.join("docs");
+    std::fs::create_dir_all(&docs).expect("建语料目录");
+    std::fs::write(docs.join("a.md"), "# 客户\n\n订单属于客户。\n").expect("写语料");
+    let skill = root.join("SKILL.md");
+    std::fs::write(&skill, "# 抽取契约（测试用）\n").expect("写 skill");
+    // 工作目录故意**不存在**：闸门若在 ①②③ 之后，它会被建出来。
+    let work = root.join("never-built");
+
+    let mut cmd = Command::new(bin());
+    cmd.args([
+        "build",
+        "run",
+        "--input",
+        &docs.display().to_string(),
+        "--work-dir",
+        &work.display().to_string(),
+        "--agent",
+        "acp",
+        "--agent-command",
+        "ontok-agent-that-does-not-exist-req163",
+        "--agent-skill",
+        &skill.display().to_string(),
+        "--bind",
+        "0.0.0.0:8899",
+        "--no-browser",
+    ]);
+    clean_env(&mut cmd);
+    let r = cmd.output().expect("跑不了 build run（非回环）");
+    let out = String::from_utf8_lossy(&r.stdout).to_string();
+    let err = String::from_utf8_lossy(&r.stderr).to_string();
+
+    assert_eq!(
+        r.status.code(),
+        Some(2),
+        "非回环 `--bind` 是**入参错**（2），不是 ④ 段的环境错（1）：\n{err}\n{out}"
+    );
+    for needle in ["--bind", "只绑回环"] {
+        assert!(err.contains(needle), "要点名 {needle:?}：\n{err}");
+    }
+    // ⛔ F4：不许建议一个本命令没有的开关。
+    assert!(
+        !err.contains("请加 `--allow-public`") && !err.contains("加 --allow-public"),
+        "⛔ 报错在建议一个已删掉的开关（F4）：\n{err}"
+    );
+    // ⛔ F3 的核心：一个文件都没建（连 work-dir 本身）。
+    assert!(
+        !work.exists(),
+        "⛔ 非回环地址却在 `--work-dir` 里建了东西（说明闸在 ①②③ 之后）：{}",
+        work.display()
+    );
+    // 也没走到任何一段（否则屏幕上会有段标题）。
+    assert!(
+        !err.contains("第 1/4 段"),
+        "⛔ 地址错了却已经开始抽取：\n{err}"
+    );
+
+    // ── 反空转：同一个工作目录换成回环地址 ⇒ **过闸**（走到 ① 段才失败）──
+    let mut cmd = Command::new(bin());
+    cmd.args([
+        "build",
+        "run",
+        "--input",
+        &docs.display().to_string(),
+        "--work-dir",
+        &work.display().to_string(),
+        "--agent",
+        "acp",
+        "--agent-command",
+        "ontok-agent-that-does-not-exist-req163",
+        "--agent-skill",
+        &skill.display().to_string(),
+        "--bind",
+        "127.0.0.1:0",
+        "--no-browser",
+    ]);
+    clean_env(&mut cmd);
+    let ok = cmd.output().expect("跑不了 build run（回环）");
+    let ok_err = String::from_utf8_lossy(&ok.stderr).to_string();
+    assert_eq!(
+        ok.status.code(),
+        Some(1),
+        "回环地址要过闸、走到 ① 段（那里才因为 agent 不存在而失败）：\n{ok_err}"
+    );
+    assert!(
+        ok_err.contains("第 1/4 段"),
+        "回环地址必须走到 ① 段：\n{ok_err}"
+    );
+    assert!(work.is_dir(), "过了闸才建工作目录（这正是 F3 的对比面）");
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -451,9 +451,11 @@ fn draft_options(
         agent_command,
         agent_skill: skill_fixture(),
         agent_timeout_secs: Some(30),
-        // ⚠️ 不开 `strict_deterministic`：假 agent 会混一条编造的引用进来（AC-005 的变异），
-        //    那一条会被丢弃并计数 —— 严格闸会因为「有块不完美」整条链失败。
-        strict_deterministic: false,
+        // ⭐ 严格闸**开着**（QA 退回项 F1）：这是 `build run` 这条链上**唯一**走
+        //    `--strict-deterministic` 的用例。假 agent 的 "valid" 模式只混**一条**编造的
+        //    引用（AC-005 的变异，被丢弃并计数），可用率远高于 20% ⇒ 严格闸放行。
+        //    ⛔ 不要为了让它绿而把这个闸关掉 —— 那等于这条链**再无**严格闸的判据。
+        strict_deterministic: true,
         work_dir: dir.join(".ontok-build"),
         schema: None,
         proposal: None,

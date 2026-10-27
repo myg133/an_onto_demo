@@ -58,11 +58,21 @@
 //! | **R3** ⛔ **不自动 apply / freeze** | [`run`] 的终点是「人看到待审清单」；本文件没有任何签名动作（结构判据 `the_orchestrator_never_applies_or_freezes`） |
 //! | **R4** 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑、缓存命中即 0 token | [`artifacts`] 是**唯一**的路径取值点 |
 //! | **R5** 只做**文档路径** | `--agent` 只认 `acp` |
+//!
+//! # ⭐ QA 退回项（第 2 轮）：`--bind` 的闸**前移到入参闸**
+//!
+//! 非回环地址（`0.0.0.0:8899` / 内网 / 公网）必须在 [`validate`] 里就拒：
+//! 否则它要等 ①②③ **全跑完**（已落盘、已烧掉 ACP token）才在 ④ 段被拒，
+//! 而且退出码会变成 `1`（环境错）而不是 `2`（入参错）—— 与 `--input` / `--agent`
+//! 这些同级参数不一致。闸门本身**复用** [`crate::console::serve::check_bind`]
+//! （⛔ 不写第二份「什么算回环」），但**文案是 `build run` 自己的**：本命令没有放行开关，
+//! ⛔ 不许在报错里教人「加 `--allow-public`」（那个开关 REQ-163 已从本命令删掉）。
 
 use std::path::PathBuf;
 
 use crate::console::local::{self, DRAFT_REL};
-use crate::console::serve::ServeArgs;
+use crate::console::serve::{check_bind, ServeArgs};
+use crate::query::serve::parse_bind;
 
 use super::bad;
 
@@ -180,6 +190,18 @@ pub fn empty_proposal_json(project: &str, base_version: i32) -> String {
 /// 为什么单独暴露：`cli::run` 在**任何活儿之前**先调它 —— `--input` 打错时应该看到
 /// 「读不到 --input」（exit 2），而不是先看到一段抽取流水账。与 `doc ingest` /
 /// `console serve` 在干活之前判入参同一条纪律。
+///
+/// # ⭐ `--bind` 也在这里判（QA 退回项 F3：它曾要等 ①②③ 跑完才在 ④ 段被拒）
+///
+/// 这条闸的三个理由，缺一个都不行：
+///
+/// | 理由 | 后果 |
+/// | --- | --- |
+/// | **在 ①②③ 之前** | 地址写错时不该先烧一遍 ACP token、还往 `--work-dir` 落一堆文件 |
+/// | **exit 2**（[`super::BadInput`]） | 「地址不合法」是**入参错**，与 `--input` / `--agent` 同级；④ 段那条路是 exit 1（环境错），码不一样下游会误判 |
+/// | **文案不带 `--allow-public`** | 本命令**没有**放行开关（REQ-163 删掉了）；教人加一个不存在的参数比不报更坏 |
+///
+/// 判「什么算回环」复用 [`crate::console::serve::check_bind`]（⛔ 不写第二份）。
 pub fn validate(o: &Options) -> anyhow::Result<()> {
     let meta = std::fs::metadata(&o.input).map_err(|e| {
         bad(format!(
@@ -213,6 +235,19 @@ pub fn validate(o: &Options) -> anyhow::Result<()> {
             o.agent_skill.display()
         )));
     }
+    // ── ④ 段的地址闸**前移到这里**（F3）：地址错了不该等 ①②③ 跑完 ──
+    let addr = parse_bind(&o.bind).map_err(|e| bad(format!("--bind {e}")))?;
+    check_bind(addr, false).map_err(|_| {
+        // ⚠️ 公文沿用 `check_bind` 的判据、但**换成 `build run` 自己的说法**：
+        // 那条文案会教人「加 --allow-public」，而本命令**没有**这个开关（F4）。
+        bad(format!(
+            "--bind {addr} 不是回环地址：`build run` **只绑回环**（127.0.0.1 / ::1），\
+             而且**没有**放行非回环的开关。\n  \
+             只给本机：`--bind 127.0.0.1:0`（端口 0 = 内核分配）。\n  \
+             要在局域网 / 远程暴露评审台：用 `ontok-builder console serve --dir <工作目录>`\
+             并自行加反向代理 + TLS（它同样只绑回环，⛔ 不会替你开口子）。"
+        ))
+    })?;
     if let Some(p) = &o.proposal {
         if !p.is_file() {
             return Err(bad(format!(
@@ -474,6 +509,9 @@ pub async fn run_draft(o: &Options) -> anyhow::Result<Artifacts> {
 /// 全部成功之后才起服务（`console::serve::serve`）—— ①② 失败时端口一个都不占，
 /// 更不会出现「页面开着、草稿不存在」那种自相矛盾的界面。
 ///
+/// ⚠️ `--bind` **不在这里判**：它属于入参（[`validate`]），比 ①②③ 还早 ——
+/// 地址写错时连 token 都不该烧。
+///
 /// ⚠️ ④ 是**前台常驻**：它与 `ontok-builder console serve --dir <work-dir>` 起的是
 /// 同一个服务（同一份回环闸 / 同一张路由表），Ctrl-C 结束。
 pub async fn run(o: Options) -> anyhow::Result<()> {
@@ -653,6 +691,46 @@ mod tests {
         o.agent_skill = dir.join("nope.md");
         let e = build_artifacts(&o, 1).await.expect_err("skill 不存在必须失败");
         assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+
+        // ⭐ `--bind` 非回环 ⇒ **入参错**（exit 2），而且**在 ①② 之前**：
+        // 地址写错时不该先烧一遍 ACP token（QA 退回项 F3）。
+        for bad_bind in ["0.0.0.0:8899", "192.168.1.9:8899", "8.8.8.8:8899"] {
+            let mut o = options(&dir);
+            o.bind = bad_bind.into();
+            let e = build_artifacts(&o, 1)
+                .await
+                .expect_err("非回环地址必须在入参闸就拒");
+            assert_eq!(
+                super::super::exit_code_for(&e),
+                super::super::EXIT_BAD_INPUT,
+                "{bad_bind} 是入参错（不是 ④ 段的环境错）"
+            );
+            let msg = format!("{e:#}");
+            assert!(msg.contains("只绑回环"), "要说明本命令的边界：{msg}");
+            assert!(msg.contains("--bind"), "要点名那个参数：{msg}");
+            // ⛔ F4：文案不许教人加一个**本命令没有**的开关。
+            assert!(
+                !msg.contains("请加 `--allow-public`") && !msg.contains("加 --allow-public"),
+                "⛔ 报错在建议一个已删掉的开关：{msg}"
+            );
+            assert!(
+                !msg.contains("第 1/4 段"),
+                "⛔ 地址错了却已经开始抽取（说明闸在 ①② 之后）：{msg}"
+            );
+        }
+        // 反空转：回环地址必须放行（否则上面那条可能只是「什么都拒」）。
+        let mut o = options(&dir);
+        o.bind = "127.0.0.1:0".into();
+        o.agent_command = "ontok-agent-that-does-not-exist-req163".into();
+        let e = build_artifacts(&o, 1)
+            .await
+            .expect_err("回环地址要放行到 ①② 段（那里才因为 agent 不存在而失败）");
+        let msg = format!("{e:#}");
+        assert!(
+            msg.contains("第 1/4 段"),
+            "回环地址必须过闸、走到 ① 段：{msg}"
+        );
+        assert_eq!(super::super::exit_code_for(&e), 1, "① 段的失败是环境错（1）");
 
         std::fs::remove_dir_all(&dir).ok();
     }
