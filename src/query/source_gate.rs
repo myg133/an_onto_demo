@@ -228,6 +228,12 @@ struct SourceDecl {
 struct RawAuth {
     #[serde(default)]
     mode: Option<String>,
+    /// ⭐ REQ-169 · 签名要用的**服务名**（tc3 的 scope 与派生密钥里那一段）。
+    ///
+    /// 只搬不改：映射写了就透出到 `get.auth.service`，没写就**一个键都不出现**
+    /// （⛔ 不从 `base_url` 的首段猜 —— 猜错了签出来的 tc3 必被拒，比缺字段更难查）。
+    #[serde(default)]
+    service: Option<String>,
     #[serde(default)]
     credential_env: Vec<String>,
     #[serde(default)]
@@ -339,7 +345,7 @@ const MAX_GET_RECIPE_BYTES: usize = 12 * 1024;
 /// | `request` | `entities[].request` + 所属源的 `sources[].defaults` | **原样透出**（模板 / 必填 / 绑定 / 分页路径；CP4 起多一个 `defaults`，仅当源写了才出现） |
 /// | `iterator` | `entities[].iterator` | 原样透出 |
 /// | `fields` | `entities[].fields` | 摊平成 `属性 → 响应字段路径` |
-/// | `auth` | `sources[].auth` 的声明 | 只透传（变量名 / 头名 / scope 段名） |
+/// | `auth` | `sources[].auth` 的声明 | 只透传（变量名 / 头名 / scope 段名 / 签名服务名） |
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Recipe {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,6 +381,16 @@ pub struct RecipeAuth {
     pub timestamp: Option<RecipeTimestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<Vec<String>>,
+    /// ⭐ REQ-169 · 签名要用的**服务名**（tc3 的 scope 与派生密钥里那一段）。
+    ///
+    /// 为什么必须由服务端发出来：配方下游的签名器对 tc3 **fail-closed**
+    /// （⛔ 不从 host 猜 service）—— 配方里没有它，数字员工手上这份配方就
+    /// **签不出能被接受的请求**（实测：手工补上 `service` 后 `--check` 立刻通过）。
+    ///
+    /// `None` ⇒ 整个键不出现（⛔ 不写空串、⛔ 不从 `base_url` 的首段推）。
+    /// 声明在末尾：v2 既有那四段的字节顺序因此一个字符都不动（只做加法）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 /// `get.auth.timestamp`：时间戳写哪个 header、什么格式。
@@ -415,7 +431,7 @@ fn build_recipe(
             auth_mode: s.auth.as_ref().and_then(|a| a.mode.clone()),
         })
     });
-    // `auth`：只透出声明；三项各自缺 ⇒ 各自不出现。
+    // `auth`：只透出声明；各项各自缺 ⇒ 各自不出现。
     let auth = src.and_then(|s| s.auth.as_ref()).map(|a| RecipeAuth {
         credential_env: a.credential_env.clone(),
         signed_headers: a.signed_headers.clone(),
@@ -430,6 +446,14 @@ fn build_recipe(
                 _ => None,
             }),
         scope: a.scope.clone(),
+        // ⭐ REQ-169 · 原样透出 `sources[].auth.service`；映射没写 ⇒ `None`（键不出现）。
+        // ⛔ 这里**不许**用 `base_url` 的首段兜底 —— 猜出来的 service 签出的 tc3 必被拒。
+        service: a
+            .service
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     });
     // `fields`：摊平成 `属性 → 响应字段路径`（值不是 `{path}` 的条目跳过 —— 那是坏映射，
     // 由 `access validate` 负责报错，本模块只负责把**能用**的部分透出）。
@@ -448,12 +472,14 @@ fn build_recipe(
         request: with_defaults(e.request.clone(), src.and_then(|s| s.defaults.clone())),
         iterator: e.iterator.clone(),
         fields: fields.filter(|f| !f.is_empty()),
-        // `credential_env` 全空且三项也没有 ⇒ 整个 `auth` 不出现。
+        // `credential_env` 全空且其余各项也没有 ⇒ 整个 `auth` 不出现。
         auth: auth.filter(|a| {
             !a.credential_env.is_empty()
                 || a.signed_headers.is_some()
                 || a.timestamp.is_some()
                 || a.scope.is_some()
+                // ⭐ REQ-169 · 只写了 `service` 的源也要把 `auth` 发出来（否则那条声明消失）。
+                || a.service.is_some()
         }),
     }
 }
