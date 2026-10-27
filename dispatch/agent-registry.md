@@ -6,7 +6,7 @@
 | session-id | 角色 | 状态 | 最后活动 | 当前任务 |
 | --- | --- | --- | --- | --- |
 | ba-join-michael-workstation-1340-20261027-093836 | ba | **online** | 2026-10-27 09:40 | join · 服务端（与 lion 分工：lion=本地抽取端）|
-| ba-lion-michael-workstation-49056-20261027-094244 | ba | **online** | 2026-10-27 09:42 | lion · 本地抽取端（ontok-builder / 抽取 / 提案 / AM 生成 / REQ-153）；入场巡检 + 账本纠偏 |
+| ba-lion-michael-workstation-49056-20261027-094244 | ba | **online** | 2026-10-27 09:52 | lion · 本地抽取端；今日按用户指令只做账本与复核：一致性审计已出（5 条漂移全在服务端）、分工已与 join 双向确认；REQ-153 暂缓 |
 | ba-michael-worksta-14864-20261020-151752 | ba | **stale** | 2026-10-21 18:20 | REQ-108 已完成（合并 `a8a51ed`）；REQ-109 AI 接入开工 |
 | ba-bogon-112089-20261002-165609 | ba | **stale** | 2026-10-02 16:56 | REQ-002 独立 QA 审核（已派出 verifier） |
 | ba-mavis-0243-20260930-2220 | ba | **stale** | 2026-09-30 22:45 | REQ-002 实施（已交付，worktree 未合并） |
