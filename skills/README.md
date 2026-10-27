@@ -52,7 +52,7 @@
 | 2 | 「FDE 指南也装进 skills 目录算了」 | ❌ 它**在 `docs/` 不在 `skills/`** —— `skills/` 只放 agent 加载的东西；agent 读的是 `ontok-extract` |
 | 3 | 「抽完就生效」 | ❌ 抽出来的是**草稿**；人逐条签 → **定版** → 导出的是**定版** |
 
-时序图与「谁负责什么」：[`MODES.md`](MODES.md)。
+时序图与「谁负责什么」：[`../docs/modes.md`](../docs/modes.md)。
 
 ---
 
@@ -156,7 +156,7 @@ curl -X POST "$ONTOK_BASE_URL/mcp" \
 | `docs/fde-guide.md` | **人读**：FDE 构建指南（造本体全流程；⛔ 不是 skill） |
 | `skills/ontok-extract/SKILL.md` | 构建端：抽取契约（通用） |
 | `skills/ontok-query/SKILL.md` | 消费端：怎么用本体服务（通用） |
-| `MODES.md` | 两种运行模式：谁加载什么、谁起服务、谁签字 |
+| `docs/modes.md` | **人读**：两种运行模式（谁加载什么、谁起服务、谁签字） |
 | `README.md` | 本文件 |
 | `mcp.example.json` | MCP 配置模板 |
 

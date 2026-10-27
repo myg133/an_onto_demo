@@ -38,7 +38,7 @@
 | 2 | 模式差别只有三处：**skill 怎么进 agent** · **谁起评审台** · **谁保证阶段顺序** |
 | 3 | 签字 / 定版 / 上传 Studio **永远是人**（两种模式都一样） |
 
-> 时序图与「谁负责什么」：`MODES.md`。
+> 时序图与「谁负责什么」：本目录的 [`modes.md`](modes.md)。
 
 ---
 
@@ -251,7 +251,7 @@ ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
 ```
 
 > ⚠️ 这条 `--agent …` 就是 **ACP 模式**：工具主动驱动外部 agent，`--agent-skill` 把 `ontok-extract` 的**路径**交给对端。
-> **独立 agent 模式没有这条命令** —— 你自己开 agent、自己把 skill 装进它的 skills 目录（见 §〇 与 `MODES.md`）。
+> **独立 agent 模式没有这条命令** —— 你自己开 agent、自己把 skill 装进它的 skills 目录（见 §〇 与 [`modes.md`](modes.md)）。
 > 两种模式**产出同一份契约**（概念/关系/逐字证据），所以这张表对两种模式都成立。
 
 **怎么读**：
