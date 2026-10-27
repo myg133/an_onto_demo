@@ -736,6 +736,7 @@ QA 的判断（BA 采纳）：**「有没有第三层」无解，但「规则不
 | REQ-163 | **构建端「纯本地链」收口**：`build run` 尾步改起 console v2（不再无条件调 REQ-160 的 DB 版 review open）· 补「从工作目录定版出包」的 CLI（CI 用）· 定 TTL/R2RML 归属 | **草稿**（等 REQ-162 合并后细化） | ba-lion-michael-workstation-49056-20261027-094244 | 2026-10-27 | **触发**：skills 收口时暴露的三处「口径 vs 代码」不一致。①`build run` 尾步仍无条件调 `review_open::open`（连库+口令），与「纯本地、不要口令」冲突 ⇒ ACP 模式永远掉回旧台；②页面能出包但无 CLI（CI 无头环境没法复现）；③`ontology export --project --version` 与「无项目/无库」冲突，归属未定（BA 倾向：构建端只出包，TTL/R2RML 归服务端）。|
 | REQ-164 | **AM 取数脚本进 skill**（`access_fetch.py`，零第三方依赖）：数字员工调用而不是照 AUTH-SPEC 手写；含签名/分页/字段映射/错误码/未签拒取/截断如实报 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 | REQ-165 | **通用化**：`access_fetch.py` 改成按 AM 契约驱动（签名器注册表 + `service` 必须来自 AM，未知 mode ⇒ `auth.unsupported`）；`SKILL.md`/`AM-FIELDS.md` 业务名词清零 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
+| REQ-166 | **AM 契约补齐**：`tc3` 模式 `auth.service` 必填（脚本 fail-closed，不猜 host 首段）· `auth` 补 `signed_headers`/`timestamp`/`scope`（显式写，不留运行时默认）· 数组参数补 `shape: array`（`instance_ids` 整串当一 ID 的坑） | **已就绪** | ba-lion-michael-workstation-49056-20261027-094244 | 2026-10-27 | **触发**：join 把 `access_fetch.py` 做成产品态（REQ-164/165）后，AM 里三处「靠猜」的缺口暴露。**归属**：AM 生成 = `ontok-builder access`（构建面，lion）。**关键裁定**：⛔ 不因「旧 AM 过不了」把 `service` 改回猜——fail-closed 是对的；缺省值也必须**显式写进 AM**，因为 AM 是声明。**不做**：改 `access_fetch.py`（join 的面）。|
 
 ## REQ-066 验收结论（2026-10-10，**PASS · 三轮 · 建议合并**）
 
