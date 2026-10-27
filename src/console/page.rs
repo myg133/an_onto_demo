@@ -41,7 +41,7 @@
 //! | 审计 | `GET /api/audit` |
 //! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
 //! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
-//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate` · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate` |
+//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects`（建项目 + 发 key，`key_label` 必填；路径作用域 `:p`，不读启动参数） · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate`（成功后固定写一句「对外服务等 P1b」） · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate` |
 //!
 //! 前四组由 `console serve` 自己提供；查询台与目录浏览是 **REQ-123 的查询服务**
 //! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
@@ -370,7 +370,7 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
     <div class="bar">
       <button id="b-refresh">刷新</button>
       <span class="note">当前项目：</span><span id="b-project">—</span>
-      <span class="note">（GET /api/projects）—— 本服务只服务启动时指定的那一个项目，所以这里只做显示。</span>
+      <span class="note">（GET /api/projects 报的是服务端启动时配置的那个项目；本页新建的项目会临时接管这里）</span>
     </div>
     <div id="b-msg"></div>
 
@@ -383,6 +383,18 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
       </div>
       <div id="b-state" class="summary">还没有上传。</div>
       <div id="b-components"></div>
+
+      <details style="margin-top:12px">
+        <summary class="note">新建项目（POST /api/projects：建项目 + 生成 key；默认折叠）</summary>
+        <div class="bar" style="margin-top:8px">
+          <label>项目名 <input id="b-new-project" size="18" placeholder="小写字母/数字/连字符" autocomplete="off"></label>
+          <label>备注 <input id="b-new-label" size="16" placeholder="可选" autocomplete="off"></label>
+          <label>key 用途 <input id="b-new-key-label" size="18" placeholder="必填：谁在用这把 key" autocomplete="off"></label>
+          <button id="b-new-submit">建立项目并生成 key</button>
+        </div>
+        <p class="note">项目名只许小写字母 / 数字 / 连字符（首字符字母或数字，2–63 位）；<code>key_label</code> 必填 —— 审计要回答「这把 key 是谁在用」（⛔ 别把密钥本身填进去）。建好的项目立刻可用于本 tab 的上传 / 解析 / 激活 / 查看 key：这些端点按路径 <code>:p</code> 作用域，跟服务端启动参数无关。</p>
+        <div id="b-new-out"></div>
+      </details>
     </div>
 
     <div id="b-dsn" class="panel" hidden>
@@ -476,8 +488,10 @@ var S = {
   declKind: "exclusions", audit: null, query: null,
   catalog: null, catalogPage: 1,
   // 构建包（REQ-159）：bundle = 上传回执 + 入库后补的 version；
-  // pendingCount = 待确认条数（来源：/api/review 的 progress.pending，缺 progress 时按条目估算）
-  bundle: null, needDsn: false, dsnOk: false, checklist: null, pendingCount: null
+  // pendingCount = 待确认条数（来源：/api/review 的 progress.pending，缺 progress 时按条目估算）；
+  // projectOverride = 本页新建的项目名（非空时它就是「当前项目」，别被 GET /api/projects 冲掉）
+  bundle: null, needDsn: false, dsnOk: false, checklist: null, pendingCount: null,
+  projectOverride: ""
 };
 
 function $(id) { return document.getElementById(id); }
@@ -1325,10 +1339,14 @@ function describeName(name) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 8 · 构建包（REQ-159）—— 上传 / 目标库 / 入库 / 待确认门禁 / 生效
+// 8 · 构建包（REQ-159）—— 建项目 / 上传 / 目标库 / 入库 / 待确认门禁 / 生效
 // ══════════════════════════════════════════════════════════
 // 这一组的端点在服务端是**并行开发**的：本 tab 的每次请求都带 notReady，
 // 404 ⇒ 「服务端未就绪」并且**不登出**（见上面的 request 层）。
+// 激活成功后的**固定警示**（契约原文，⛔ 一个字都别改）：
+// 建了新项目、叠了构建包也不代表对外能查 —— `query serve` 目前仍绑单一项目。
+var ACTIVATE_NOTE = "已入库并激活。对外服务需等 P1b（一套部署多套本体）上线后生效 —— " +
+  "当前 query serve 仍绑定单一项目。";
 // key 明文**按需拉取**（GET …/key），只放在内存里供复制：
 // ⛔ 不进 sessionStorage、不写长期存储、不回填任何输入框（能再次查看靠的是「再拉一次」，不是缓存）。
 var LAST_KEY = null;
@@ -1360,15 +1378,76 @@ function flagOf(v) { return (v === true || v === "true") ? "是" : "否"; }
 function loadBundles() {
   txt($("b-project"), "载入中…");
   return json("api/projects").then(function (d) {
-    S.projects = d;
-    txt($("b-project"), d.project || "—");
+    // ⚠️ 本页**新建**的项目不会被 GET /api/projects 报出来（它只报服务端启动时的那个），
+    // 所以有 override 时不能拿服务端的回执把当前项目冲掉。
+    if (!S.projectOverride) S.projects = d;
+    txt($("b-project"), bundleProject() || "—");
     clear($("b-msg"));
+    if (S.projectOverride) {
+      $("b-msg").appendChild(el("div", "note",
+        "当前项目已切到本页新建的「" + S.projectOverride + "」：GET /api/projects 只报服务端启动时配置的那个项目，别被它误导。"));
+    }
     loadChecklist().catch(function () {});
     return d;
   }).catch(function (e) {
     txt($("b-project"), "—");
     showErr($("b-msg"), e);
     throw e;
+  });
+}
+
+// 新建项目：POST /api/projects（建项目 + 发 key）。端点是**路径作用域** `:p`，不读 svc.project，
+// 所以建出来的项目与 console 启动参数无关，可以立刻接着上传 / 解析 / 激活。
+// 前端先校验，不合格**就地报错、不发请求**（省一次 400）。`key_label` 必填（审计归属）。
+function createProject() {
+  var name = $("b-new-project").value.trim();
+  var label = $("b-new-label").value.trim();
+  var keyLabel = $("b-new-key-label").value.trim();
+  var out = $("b-new-out");
+  clear(out);
+  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(name)) {
+    out.appendChild(errBox(wbError(400, "BAD_PROJECT_NAME",
+      "项目名不合法：" + (name || "（空）"),
+      "只许小写字母 / 数字 / 连字符，首字符是字母或数字，长度 2–63（例如两个单词用连字符连起来）。")));
+    setMsg("项目名不合法：没有发出任何请求。", "bad");
+    return;
+  }
+  if (!keyLabel) {
+    out.appendChild(errBox(wbError(400, "KEY_LABEL_REQUIRED",
+      "key 用途（key_label）必填：服务端用它记审计归属。",
+      "填一句「这把 key 谁在用」（系统名 / 角色名）；⛔ 不要把密钥本身填进来。")));
+    setMsg("key 用途必填：没有发出任何请求。", "bad");
+    return;
+  }
+  out.appendChild(el("div", "note", "建立项目中…"));
+  return bjson("api/projects", "POST", { project: name, label: label, key_label: keyLabel }).then(function (r) {
+    r = r || {};
+    var created = r.project || name;
+    clear(out);
+    // 当前项目切到新项目：后面的上传 / DSN / 解析 / 激活 / 查看 key 都按它拼路径。
+    S.projectOverride = created;
+    S.projects = { project: created, versions: [] };
+    txt($("b-project"), created);
+    clear($("b-msg"));
+    showKey(r);   // 回执里带 key：直接渲染（label / created_at / 已吊销 一并显示）
+    out.appendChild(okBox([
+      "已建立项目 " + created + "（key_kind " + (r.key_kind || "—") + " · key_label " + (r.key_label || "—") + "）",
+      "key_digest " + (r.key_digest || "—") + "（摘要可留档；明文在上面 key 区块，可随时「查看 key」再取）",
+      "下一步：在上面「上传并校验」选构建包 —— 解析 / 激活都按项目 " + created + " 走。"
+    ]));
+    setMsg("已建立项目 " + created + "：可以上传构建包了。", "ok");
+    return r;
+  }).catch(function (e) {
+    clear(out);
+    if (e && e.status === 409) {
+      out.appendChild(errBox(wbError(409, "PROJECT_EXISTS",
+        "项目已存在：" + e.message,
+        "换一个项目名；如果这就是你想用的那个项目，直接在上面「上传并校验」里传构建包即可（不用再建）。")));
+      setMsg("项目已存在：直接上传构建包即可。", "bad");
+      return;
+    }
+    showErr(out, e);   // 404 ⇒ request 已改成「服务端未就绪」
+    setMsg("建立项目失败：" + e.message, "bad");
   });
 }
 
@@ -1684,6 +1763,9 @@ function activateBundle() {
       " · 版本 " + (r.version === undefined ? "—" : r.version) +
       " · ontology_version " + (r.ontology_version === undefined ? "—" : r.ontology_version)
     ]));
+    // ⚠️ 固定警示（照契约原文）：本页可以建新项目并激活，但**对外查询**还要等 P1b。
+    // 少这一句，用户会拿着新 key 去查、拿到 503/404，然后来问「为什么建了不能用」。
+    out.appendChild(el("div", "note", ACTIVATE_NOTE));
     b.state = r.state || "active";
     S.bundle = b;
     setMsg("已冻结并切流量。", "ok");
@@ -1813,6 +1895,7 @@ $("k-load").onclick = function () { loadCatalog(parseInt($("k-page").value, 10) 
 $("k-prev").onclick = function () { loadCatalog(Math.max(1, S.catalogPage - 1)).catch(function () {}); };
 $("k-next").onclick = function () { if (S.catalog && S.catalog.has_more) loadCatalog(S.catalogPage + 1).catch(function () {}); };
 $("b-refresh").onclick = function () { loadBundles().catch(function () {}); };
+$("b-new-submit").onclick = createProject;
 $("b-upload").onclick = uploadBundle;
 $("b-dsn-save").onclick = saveDsn;
 $("b-dsn-test").onclick = testDsn;
@@ -2021,6 +2104,15 @@ mod tests {
             "/database/test",
             "/key",
             "key/rotate",
+            // 建项目 + 发 key：路径作用域 :p、key_label 必填（审计归属）
+            "/api/projects",
+            "key_label",
+            "id=\"b-new-project\"",
+            "id=\"b-new-key-label\"",
+            "id=\"b-new-submit\"",
+            // 激活成功后的固定警示：删了它，用户会拿着新 key 去查、拿到 503/404 再来问
+            "P1b",
+            "query serve 仍绑定单一项目",
             // key 能再次查看 ⇒ 每次查看都要留痕：审计提示是这条需求的唯一补偿，不许删
             "reveal_key",
             "id=\"b-key-view\"",
@@ -2049,6 +2141,7 @@ mod tests {
         }
         for fun in [
             "loadBundles()",
+            "createProject()",
             "uploadBundle()",
             "showBundle(",
             "needDsn(",
