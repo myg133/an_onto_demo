@@ -88,3 +88,11 @@ pub mod metrics;
 // 网络客户端（`ureq`）在阶段 0 **一行都不调** —— 见 `access::fetch` 模块头。
 pub mod access;
 
+// ⭐ REQ-159 · **构建包（`.ontokbundle`）的打包与自检**（`bundle pack` / `bundle verify`）。
+// **不放 domain/**：它不是本体模型，而是「把本体模型搬出去」的工程设施
+// （zip 容器 / manifest / 契约里的 8 个拒绝码），与 `access` / `console` 同类。
+// ⚠️ 只被构建面（[`cli`]）引用：服务面（[`service`]）不碰它。
+// 连库只有 `cli.rs` 那一处 —— [`bundle::assemble`] 与 [`bundle::verify`] 是**纯函数**
+// （见 `src/bundle/mod.rs` 模块头；守卫在 `tests/test_req159_bundle.rs`）。
+pub mod bundle;
+
