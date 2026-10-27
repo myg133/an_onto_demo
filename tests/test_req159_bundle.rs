@@ -935,7 +935,11 @@ fn no_zip_crate_was_added() {
     assert!(toml.contains("[dependencies]"));
     assert!(toml.contains("serde_json = \"1\""));
 
-    // ② 构建端源码（去掉注释后）不许出现任何压缩 / 解压实现。
+    // ② 构建端源码（去掉注释后）不许出现任何压缩 / 解压**实现**。
+    //
+    // ⚠️ 判据用**crate/类型符号**而不是 `deflate` / `Compression` 这种词：
+    // 本模块自己就有 `ZipError::UnsupportedCompression` 这个**拒绝压缩**的变体，
+    // 按词判会把「拒绝 deflate」判成「用了 deflate」—— 判据要盯**用了谁**，不是**提了谁**。
     for file in [
         "src/bundle/mod.rs",
         "src/bundle/zip.rs",
@@ -943,7 +947,7 @@ fn no_zip_crate_was_added() {
         "src/bundle/verify.rs",
     ] {
         let src = code_only(&repo_file(file));
-        for forbidden in ["flate2", "miniz_oxide", "deflate", "Deflate", "Compression"] {
+        for forbidden in ["flate2", "miniz_oxide", "ZipWriter", "ZipArchive"] {
             assert!(
                 !src.contains(forbidden),
                 "⛔ `{file}` 的代码里出现了 `{forbidden}` —— 构建端只许 store（method 0），\
@@ -1211,5 +1215,78 @@ fn password_with_a_value_still_warns() {
         w.message.contains("password"),
         "要点名是哪个键：{}",
         w.message
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// 容器码 · 压缩方法（服务端同名码 `bundle.unsupported.compression`）
+// ══════════════════════════════════════════════════════════════
+
+/// 被 deflate 重压过的包（method=8）⇒ `bundle.unsupported.compression`，**不是** manifest 不合规。
+///
+/// 复现路径与 BA 的实验一致：Python `zipfile` 用 `ZIP_DEFLATED` 重压一遍，
+/// 或 `zip -r` 再打一次 —— 容器还在、`manifest.json` 也完好，变的是 method 字节。
+/// 拒绝是**对**的（store-only 是契约），但码要说清「容器不被支持」：
+/// 报 `bundle.manifest.invalid` 会让人去改 manifest，改一百遍也没用。
+#[test]
+fn reject_unsupported_compression() {
+    const EOCD_LEN: usize = 22;
+
+    let mut bytes = packed();
+    // ① 从 EOCD 找到 central directory 起点（⛔ 不靠搜签名：内容里可能碰巧有那 4 个字节）。
+    let eocd = bytes.len() - EOCD_LEN;
+    assert_eq!(
+        u32::from_le_bytes([bytes[eocd], bytes[eocd + 1], bytes[eocd + 2], bytes[eocd + 3]]),
+        zip::EOCD_SIG,
+        "夹具不是一个以 EOCD 结尾的 zip"
+    );
+    let cd = u32::from_le_bytes([
+        bytes[eocd + 16],
+        bytes[eocd + 17],
+        bytes[eocd + 18],
+        bytes[eocd + 19],
+    ]) as usize;
+    assert_eq!(
+        u32::from_le_bytes([bytes[cd], bytes[cd + 1], bytes[cd + 2], bytes[cd + 3]]),
+        zip::CENTRAL_SIG
+    );
+
+    // ② 改 method：central entry 的 +10（读的时候以它为准），local header 的 +8 一起改更像真包。
+    bytes[cd + 10..cd + 12].copy_from_slice(&8u16.to_le_bytes());
+    bytes[8..10].copy_from_slice(&8u16.to_le_bytes());
+
+    // ③ 仍然是**拒**（exit 2），只是码换了。
+    let report = verify(&bytes);
+    assert!(!report.ok, "压缩过的包必须拒（⛔ 不许因为换码就放宽）");
+    let p = report
+        .problems
+        .iter()
+        .find(|p| p.code == code::UNSUPPORTED_COMPRESSION)
+        .unwrap_or_else(|| {
+            panic!(
+                "应当报 `bundle.unsupported.compression`，实际：{:?}",
+                report.problems.iter().map(|p| p.code).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(p.path, "(package)", "这是包级问题，不该指向某个包内文件");
+    assert!(
+        p.message.contains("只认 0（store）"),
+        "文案要点明只认 0（store）：{}",
+        p.message
+    );
+    assert!(p.message.contains('8'), "文案要点名实际的 method：{}", p.message);
+    assert!(
+        p.hint.contains("bundle pack"),
+        "改法要指向重新打包：{}",
+        p.hint
+    );
+    // ④ 码不能新旧混报：容器都没读进去，谈不上「manifest 不合规」。
+    assert!(
+        !report
+            .problems
+            .iter()
+            .any(|p| p.code == code::MANIFEST_INVALID),
+        "⛔ 同一个原因不该同时报成 manifest.invalid：{:?}",
+        report.problems
     );
 }

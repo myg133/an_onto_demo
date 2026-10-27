@@ -10,6 +10,7 @@
 //! | --- | --- | --- |
 //! | 0 | 体积 ≤ 100 MB | [`code::TOO_LARGE`] |
 //! | 1 | 容器能解析（EOCD → central directory → 逐 entry） | [`code::MANIFEST_INVALID`] |
+//! | 1b | 每个 entry 的压缩方法必须是 `0`（store） | [`code::UNSUPPORTED_COMPRESSION`] |
 //! | 2 | 每个 entry 的 CRC32 与内容相符 | [`code::SHA256_MISMATCH`] |
 //! | 3 | `manifest.json` 存在、是合法 JSON、符合 schema（必填 / 类型 / 未知字段） | [`code::MANIFEST_INVALID`] |
 //! | 4 | `bundle_version` 只认 `"1.0"` | [`code::VERSION_UNSUPPORTED`] |
@@ -218,8 +219,24 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
     }
 
     // 1 · 容器。
+    //
+    // ⚠️ 两种「读不出来」要分开报（join 的同一场景也用同名码）：
+    // - **压缩方法不是 0** ⇒ [`code::UNSUPPORTED_COMPRESSION`]：容器不被支持，
+    //   但 manifest 一个字节都还没读 —— 报 `manifest.invalid` 只会让人去改 manifest。
+    // - 其余结构问题（截断 / 签名不对 / data descriptor）⇒ [`code::MANIFEST_INVALID`]。
     let entries = match zip::read(bytes) {
         Ok(e) => e,
+        Err(e @ zip::ZipError::UnsupportedCompression { .. }) => {
+            problems.push(Problem::new(
+                code::UNSUPPORTED_COMPRESSION,
+                PKG,
+                format!("{e} —— 包是被压缩过的（deflate / 其他），容器本身不被支持"),
+                "契约要求 store-only（method 0）：包的内容全是序列化好的 JSON，压缩率对人没有价值、\
+                 但会毁掉确定性。⛔ 不要用 zip 工具重压一遍（`zip -r` / Python `ZIP_DEFLATED` 都会改成 method 8）；\
+                 用 `ontok-builder bundle pack` 重新打包",
+            ));
+            return Report::finish(problems, warnings, summary);
+        }
         Err(e) => {
             problems.push(Problem::new(
                 code::MANIFEST_INVALID,
