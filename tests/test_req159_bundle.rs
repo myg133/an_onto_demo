@@ -56,12 +56,16 @@
 //!
 //! ⚠️ 本文件不加 `//! @guard-manifest: REQ-081`（与 REQ-107/157/158 的同类文件一致）。
 
+// ⭐ 判据读源码要走 `tests/common/source_root.rs`（**运行时**定位 crate 根）。
+// ⛔ 不用 `env!("CARGO_MANIFEST_DIR")`：它是编译期常量，二进制搬到别处仍会去读
+// 「编它时那棵树」；REQ-046 的事故形态见 `common/source_root.rs` 的文件头。
+mod common;
+
 use ontok::bundle::{assemble, code, verify, verify_with_limit, zip, PackInput};
 use ontok::domain::snapshot::{EntityType, Evidence, LinkType, Property, Snapshot};
 use ontok::query::audit::sha256_hex;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::process::Command;
 
 // ══════════════════════════════════════════════════════════════
@@ -820,8 +824,9 @@ fn server_only_codes_are_documented_as_such() {
 // ══════════════════════════════════════════════════════════════
 
 fn repo_file(rel: &str) -> String {
-    let root = env!("CARGO_MANIFEST_DIR");
-    let p = Path::new(root).join(rel);
+    // ⭐ 锚点是**运行时**定位到的 crate 根（`tests/common/source_root.rs` 的
+    // `crate_root`），不是编译期常量 —— 见本文件 `mod common;` 那一处的注释。
+    let p = common::source_root::crate_root().join(rel);
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("读不到 {}：{e}", p.display()))
 }
 

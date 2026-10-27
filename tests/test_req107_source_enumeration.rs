@@ -868,6 +868,34 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
         "`relation verbs check` 的 JSON 报告（REQ-157）：字典版本 + 动词名 + 候选 + 位置，\
          建模/运维面诊断，零客户视图字段，不进任何客户出口",
     ),
+    // ── ⭐ REQ-159 · 构建包的**自检报告**（FDE 本机工具，不是客户视图）──
+    //
+    // 判据（事实，不是印象）：
+    // · 这两个写点都在 **`ontok-builder`** 的 `bundle verify` / `bundle pack` 里
+    //   （构建面二进制，FDE 本机跑；服务面 `ontok` 根本不含这两个命令）；
+    // · 正文是 `bundle::verify::Report::to_json()` —— `ok` / `problems` / `warnings` /
+    //   `summary`（entry 数 / `files[]` 条数 / 容器字节数 / 项目名 / 版本号 / 包格式），
+    //   以及 `bundle pack` 的产物摘要（同上 + `zip.method` / dos 时间戳）；
+    // · 零客户视图字段：没有实体名 / 关系名 / 属性名 / 样例值，客户视图也**零读取**它
+    //   （客户视图只经 C1–C7 / I14 那些已登记出口）；
+    // · 因此与同表的 `{check_json}`（REQ-157 的 FDE 词典诊断）**完全同类**：
+    //   写出的是一份「关于产物的回执」，不是产物本身。
+    (
+        "src/cli.rs",
+        "{verify_json}",
+        2,
+        "`bundle verify` 与 `bundle pack` 自检失败时的 JSON 报告（REQ-159）：\
+         FDE 面的包自检回执（problems/warnings/summary），零客户视图字段 —— \
+         客户视图零读取它，也不进任何客户出口（与 REQ-157 的 `{check_json}` 同一条口径）",
+    ),
+    (
+        "src/cli.rs",
+        "{pack_json}",
+        1,
+        "`bundle pack` 成功后的产物摘要（REQ-159）：路径 / 字节数 / entry 数 / 项目名 / \
+         版本号 / 包格式 / zip method 与固定时间戳。FDE 面的打包回执，\
+         零客户视图字段（与 `{verify_json}` 同一份口径）",
+    ),
 ];
 
 /// 整文件豁免：**只允许**「不承载客户视图」的文件（运维二进制 / 响应构造器）。
@@ -1901,6 +1929,39 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "semantics_from_project",
         "运维辅助（REQ-157：从库内快照取关系语义；只读、不迁移、不冻结）",
     ),
+    // ⭐ REQ-159 · 构建包（`ontok-builder bundle pack|verify`，**FDE 本机工具**）。
+    // T5 要求「出口文件里每一个 fn 都必须显式登记用途」—— 这 6 个函数是那一单加进来的，
+    // 合并时漏登记（判据在 HEAD 上就是红的）；这里补的是**登记**，不是放宽判据。
+    (
+        "src/cli.rs",
+        "bundle_cmd",
+        "子命令分派（REQ-159 `bundle verify` / `bundle pack`：FDE 本机工具，不连服务端）",
+    ),
+    (
+        "src/cli.rs",
+        "bundle_verify",
+        "子命令 handler（REQ-159 `bundle verify`：纯本地读包 + 纯函数自检 → 双份报告）",
+    ),
+    (
+        "src/cli.rs",
+        "require_entry_path",
+        "运维辅助（REQ-159：派生 entry 名在**连库之前**就按契约验，命中即退出 2 —— 零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "bundle_pack",
+        "子命令 handler（REQ-159 `bundle pack`：读本地输入 + 只读元数据库 → `assemble` → 自检 → 落盘）",
+    ),
+    (
+        "src/cli.rs",
+        "snapshot_for_pack",
+        "共用实现（REQ-159：`bundle pack` 的只读取快照；返回 `Snapshot` 结构体而非任何 view —— 零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "read_declarations",
+        "运维辅助（REQ-159：`--declarations <dir>` 的读取段；不递归、不跟符号链接 —— 零写出）",
+    ),
 ];
 
 /// ⭐ **纯函数**：一段源码里**重名**的函数定义（第 4 轮 B5）。
@@ -2032,6 +2093,13 @@ const MODULES: &[(&str, &str)] = &[
     ("src/lib.rs", "extract"),
     ("src/lib.rs", "mcp"),
     ("src/lib.rs", "server"),
+    // ⭐ REQ-159 · **构建端**的包组装/自检/容器三个模块（`ontok-builder bundle pack|verify`）。
+    // ⛔ 它们**不新增响应写点**（服务端读包器在 `console::bundle`，出口仍只有 I18）：
+    // 本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "bundle"),
+    ("src/bundle/mod.rs", "pack"),
+    ("src/bundle/mod.rs", "verify"),
+    ("src/bundle/mod.rs", "zip"),
     // ⭐ REQ-135 · 生产可观测性（`/metrics` 的指标登记表 / 渲染 / 格式校验）。
     // 出口 I28 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "metrics"),

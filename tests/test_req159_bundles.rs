@@ -1377,6 +1377,57 @@ async fn creating_a_project_twice_is_409_and_needs_a_non_empty_key_label() {
     assert_eq!(v["code"], "project.name.invalid", "{body}");
 }
 
+/// ⭐ 契约更正（2026-10-27）：项目名 pattern 允许**下划线**
+/// （`^[a-z0-9][a-z0-9_-]{1,62}$`）—— 库里既有项目名大量带 `_`
+/// （`req129_ac006_22140_1793033086208` 一类），而这条 pattern 同时是
+/// `POST /api/projects` 与 `manifest.project` 的同一条判据 ⇒ 禁掉 `_`
+/// 等于让历史项目既建不了行、也打不了包（真库已实测复现）。
+///
+/// 两面都钉：① 带下划线的名字**真的能建出来**（不是只放行字符串校验）；
+/// ② 旧行为**不回退**（大写 / 空格 / `..` / 前导下划线仍然拒）。
+#[tokio::test]
+async fn an_underscore_project_name_is_accepted_but_the_old_rejections_still_hold() {
+    // ① 纯函数面：pattern 本体的正例 / 反例。
+    for ok in ["foo_bar_159", "a_b", "req129_ac006_22140_1793033086208", "t_1"] {
+        assert!(
+            ontok::console::bundle::valid_project_name(ok),
+            "`{ok}` 应当合法（下划线已放行）"
+        );
+    }
+    for bad in ["Bad_Name", "foo bar", "..", "_leading", "-leading", "a", "foo/bar"] {
+        assert!(
+            !ontok::console::bundle::valid_project_name(bad),
+            "`{bad}` 必须仍然被拒（旧行为不回退）"
+        );
+    }
+
+    // ② 真建行：带下划线的名字打 HTTP 也得 CREATED（而不是 400 project.name.invalid）。
+    let pool = common::test_pool().await;
+    common::migrate(&pool).await;
+    let app = ontok::console::http::build_router(service(pool.clone()));
+    let name = format!("foo_bar_159_{}", std::process::id());
+    let (st, v, body) = post_json(
+        &app,
+        "/api/projects",
+        Some(ADMIN),
+        &json!({"project": name, "key_label": "下划线项目"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "带下划线的项目名必须能建：{body}");
+    assert_eq!(v["project"], name.as_str(), "{body}");
+
+    // ③ 同一个端点：大写仍然拒（旧行为不回退，防「顺手把整个校验删了」）。
+    let (st, v, body) = post_json(
+        &app,
+        "/api/projects",
+        Some(ADMIN),
+        &json!({"project": "Bad_Name", "key_label": "x"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(v["code"], "project.name.invalid", "{body}");
+}
+
 #[tokio::test]
 async fn every_new_endpoint_rejects_a_query_token_with_403() {
     let pool = common::test_pool().await;

@@ -3906,7 +3906,10 @@ fn bundle_verify(file: &std::path::Path) -> anyhow::Result<()> {
         .with_context(|| format!("读不到包：{}（路径 / 权限问题）", file.display()))?;
     let report = crate::bundle::verify(&bytes);
     eprint!("{}", report.human());
-    println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+    // 序列化与写出分两行：`println!` 的窗口里只有「打一个已经算好的字符串」
+    // （T1 的 F2 要求白名单窗口不含 domain 生产者）。输出与一行写完逐字节相同。
+    let verify_json = serde_json::to_string_pretty(&report.to_json())?;
+    println!("{verify_json}");
     if !report.ok {
         std::process::exit(EXIT_BUNDLE_REJECTED);
     }
@@ -4042,7 +4045,8 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
     let report = crate::bundle::verify(&bytes);
     if !report.ok {
         eprint!("{}", report.human());
-        println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+        let verify_json = serde_json::to_string_pretty(&report.to_json())?;
+        println!("{verify_json}");
         eprintln!(
             "✗ 打包产物**过不了自己的自检** —— 这是打包端的 bug\
              （`pack` 与 `verify` 对同一份契约的两处实现打架），请报给维护者"
@@ -4080,7 +4084,11 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
             "dos_time": format!("{:#06x}", zip::DOS_TIME_MIDNIGHT),
         },
     });
-    println!("{}", serde_json::to_string_pretty(&out_json)?);
+    // ⚠️ 序列化与写出**分两行**：`println!` 的窗口里只有「打一个已经算好的字符串」，
+    // 与 `relation verbs check` / `access validate` 同一写法（T1 的 F2：白名单窗口
+    // 里不许出现 domain 生产者）。输出字节与「一行写完」逐字节相同。
+    let pack_json = serde_json::to_string_pretty(&out_json)?;
+    println!("{pack_json}");
     Ok(())
 }
 

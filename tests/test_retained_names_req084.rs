@@ -2,8 +2,9 @@
 //!
 //! # 这层补的是哪一格
 //!
-//! REQ-084 脱敏后，代码里**仍然保留着 199 处真实表名**：
-//! 160 `L` + 19 `L-改判` + 20 `R`，全部已裁定，`O-待裁` 清零。
+//! REQ-084 脱敏后，代码里**仍然保留着 230 处真实表名**：
+//! 191 `L` + 19 `L-改判` + 20 `R`，全部已裁定，`O-待裁` 清零。
+//! （2026-10-27：`L` 由 187 → 191，新增的是 `src/domain/concept.rs` 四条**此前漏登记**的夹具。）
 //! 每一处都必须能回答「**为什么不能改**」。答案集中登记在
 //! [`REGISTRY`] —— **单一登记点**，不是散落在注释里的善意。
 //!
@@ -183,7 +184,7 @@ fn line_of(hay: &str, line: usize) -> &str {    hay.lines().nth(line - 1).unwrap
 /// 独立第二来源，两者相等才有意义（若登记由实物生成，这个等式恒成立，
 /// 判据即失效 —— REQ-081 记过同一条权衡）。
 const FLOOR_KIND: &[(&str, usize)] = &[
-    ("L", 160),
+    ("L", 191),   // 2026-10-27：+4（concept.rs 漏登记的四条夹具）
     // ① 第一步判 S、被 `cargo test` 变红证伪后改判 L 的 13 处
     //   （gate-preflight 12 + test_prop_name_quality 1）；
     // ② AC-003「泄漏 oracle」经 BA rev.3 裁定**全留**的 6 处（同在 gate-preflight）。
@@ -200,12 +201,12 @@ const FLOOR_KIND: &[(&str, usize)] = &[
 /// 每个文件各应登记多少处（含 `drop_rate.rs` 的 0 —— 它必须**显式**是 0）。
 const FLOOR_FILE: &[(&str, usize)] = &[
     ("src/bin/ontok-gate-preflight.rs", 18),
-    ("src/domain/concept.rs", 5),
+    ("src/domain/concept.rs", 9),
     ("src/domain/html_view.rs", 2),
     ("src/domain/identifier_shape.rs", 10),
     ("src/domain/review.rs", 3),
     ("src/domain/view.rs", 5),
-    ("src/extract/propose.rs", 130),
+    ("src/extract/propose.rs", 157),
     ("tests/drop_rate.rs", 0),
     ("tests/test_fk_naming.rs", 15),
     ("tests/test_mcp_server.rs", 2),
@@ -221,8 +222,10 @@ fn test_req084_registry_totals_match_the_floor() {
     let rows = registry();
     assert_eq!(
         rows.len(),
-        199,
-        "登记表共 {} 行，应为 199（160 L + 19 L-改判 + 20 R + 0 O-待裁）。\
+        230,
+        "登记表共 {} 行，应为 230（191 L + 19 L-改判 + 20 R + 0 O-待裁）——
+         2026-10-27 由 187 → 191：`src/domain/concept.rs` 的四条单元测试夹具
+         （`customers` ×1、`licenses` ×3）此前**没登记**就留在仓库里，本应登记而非脱敏。\
          删登记行来掩盖改动 ⇒ 这里红。",
         rows.len()
     );

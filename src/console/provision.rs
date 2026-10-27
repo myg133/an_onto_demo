@@ -194,9 +194,10 @@ pub async fn create_project(
     if !bundle::valid_project_name(project) {
         return Err(OpError::bad_request(
             "project.name.invalid",
-            format!("项目名 {project:?} 不合法（要求 `^[a-z0-9][a-z0-9-]{{1,62}}$`）。"),
-            "小写字母 / 数字 / 连字符，2–63 字符，且不能以连字符开头 —— 与 manifest 里 \
-             `project` 的 pattern 是**同一条**（包要用这个名字校验，两边必须一致）。",
+            format!("项目名 {project:?} 不合法（要求 `^[a-z0-9][a-z0-9_-]{{1,62}}$`）。"),
+            "小写字母 / 数字 / 连字符 / 下划线，2–63 字符，且不能以连字符或下划线开头 —— \
+             与 manifest 里 `project` 的 pattern 是**同一条**（包要用这个名字校验，两边必须一致）。\
+             ⭐ 2026-10-27 起**允许下划线**：库里既有项目名大量带 `_`，禁掉它等于让历史项目打不了包。",
         ));
     }
     let label = clean_label(label, "`label`（项目备注）", false)?;

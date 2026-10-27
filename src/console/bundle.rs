@@ -37,13 +37,14 @@
 //!
 //! # zip：为什么手写一个只读解析器
 //!
-//! R1「不引新依赖」的落点：`zip` crate 不在依赖树里，而 `flate2` 在（`ureq` 的
-//! `gzip` 带进来的）。包格式只要求「读几个 entry、按 `deflate`/`stored` 解压」，
-//! 所以这里实现的是**只读子集**：不支持 zip64、不支持加密、不支持多分卷 ——
+//! R1「不引新依赖」的落点：`zip` crate 不在依赖树里，`flate2` 也**不是**直接依赖
+//! （本单不许新增）。包格式只要求「读几个 entry、取原始字节」，所以这里实现的是
+//! **只读子集**：不支持 zip64、不支持加密、不支持多分卷、不支持 deflate ——
 //! 遇到就**明确拒绝**（不猜、不半读），而不是「尽力而为」。
 //!
-//! 构建端确认用 **store-only zip**（method 0、无 data descriptor、`manifest.json`
-//! 是第一条 entry）。本读取器 method 0 / 8 都支持，且**不假设有压缩率**。
+//! 契约把容器钉成 **store-only zip**（method 0、无 data descriptor、`manifest.json`
+//! 是第一条 entry），构建端也只产出 method 0。于是本读取器**只认 method 0**：
+//! 别的压缩方法一律 `bundle.unsupported.compression`（见读包器里的 `match method`）。
 //!
 //! ⛔ 不校验 entry 的 CRC32：契约的完整性判据是**每个文件的 sha256**
 //! （比 CRC32 强得多），再校一遍 CRC 只是多一处「两个判据打架时听谁的」。
@@ -434,27 +435,22 @@ pub fn read_zip(bytes: &[u8]) -> Result<Vec<ZipEntry>, BundleError> {
                     }
                     raw.to_vec()
                 }
-                8 => {
-                    use std::io::Read;
-                    let mut out = Vec::with_capacity(uncomp_size.min(1024 * 1024));
-                    let mut d = flate2::read::DeflateDecoder::new(raw);
-                    // 多读 1 字节：读得出来就说明声明的长度在撒谎。
-                    let mut limited = (&mut d).take((uncomp_size as u64).saturating_add(1));
-                    limited
-                        .read_to_end(&mut out)
-                        .map_err(|e| not_zip(&format!("{name:?} 的 deflate 解压失败：{e}")))?;
-                    if out.len() != uncomp_size {
-                        return Err(not_zip(&format!(
-                            "{name:?} 解压后 {} 字节，与声明的 {uncomp_size} 不符",
-                            out.len()
-                        )));
-                    }
-                    out
-                }
+                // ⛔ 契约只允许 store-only（method = 0），构建端也只产出 method = 0。
+                // 于是这里**明确拒绝**而不是「尽力解压」：deflate 支持曾经靠一个
+                // 直接依赖（`flate2`）实现，而本单 R1 不许新增 crate；契约收口成
+                // store-only 之后，那条分支连理由都没了（见 `Cargo.toml` 的登记）。
                 other => {
-                    return Err(not_zip(&format!(
-                        "{name:?} 用了压缩方法 {other}（只支持 0=stored / 8=deflate）"
-                    )))
+                    return Err(BundleError::new(
+                        StatusCode::BAD_REQUEST,
+                        "bundle.unsupported.compression",
+                        format!(
+                            "{name:?} 的压缩方法是 {other}，而契约只允许 store-only\
+                             （method = 0，即不压缩），收到 method = {other}。"
+                        ),
+                        "包必须是 store-only zip（method = 0）：用 `ontok-builder bundle pack` \
+                         打出来的包就是这样，⛔ 不要用会做 deflate 的通用打包器（`zip -9` 一类）\
+                         重打一次 —— 那样即使内容一样，契约也拒。服务端**不解压**不认识的方法。",
+                    ));
                 }
             }
         };
@@ -657,7 +653,14 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// 项目名（schema 里 `^[a-z0-9][a-z0-9-]{1,62}$`）。
+/// 项目名（schema 里 `^[a-z0-9][a-z0-9_-]{1,62}$`）。
+///
+/// ⭐ 契约更正（2026-10-27）：**允许下划线**。库里既有项目名大量带 `_`
+/// （`req129_ac006_22140_1793033086208` 一类），而这条 pattern 同时是
+/// `POST /api/projects` 与 `manifest.project` 的**同一条**判据 ⇒ 禁掉 `_`
+/// 等于让历史项目既建不了行、也打不了包（真库上已实测复现）。
+/// 仍然禁大写 / 空格 / 斜杠 / 点。权威出处：
+/// `BA/demands/REQ-159/manifest.schema.json` 的 `project.pattern`（已同步为带 `_` 的版本）。
 pub fn valid_project_name(s: &str) -> bool {
     let b = s.as_bytes();
     if !(2..=63).contains(&b.len()) {
@@ -668,7 +671,7 @@ pub fn valid_project_name(s: &str) -> bool {
         return false;
     }
     b.iter()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-' || *c == b'_')
 }
 
 fn valid_iso8601_date_time(s: &str) -> bool {
@@ -765,7 +768,7 @@ pub fn parse_manifest(v: &Value) -> Result<Manifest, BundleError> {
     let project = need_str(obj, "project", "manifest")?;
     if !valid_project_name(project) {
         return Err(manifest_invalid(format!(
-            "`manifest.project` = {project:?} 不符合 `^[a-z0-9][a-z0-9-]{{1,62}}$`"
+            "`manifest.project` = {project:?} 不符合 `^[a-z0-9][a-z0-9_-]{{1,62}}$`"
         )));
     }
     let ontology_seq = need_int(obj, "ontology_seq", "manifest")?;
@@ -1267,15 +1270,23 @@ mod tests {
         assert!(!valid_project_name("a"));
         assert!(!valid_project_name("-a"));
         assert!(!valid_project_name("A-b"));
-        assert!(!valid_project_name("a_b"));
+        // ⭐ 2026-10-27 决策 A：项目名允许下划线（库里既有 `anspire_real` / `req129_ac006_…`）
+        assert!(valid_project_name("a_b"));
+        assert!(valid_project_name("req129_ac006_22140"));
+        assert!(!valid_project_name("a b"));   // 空格仍拒
+        assert!(!valid_project_name("a/b"));   // 斜杠仍拒（路径穿越）
         assert!(!valid_project_name(&"a".repeat(64)));
     }
 
-    // ── zip（含 deflate 分支）────────────────────────────────
+    // ── zip（store-only）──────────────────────────────────────
 
-    /// 造一个 zip（stored 或 deflate）。CRC 固定写 0 —— 本读取器**不校验 CRC**
+    /// 造一个 **store-only** zip（method 0）。CRC 固定写 0 —— 本读取器**不校验 CRC**
     /// （完整性判据是每个文件的 sha256，见模块头）。
-    fn make_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    ///
+    /// ⛔ 刻意**不**提供 deflate 选项：契约只允许 store-only，读取器对 method ≠ 0
+    /// 的拒绝由 [`zip_rejects_a_non_stored_entry_as_unsupported_compression`] 钉住，
+    /// 那份夹具手搓一个 method 字节即可（不需要任何压缩实现）。
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         fn crc32(data: &[u8]) -> u32 {
             let mut crc = 0xFFFF_FFFFu32;
             for b in data {
@@ -1289,16 +1300,9 @@ mod tests {
         }
         let mut out: Vec<u8> = Vec::new();
         let mut central: Vec<u8> = Vec::new();
-        for (name, data, deflate) in entries {
-            let (payload, method) = if *deflate {
-                use std::io::Write;
-                let mut e =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-                e.write_all(data).unwrap();
-                (e.finish().unwrap(), 8u16)
-            } else {
-                (data.to_vec(), 0u16)
-            };
+        for (name, data) in entries {
+            let payload: Vec<u8> = data.to_vec();
+            let method = 0u16;
             let offset = out.len() as u32;
             out.extend_from_slice(&LFH_SIG.to_le_bytes());
             out.extend_from_slice(&20u16.to_le_bytes());
@@ -1347,21 +1351,74 @@ mod tests {
         out
     }
 
+    /// 把 store-only zip 里**所有** entry 的压缩方法字节改成 `method`
+    /// （本地头 + 中央目录两处都要改，否则是「两处声明打架」，会先被别的判据抓到）。
+    ///
+    /// 只在本地头 / 中央目录的固定偏移上改，**不碰数据区** —— 于是「method 变了、
+    /// 字节长度没变」正是契约之外的形态，读取器该在**解之前**就拒。
+    fn with_method(zip: &[u8], method: u16) -> Vec<u8> {
+        let mut out = zip.to_vec();
+        // 本地头：sig(4) ver(2) flags(2) ⇒ method 在 +8。
+        // 中央目录：sig(4) ver_made(2) ver_need(2) flags(2) ⇒ method 在 +10。
+        for sig in [LFH_SIG, CD_SIG] {
+            let mut at = 0usize;
+            while let Some(rel) = out[at..]
+                .windows(4)
+                .position(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) == sig)
+            {
+                let p = at + rel;
+                let m = if sig == LFH_SIG { p + 8 } else { p + 10 };
+                out[m..m + 2].copy_from_slice(&method.to_le_bytes());
+                at = p + 4;
+            }
+        }
+        out
+    }
+
     #[test]
-    fn zip_reads_both_stored_and_deflated_entries() {
+    fn zip_reads_stored_entries() {
         let body = b"{\"hello\":\"world\"}".to_vec();
-        let zip = make_zip(&[("a.json", &body, false), ("b/c.json", &body, true)]);
+        let zip = make_zip(&[("a.json", &body), ("b/c.json", &body)]);
         let got = read_zip(&zip).expect("应当读得出");
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].name, "a.json");
         assert_eq!(got[0].data, body);
         assert_eq!(got[1].name, "b/c.json");
-        assert_eq!(got[1].data, body, "deflate 分支必须解出原文");
+        assert_eq!(got[1].data, body);
+    }
+
+    /// ⛔ 契约只允许 store-only（method 0）：method 8（deflate）/ 其它一律**明确拒绝**。
+    ///
+    /// 反空转：夹具真的是「method ≠ 0、字节没变」的容器（`with_method` 改的是本地头
+    /// 与中央目录的同一个字段），所以本断言不是「随便造个坏包也能拒」。
+    #[test]
+    fn zip_rejects_a_non_stored_entry_as_unsupported_compression() {
+        let body = b"{\"hello\":\"world\"}".to_vec();
+        for method in [8u16, 1, 99] {
+            let zip = with_method(&make_zip(&[("a.json", &body)]), method);
+            let e = read_zip(&zip).unwrap_err();
+            assert_eq!(
+                e.code, "bundle.unsupported.compression",
+                "method {method} 应当按「契约只允许 store-only」拒，实得 {e:?}"
+            );
+            assert!(
+                e.message.contains(&format!("method = {method}")),
+                "报错要点名收到的 method：{}",
+                e.message
+            );
+            assert!(
+                e.message.contains("store-only"),
+                "报错要说清契约只允许 store-only：{}",
+                e.message
+            );
+        }
+        // 反空转：method 0 的那一份必须读得出（否则上面那圈「全拒」是废话）。
+        assert!(read_zip(&make_zip(&[("a.json", &body)])).is_ok());
     }
 
     #[test]
     fn zip_rejects_a_traversal_entry_before_reading_bytes() {
-        let zip = make_zip(&[("../evil.json", b"x", false)]);
+        let zip = make_zip(&[("../evil.json", b"x")]);
         let e = read_zip(&zip).unwrap_err();
         assert_eq!(e.code, "bundle.path.illegal");
     }
@@ -1393,8 +1450,8 @@ mod tests {
         }]);
         let m_bytes = serde_json::to_vec(&m).unwrap();
         make_zip(&[
-            ("manifest.json", &m_bytes, true),
-            ("ontology/snapshot.json", &snap_bytes, true),
+            ("manifest.json", &m_bytes),
+            ("ontology/snapshot.json", &snap_bytes),
         ])
     }
 
@@ -1426,18 +1483,18 @@ mod tests {
         let entries = read_zip(&zip).unwrap();
         // **同长度**改一个字节（`bytes` 不变、sha256 变）—— 这才是 AC-002 的形态：
         // 「篡改一个文件的 sha256」而不是「包的长度变了」。
-        let mut rebuilt: Vec<(String, Vec<u8>, bool)> = Vec::new();
+        let mut rebuilt: Vec<(String, Vec<u8>)> = Vec::new();
         for e in &entries {
             let mut d = e.data.clone();
             if e.name == "ontology/snapshot.json" {
                 let last = d.len() - 1;
                 d[last] = if d[last] == b'}' { b']' } else { b'}' };
             }
-            rebuilt.push((e.name.clone(), d, true));
+            rebuilt.push((e.name.clone(), d));
         }
-        let refs: Vec<(&str, &[u8], bool)> = rebuilt
+        let refs: Vec<(&str, &[u8])> = rebuilt
             .iter()
-            .map(|(n, d, z)| (n.as_str(), d.as_slice(), *z))
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
             .collect();
         let tampered = make_zip(&refs);
         let e = verify_and_read(tampered, "cloud-resource").unwrap_err();
@@ -1452,17 +1509,17 @@ mod tests {
         let snap = crate::domain::snapshot::Snapshot::new(uuid::Uuid::nil(), 5);
         let zip = bundle_for("cloud-resource", &snap);
         let entries = read_zip(&zip).unwrap();
-        let mut rebuilt: Vec<(String, Vec<u8>, bool)> = Vec::new();
+        let mut rebuilt: Vec<(String, Vec<u8>)> = Vec::new();
         for e in &entries {
             let mut d = e.data.clone();
             if e.name == "ontology/snapshot.json" {
                 d.push(b' ');
             }
-            rebuilt.push((e.name.clone(), d, true));
+            rebuilt.push((e.name.clone(), d));
         }
-        let refs: Vec<(&str, &[u8], bool)> = rebuilt
+        let refs: Vec<(&str, &[u8])> = rebuilt
             .iter()
-            .map(|(n, d, z)| (n.as_str(), d.as_slice(), *z))
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
             .collect();
         let bigger = make_zip(&refs);
         let e = verify_and_read(bigger, "cloud-resource").unwrap_err();
@@ -1496,8 +1553,8 @@ mod tests {
         ]);
         let m_bytes = serde_json::to_vec(&m).unwrap();
         let zip = make_zip(&[
-            ("manifest.json", &m_bytes, false),
-            ("ontology/snapshot.json", &snap_bytes, false),
+            ("manifest.json", &m_bytes),
+            ("ontology/snapshot.json", &snap_bytes),
         ]);
         let e = verify_and_read(zip, "cloud-resource").unwrap_err();
         assert_eq!(e.code, "bundle.files.mismatch");
@@ -1520,8 +1577,8 @@ mod tests {
         }]);
         let m_bytes = serde_json::to_vec(&m).unwrap();
         let zip = make_zip(&[
-            ("manifest.json", &m_bytes, false),
-            ("ontology/snapshot.json", &snap_bytes, false),
+            ("manifest.json", &m_bytes),
+            ("ontology/snapshot.json", &snap_bytes),
         ]);
         let e = verify_and_read(zip, "cloud-resource").unwrap_err();
         assert_eq!(e.code, "bundle.manifest.invalid");
