@@ -176,7 +176,7 @@ fn mapping_text(base_url: &str, entity_json: &str) -> String {
     "id": "fake",
     "kind": "http-json",
     "base_url": "{base_url}",
-    "auth": {{ "mode": "tc3-hmac-sha256", "credential_env": ["ONTOK_R149_ID", "ONTOK_R149_KEY"] }},
+    "auth": {{ "mode": "tc3-hmac-sha256", "credential_env": ["ONTOK_R149_ID", "ONTOK_R149_KEY"], "service": "svc" }},
     "defaults": {{ "Region": "ap-guangzhou" }}
   }}],
   "entities": [{entity_json}]
@@ -371,7 +371,7 @@ fn cli_mapping_text() -> String {
   "contract_version": 1,
   "project": "req149",
   "sources": [{{ "id": "fake", "base_url": "http://127.0.0.1:1",
-                 "auth": {{ "mode": "tc3-hmac-sha256", "credential_env": ["ONTOK_R149_ID", "ONTOK_R149_KEY"] }} }}],
+                 "auth": {{ "mode": "tc3-hmac-sha256", "credential_env": ["ONTOK_R149_ID", "ONTOK_R149_KEY"], "service": "svc" }} }}],
   "entities": [{{
     "id": "Thing",
     "class": "c",

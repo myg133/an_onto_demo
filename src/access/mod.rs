@@ -303,6 +303,16 @@ pub struct Source {
 pub struct Auth {
     pub mode: String,
     pub credential_env: Vec<String>,
+    /// ⭐ REQ-166 · TC3 签名的服务名（`cvm` / `monitor` / `cbs` …）。
+    ///
+    /// **`tc3-hmac-sha256` 模式下必填**（`validate` / `parse` 会拒）：它是签名串
+    /// `{date}/{service}/tc3_request` 的一段，也是派生签名密钥的输入 ——
+    /// 猜不出来。早先按 `base_url` 首段猜（`cvm.tencentcloudapi.com` → `cvm`），
+    /// 换一家云、或端点不走产品域名，签出来的 `Authorization` 就是错的。
+    ///
+    /// 其它 `auth.mode` **不要求**它（⛔ 不一刀切）；没写 ⇒ 该键不出现（AC-106）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
     /// ⭐ v2 · 参与签名的 header 名（**小写**；顺序即映射作者写的顺序 ——
     /// 签名前要排序，但那是实现细节，契约不替客户端排）。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -467,6 +477,16 @@ pub struct RequestSpec {
     pub paging_offset: Option<String>,
     /// 同上，limit。
     pub paging_limit: Option<String>,
+    /// ⭐ REQ-166 · **请求级**单页上限（`request.paging.max_limit`）。
+    ///
+    /// 与实体级 [`Paging::max_limit`] 不是同一件事但值同源：实体级管「一页取多少行」的循环，
+    /// 这里声明**写进请求体的那个值**。join 的取数脚本按
+    /// `paging.max_limit → request.paging.max_limit → 100` 取值 ——
+    /// 所以「契约写了它就必须被承载」，⛔ 静默忽略等于两套真相。
+    ///
+    /// `None` ⇒ 该键不出现（客户端退到实体级 `paging.max_limit`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_limit: Option<u32>,
     /// 页码写到哪个路径（`PageNumber`）。与 [`RequestSpec::paging_offset`] **互斥**。
     ///
     /// 有它 ⇒ 分页器发的是**页码**（`已取页数 + offset_base`，
@@ -833,8 +853,41 @@ pub fn parse_value(root: &Value, problems: &mut Vec<Problem>) -> Result<Mapping,
 
 /// ⭐ REQ-152 · 解析 `sources[].auth`（v1 只认 `mode` / `credential_env`；v2 的三项声明可选）。
 ///
+/// ⭐ REQ-166 · `service`：**`tc3-hmac-sha256` 下必填**，其它 mode 不要求
+/// （`{date}/{service}/tc3_request` 里的 service 是签名输入，⛔ 不从 host 猜）。
+///
 /// ⛔ 这里**只解声明**：不读环境变量、不碰任何凭据值、不按 `mode` 推默认头。
 fn parse_auth(a: &Map<String, Value>, loc: &str, problems: &mut Vec<Problem>) -> Auth {
+    let mode = opt_str(a, "mode").unwrap_or_else(|| "none".to_string());
+    // 空白字符串 = 没写（与 `pick` / `need_str` 的口径一致）；类型不对 ⇒ 点名，⛔ 不静默丢。
+    let service = match a.get("service") {
+        None => None,
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::String(_)) => None,
+        Some(_) => {
+            problems.push(Problem::new(
+                CODE_SCHEMA,
+                format!("{loc}.service"),
+                "必须是字符串（云产品的服务名，如 `cvm` / `monitor`）。",
+            ));
+            None
+        }
+    };
+    // ⭐ REQ-166 · fail-closed：TC3 缺 `service` ⇒ 拒。**这是有意的**（旧 AM 全部报错），
+    // ⛔ 不为兼容旧 AM 放行 —— 放行意味着运行时又回去猜 host 首段。
+    if mode.eq_ignore_ascii_case("tc3-hmac-sha256") && service.is_none() {
+        problems.push(Problem::new(
+            CODE_SCHEMA,
+            format!("{loc}.service"),
+            "`auth.mode` 是 `tc3-hmac-sha256` ⇒ `auth.service` 必填，这里缺失（或为空）。\n\
+             它是 TC3 签名串 `{date}/{service}/tc3_request` 的一段，也是派生签名密钥的输入 —— \
+             **猜不出来**：早先按 `base_url` 首段猜（`cvm.tencentcloudapi.com` → `cvm`），\
+             换一家云、或端点不走产品域名，签出来的 `Authorization` 就是错的，且只在真调时才暴露。\n\
+             改法：在 `sources[].auth` 里显式写 `\"service\": \"<该接口所属产品名>\"`\
+             （腾讯云 CVM = `cvm`、云监控 = `monitor`；以该 API 文档的 service 为准）。\
+             ⛔ 不要从 host 推断。其它 `auth.mode` 不要求这个字段。",
+        ));
+    }
     let timestamp = match a.get("timestamp") {
         None => None,
         Some(Value::Object(t)) => Some(AuthTimestamp {
@@ -854,8 +907,9 @@ fn parse_auth(a: &Map<String, Value>, loc: &str, problems: &mut Vec<Problem>) ->
         }
     };
     Auth {
-        mode: opt_str(a, "mode").unwrap_or_else(|| "none".to_string()),
+        mode,
         credential_env: opt_str_list(a, "credential_env").unwrap_or_default(),
+        service,
         signed_headers: opt_str_list(a, "signed_headers").filter(|v| !v.is_empty()),
         timestamp,
         scope: opt_str_list(a, "scope").filter(|v| !v.is_empty()),
@@ -1394,6 +1448,21 @@ fn parse_request_spec(
                 out.paging_limit = opt_str(p, "limit");
                 out.paging_page = opt_str(p, "page");
 
+                // ⭐ REQ-166 · 请求级分页上限（正整数；0 / 非数字都点名，⛔ 不静默当 100）。
+                if let Some(v) = p.get("max_limit") {
+                    match v.as_u64() {
+                        Some(n) if n >= 1 && n <= u32::MAX as u64 => out.max_limit = Some(n as u32),
+                        _ => problems.push(Problem::new(
+                            CODE_SCHEMA,
+                            format!("{ploc}.max_limit"),
+                            format!(
+                                "必须是 ≥ 1 的整数（收到 {v}）—— 0 意味着一页也取不到；\
+                                 这个值会原样写进请求体。⛔ 不静默当成默认 100。"
+                            ),
+                        )),
+                    }
+                }
+
                 // `offset` 与 `page` 是对同一件事的两种读法 —— 同时写就是语义打架。
                 if out.paging_offset.is_some() && out.paging_page.is_some() {
                     problems.push(Problem::new(
@@ -1452,6 +1521,17 @@ fn parse_request_spec(
                 format!("{loc} 字段 request.paging"),
                 "必须是对象：`{\"offset\":\"Offset\",\"limit\":\"Limit\"}`（值是**路径**）。",
             )),
+        }
+    }
+
+    // ⭐ REQ-166 · 序列化形态是**扁平**的（`paging_offset` / `max_limit` …，见 [`RequestSpec`] 的
+    // `Serialize`）。这里只为 `max_limit` 做一次镜像读取 ⇒ 「解析 → 序列化 → 再解析」不丢字段。
+    // ⚠️ 其它扁平键没有消费方，不做无谓双读。
+    if out.max_limit.is_none() {
+        if let Some(n) = obj.get("max_limit").and_then(Value::as_u64) {
+            if (1..=u32::MAX as u64).contains(&n) {
+                out.max_limit = Some(n as u32);
+            }
         }
     }
 
@@ -2568,6 +2648,7 @@ mod tests {
             v["sources"][0]["auth"] = serde_json::json!({
                 "mode": "tc3-hmac-sha256",
                 "credential_env": ["PROVIDER_ACCESS_KEY_ID", "PROVIDER_SECRET_KEY"],
+                "service": "cvm",
                 "signed_headers": ["content-type", "host", "x-api-action"],
                 "timestamp": { "header": "X-Api-Timestamp", "format": "unix-seconds" },
                 "scope": ["date", "service", "tc3_request"]
@@ -2596,8 +2677,14 @@ mod tests {
         .expect("v2 + 最小 auth");
         let a = m.sources[0].auth.as_ref().unwrap();
         assert!(a.signed_headers.is_none() && a.timestamp.is_none() && a.scope.is_none());
+        assert!(a.service.is_none(), "非 tc3 模式不要求 service ⇒ 不出现");
         let text = serde_json::to_string(a).unwrap();
-        assert!(!text.contains("signed_headers") && !text.contains("timestamp"), "{text}");
+        assert!(
+            !text.contains("signed_headers")
+                && !text.contains("timestamp")
+                && !text.contains("service"),
+            "{text}"
+        );
 
         // `timestamp` 缺 `header` ⇒ 点名（否则客户端不知道往哪个 header 放时间戳）。
         let errs = parse(&v2_with(|v| {
@@ -2665,5 +2752,312 @@ mod tests {
         assert_eq!(Ontology::local_name("https://x#云资源"), "云资源");
         assert_eq!(Ontology::local_name("https://x/云资源"), "云资源");
         assert_eq!(Ontology::local_name("云资源"), "云资源");
+    }
+
+    // ── ⭐ REQ-166 · AM 契约跟上「取数脚本不再猜」────────────────────
+    //
+    // | # | 判据 | 在旧代码上红的方式 |
+    // | --- | --- | --- |
+    // | 1 | tc3 缺 `auth.service` ⇒ 拒（码 + 点名 + 说是 tc3） | 旧代码照单全收 ⇒ `expect_err` panic |
+    // | 2 | tc3 有 `service` ⇒ 过（防「一律拒」） | —（反向保护） |
+    // | 3 | 非 tc3 缺 `service` ⇒ **不**拒（防一刀切） | 一刀切时这里红 |
+    // | 4 | `shape: array` 的绑定序列化/反序列化不丢 | 丢字段时这里红 |
+    // | 5 | 两份 fixture 都能通过 validate | 数据没跟上时这里红 |
+    // | 6 | 每个有 `iterator` 的 entity 都**显式**写了 paging（两层） | 有人删掉/靠默认值时这里红 |
+    // | 7 | `request.paging.max_limit` 解析承载 + 序列化写出 + 往返 | 静默忽略时这里红 |
+
+    fn repo_root() -> std::path::PathBuf {
+        // 单测在 crate 根目录跑（cargo test 的 CWD）⇒ 夹具用运行期定位即可。
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        repo_root().join("fixtures")
+    }
+
+    fn tc3_auth(service: Option<serde_json::Value>) -> String {
+        v2_with(|v| {
+            let mut auth = serde_json::json!({
+                "mode": "tc3-hmac-sha256",
+                "credential_env": ["SECRET_ID", "SECRET_KEY"],
+            });
+            if let Some(s) = service {
+                auth["service"] = s;
+            }
+            v["sources"][0]["auth"] = auth;
+        })
+    }
+
+    /// ① tc3 缺 `auth.service`（或空白）⇒ **拒**，且码 / 位置 / 消息都点名。
+    ///
+    /// ⚠️ 这条**必须在旧代码上红**：旧 `parse` 不认识 `service`，照单全收 ⇒
+    /// 下面的 `expect_err` 会直接 panic（不是断言里的期望值对不上，而是「它居然过了」）。
+    #[test]
+    fn req166_tc3_without_service_is_rejected() {
+        for auth in [tc3_auth(None), tc3_auth(Some(serde_json::json!("   ")))] {
+            let errs = parse(&auth).expect_err(
+                "tc3-hmac-sha256 缺 auth.service 必须拒（⛔ 不从 host 猜、⛔ 不为旧 AM 放行）",
+            );
+            let p = errs
+                .iter()
+                .find(|p| p.code == CODE_SCHEMA && p.location.contains("auth.service"))
+                .unwrap_or_else(|| panic!("必须点名 `auth.service`（在 sources[0].auth 下）：{errs:?}"));
+            assert!(p.location.contains("sources[0]"), "要点名哪个 source：{}", p.location);
+            assert!(p.message.contains("auth.service"), "消息要点名：{}", p.message);
+            assert!(p.message.contains("tc3"), "消息要说清是哪一种签名：{}", p.message);
+            assert!(
+                p.message.contains("service") && p.message.contains("改法"),
+                "消息要给补法：{}",
+                p.message
+            );
+        }
+
+        // 大小写不该成为绕过口（与 `Credentials::resolve` 的 `eq_ignore_ascii_case` 同口径）。
+        let upper = v2_with(|v| {
+            v["sources"][0]["auth"] =
+                serde_json::json!({ "mode": "TC3-HMAC-SHA256", "credential_env": ["A"] });
+        });
+        assert!(
+            parse(&upper).is_err(),
+            "`TC3-HMAC-SHA256` 与 `tc3-hmac-sha256` 是同一种签名 ⇒ 同样必填"
+        );
+    }
+
+    /// ② tc3 **有** `service` ⇒ 过（反向：防「干脆一律拒」）。
+    #[test]
+    fn req166_tc3_with_service_passes() {
+        let m = parse(&tc3_auth(Some(serde_json::json!("cvm")))).expect("tc3 + service 应当合法");
+        let a = m.sources[0].auth.as_ref().expect("auth");
+        assert_eq!(a.service.as_deref(), Some("cvm"));
+        // 显式声明的字段必须原样出现在序列化结果里（契约要分发给客户端）。
+        let wire = serde_json::to_value(a).unwrap();
+        assert_eq!(wire["service"], serde_json::json!("cvm"), "{wire}");
+    }
+
+    /// ③ 非 tc3 模式**不要求** `service`（⛔ 不一刀切）。
+    #[test]
+    fn req166_non_tc3_mode_does_not_require_service() {
+        for mode in ["none", "aws-sigv4"] {
+            let text = v2_with(|v| {
+                v["sources"][0]["auth"] =
+                    serde_json::json!({ "mode": mode, "credential_env": ["A"] });
+            });
+            let m = parse(&text)
+                .unwrap_or_else(|e| panic!("`{mode}` 没写 service 不该被拒（⛔ 不一刀切）：{e:?}"));
+            assert!(m.sources[0].auth.as_ref().unwrap().service.is_none());
+        }
+    }
+
+    /// ④ `shape: array` 的 binding：解析记住、序列化不丢、回写仍认。
+    #[test]
+    fn req166_array_binding_shape_round_trips() {
+        let text = with_request(serde_json::json!({
+            "template": { "InstanceIds": "{ids}" },
+            "bindings": { "ids": { "source": "filter", "shape": "array" } }
+        }));
+        let m = parse(&text).expect("`shape: array` 应当合法");
+        let b = &m.entities[0].request.bindings["ids"];
+        assert_eq!(b.shape, Some(BindingShape::Array));
+        assert_eq!(b.shape(), BindingShape::Array);
+
+        // 序列化：`shape` 一个字段都不许丢（丢了客户端会退回 scalar，多值就发不出去）。
+        let wire = serde_json::to_value(b).expect("Binding 可序列化");
+        assert_eq!(wire["shape"], serde_json::json!("array"), "序列化丢了 shape：{wire}");
+
+        // 反序列化：把序列化出来的 `shape` 值写回 author 格式再解析 ⇒ 语义不变。
+        let again = with_request(serde_json::json!({
+            "template": { "InstanceIds": "{ids}" },
+            "bindings": { "ids": { "source": "filter", "shape": wire["shape"].clone() } }
+        }));
+        let m2 = parse(&again).expect("回写后应当仍然合法");
+        assert_eq!(m2.entities[0].request.bindings["ids"].shape(), BindingShape::Array);
+
+        // 显式 `scalar` 也照收（封闭集合的另一半）。
+        let scalar = with_request(serde_json::json!({
+            "bindings": { "ids": { "source": "filter", "shape": "scalar" } }
+        }));
+        let m3 = parse(&scalar).expect("`shape: scalar` 应当合法");
+        assert_eq!(m3.entities[0].request.bindings["ids"].shape(), BindingShape::Scalar);
+    }
+
+    /// ⑦ `request.paging.max_limit`：解析要承载、序列化要写出（⛔ 静默忽略 = 两套真相）。
+    #[test]
+    fn req166_request_paging_max_limit_round_trips() {
+        let text = with_request(serde_json::json!({
+            "template": { "Constant": "x" },
+            "paging": { "offset": "Offset", "limit": "Limit", "max_limit": 20, "value_type": "string" }
+        }));
+        let m = parse(&text).expect("`request.paging.max_limit` 应当被接受");
+        let spec = &m.entities[0].request;
+        assert_eq!(spec.max_limit, Some(20), "解析后必须承载（⛔ 静默忽略）");
+        assert_eq!(spec.paging_value_type, PagingValueType::String);
+        assert_eq!(spec.paging_offset.as_deref(), Some("Offset"));
+
+        // 序列化：写了就必须写出来（否则客户端/脚本只能退回默认 100）。
+        let wire = serde_json::to_value(spec).expect("RequestSpec 可序列化");
+        assert_eq!(wire["max_limit"], serde_json::json!(20), "{wire}");
+
+        // 再解析：往返不丢（扁平 `max_limit` 是序列化形态，解析端做镜像读取）。
+        let mut problems = Vec::new();
+        let back = parse_request_spec(Some(&wire), "entities[0]", &mut problems);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back.max_limit, Some(20), "序列化 → 解析 之后必须还在");
+        // 其它扁平分页键没有消费方 ⇒ 不做镜像（这里只钉 max_limit 这一条）。
+
+        // 0 / 负数 / 字符串都要点名，⛔ 不静默当成 100。
+        for bad in [serde_json::json!(0), serde_json::json!(-5), serde_json::json!("100")] {
+            let bad_text = with_request(serde_json::json!({ "paging": { "max_limit": bad } }));
+            let errs = parse(&bad_text).unwrap_err();
+            assert!(
+                errs.iter().any(|p| {
+                    p.code == CODE_SCHEMA && p.location.contains("request.paging.max_limit")
+                }),
+                "必须点名 max_limit：{errs:?}"
+            );
+        }
+    }
+
+    /// ⑤ 交付的两份 fixture 都能**通过 validate**（数据跟上契约，否则取数直接跑不了）。
+    #[test]
+    fn req166_fixtures_pass_validation() {
+        let ontology = parse_ontology(
+            &std::fs::read_to_string(fixtures_dir().join("access-ontology.ttl"))
+                .expect("示例本体必须在 fixtures/ 里"),
+        );
+
+        for (name, mapping_dir) in [
+            // `access-cvm.json` 的 fixture 是相对 fixtures/ 的裸文件名。
+            ("access-cvm.json", fixtures_dir()),
+            // `access-cvm-real.json` 的 fixture 写成 `fixtures/...`（相对仓库根）。
+            ("access-cvm-real.json", repo_root()),
+        ] {
+            let text = std::fs::read_to_string(fixtures_dir().join(name))
+                .unwrap_or_else(|e| panic!("{name} 必须存在：{e}"));
+            let m = parse(&text).unwrap_or_else(|ps| {
+                panic!(
+                    "{name} 必须能解析（旧 AM 已按新契约补齐 service / shape）：{}",
+                    ps.iter()
+                        .map(|p| format!("[{}] {} :: {}", p.code, p.location, p.message))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                )
+            });
+
+            // 每个 tc3 source 都必须显式带 service（⛔ 空串 / 留空都不算）。
+            let tc3: Vec<_> = m
+                .sources
+                .iter()
+                .filter(|s| {
+                    s.auth
+                        .as_ref()
+                        .is_some_and(|a| a.mode.eq_ignore_ascii_case("tc3-hmac-sha256"))
+                })
+                .collect();
+            assert!(!tc3.is_empty(), "{name} 里应当有 tc3 source（否则这条判据没牙）");
+            for s in tc3 {
+                let svc = s.auth.as_ref().and_then(|a| a.service.as_deref()).unwrap_or("");
+                assert!(!svc.trim().is_empty(), "{name} 的 source `{}` 缺 service", s.id);
+            }
+
+            // 请求级分页上限必须被契约**承载**（写了却被静默忽略 = 两套真相）。
+            for e in &m.entities {
+                if e.iterator.trim().is_empty() {
+                    continue;
+                }
+                assert!(
+                    e.request.max_limit.is_some_and(|n| n >= 1),
+                    "{name} · entity `{}` 的 request.paging.max_limit 没被解析承载",
+                    e.id
+                );
+            }
+
+            let r = super::validate::validate(&m, &ontology, &mapping_dir);
+            assert!(
+                r.ok,
+                "{name} 必须通过 validate：{:?}",
+                r.errors
+            );
+        }
+    }
+
+    /// ⑥ 分页参数名要**两层都显式写**（⛔ 靠「缺省 = `Offset` / `Limit` / `100`」）。
+    ///
+    /// 脚本的取值顺序是：`paging.offset_param` → `request.paging.offset` → `request.paging.page`
+    /// → 字面量 `"Offset"`（`limit` / `max_limit` 同理）。**「猜」的就是最后那几个字面量**，
+    /// 所以两层都要在数据里写死。
+    ///
+    /// 判据在**原始 JSON** 上（不是解析后的结构）：结构层今天还会在「写了 paging 但漏字段」时
+    /// 悄悄补 `Offset` / `Limit` —— 那正是这一条要防的退化。
+    #[test]
+    fn req166_paging_params_are_explicit_in_fixtures() {
+        for name in ["access-cvm.json", "access-cvm-real.json"] {
+            let text = std::fs::read_to_string(fixtures_dir().join(name)).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let entities = v["entities"].as_array().expect("entities 必须是数组");
+            let mut checked = 0usize;
+            for e in entities {
+                let has_iterator = e["iterator"].as_str().is_some_and(|s| !s.trim().is_empty());
+                if !has_iterator {
+                    continue;
+                }
+                checked += 1;
+                let id = e["id"].as_str().unwrap_or("<无 id>");
+
+                // ── 第一层：实体级 `paging`（响应侧循环 + 总行数路径）──────────
+                let paging = e.get("paging").unwrap_or_else(|| {
+                    panic!("{name} · entity `{id}` 有 iterator 却没有 paging 键（⛔ 不靠默认值）")
+                });
+                let p = paging.as_object().unwrap_or_else(|| {
+                    panic!("{name} · entity `{id}` 的 paging 必须是对象（或 null 表示不分页）")
+                });
+                for k in ["offset_param", "limit_param"] {
+                    let val = p.get(k).and_then(|x| x.as_str()).unwrap_or("");
+                    assert!(
+                        !val.trim().is_empty(),
+                        "{name} · entity `{id}` 的 paging.{k} 必须显式写且非空"
+                    );
+                }
+                let total = p.get("total_path").and_then(|x| x.as_str()).unwrap_or("");
+                assert!(
+                    !total.trim().is_empty(),
+                    "{name} · entity `{id}` 有 total_path 就必须写出来（⛔ 留空）"
+                );
+                let ent_max = p.get("max_limit").and_then(|x| x.as_u64()).unwrap_or(0);
+                assert!(
+                    ent_max >= 1,
+                    "{name} · entity `{id}` 的 paging.max_limit 必须显式写 ≥ 1（⛔ 靠默认 100）"
+                );
+
+                // ── 第二层：请求级 `request.paging`（请求侧键名 + 类型 + 基数）──
+                let rp = e
+                    .get("request")
+                    .and_then(|r| r.get("paging"))
+                    .and_then(|x| x.as_object())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{name} · entity `{id}` 缺 `request.paging` —— \
+                             脚本会退到字面量 `Offset` / `Limit`（⛔ 靠默认值）"
+                        )
+                    });
+                let offset = rp.get("offset").and_then(|x| x.as_str()).unwrap_or("");
+                let page = rp.get("page").and_then(|x| x.as_str()).unwrap_or("");
+                assert!(
+                    !offset.trim().is_empty() || !page.trim().is_empty(),
+                    "{name} · entity `{id}` 的 request.paging 必须写 `offset`（或 `page`）且非空"
+                );
+                let limit = rp.get("limit").and_then(|x| x.as_str()).unwrap_or("");
+                assert!(
+                    !limit.trim().is_empty(),
+                    "{name} · entity `{id}` 的 request.paging.limit 必须显式写且非空"
+                );
+                let req_max = rp.get("max_limit").and_then(|x| x.as_u64()).unwrap_or(0);
+                assert!(
+                    req_max >= 1,
+                    "{name} · entity `{id}` 的 request.paging.max_limit 必须显式写 ≥ 1\
+                     （⛔ 靠默认 100）"
+                );
+            }
+            assert!(checked > 0, "{name} 里应当至少有一条带 iterator 的 entity");
+        }
     }
 }
