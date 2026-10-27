@@ -208,7 +208,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // 点开 DSN 弹窗，才收到 500。启动期报错的成本是零，运行期报错的成本是一次联调。
     //
     // ⛔ 没有「本地调试可以先跳过」的开关（与 `ONTOK_VIEW_TOKEN` 同一条纪律）。
-    let secret_cipher = crate::console::dsn::SecretCipher::from_env().map_err(|e| {
+    let secret_cipher = crate::provision::dsn::SecretCipher::from_env().map_err(|e| {
         anyhow::anyhow!(
             "DSN 加密列的密钥不可用，拒绝启动控制面：\n{e}\n  \
              设置方式（当前会话）：\n    \

@@ -61,7 +61,7 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// ⭐ REQ-159 · **包上传**那一格的请求体上限。
 ///
-/// 为什么比 [`MAX_BODY_BYTES`] 大、又比 [`crate::console::bundle::MAX_BUNDLE_BYTES`] 略大：
+/// 为什么比 [`MAX_BODY_BYTES`] 大、又比 [`crate::provision::bundle::MAX_BUNDLE_BYTES`] 略大：
 /// 「包超限」必须由**我们**答成 `bundle.too_large`（带实际大小与上限），
 /// 而 `DefaultBodyLimit` 的拒绝是 axum 自己拼的纯文本 413 —— 那条错误里没有错误码。
 /// 所以闸门放在比包上限高 8 MiB 的位置：留出 multipart 的头部/边界开销，
@@ -70,7 +70,7 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// ⭐ REQ-159 P1c-1 · 查询面（`query::http`）也用这一格上限：同一个端点搬到
 /// `query serve` 之后，**包体上限必须还是这一个数** —— 两个面各写一份，第一次改就漂。
 pub(crate) const MAX_UPLOAD_BODY_BYTES: usize =
-    crate::console::bundle::MAX_BUNDLE_BYTES + 8 * 1024 * 1024;
+    crate::provision::bundle::MAX_BUNDLE_BYTES + 8 * 1024 * 1024;
 
 /// 身份门放进请求扩展的那一行 token（handler 只能拿到它）。
 #[derive(Debug, Clone)]

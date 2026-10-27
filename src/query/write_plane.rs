@@ -27,7 +27,7 @@ use sqlx::postgres::PgPool;
 
 use super::audit::AuditSink;
 use crate::console::audit::AuditLog;
-use crate::console::dsn::{SecretCipher, SECRET_KEY_ENV};
+use crate::provision::dsn::{SecretCipher, SECRET_KEY_ENV};
 use crate::console::provision_api::Deps;
 
 /// 写面的进程级依赖（见模块头）。
@@ -72,7 +72,7 @@ impl WritePlane {
     }
 }
 
-/// 读密钥（**纯函数内核**：判据不去改进程环境，见 `console::dsn::SecretCipher::from_lookup`）。
+/// 读密钥（**纯函数内核**：判据不去改进程环境，见 `provision::dsn::SecretCipher::from_lookup`）。
 ///
 /// 返回 `anyhow::Result` 而不是 `DsnError`：调用点是启动闸门，要把「为什么拒绝启动」
 /// 与「怎么补」写成一段人话（`center` 的错误契约是面向调用方的，这里面向运维）。
@@ -139,7 +139,7 @@ mod tests {
     fn two_different_keys_are_refused_instead_of_guessed() {
         let e = make_cipher(|name| match name {
             SECRET_KEY_ENV => Some("11".repeat(32)),
-            crate::console::dsn::LEGACY_SECRET_KEY_ENV => Some("22".repeat(32)),
+            crate::provision::dsn::LEGACY_SECRET_KEY_ENV => Some("22".repeat(32)),
             _ => None,
         })
         .expect_err("两把不同的密钥必须拒绝");

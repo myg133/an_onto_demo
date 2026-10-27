@@ -86,7 +86,7 @@ use sqlx::postgres::PgPool;
 
 use crate::console::audit::AuditLog;
 use crate::console::decl::{DeclKind, DeclPaths};
-use crate::console::dsn::SecretCipher;
+use crate::provision::dsn::SecretCipher;
 use crate::console::serve::check_bind;
 use crate::console::tokens::AdminTokens;
 use crate::console::{ConsoleParts, ConsoleService};

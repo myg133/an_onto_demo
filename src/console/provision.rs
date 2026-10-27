@@ -7,8 +7,8 @@
 //! | 建版本 / 取 `seq` | [`crate::db::apply::begin_new_version`]（`proposal apply` 的同一个） |
 //! | 写快照五行 | [`crate::db::apply::write_snapshot_in`]（同上；REQ-011/012/033 收口过的那份） |
 //! | 冻结 / 生效指针 | [`crate::db::project::PgProjectStore::activate`] |
-//! | 包格式 / manifest / 8 个错误码 | [`crate::console::bundle`] |
-//! | DSN 加解密 / 探测 | [`crate::console::dsn`] |
+//! | 包格式 / manifest / 8 个错误码 | [`crate::provision::bundle`] |
+//! | DSN 加解密 / 探测 | [`crate::provision::dsn`] |
 //!
 //! # 为什么这些端点**不**走 `check_project`（单项目作用域）
 //!
@@ -32,8 +32,8 @@ use crate::db::bundle_store::PgBundleStore;
 use crate::db::project::{PgProjectStore, ProjectError, ProjectRow};
 use crate::db::snapshot_store::PgStore;
 
-use super::bundle::{self, BundleError, State, VerifiedBundle};
-use super::dsn::{self, SecretCipher, DsnTest};
+use crate::provision::bundle::{self, BundleError, State, VerifiedBundle};
+use crate::provision::dsn::{self, SecretCipher, DsnTest};
 use super::OpError;
 
 // ══════════════════════════════════════════════════════════════

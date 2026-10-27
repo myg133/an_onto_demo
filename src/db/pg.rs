@@ -774,7 +774,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS project_keys_one_active
 
 -- ⭐ REQ-159 · 构建包：状态机 + manifest 原文 + 整包指纹。
 --
--- `state` 的取值集合由 `console::bundle::BundleState` 收口
+-- `state` 的取值集合由 `provision::bundle::BundleState` 收口
 -- （uploaded / db_pending / imported / activated / failed），
 -- 这里不加 CHECK：状态机的**唯一**权威是那个枚举，加一份 CHECK 就是两份定义。
 CREATE TABLE IF NOT EXISTS project_bundles (

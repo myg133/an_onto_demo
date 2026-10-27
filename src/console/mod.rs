@@ -24,8 +24,8 @@
 //! | `POST /api/projects` | [`crate::db::project::PgProjectStore::create_labeled_in`] + [`crate::db::bundle_store::PgBundleStore::create_key_in`]（同一事务） |
 //! | `POST /api/projects/:p/bundles` | [`bundle::verify_and_read`]（校验）+ [`crate::db::bundle_store::PgBundleStore::create_bundle`] |
 //! | `GET /api/projects/:p/bundles/:id` | [`crate::db::bundle_store::PgBundleStore::get_bundle_in_project`] |
-//! | `PUT /api/projects/:p/database` | [`crate::console::dsn::SecretCipher::encrypt`] + [`crate::db::bundle_store::PgBundleStore::upsert_database`] |
-//! | `POST /api/projects/:p/database/test` | [`crate::console::dsn::probe`]（真连一次） |
+//! | `PUT /api/projects/:p/database` | [`crate::provision::crate::provision::dsn::SecretCipher::encrypt`] + [`crate::db::bundle_store::PgBundleStore::upsert_database`] |
+//! | `POST /api/projects/:p/database/test` | [`crate::provision::dsn::probe`]（真连一次） |
 //! | `POST /api/projects/:p/bundles/:id/import` | [`crate::db::apply::begin_new_version`] + [`crate::db::apply::write_snapshot_in`]（**与 `proposal apply` 同一套**，单事务） |
 //! | `POST /api/projects/:p/bundles/:id/activate` | [`crate::db::project::PgProjectStore::activate`]（冻结 + 生效指针，同一事务） |
 //!
@@ -64,9 +64,7 @@
 //!   并发两个 PUT 的结果是后写覆盖（没有乐观锁 / ETag）。
 
 pub mod audit;
-pub mod bundle;
 pub mod decl;
-pub mod dsn;
 pub mod http;
 pub mod ops;
 pub mod page;
@@ -219,8 +217,8 @@ pub struct ConsoleService {
     /// ⭐ REQ-159 · DSN 的对称加密器（密钥来自 `ONTOK_DSN_KEY`）。
     ///
     /// ⛔ 它只在这里**持有**：加解密在 [`dsn`]，对外没有任何「打印密钥 / 打印明文」
-    /// 的出口（`Debug` 是手写的 `<redacted>`，见 [`dsn::SecretCipher`]）。
-    pub secret_cipher: dsn::SecretCipher,
+    /// 的出口（`Debug` 是手写的 `<redacted>`，见 [`crate::provision::dsn::SecretCipher`]）。
+    pub secret_cipher: crate::provision::dsn::SecretCipher,
 }
 
 /// 构造参数（`serve` 与测试共用**这一个**构造器）。
@@ -235,7 +233,7 @@ pub struct ConsoleParts {
     pub bind: SocketAddr,
     pub allow_public: bool,
     /// ⭐ REQ-159 · 见 [`ConsoleService::secret_cipher`]。
-    pub secret_cipher: dsn::SecretCipher,
+    pub secret_cipher: crate::provision::dsn::SecretCipher,
 }
 
 impl ConsoleService {

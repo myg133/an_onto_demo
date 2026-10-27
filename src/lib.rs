@@ -68,6 +68,8 @@ pub mod query;
 // 本模块只有 import → review → apply → freeze 这条**既有流程**，
 // 没有「直接改对象」的端点（需求风险 1）。见 `src/console/mod.rs` 模块头。
 pub mod console;
+/// ⭐ REQ-159 · 服务端与构建端共用的底层件（加密列 / 包解析），见 `src/provision/mod.rs`。
+pub mod provision;
 
 // ⭐ REQ-155 · **Studio 页面壳**（`query serve` 上的 `/studio` + 两个静态资源）。
 // 为什么单独一个模块：它是**编译期常量**（`include_str!` 的 HTML / CSS / JS），

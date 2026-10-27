@@ -2316,6 +2316,10 @@ const MODULES: &[(&str, &str)] = &[
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),
     ("src/console/mod.rs", "audit"),
+        // ⭐ REQ-159 P1c-2b · 服务端与构建端共用的底层件（从 console 搬出）
+        ("src/lib.rs", "provision"),
+        ("src/provision/mod.rs", "bundle"),
+        ("src/provision/mod.rs", "dsn"),
     // ⭐ REQ-159 P1c-1 · 8 条写端点的**共享适配层**（console 与 `query serve` 各挂一份
     // 路由、语义只有这一份）。⛔ 不新增出口：它调 `console::http::{respond,fail}` ——
     // 也就是 I18 那一个 `Json(` 写点（「写面只有一个 JSON 写点」是刻意保留的性质）。
@@ -2323,9 +2327,7 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-159 · 构建包导入（P1a）：包校验 / 密文列 / 领域编排。
     // ⛔ 三个模块都**不新增响应写点** —— 它们的产物经既有的 I18（`console::http::respond`）
     // 送出去，所以 `OUTLETS` 不加行；本表只登记模块（T6：新增模块即红）。
-    ("src/console/mod.rs", "bundle"),
     ("src/console/mod.rs", "decl"),
-    ("src/console/mod.rs", "dsn"),
     ("src/console/mod.rs", "http"),
     ("src/console/mod.rs", "ops"),
     // ⭐ REQ-125 · 工作台页面壳（GET /）：零数据 HTML 骨架；出口 I22 登记在 OUTLETS。

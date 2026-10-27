@@ -32,7 +32,7 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use ontok::console::audit::AuditLog;
 use ontok::console::decl::DeclPaths;
-use ontok::console::dsn::SecretCipher;
+use ontok::provision::dsn::SecretCipher;
 use ontok::console::tokens::AdminTokens;
 use ontok::console::{ConsoleParts, ConsoleService};
 use ontok::db::project::{NewProject, PgProjectStore};
@@ -797,7 +797,7 @@ async fn code_bundle_too_large() {
 
     // 上限 + 1 MB 的**原始字节**（不是 zip）。路由的 body 上限留了 8 MB 余量，
     // 所以这一条能走到 handler 里被**我们的**判据接住（而不是 axum 的纯文本 413）。
-    let big = vec![0u8; ontok::console::bundle::MAX_BUNDLE_BYTES + 1024 * 1024];
+    let big = vec![0u8; ontok::provision::bundle::MAX_BUNDLE_BYTES + 1024 * 1024];
     let (st, v, body) = upload(&app, &project, big).await;
     assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
     assert_eq!(v["code"], "bundle.too_large", "{body}");
@@ -1390,13 +1390,13 @@ async fn an_underscore_project_name_is_accepted_but_the_old_rejections_still_hol
     // ① 纯函数面：pattern 本体的正例 / 反例。
     for ok in ["foo_bar_159", "a_b", "req129_ac006_22140_1793033086208", "t_1"] {
         assert!(
-            ontok::console::bundle::valid_project_name(ok),
+            ontok::provision::bundle::valid_project_name(ok),
             "`{ok}` 应当合法（下划线已放行）"
         );
     }
     for bad in ["Bad_Name", "foo bar", "..", "_leading", "-leading", "a", "foo/bar"] {
         assert!(
-            !ontok::console::bundle::valid_project_name(bad),
+            !ontok::provision::bundle::valid_project_name(bad),
             "`{bad}` 必须仍然被拒（旧行为不回退）"
         );
     }

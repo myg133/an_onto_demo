@@ -270,7 +270,7 @@ fn local_service(token: &str) -> std::sync::Arc<ontok::console::ConsoleService> 
         audit: AuditLog::new(AuditSink::stdout_only()),
         bind: "127.0.0.1:0".parse().unwrap(),
         allow_public: false,
-        secret_cipher: ontok::console::dsn::SecretCipher::for_tests(),
+        secret_cipher: ontok::provision::dsn::SecretCipher::for_tests(),
     }))
 }
 
