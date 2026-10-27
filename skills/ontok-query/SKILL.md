@@ -342,7 +342,7 @@ python ana.py bill --class <class>
 
 > **判断标准**：同一种"取数/解析"要做第 2 次时，就该抽成文件；⛔ 不要复制粘贴改三个字符。
 
-#### ⑦ ⛔ 不要"找接口规格"，也不要翻 SDK 源码
+#### ⑥ ⛔ 不要"找接口规格"，也不要翻 SDK 源码
 
 实测（同一轮里出现了三次）：
 
@@ -368,7 +368,7 @@ python ana.py bill --class <class>
 > 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
 > 9 次错误里 6 次出在这几件事上（§4.4②）。
 
-#### ⑥ 配套文档与脚本（**遇到细节就翻这些，别猜**）
+#### ⑦ 配套文档与脚本（**遇到细节就翻这些，别猜**）
 
 | 文件 | 讲什么 |
 | --- | --- |
@@ -382,7 +382,16 @@ python ana.py bill --class <class>
 
 #### ① 取数脚本
 
-本 skill 的取数脚本按 **skill 目录相对路径** 引用：`scripts/access_fetch.py`。用法：
+本 skill 的取数脚本按 **skill 目录相对路径** 引用：`scripts/access_fetch.py`。
+
+**它就是一个 `.py` 文件** —— 下面两件事做了也是白费一轮：
+
+| ⛔ 它不是 | 所以别做 |
+| --- | --- |
+| 不是 pip 包 | `pip show ontok` / `python -c "import ontok"` ⇒ `ModuleNotFoundError` **是正常的** |
+| 不是命令 | `which ontok-builder` 找不到**也是正常的**（构建工具不装在客户环境） |
+
+用法：
 
 ```bash
 python scripts/access_fetch.py --selftest        # 离线自检（不需要 AM / 凭据 / 网络）
