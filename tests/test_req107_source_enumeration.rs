@@ -916,30 +916,11 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "src/review_open/build_run.rs",
-        "写不出基础提案 {}",
+        "草稿已写出",
         1,
-        "`build run` 在 `--work-dir` 里写**基础提案**（空提案或人给的提案）：本地中间产物，\
-         用于 `doc merge` 的输入；⛔ 不是客户视图、也不进库（导入是第 ③ 段）",
-    ),
-    (
-        "src/review_open/build_run.rs",
-        "已导入，共 {} 个条目",
-        1,
-        "`build run` 第 ③ 段的导入回执：提案别名 + 条目数 + 基版本（与 `propose import` 同源，\
-         同属建模轨回执）",
-    ),
-    (
-        "src/review_open/build_run.rs",
-        "[{}] {} {}",
-        1,
-        "`build run` 的逐条回执 `[seq] kind target_key`（与 `propose import` 的同一形状）：\
-         `target_key` 是建模 key 本身，属建模轨内容",
-    ),
-    (
-        "src/review_open/build_run.rs",
-        "其余 {} 条在页面上看",
-        1,
-        "`build run` 的回执截断提示（零数据）：超过 20 条时让人去页面上看",
+        "`build run` 第 ③ 段的**草稿回执**（REQ-163）：工作目录里的 `out/proposal.json` + 条目数 + \
+         项目名。写的是**本地工作目录**（评审台的输入），不是库、不是客户视图；\
+         条目名一个都不打（要在页面上看）",
     ),
     (
         "src/review_open/build_run.rs",
