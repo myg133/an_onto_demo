@@ -43,10 +43,20 @@
       </div>
     </div>
     <div class="topbar-sep"></div>
-    <div class="crumbs">
-      <b id="crumb-project">—</b>
-      <span id="crumb-sub">未连接</span>
+    <!-- ⭐ REQ-159 P1c-2 · 项目选择器：原来的项目名变成可点的下拉（切项目 ⇒ 重绘本体图）。
+         没有 admin 口令时这里是禁用态（看图不受影响）。 -->
+    <div class="projsel" id="projsel">
+      <button class="proj-pick" id="proj-pick" type="button" disabled title="切换项目（一套部署 · 多套本体）">
+        <span class="proj-pick-name" id="crumb-project">—</span>
+        <span class="proj-pick-meta" id="crumb-sub">未连接</span>
+        <span class="proj-pick-caret" aria-hidden="true">▾</span>
+      </button>
+      <button class="proj-add" id="proj-add" type="button" disabled title="新建项目">＋</button>
+      <div class="proj-menu" id="proj-menu"></div>
     </div>
+    <button class="q-btn" id="bundle-open" type="button" disabled>上传构建包</button>
+    <button class="q-btn ghost" id="key-view" type="button" disabled>查看 key</button>
+    <span class="proj-hint" id="ops-hint"></span>
     <div class="spacer"></div>
     <div class="search">
       <input id="token" type="password" placeholder="访问口令…" autocomplete="off" spellcheck="false" aria-label="访问口令" />
@@ -93,6 +103,8 @@
     <!-- 视图：本体图 -->
     <section class="view" id="v-graph">
       <svg id="graph"></svg>
+      <!-- ⭐ REQ-159 P1c-2 · 操作结果/降级提示条（默认不存在条目 ⇒ 高度为 0，不挤动图） -->
+      <div class="ops-banner" id="ops-banner"></div>
       <div class="hint-bar">
         <span><em>拖拽</em> 平移</span>
         <span><em>滚轮</em> 缩放</span>

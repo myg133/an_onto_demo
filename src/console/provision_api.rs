@@ -114,6 +114,22 @@ fn as_json<T: serde::Serialize>(v: &T) -> Value {
 }
 
 // ══════════════════════════════════════════════════════════════
+// ⓪ GET /api/projects —— 列表（Studio 顶栏下拉）
+// ══════════════════════════════════════════════════════════════
+
+/// `GET /api/projects` —— 全部项目（**只读**）。
+///
+/// 与 `bundle_status` 同口径：**不记审计行** —— 它读的是项目名 / 版本号 / 两个计数，
+/// 没有 key、没有 DSN、没有密文，写一行审计只会把「谁在刷新下拉」灌满审计文件。
+/// 真正的敏感查看是 `GET …/key`（那条每次都记 `reveal_key`）。
+pub async fn list_projects(d: &Deps<'_>) -> Response {
+    match provision::list_projects(d.pool).await {
+        Ok(out) => respond(StatusCode::OK, as_json(&out)),
+        Err(e) => fail_op(e),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
 // ① POST /api/projects —— 建项目 + 发 key
 // ══════════════════════════════════════════════════════════════
 

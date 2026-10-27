@@ -282,7 +282,13 @@ fn routes() -> Router {
         // ⚠️ 只认 `kind = admin`：身份门对 `/api/projects*` 一条路径判一次（`is_write_path`），
         //    query key ⇒ **403 `key.not_admin`**。⛔ 读端点（catalog / describe / sparql /
         //    ttl / mcp / studio）的路由与行为一个字节都没动。
-        .route("/api/projects", post(post_create_project))
+        // ⭐ REQ-159 P1c-2 · `GET /api/projects` —— Studio 顶栏的项目下拉（读，但**只给 admin**：
+        //    它落在 `/api/projects` 前缀下，同一个 `is_write_path` 门，`query` key ⇒ 403
+        //    `key.not_admin`）。⛔ 它不改 `POST` 那一条的任何语义。
+        .route(
+            "/api/projects",
+            get(get_list_projects).post(post_create_project),
+        )
         // ⚠️ 上传这一格**单独**放宽 body 上限（与 console 同一个常量）：
         // 全局 256 KiB 是给 SPARQL 的，包动辄几百 KB —— 但 ⛔ 不全局放开。
         .route(
@@ -1352,6 +1358,16 @@ async fn inject_write_plane(
 ) -> Response {
     req.extensions_mut().insert(write);
     next.run(req).await
+}
+
+/// `GET /api/projects` —— 项目列表（Studio 顶栏下拉；与 ADR-013 的写面同一个 admin 门）。
+///
+/// 三件事刻意如此：
+/// - **不读 `:p`**：列表没有作用域，admin 看的是全部项目（那正是它存在的理由）；
+/// - **不解析项目**（`resolve_multi` 对 `/api/projects*` 只判 admin，不查库）；
+/// - **不记审计行**：回执里没有 key / DSN / 密文（见 `provision_api::list_projects`）。
+async fn get_list_projects(Extension(write): Extension<Arc<WritePlane>>) -> Response {
+    crate::console::provision_api::list_projects(&write.deps()).await
 }
 
 /// `POST /api/projects` —— 建项目 + 发 key（**201**）。
