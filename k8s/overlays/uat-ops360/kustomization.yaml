@@ -58,7 +58,7 @@ patches:
         value: "cloud-resource"
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
-        value: "3"
+        value: "5"
       # 本体模式不读源库：把这个 env 去掉，避免"看起来需要它"
       - op: remove
         path: /spec/template/spec/containers/0/env/3
