@@ -549,4 +549,242 @@ mod tests {
             "`.edge-line` 上不要挂入场动画（`both` 会把 opacity 锁死）"
         );
     }
+
+    /* ══════════════════════════════════════════════════════════════
+       ⭐ REQ-159 P1c-2b · 节点着色的**两种模式**（可查性 / 中心度）
+       ══════════════════════════════════════════════════════════════ */
+
+    /// 从 `studio.js` 里抠出一个函数体（含首尾大括号）。
+    ///
+    /// 判据只看**这个函数内部**在写什么 —— AC-e4 要的正是「可查性的图例函数里
+    /// 不许出现中心度的词」这种**局部**约束；拿整份 JS 做 `contains` 会被另一段
+    /// 代码满足，等于没判（REQ-144 的「判据写在两处」教训）。
+    fn body_of(src: &'static str, name: &str) -> &'static str {
+        let start = src
+            .find(&format!("function {name}("))
+            .unwrap_or_else(|| panic!("studio.js 里找不到 `function {name}(`"));
+        let rest = &src[start..];
+        /* 函数体在文件里以「两空格缩进 + } + 换行」收尾；嵌套闭包的缩进更深，
+           不会撞上这个标记。 */
+        let end = rest
+            .find("\n  }\n")
+            .unwrap_or_else(|| panic!("`function {name}(` 没有以两空格缩进的 }} 收尾"))
+            + "\n  }\n".len();
+        &rest[..end]
+    }
+
+    /// ⭐ **AC-e1** · 着色模式**只进** `sessionStorage`：⛔ URL、⛔ 长期存储。
+    ///
+    /// 为什么不能进 URL：URL 会进访问日志、收藏、截图、别人贴过来的链接 ——
+    /// 那是一个**显示偏好**，没有理由出现在任何人的日志里（与口令同一条纪律，
+    /// 只是后果轻一些）。所以这里连 `searchParams` / `pushState` 都一并禁掉。
+    ///
+    /// 变异（红）：把 `sessionStorage.setItem(COLOR_KEY` 改成 `location.search` ⇒ 本用例红。
+    #[test]
+    fn the_color_mode_lives_only_in_session_storage_and_never_in_the_url() {
+        assert!(
+            STUDIO_JS.contains("var COLOR_KEY = \"ontok_studio_color_mode\";"),
+            "着色模式的 storage key 不见了"
+        );
+        assert!(
+            STUDIO_JS.contains("sessionStorage.setItem(COLOR_KEY"),
+            "切模式没有写 sessionStorage ⇒ 刷新后记不住（AC-e1）"
+        );
+        assert!(
+            STUDIO_JS.contains("sessionStorage.getItem(COLOR_KEY)"),
+            "启动时没有读 sessionStorage ⇒ 刷新后回不到上次的选择（AC-e1）"
+        );
+        for bad in ["?color=", "&color=", "searchParams", "pushState", "replaceState"] {
+            assert!(
+                !STUDIO_JS.contains(bad),
+                "着色模式⛔ 进 URL：页面里出现了 `{bad}`"
+            );
+        }
+
+        /* 壳：两项、默认是第一项「可查性」 */
+        assert!(INDEX_HTML.contains("id=\"color-mode\""), "顶栏没有「着色」下拉（#color-mode）");
+        let a = INDEX_HTML.find("value=\"verifiability\"").expect("缺「可查性」选项");
+        let b = INDEX_HTML.find("value=\"degree\"").expect("缺「中心度」选项");
+        assert!(a < b, "「可查性」必须是**第一个** option（= 默认值）");
+        assert!(
+            INDEX_HTML.contains(">可查性<") && INDEX_HTML.contains(">中心度<"),
+            "两项的文案必须是「可查性 / 中心度」"
+        );
+        assert_eq!(INDEX_HTML.matches("<option").count(), 2, "着色下拉只该有两项");
+    }
+
+    /// ⭐ **AC-e3** · 四档必须用**分位数**（P50/P80/P95），⛔ 绝对阈值。
+    ///
+    /// 「≥5 条边算枢纽」在 500 个类上会全红、在 10 个类上会全灰；分位数保证
+    /// 「不管多少类，四档都有人」。这条守卫的两半：
+    /// · `degreeTier` 里的每一条比较都只能跟 `cuts.pXX` 比（出现数字 ⇒ 又回到绝对阈值）；
+    /// · 分位数是「排序后取第 k 个」（最近秩法），不是插值 —— 图上没有 3.5 条边。
+    ///
+    /// 变异（红）：把 `deg >= cuts.p95` 改成 `deg >= 5` ⇒ 本用例红。
+    #[test]
+    fn the_degree_tiers_are_quantiles_not_absolute_thresholds() {
+        assert!(STUDIO_JS.contains("var DEGREE_TIERS = ["), "四档颜色表（DEGREE_TIERS）不见了");
+        for (label, color) in [
+            ("枢纽", "#ef7a8a"),
+            ("中心", "#e6b455"),
+            ("一般", "#6ec8ff"),
+            ("边缘", "#5d6a80"),
+        ] {
+            assert!(
+                STUDIO_JS.contains(&format!("label: \"{label}\", color: \"{color}\"")),
+                "DEGREE_TIERS 里的「{label}」不是占位色 {color}（颜色表被改散了？）"
+            );
+        }
+        assert!(
+            STUDIO_JS.contains("var DEGREE_PCTS = { p50: 50, p80: 80, p95: 95 };"),
+            "分位点常量被改了（四档 = P50/P80/P95）"
+        );
+        assert!(
+            STUDIO_JS.contains("Math.ceil(p / 100 * n)"),
+            "分位数不再是「排序后取第 ceil(p/100×n) 个」—— 换个算法边界值就对不上了"
+        );
+
+        let tier = body_of(STUDIO_JS, "degreeTier");
+        let mut idx = 0usize;
+        let mut seen = 0usize;
+        while let Some(p) = tier[idx..].find("deg >=") {
+            let at = idx + p + "deg >=".len();
+            let rest = tier[at..].trim_start();
+            assert!(
+                rest.starts_with("cuts.p"),
+                "degreeTier 里出现了**绝对阈值**（`deg >=` 后面不是分位切点）：\n{tier}"
+            );
+            seen += 1;
+            idx = at;
+        }
+        assert_eq!(seen, 3, "四档的判定应当正好三条 `deg >= cuts.pXX`：\n{tier}");
+
+        /* 颜色表集中一处：球面/泛光渐变从 DEGREE_TIERS 派生，⛔ 不再写第二份色值 */
+        let defs = body_of(STUDIO_JS, "injectDefs");
+        assert!(defs.contains("DEGREE_TIERS.forEach"), "四档的渐变不是从 DEGREE_TIERS 派生的");
+        assert!(
+            !defs.contains("#ef7a8a"),
+            "injectDefs 里又写了一份枢纽色 ⇒ 颜色表不再集中一处（用户改一处不生效）"
+        );
+    }
+
+    /// ⭐ **AC-e4** 的静态那一半 · 图例文案跟着模式走，⛔ 两种模式的词不许串味。
+    ///
+    /// 这条守卫防的是**颜色撒谎**：图例说「琥珀 = 需取数」而实际琥珀 = 枢纽。
+    /// 所以判据不是「图例里有中心度的词」，而是「**可查性的图例函数里没有**中心度的词」
+    /// 且「中心度的图例函数里没有**可查性**的词」——局部断言，串味必红。
+    ///
+    /// 动态那一半（真跑 studio.js、切模式、读图例）在
+    /// `tests/fixtures/req159e/color_probe.js`。
+    ///
+    /// 变异（红）：让 `buildLegend` 永远走 `verifiabilityLegendRows()` ⇒ 本用例红 +
+    /// 探针的 AC-e4 四条红。
+    #[test]
+    fn the_legend_text_follows_the_color_mode() {
+        assert!(
+            STUDIO_JS.contains(
+                "(colorMode === \"degree\") ? degreeLegendRows() : verifiabilityLegendRows()"
+            ),
+            "图例不再按模式分派 ⇒ 切了模式图例不变，颜色就在撒谎（AC-e4）"
+        );
+
+        let ver = body_of(STUDIO_JS, "verifiabilityLegendRows");
+        assert!(ver.contains("API 源") && ver.contains("库源"), "可查性图例少了那两句");
+        for bad in ["需取数", "不可查", "枢纽", "中心度", "边缘"] {
+            assert!(
+                !ver.contains(bad),
+                "可查性图例里出现了中心度的词「{bad}」\n{ver}"
+            );
+        }
+
+        let deg = body_of(STUDIO_JS, "degreeLegendRows");
+        assert!(deg.contains("中心度着色"), "中心度图例没有自己的标题（用户分不清现在看的是哪套）");
+        assert!(deg.contains("大小与颜色同源"), "中心度图例没有说明「大小与颜色同源」");
+        for bad in ["需取数", "不可查", "API 源", "库源"] {
+            assert!(
+                !deg.contains(bad),
+                "中心度图例里出现了可查性的词「{bad}」⇒ 颜色在撒谎\n{deg}"
+            );
+        }
+        /* 阈值必须**现算**并显示出来（⛔ 写死一个数字：换个本体阈值就变了） */
+        assert!(deg.contains("tierRange(t, cuts)"), "中心度图例没有显示实际阈值");
+        assert!(deg.contains("degreeCuts()"), "中心度图例的阈值不是现算的");
+    }
+
+    /// ⭐ **AC-e7** · 模式 A「可查性」的三态、三色、判据**逐字未变**。
+    ///
+    /// 模式 A 是**已验收**的语义（REQ-155/156 那套），这次只加第二种模式，
+    /// ⛔ 不许"顺手优化"它。这条用例把返回值、色调表达式、三个判据一起钉住：
+    /// 改任何一个字（包括色值）就红。
+    ///
+    /// 变异（红）：把 `"#5d6a80"` 改成 `"#606a80"` ⇒ 本用例红。
+    #[test]
+    fn the_verifiability_three_states_and_colors_are_unchanged() {
+        assert!(STUDIO_JS.contains(r#"key: "api", label: "需取数", tone: "warn","#));
+        assert!(STUDIO_JS.contains(r#"key: "none", label: "不可查", tone: "dim","#));
+        assert!(STUDIO_JS.contains(
+            r#"return { key: "ok", label: "可查", tone: "ok", why: "库源，可走 SPARQL" };"#
+        ));
+        assert!(
+            STUDIO_JS.contains(
+                r##"v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#5d6a80""##
+            ),
+            "模式 A 的三色映射被改了（AC-e7 钉的就是这个表达式：琥珀 / 蓝 / 灰）"
+        );
+        assert!(
+            STUDIO_JS.contains(
+                r#"grad: v.key === "api" ? "warn" : v.key === "ok" ? "ok" : "dim""#
+            ),
+            "模式 A 的三个渐变键被改了（glow-warn / glow-ok / glow-dim）"
+        );
+
+        let vf = body_of(STUDIO_JS, "verifiability");
+        for needle in [
+            "var mode = (S.health || {}).mode;",
+            "if (isApi(c)) {",
+            "if (mode === \"ontology-only\") {",
+        ] {
+            assert!(vf.contains(needle), "verifiability 的判据变了：`{needle}`");
+        }
+    }
+
+    /// ⭐ **AC-e5** 的静态那一半 · 切换着色**只改属性**：⛔ 不重建图、⛔ 不重跑布局、⛔ 不刷新。
+    ///
+    /// 布局一跳，用户就以为页面在闪 —— 这条守的是「点了下拉，图**原地**换色」。
+    /// 静态这半盯调用点（建图/布局/刷新一个都不许出现），动态那半由探针数
+    /// 「g-root 新建 0 / node-g 新建 0 / reload 0 / cx 偏移 0」。
+    ///
+    /// 变异（红）：在 `setColorMode` 里加一句 `buildGraph()` ⇒ 本用例红。
+    #[test]
+    fn the_color_switch_only_repaints_existing_nodes() {
+        let repaint = body_of(STUDIO_JS, "applyColorMode");
+        assert!(
+            !repaint.contains("buildGraph") && !repaint.contains("simulate"),
+            "applyColorMode 里调了建图/布局 ⇒ 布局会跳（AC-e5）：\n{repaint}"
+        );
+        assert!(
+            !repaint.contains("createElement") && !repaint.contains("appendChild"),
+            "applyColorMode 里在造元素 ⇒ 那不是「只重绘颜色」"
+        );
+        assert!(!repaint.contains("reload"), "applyColorMode 里刷新了页面");
+        assert!(
+            repaint.contains("setAttribute(\"stroke\"") && repaint.contains("setAttribute(\"fill\""),
+            "没有真的改描边/填充色"
+        );
+
+        let setmode = body_of(STUDIO_JS, "setColorMode");
+        for bad in ["buildGraph", "simulate", "renderAll", "reload", "centerAt1", "applyView"] {
+            assert!(
+                !setmode.contains(bad),
+                "setColorMode 里出现了 `{bad}`（切换会重建/跳布局）"
+            );
+        }
+        assert!(setmode.contains("buildLegend()"), "setColorMode 没有换图例（AC-e4）");
+
+        /* 首屏不能「先按默认色画一遍再改」= 一次肉眼可见的闪 */
+        let start = body_of(STUDIO_JS, "start");
+        let read_at = start.find("colorMode = readColorMode();").expect("start() 没有先读模式");
+        let boot_at = start.find("boot();").expect("start() 里没有 boot()");
+        assert!(read_at < boot_at, "先画图后读模式 ⇒ 首屏会闪一下");
+    }
 }

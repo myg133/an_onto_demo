@@ -58,6 +58,16 @@
     <button class="q-btn ghost" id="key-view" type="button" disabled>查看 key</button>
     <span class="proj-hint" id="ops-hint"></span>
     <div class="spacer"></div>
+    <!-- ⭐ REQ-159 P1c-2b · 着色：可查性（默认＝现状）/ 中心度（按连接数分位四档）。
+         选择只进 sessionStorage（⛔ URL、⛔ 长期存储）；切换只换节点色与图例，
+         ⛔ 不重建图、⛔ 不重跑布局。 -->
+    <div class="colorpick">
+      <label class="colorpick-label" for="color-mode">着色</label>
+      <select class="colorpick-select" id="color-mode" aria-label="着色方式">
+        <option value="verifiability" selected>可查性</option>
+        <option value="degree">中心度</option>
+      </select>
+    </div>
     <div class="search">
       <input id="token" type="password" placeholder="访问口令…" autocomplete="off" spellcheck="false" aria-label="访问口令" />
     </div>
