@@ -1,3 +1,7 @@
+> ⚠️ **本文件不维护状态** —— 状态以 [`dispatch/req-registry.md`](../dispatch/req-registry.md) 为准。
+> 这里只记"为什么做、做到哪一步、还差什么"。
+> > 真值：**P1+P2 已完成**（v0.2.2 起 Studio 上线）· **P3（Console 换皮）已交另一位 BA 的 Dev**。
+
 # 状态：REQ-155 · UI 重组
 
 ## 当前状态

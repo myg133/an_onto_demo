@@ -1,3 +1,6 @@
+> ⚠️ **本文件不维护状态** —— 状态以 [`dispatch/req-registry.md`](../dispatch/req-registry.md) 为准。
+> 这里只记"为什么做、做到哪一步、还差什么"。
+
 # 状态：REQ-140 · JSON-LD 上下文子图
 
 ## 当前状态

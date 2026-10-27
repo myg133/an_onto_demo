@@ -108,7 +108,7 @@ stateDiagram-v2
 | # | 方法 · 路径 | 谁 | 作用 |
 | --- | --- | --- | --- |
 | 1 | `POST /api/projects` | admin | 建项目 + **生成 key** |
-| 2 | `POST /api/projects/:p/bundles` | admin | 上传包（multipart），只校验不解析 |
+| 2 | `POST /api/projects/:p/bundles` | admin | 上传包（**octet-stream 原始字节**），只校验不解析 |
 | 3 | `GET /api/projects/:p/bundles/:id` | admin | 看包状态与组件清单 |
 | 4 | `PUT /api/projects/:p/database` | admin | 配 DSN（加密存，**永不回显**） |
 | 5 | `POST /api/projects/:p/database/test` | admin | 测连通性 |
@@ -146,14 +146,17 @@ stateDiagram-v2
 
 ### 2 · `POST /api/projects/:p/bundles`
 
-`multipart/form-data`，字段 `file`。
+**`Content-Type: application/octet-stream`，body = 包文件的原始字节。**
+
+> ⚠️ **不用 multipart**（2026-10-27 与前端对齐后改）：单文件没必要 multipart，
+> 也不必给 `axum` 开 multipart feature。前端 `request()` 需要一条「原始 body」分支。
 
 ```json
 // 201
 { "bundle_id": "bdl_01H…", "state": "uploaded",
   "requires_db": true,
   "components": { "ontology": {"entity_types":30,"link_types":34},
-                  "am": {"tenants":3}, "db": {"dialect":"postgresql"} },
+                  "am": {"entities":12,"sources":3}, "db": {"dialect":"postgresql"} },
   "sha256_verified": true }
 ```
 
@@ -627,3 +630,32 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 | 审计被改 | 没有防篡改（v1 不做） |
 
 > 一句话：**加密挡的是"拖库"，审计挡的是"内鬼"，都不挡"有 admin 的人"。** 这是可查看功能的固有代价，不是实现缺陷。
+
+
+---
+
+## 十八 · 与前端对齐的口径（2026-10-27 10:27）
+
+前端（`src/console/page.rs`，另一位 BA 的 Dev 在做）已按下面这组口径写完。**后端必须照这个实现，否则页面要改。**
+
+| # | 项 | 口径 |
+| --- | --- | --- |
+| 1 | 上传 | `Content-Type: application/octet-stream`，body = 原始字节，**⛔ 不用 multipart** |
+| 2 | 测连通 | **成功失败都 HTTP 200**；失败体 `{"ok":false,"error":{"code","message"}}` |
+| 3 | 未实现端点 | 回 **404**（前端只在 404 时显示「服务端未就绪」；405/401 会被当成端点坏了） |
+| 4 | `components.am` 计数 | 用 `entities` / `sources`，**⛔ 不用 `tenants`**（`Mapping` 里没这个字段，`tenants` 是当初猜的） |
+| 5 | `import` 回执 | `{version, state, counts, warnings[]}` —— **不含 blocking**；blocking 属于评审清单（`review/decide`），不是解析结果 |
+| 6 | body 上限 | **只在上传这一条路由放宽**，⛔ 不动全局 4 MB（否则 `/api/import` 也跟着放宽） |
+
+### 包容器：**store-only zip**
+
+| 特征 | 值 |
+| --- | --- |
+| 压缩方法 | **method=0（不压缩）** |
+| data descriptor | **无**（bit 3 = 0；长度与 CRC 在 local header） |
+| 时间戳 | 固定 `1980-01-01`（为了两次打包逐字节相同） |
+| entry 顺序 | `manifest.json` **永远是第一条**，其余按 path 升序 |
+| 文件名编码 | UTF-8（bit 11 = 1） |
+
+> 构建端手写 zip writer（不引 `zip` crate，遵守"不新增依赖"）。标准工具都能读；
+> **我这边的验证不只看他的自述，会用 Python `zipfile` 独立解一遍。**
