@@ -166,6 +166,8 @@ ontok-builder console serve --dir <工作目录>
 # 6 导出（**导出的是定版**，不是草稿）
 #   6a 主路径：页面上点「导出构建包」→ 从定版快照打包
 #       产物 <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle（包内快照与定版逐字节相同）
+# 无 UI / CI 里出同一个包（与页面导出**逐字节相同**；--built-at 钉死才可比 sha）
+ontok-builder bundle pack --dir <工作目录> [--version v1] --out <路径> [--built-at <RFC3339>]
 ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
 #   ✅ 验：exit 0（2=包不合规 / 1=环境问题）
 #   6b 附加：部署端还要 TTL / R2RML 时（**旧 DB 链**：要连元数据库、按项目/版本）
@@ -204,6 +206,8 @@ ontok-builder console serve --dir <工作目录>
 
 # 4 导出（B 没有 schema ⇒ 不进库、也不导 TTL；**只要那个定版包**）
 #   页面上「导出构建包」→ .ontok/bundles/<目录名>-v<N>.ontokbundle
+# 无 UI / CI 里出同一个包（与页面导出**逐字节相同**；--built-at 钉死才可比 sha）
+ontok-builder bundle pack --dir <工作目录> [--version v1] --out <路径> [--built-at <RFC3339>]
 ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
 #   ✅ 验：包内快照 == .ontok/versions/v<N>/snapshot.json（逐字节）；exit 0
 
@@ -350,13 +354,15 @@ ontok-builder console serve --dir <工作目录> [--bind 127.0.0.1:8899] [--no-b
 | `review decide --accept-all …` | **旧：DB 版批量放行** | **已被取代**：v2 里没有这个概念，逐条签就是逐条签 |
 | `console serve` + 口令表 / 项目作用域 / 声明校验 | **旧：带口令 / 项目 / 声明的管理台** | **已被取代**：那些参数已删，写了直接报错 |
 
-⚠️ 若你的工具版本 `build run` 尾步仍落到旧的 `review open`（REQ-160），**Ctrl-C 掉**，按本节 §1 用 `console serve --dir <工作目录>` 起 console v2。
+> ✅ REQ-163 起，`build run` 的尾步**就是** console v2（同一份启动实现），**不再**落到旧 `review open`。
 
 ### 8 · 定版之后：出包 →（**人工**）传 Studio
 
 ```bash
 # 页面上点「导出构建包」= 从**定版快照**打包（复用 bundle::pack），不重算、不重新抽
 # 产物：<工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
+# 无 UI / CI 里出同一个包（与页面导出**逐字节相同**；--built-at 钉死才可比 sha）
+ontok-builder bundle pack --dir <工作目录> [--version v1] --out <路径> [--built-at <RFC3339>]
 ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
 #   0 = 通过 · 2 = 包不合规 · 1 = 环境问题
 ```
