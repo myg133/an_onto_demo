@@ -284,7 +284,12 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 .drawer-head .btn-icon{margin-left:auto;width:26px;height:26px;padding:0;border-color:var(--line);background:transparent;color:var(--mut)}
 .drawer-head .btn-icon:hover{color:var(--fg);border-color:var(--line)}
 .drawer-body{flex:1;min-height:0;overflow:auto;padding:12px 13px}
-#k-detail{margin:0;border:0;padding:0;background:transparent}
+#k-detail{margin:0;border:0;padding:0;background:transparent;overflow-x:auto}
+/* 抽屉里的属性 / 关系：紧凑列表（名字等宽 + 一行摘要），不是 7 列表格 */
+.list{display:grid;gap:5px;margin-top:4px}
+.row2{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;line-height:1.5}
+.row2 .k{color:#cfe6ff}
+.row2 .t{color:var(--mut-2);word-break:break-word}
 /* ── 滚动条 ───────────────────────────────────────────── */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -1561,25 +1566,50 @@ function describeName(name) {
     var box = $("k-detail");
     clear(box);
     box.hidden = false;
-    box.appendChild(el("h2", null, "详情：" + d.name + "（" + d.kind + "）"));
+    // 标题只在抽屉头显示（`openDrawer` 设），这里不再重复一个 h2 —— 460px 宽的抽屉里
+    // 两行一样的标题纯属占地方。
     if (d.kind === "class") {
       box.appendChild(kvList([
         ["源表", d.table], ["主键", d.primary_key], ["说明", d.description || "—"],
         ["租户口径", (d.tenant ? (d.tenant.mode + (d.tenant.column ? ("（列 " + d.tenant.column + "）") : "") +
           (d.tenant.coverage ? (" · 覆盖面 " + d.tenant.coverage) : "") + (d.tenant.reason ? (" · " + d.tenant.reason) : "")) : "—")]
       ]));
+      // 抽屉只有 460px：属性 / 关系用**紧凑列表**（名字等宽 + 一行摘要），别塞 7 列表格
+      // —— 那样每列只剩几十像素，必须横向拖着看（样机同样用列表）。
       box.appendChild(el("h3", null, "属性（" + (d.properties || []).length + "）"));
-      box.appendChild(makeTable(["名字", "列", "类型", "可空", "枚举值", "样例", "说明"], (d.properties || []).map(function (p) {
-        return [p.name, p.column, p.datatype, p.nullable === null || p.nullable === undefined ? "—" : yesNo(p.nullable),
-          p.enum_values || "—", p.sample === null || p.sample === undefined ? "—" : p.sample, p.note || "—"];
-      })));
+      var plist = el("div", "list");
+      (d.properties || []).forEach(function (p) {
+        var row = el("div", "row2");
+        row.appendChild(el("span", "k key", p.name));
+        row.appendChild(el("span", "t", [
+          p.column ? ("列 " + p.column) : "",
+          p.datatype || "",
+          p.nullable === null || p.nullable === undefined ? "" : (p.nullable ? "可空" : "非空"),
+          p.enum_values ? ("枚举 " + p.enum_values) : "",
+          p.sample === null || p.sample === undefined ? "" : ("例 " + p.sample),
+          p.note || ""
+        ].filter(Boolean).join(" · ")));
+        plist.appendChild(row);
+      });
+      box.appendChild(plist);
       box.appendChild(el("h3", null, "关系（" + (d.relations || []).length + "）"));
-      box.appendChild(makeTable(["名字", "反向", "边", "证据等级", "可查", "基数", "证据"], (d.relations || []).map(function (r) {
-        return [r.name, r.inverse, r.from + " → " + r.to + " · 列 " + r.column,
-          badge(r.evidence_level, r.evidence_level === "true" ? "ok" : (r.evidence_level === "false" ? "bad" : "warn")),
-          r.queryable ? badge("可查", "ok") : badge("不可查", "bad"),
-          r.cardinality || "—", r.evidence || "—"];
-      })));
+      var rlist = el("div", "list");
+      (d.relations || []).forEach(function (r) {
+        var row = el("div", "row2");
+        row.appendChild(el("span", "k key", r.name));
+        row.appendChild(el("span", "t", [
+          r.from + " → " + r.to,
+          r.column ? ("列 " + r.column) : "",
+          r.inverse ? ("反向 " + r.inverse) : "",
+          r.cardinality ? ("基数 " + r.cardinality) : "",
+          r.evidence || ""
+        ].filter(Boolean).join(" · ")));
+        row.appendChild(badge("证据 " + (r.evidence_level || "—"),
+          r.evidence_level === "true" ? "ok" : (r.evidence_level === "false" ? "bad" : "warn")));
+        row.appendChild(r.queryable ? badge("可查", "ok") : badge("不可查", "bad"));
+        rlist.appendChild(row);
+      });
+      box.appendChild(rlist);
     } else {
       box.appendChild(kvList([
         ["类", d.class], ["名字", d.name], ["列", d.column], ["类型", d.datatype],
