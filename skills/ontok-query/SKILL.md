@@ -353,41 +353,27 @@ python ana.py bill --class <class>
 > 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
 > 9 次错误里 6 次出在这几件事上（§4.4②）。
 
-#### ① 先定位脚本（**别假设它就在当前目录**）
+#### ① 脚本在哪、怎么调
 
-脚本是**一个普通的 `.py` 文件**，随本 skill 一起分发。它：
-
-| 不是 | 所以 ⛔ 别做 |
-| --- | --- |
-| 不是 pip 包 | `python -c "import ontok"` ⇒ `ModuleNotFoundError`（**这是正常的**） |
-| 不是命令 | `which ontok-builder` ⇒ 找不到（**这是正常的**，构建工具不一定装在客户环境） |
-| 不在你的工作目录 | `python access_fetch.py` ⇒ `No such file`（**先定位再跑**） |
-
-**定位三步（任选其一）**：
+`access_fetch.py` **与本文件同目录**。调用就是文件名本身：
 
 ```bash
-# A) 你知道 skill 装在哪 ⇒ 直接用全路径（最推荐，不用 cd）
-python <skill目录>/ontok-query/access_fetch.py --selftest
-
-# B) 不知道 ⇒ 先找它（找 access_fetch.py 这个文件，而不是找命令）
-ls <skill目录>/ontok-query/access_fetch.py
-find / -maxdepth 6 -name access_fetch.py 2>/dev/null        # 兜底
-
-# C) 想省事 ⇒ 复制到你自己的工作目录，之后用短命令
-cp -r <skill目录>/ontok-query .        # 整个目录（脚本 + fixtures）
-FETCH="python ontok-query/access_fetch.py"     # 后续示例统一用 $FETCH
-$FETCH --selftest
+python access_fetch.py --selftest
 ```
 
-> ⚠️ **`--selftest` 是"路径对不对"的唯一判据**：不需要 AM、不需要凭据、不需要网络。
-> 报 `No such file` ⇒ **你路径写错了，不是脚本坏了**；跑出 `88 passed` 才说明定位成功。
+**本文不规定任何目录**——脚本放在哪、`--mapping` 指向哪个 AM、`--out` 写到哪，
+**全由调用方（你的运行环境）决定**：
+
+| 参数 | 由谁给 |
+| --- | --- |
+| `--mapping` | 调用方给的 AM 文件（**本 skill 不带、也不需要知道它在哪**） |
+| `--out` | 你自己的输出位置 |
+| 脚本自身的路径 | 你的运行环境（agent 宿主）负责把 skill 文件放到位 |
+
+> ⛔ **不要去搜索、猜测或追问任何绝对路径 / 样例目录**。本 skill 里**没有任何**机器相关的路径；
+> 出现"目录找不到"时，正确反应是**问调用方要 AM 路径**，⛔ 不是去翻文件系统找某个目录名。
 >
-> ⚠️ **`--selftest` 要连 `fixtures/` 一起**（签名向量、AM 与分页夹具都在里面）：
-> 只复制 `access_fetch.py` 会报 `找不到内置 fixtures 目录`（**这是有意的**，不是脚本坏）。
-> 只要取数、不跑自检，可以只放 `access_fetch.py`，`--mapping` 指向客户自己的 AM 即可。
->
-> ⚠️ 同目录的 `fixtures/` 是**自检与演示用**（签名向量 + 几份假 AM），
-> ⛔ **不要拿它当生产 AM**；`--mapping` 永远指向**客户自己的 AM 文件**。
+> 唯一需要跑一次的是离线自检：`python access_fetch.py --selftest`（不需要 AM、不需要凭据、不需要网络）。
 
 #### ② 最常用的命令
 
