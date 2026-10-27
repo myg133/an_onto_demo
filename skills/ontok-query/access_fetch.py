@@ -446,7 +446,7 @@ def validate_am(am, check_fixtures=True, am_path=None):
         where = "source `%s`" % sid
         if kind and kind != "http-json":
             report.error("am.invalid",
-                         "%s 的 kind=%r；v1 只支持 http-json" % (where, kind))
+                         "%s 的 kind=%r；本脚本只支持 http-json" % (where, kind))
         if base_url and not base_url.startswith(("http://", "https://")):
             report.error("am.invalid",
                          "%s 的 base_url 不是 http(s) 地址：%r" % (where, base_url))
@@ -1315,7 +1315,7 @@ class HttpTransport(Transport):
             fail(classify_network_error(exc), EXIT_NETWORK,
                  "请求超时（%d 秒）：%s" % (self.timeout, url),
                  "网络/代理不通，或接口很慢。先 `--dry-run` 确认映射没问题，"
-                 "再查网络；本脚本 v1 **不自动重试**（重试策略交给调用方）。")
+                 "再查网络；本脚本**不自动重试**（重试策略交给调用方）。")
         except urllib.error.URLError as exc:
             self.calls += 1
             code = classify_network_error(exc)
