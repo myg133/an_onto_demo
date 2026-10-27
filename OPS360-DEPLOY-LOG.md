@@ -138,6 +138,21 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --check \
 
 本次实测：UAT 那份 AM 8 个 source **全缺 `service`** ⇒ 直接换镜像会**起不来**；补完后 `0 error`。
 
+### ⛔ 同 tag 重建 ⇒ `imagePullPolicy` 必须 `Always`
+
+**本次实测**：0.3.0 重建后 apply，老 pod 仍跑旧镜像 —— base 里是 `IfNotPresent`，节点有缓存就不重拉。
+**pod 名一样、tag 一样，你看不出来。**
+
+- overlay 已改 `Always`（`overlays/uat-ops360/kustomization.yaml`）
+- 验证别只看 tag，要看 **pod 的 imageID**：
+
+```bash
+kubectl -n anspire-ontok-uat get pods -l app=ontok-query \
+  -o jsonpath='{range .items[*]}{range .status.containerStatuses[?(@.name=="query")]}{.imageID}{"\n"}{end}{end}'
+# 与 podman image inspect <tag> --format '{{.Digest}}' 对得上，才算真的换了
+```
+
+
 ### ⛔ 两个"缺了就不可用"的前置（都是本次踩到的）
 
 | 前置 | 缺了会怎样 | 怎么 provision |
