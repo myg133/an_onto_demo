@@ -10,6 +10,8 @@
 //
 // 环境变量：
 //   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang | flaky | halfgarbage | garbagetwo
+//                  | maps（REQ-170：关系带 maps_to，且两端表/列在 schema 里）
+//                  | maps-bad（REQ-170：maps_to 指向不存在的列 ⇒ 程序必须丢掉并计数）
 //   FAKE_ACP_LOG   每收到一条 `session/prompt` 就往这个文件追加一行（数调用次数用）
 'use strict';
 
@@ -73,6 +75,41 @@ function answerFor(text) {
       });
     case 'garbage':
       return '好的，我来抽取：';
+    // ⭐ REQ-170：**库结构进了 prompt** 之后模型该给的形状（关系带 maps_to）。
+    // 这里只认列名（child_column / parent_column），表由「概念名 ↔ 表名/中文名」落 ——
+    // 与简报 §2-R3 的形状一致。
+    case 'maps':
+      return JSON.stringify({
+        concepts: [
+          { name: '云硬盘', quote: q1, modality: 'fact' },
+          { name: '云主机', quote: q2 || q1, modality: 'fact' },
+        ],
+        relations: [
+          {
+            subject: '云硬盘',
+            predicate: '挂载到',
+            object: '云主机',
+            quote: q2 || q1,
+            modality: 'fact',
+            maps_to: { child_column: 'server_id', parent_column: 'id' },
+          },
+        ],
+      });
+    // 反例：父端列在 schema 里不存在 ⇒ 必须**整条丢弃并计数**（⛔ 不编列名）。
+    case 'maps-bad':
+      return JSON.stringify({
+        concepts: [{ name: '云硬盘', quote: q1, modality: 'fact' }],
+        relations: [
+          {
+            subject: '云硬盘',
+            predicate: '挂载到',
+            object: '云主机',
+            quote: q2 || q1,
+            modality: 'fact',
+            maps_to: { child_column: 'server_id', parent_column: 'no_such_column' },
+          },
+        ],
+      });
     case 'valid':
     default:
       return JSON.stringify({

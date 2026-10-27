@@ -537,6 +537,26 @@ pub enum DocCmd {
         /// 「本轮 N 块失败，重跑会重调这 N 块 ⇒ 产物可能变化」。
         #[arg(long)]
         strict_deterministic: bool,
+        /// ⭐ REQ-170 · **真实库结构**（`ontok-builder introspect` 的 `schema.json`）。
+        ///
+        /// 给了 ⇒ 库结构摘要（表名 + 中文名 + 列名 + 列类型 + 既有关系）随**每一块**
+        /// 进 prompt（与 skill **同一条 system 通道**），关系断言可以带
+        /// `maps_to: {child_column, parent_column}`；两端表/列必须在这份 schema 里，
+        /// **查不到的整条丢弃并计数**（⛔ 不编列名、⛔ 不按名字猜表）。
+        ///
+        /// 摘要的内容进 `prompt_sha` ⇒ **换 schema 就让缓存整体失效**（与换 skill 同一条纪律）。
+        ///
+        /// 大库**不会全塞**：按本轮文档里的概念名给表打分、只带 top-N（见
+        /// `--schema-max-tables`），屏幕上报「带了多少 / 共多少」。
+        ///
+        /// ⛔ 不给 ⇒ 产物与 REQ-147 **逐字节相同**（这是零回归的判据）。
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// ⭐ REQ-170 · 大库的**大小闸**：每块最多带几张表（默认 40）。
+        ///
+        /// 只与 `--schema` 一起用。没有匹配的表就**一张都不带**（⛔ 不拿无关的表凑数）。
+        #[arg(long)]
+        schema_max_tables: Option<usize>,
     },
     /// ⭐ REQ-129 · 把断言**机械地**并进一份提案（产出与 `proposal.json` 同形状）
     ///
@@ -1330,7 +1350,7 @@ pub enum ReviewCmd {
 /// 合成一个命令会让「只想重跑合并」也被迫走一遍抽取（demand §九-风险 2）。
 #[derive(Subcommand)]
 pub enum BuildCmd {
-    /// 文档 → 抽取 → 合并 → **写草稿** → **起本机评审台**（⛔ 全程不连库、⛔ 不 apply / freeze）
+    /// 文档 → 抽取 → 合并 → **写草稿** → **起本机评审台**（不给 `--dsn`/`--schema` 时全程不连库、⛔ 不 apply / freeze）
     ///
     /// 【可以照抄的一整条】
     ///
@@ -1347,10 +1367,21 @@ pub enum BuildCmd {
     ///
     /// # ⭐ 纯本地（REQ-163）
     ///
-    /// **一个工作目录 = 一个项目**。全程不连库、不要口令：
+    /// **一个工作目录 = 一个项目**。不给 `--dsn` / `--schema` 时全程不连库、不要口令：
     /// `ONTOK_DATABASE_URL` / `ONTOK_SECRET_KEY` 缺了也照常跑通。
     /// 项目名缺省 = **工作目录名**（`--project` 只是可选覆盖；与页面同一个 sanitize）；
     /// 基版本缺省 = `1` 或「最新定版 + 1」（`--base-version` 只是可选覆盖）。
+    ///
+    /// # ⭐ REQ-170 · 可选带上库（`--dsn` | `--schema`）
+    ///
+    /// | 参数 | 做什么 | 产物 |
+    /// | --- | --- | --- |
+    /// | `--dsn <库 URL>` | 第 0 段调 `introspect`（**只读** fail-closed） | `<work-dir>/schema.json` |
+    /// | `--schema <path>` | 用现成文件（人已经跑过 introspect） | —（原样使用） |
+    ///
+    /// 有了 schema：第 ① 段的 prompt 随每块带库结构摘要（抽取才可能给 `maps_to`）、
+    /// 第 ② 段拿它做严格校验。审计与后续 `r2rml generate --schema <同文件>` 用的是同一份。
+    /// ⛔ 两者**互斥**（同时给 ⇒ 退出码 2）；⛔ 都不给 ⇒ 行为与 REQ-163 **逐字节不变**。
     ///
     /// # 四条裁定
     ///
@@ -1402,9 +1433,22 @@ pub enum BuildCmd {
         /// 基版本序号**覆盖**（省略 = 1 或「最新定版 + 1」；必须大于已定版的最新版）
         #[arg(long)]
         base_version: Option<i32>,
-        /// 真实 schema（`doc merge` 的严格校验）
+        /// ⭐ REQ-170 · 真实 schema（`ontok-builder introspect` 的 `schema.json`）。
+        ///
+        /// 给了它：第 ① 段的库结构摘要随每块进 prompt（抽取才可能产出 `maps_to`）、
+        /// 第 ② 段拿它做严格校验（表/列必须在里面）。
+        /// ⛔ 与 `--dsn` **互斥**（同时给 ⇒ 退出码 2）。
+        /// ⛔ 两个都不给 ⇒ 纯文档路径，产物与 REQ-163 **逐字节相同**。
         #[arg(long)]
         schema: Option<PathBuf>,
+        /// ⭐ REQ-170 · **源库连接串**：第 0 段调 `introspect`（只读、fail-closed）勘查，
+        /// 把 `<work-dir>/schema.json` 写出来，再当 `--schema` 用。
+        ///
+        /// ⛔ 与 `--schema` **互斥**（同时给 ⇒ 退出码 2，报错点名两个参数）。
+        /// ⛔ 本命令**不写任何 DB 连接代码**：勘查只有 `extract::introspect` 一份实现；
+        /// 这个库**只被读**（连接串强制 `default_transaction_read_only=on`）。
+        #[arg(long)]
+        dsn: Option<String>,
         /// 评审台的监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配）。
         /// **只许回环**：非回环地址在入参闸就拒（exit 2，⛔ 不会先烧一遍 ACP token）；
         /// 本命令**没有** `--allow-public` 这样的放行开关
@@ -2396,6 +2440,8 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
             agent_skill,
             agent_timeout_secs,
             strict_deterministic,
+            schema,
+            schema_max_tables,
         } => {
             return doc_ingest_cmd(
                 input,
@@ -2410,6 +2456,8 @@ async fn doc_cmd(cmd: DocCmd) -> anyhow::Result<()> {
                 agent_skill,
                 agent_timeout_secs,
                 strict_deterministic,
+                schema,
+                schema_max_tables,
             )
             .await
         }
@@ -2462,9 +2510,21 @@ fn build_doc_transport(
     agent_command: Option<&str>,
     agent_skill: Option<&std::path::Path>,
     agent_timeout_secs: Option<u64>,
+    schema_digest: Option<&str>,
 ) -> anyhow::Result<DocTransport> {
     use crate::extract::doc_acp as da;
     use crate::extract::doc_ingest as di;
+
+    /// ⭐ REQ-170 · 摘要与 skill **同一条通道**（system 消息）⇒ 同一个 `prompt_sha`。
+    ///
+    /// 换成「塞进 user 消息」会让换 schema **不**触发缓存失效 —— 而那股缓存回放的
+    /// 是「上一份表列」下的回答，产物看着正常、`maps_to` 全对不上。
+    fn with_digest(prompts: di::Prompts, digest: Option<&str>) -> di::Prompts {
+        match digest {
+            Some(d) => prompts.with_extra_system(d),
+            None => prompts,
+        }
+    }
 
     let name = match agent {
         // ── 默认：内置 LLM（REQ-116 原路）──
@@ -2482,7 +2542,7 @@ fn build_doc_transport(
             let max_tokens = di::resolve_max_tokens(settings.config.max_tokens, max_tokens_set);
             return Ok(DocTransport {
                 transport,
-                prompts: di::Prompts::standard(),
+                prompts: with_digest(di::Prompts::standard(), schema_digest),
                 model,
                 max_tokens,
                 acp: None,
@@ -2549,7 +2609,8 @@ fn build_doc_transport(
         transport: Box::new(session.transport),
         // ⭐ skill 全文当 system 消息 ⇒ 它的 sha256 就是指纹里的 `prompt_sha`
         //   ⇒ **改契约 = 缓存整体失效**（不会回放旧契约下的回答）。
-        prompts: di::Prompts::from_system(da::system_prompt(&skill)),
+        // ⭐ REQ-170：库结构摘要**跟在 skill 后面**走同一条通道 ⇒ 换 schema 同样失效。
+        prompts: with_digest(di::Prompts::from_system(da::system_prompt(&skill)), schema_digest),
         model,
         // ACP 侧没有 `max_tokens` 这个参数（输出上限由对端决定），如实记 0。
         max_tokens: 0,
@@ -2584,16 +2645,53 @@ pub(crate) async fn doc_ingest_cmd(
     agent_skill: Option<PathBuf>,
     agent_timeout_secs: Option<u64>,
     strict_deterministic: bool,
+    schema: Option<PathBuf>,
+    schema_max_tables: Option<usize>,
 ) -> anyhow::Result<()> {
     use crate::extract::doc_ingest as di;
 
     if limit_chunks == Some(0) {
         anyhow::bail!("--limit-chunks 是 0：0 块等于「什么都没跑」，那与「不跑」混淆。要跑就给 ≥1。");
     }
+    if schema_max_tables == Some(0) {
+        anyhow::bail!(
+            "--schema-max-tables 是 0：0 张表等于「不给模型看库结构」，\
+             那与「不传 --schema」混淆。要带表就给 ≥1。"
+        );
+    }
 
     // ① 输入 + 格式闸（AC-001）。`load_docs` 是**唯一**判「这个扩展名能不能吃」的地方。
     let docs = di::load_docs(&input)?;
     let all_chunks = di::chunk_all(&docs);
+
+    // ①.5 ⭐ REQ-170 · **库结构**（`--schema`）：读一次，算两样东西 ——
+    //
+    // | 产物 | 干什么 |
+    // | --- | --- |
+    // | [`SchemaView`] | `maps_to` 的对账面（表/列存在性，**全量**） |
+    // | [`Digest`] | 随每块进 system prompt 的**摘要**（按本轮文档挑 top-N，**有体积上限**） |
+    //
+    // ⛔ 不给 `--schema` ⇒ 这段整个是 `None`，后面每一处都走老路（逐字节不变）。
+    // 位置刻意在 `--chunks-only` 之前：schema 路径写错时，连「只分块」都该先报这个错
+    //（最便宜的失败先报），而块清单本身仍由下面的分支原样产出。
+    let schema_loaded = match schema.as_deref() {
+        None => None,
+        Some(path) => {
+            let view = crate::extract::schema_digest::SchemaView::from_path(path)?;
+            if view.table_count() == 0 {
+                anyhow::bail!(
+                    "--schema {} 里一张表都没读到（要 `tables[].columns[]`）—— 这份 schema 没法对账。\n  \
+                     换一份 `ontok-builder introspect --out` 的真实产物。",
+                    path.display()
+                );
+            }
+            let max = schema_max_tables
+                .unwrap_or(crate::extract::schema_digest::DEFAULT_MAX_TABLES);
+            let corpus: String = docs.iter().map(|d| d.text.as_str()).collect::<Vec<_>>().join("\n");
+            let digest = view.digest(&corpus, max);
+            Some((view, digest))
+        }
+    };
 
     // ② `--chunks-only`：只产块清单，一次模型都不调（AC-002 的确定性判据用它比对）。
     if chunks_only {
@@ -2623,6 +2721,7 @@ pub(crate) async fn doc_ingest_cmd(
         agent_command.as_deref(),
         agent_skill.as_deref(),
         agent_timeout_secs,
+        schema_loaded.as_ref().map(|(_, d)| d.text.as_str()),
     )?;
 
     // ④ 指纹缓存：**本地 JSON 文件**（⛔ 不是 `ai_cache` 表 —— 本命令不写库）。
@@ -2646,7 +2745,7 @@ pub(crate) async fn doc_ingest_cmd(
         Some(n) if n < all_chunks.len() => all_chunks[..n].to_vec(),
         _ => all_chunks.clone(),
     };
-    let (assertions, stats) = di::ingest_all(
+    let (assertions, stats) = di::ingest_all_with_schema(
         transport.as_mut(),
         &mut mem_cache,
         &chunks,
@@ -2654,6 +2753,7 @@ pub(crate) async fn doc_ingest_cmd(
         &prompts,
         budget,
         max_tokens,
+        schema_loaded.as_ref().map(|(v, _)| v),
     );
 
     // ⑥ **先落缓存、再判预算**：已经花掉的钱对应的回答必须留在盘上，
@@ -2932,6 +3032,43 @@ pub(crate) async fn doc_ingest_cmd(
             a.timeout.as_secs()
         );
         eprintln!("  quote 校验  : {}", crate::extract::doc_acp::quote_pass_line(&stats));
+    }
+    // ⭐ REQ-170：给了 --schema 才打印这两块（不给 ⇒ 屏幕输出与 REQ-163 逐字节相同）。
+    if let (Some((_, digest)), Some(path)) = (&schema_loaded, &schema) {
+        eprintln!(
+            "  库结构      : {}（带 **{}** / 共 {} 张表 · 按文档概念匹配到 {} 张 · \
+             上限 {} 张 · 摘要 sha256 {}…）",
+            path.display(),
+            digest.included,
+            digest.total,
+            digest.matched,
+            digest.max_tables,
+            &digest.sha256()[..12],
+        );
+        if digest.included == 0 {
+            eprintln!(
+                "                ⚠ 一张表都没对上文档的概念名 ⇒ 本轮 **不会**有 maps_to\
+                 （⛔ 不拿无关的表凑数，⛔ 不按名字猜表）"
+            );
+        }
+        eprintln!(
+            "  maps_to     : 落地 {} 条 · 丢弃 {} 条（形状 {} · 查不到表 {} · 对上多张 {} · \
+             查不到列 {}）{}",
+            stats.maps_to_kept,
+            stats.maps_to_dropped(),
+            stats.maps_to_dropped_shape,
+            stats.maps_to_dropped_table,
+            stats.maps_to_dropped_ambiguous,
+            stats.maps_to_dropped_column,
+            if stats.maps_to_dropped_no_schema > 0 {
+                format!(" · 另有 {} 条因没有 schema 未落地", stats.maps_to_dropped_no_schema)
+            } else {
+                String::new()
+            },
+        );
+        for s in stats.maps_to_samples.iter().take(3) {
+            eprintln!("                {s}");
+        }
     }
     eprintln!(
         "  缓存        : 命中 {} / {} 块（实际调用 {} 次 · 强制失败 {} 次）",
@@ -7162,6 +7299,7 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         allow_doc_only,
         base_version,
         schema,
+        dsn,
         bind,
         no_browser,
     } = cmd;
@@ -7175,6 +7313,7 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         strict_deterministic: *strict_deterministic,
         work_dir: work_dir.clone(),
         schema: schema.clone(),
+        dsn: dsn.clone(),
         proposal: proposal.clone(),
         allow_doc_only: *allow_doc_only,
         base_version: *base_version,

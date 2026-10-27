@@ -1,0 +1,35 @@
+{
+  "project": "req170_chain",
+  "base_version": 1,
+  "items": [
+    {
+      "kind": "add_entity_type",
+      "target": "云硬盘",
+      "payload": {
+        "key": "cloud_disks",
+        "display_name": "云硬盘",
+        "band": "low",
+        "reviewed_by": null,
+        "properties": [
+          { "name": "云硬盘编号", "column": "id" },
+          { "name": "名称", "column": "name" },
+          { "name": "所属云主机", "column": "server_id" }
+        ]
+      }
+    },
+    {
+      "kind": "add_entity_type",
+      "target": "云主机",
+      "payload": {
+        "key": "servers",
+        "display_name": "云主机",
+        "band": "low",
+        "reviewed_by": null,
+        "properties": [
+          { "name": "云主机编号", "column": "id" },
+          { "name": "主机名", "column": "hostname" }
+        ]
+      }
+    }
+  ]
+}

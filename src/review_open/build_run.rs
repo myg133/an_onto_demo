@@ -82,6 +82,13 @@ pub const DEFAULT_WORK_DIR: &str = ".ontok-build";
 /// 目前唯一支持的 `--agent` 取值（R5：只做文档路径的 ACP 通道）。
 pub const ONLY_AGENT: &str = "acp";
 
+/// ⭐ REQ-170 · `--dsn` 勘查出来的 schema 落在**工作目录**里的文件名（`<work-dir>/schema.json`）。
+///
+/// 为什么是这个名字：`r2rml generate --schema` / `doc merge --schema` / `ontok-introspect --out`
+/// 的默认值都是 `out/schema.json` 或 `schema.json`，同一个人工链路里不出现第二个名字。
+/// 放在工作目录（而不是 `out/`）：它同时是第 ① 段的输入，`out/` 是**产物**目录。
+pub const SCHEMA_REL: &str = "schema.json";
+
 /// `build run` 的参数（已从 clap 拆出来：本模块不认识 clap）。
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -100,6 +107,12 @@ pub struct Options {
     pub work_dir: PathBuf,
     /// 真实 schema（`doc merge` 的严格校验）。
     pub schema: Option<PathBuf>,
+    /// ⭐ REQ-170 · 源库连接串。给了它就在第 0 段调 [`crate::extract::introspect`]
+    /// 勘查出 `<work-dir>/schema.json`，再当 `--schema` 用。
+    ///
+    /// ⛔ 与 `schema` **互斥**（同时给 ⇒ exit 2，见 [`validate`]）。
+    /// ⛔ 本命令**不写任何 DB 连接代码**：勘查只有 `extract::introspect` 那一份实现。
+    pub dsn: Option<String>,
     /// 基础提案（省略 = 在工作目录里生成一份空提案，并自动开纯文档通路）。
     pub proposal: Option<PathBuf>,
     /// 强制开纯文档通路（`doc merge --allow-doc-only`）。省略时：生成了空提案就开。
@@ -256,7 +269,120 @@ pub fn validate(o: &Options) -> anyhow::Result<()> {
             )));
         }
     }
+    // ── ⭐ REQ-170 · 库结构的两个入口**互斥**，且点名 ────────────────
+    //
+    // 为什么要在这里（入参闸）而不是第 0 段：同时给两个来源时，**哪个说了算**没有
+    // 正确答案 —— 先勘查再拿文件盖掉、或者反过来，产出的 schema.json 都取决于顺序，
+    // 而用户以为两者等价。所以它是**入参错（exit 2）**，要在烧掉 ACP token 之前报。
+    if o.dsn.is_some() && o.schema.is_some() {
+        return Err(bad(
+            "`--dsn` 与 `--schema` **互斥**：一个是「连库现勘」，一个是「用现成文件」。\n  \
+             只给 `--dsn <库 URL>` ⇒ 第 0 段调 introspect（只读 fail-closed）写 \
+             `<work-dir>/schema.json`；\n  \
+             只给 `--schema <schema.json>` ⇒ 直接用那份文件（人已经跑过 introspect）。\n  \
+             ⛔ 两个都给时没有「谁优先」的正确答案 —— 产出的 schema 会取决于顺序。",
+        ));
+    }
+    if let Some(dsn) = &o.dsn {
+        if dsn.trim().is_empty() {
+            return Err(bad(
+                "`--dsn` 是空的：要给一条库连接串（如 postgresql://user:pass@127.0.0.1:5432/db）。\n  \
+                 不想连库就别给这个参数（不给 = 纯文档路径，与 REQ-163 逐字节相同）。",
+            ));
+        }
+    }
     Ok(())
+}
+
+/// ⭐ REQ-170 · 第 0 段：**勘查**（只有给了 `--dsn` 才跑）→ `<work-dir>/schema.json`。
+///
+/// # 为什么是「第 0 段」而不是塞进 ①
+///
+/// `doc ingest` 的 prompt 要带库结构，`doc merge` 要用 schema 做严格校验 ——
+/// 两者都得**先有 schema**。而勘查失败（连不上 / 不是只读 / 库名不对）属于
+/// **环境错**：此时一个字节都还没写（连 `--work-dir` 都不建），⛔ 不留半份草稿。
+///
+/// # 为什么调 `introspect_with_keys` 而不是自己写 SQL
+///
+/// 平台里接触客户库的代码**只有** `extract::introspect` 一份（AC-101 的只读红线在
+/// 那里）。它同时给出键事实（主键 / 唯一列）—— `r2rml generate` 要这些，缺了它
+/// 会把所有类都判成「没有主键」而跳过。⛔ 这里不新增任何一条 SQL、不新建连接池。
+///
+/// # 与「人先跑一遍 introspect 再 `--schema`」的关系
+///
+/// 产物**同源**：`ontok-builder introspect --out` 走的也是
+/// `introspect_with_keys` + `KeyCatalog::inject_into_product`。所以同一库的
+/// `--dsn` 与 `--schema` 得到同一份 `schema.json`（逐字节），下游产物自然一致。
+pub async fn resolve_schema(o: &Options) -> anyhow::Result<Option<PathBuf>> {
+    let Some(dsn) = o.dsn.as_deref() else {
+        // 没给 --dsn：有 --schema 就用它，都没有就 None（老路）。
+        return Ok(o.schema.clone());
+    };
+    if o.schema.is_some() {
+        // validate 已经拦过；这里是「不靠调用顺序也安全」的第二道。
+        return Err(bad("`--dsn` 与 `--schema` 互斥（内部：勘查前复核）。"));
+    }
+
+    eprintln!("── 第 0/4 段：勘查源库（introspect，只读 fail-closed）──────────────");
+    let (report, keys) = crate::extract::introspect::introspect_with_keys(dsn)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "第 0/4 段（勘查）失败：{e:#}\n\
+                 ⛔ 后面的四段一个都不会跑 —— 本轮**不产出**断言、不写草稿、不起评审台。\n\
+                 排查：库地址 / 只读账号 / 库名；或改用人已经跑好的 `--schema <schema.json>`。",
+            )
+        })?;
+    if report.table_count == 0 {
+        anyhow::bail!(
+            "第 0/4 段（勘查）失败：源库里**一张表都没有**（schema = {}）—— \
+             这样的 schema 没法跟文档对齐，也没法给 r2rml 用。\n  \
+             检查 `--dsn` 指向的库对不对（勘查只读 public schema）。",
+            report.schema
+        );
+    }
+
+    // 产物形状与 `ontok-builder introspect --out` **同一份**（SchemaReport + 键字段）。
+    let mut product = serde_json::to_value(&report).map_err(|e| {
+        anyhow::anyhow!("内部错误：SchemaReport 序列化失败：{e}")
+    })?;
+    keys.inject_into_product(&mut product);
+    let text = serde_json::to_string_pretty(&product)
+        .map_err(|e| anyhow::anyhow!("内部错误：schema.json 序列化失败：{e}"))?;
+
+    // ⚠️ 工作目录在**勘查成功之后**才建：勘查失败时盘上不该出现任何东西。
+    if !o.work_dir.as_os_str().is_empty() {
+        std::fs::create_dir_all(&o.work_dir).map_err(|e| {
+            anyhow::anyhow!(
+                "建不出 --work-dir {}：{e}（schema.json 要写在这里）",
+                o.work_dir.display()
+            )
+        })?;
+    }
+    let path = o.work_dir.join(SCHEMA_REL);
+    local::write_atomic(&path, text.as_bytes()).map_err(|e| {
+        anyhow::anyhow!(
+            "写不出 {}：{}（改法：{}）",
+            path.display(),
+            e.message,
+            e.hint
+        )
+    })?;
+    let single_pk = report
+        .tables
+        .iter()
+        .filter(|t| keys.get(&t.name).and_then(|k| k.primary_key.as_ref()).is_some())
+        .count();
+    println!(
+        "源库勘查完成（只读）：{} 张表 / {} 列 · 单列主键 {} / {} · 真实外键 {} 条 → {}",
+        report.table_count,
+        report.column_count,
+        single_pk,
+        report.table_count,
+        report.foreign_key_count,
+        path.display(),
+    );
+    Ok(Some(path))
 }
 
 /// ① ② 两段：**不碰数据库**，只吃本地文件、只产本地文件。
@@ -267,6 +393,13 @@ pub fn validate(o: &Options) -> anyhow::Result<()> {
 pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<Artifacts> {
     // ── 入参闸（⛔ 全部在干活之前判完）──────────────────────────
     validate(o)?;
+
+    // ── ⭐ REQ-170 · 第 0 段：勘查（只有给了 --dsn 才跑）─────────────
+    //
+    // 位置在 ①② 之前、`--work-dir` 建立之前：勘查失败 ⇒ 盘上一个字节都没有。
+    // 给了 `--schema` 时这里只是把那个路径递下去（不读、不复制）。
+    let schema_path = resolve_schema(o).await?;
+
     if !o.work_dir.as_os_str().is_empty() {
         std::fs::create_dir_all(&o.work_dir).map_err(|e| {
             anyhow::anyhow!(
@@ -277,6 +410,13 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
     }
 
     let art = artifacts(o);
+
+    if let Some(p) = &schema_path {
+        eprintln!(
+            "· 库结构：{}（第 ① 段随每块下发摘要 · 第 ② 段拿它做严格校验）",
+            p.display()
+        );
+    }
 
     // ── ① 抽取（既有装配点，一行实现都不抄）────────────────────
     eprintln!("── 第 1/4 段：doc ingest ───────────────────────────────────────");
@@ -293,6 +433,8 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
         Some(o.agent_skill.clone()),
         o.agent_timeout_secs,
         o.strict_deterministic,
+        schema_path.clone(), // ⭐ REQ-170：库结构（None ⇒ 与 REQ-163 逐字节相同）
+        None,                // 表数闸：用 doc ingest 的默认值（DEFAULT_MAX_TABLES）
     )
     .await
     .map_err(|e| {
@@ -343,7 +485,7 @@ pub async fn build_artifacts(o: &Options, base_version: i32) -> anyhow::Result<A
         &art.proposal_in,
         &art.merged,
         Some(&art.merged_stats),
-        o.schema.as_deref(),
+        schema_path.as_deref(),
         doc_only,
     )
     .await
@@ -574,6 +716,7 @@ mod tests {
             strict_deterministic: true,
             work_dir: dir.join(".ontok-build"),
             schema: None,
+            dsn: None,
             proposal: None,
             allow_doc_only: false,
             base_version: None,
@@ -1003,6 +1146,71 @@ mod tests {
             MODULE_SRC.contains("None, // 缓存落点"),
             "缓存落点必须留给 doc ingest 的默认值（R4）"
         );
+    }
+
+    // ── ⭐ REQ-170 · 库结构的两个入口（`--dsn` | `--schema`）──────────
+
+    /// `--dsn` 与 `--schema` **互斥** ⇒ exit 2，且报错**点名两个参数**。
+    ///
+    /// 为什么是入参错：同时给两个来源时「谁优先」没有正确答案 —— 产出的 schema.json
+    /// 会取决于顺序，而人以为两者等价。这里还顺手钉住「没有写任何东西」：
+    /// 这条闸在 ①②（以及第 0 段勘查）之前。
+    #[test]
+    fn dsn_and_schema_are_mutually_exclusive_and_the_error_names_both() {
+        let dir = temp_dir("dsn-exclusive");
+        write_input(&dir);
+        let mut o = options(&dir);
+        o.dsn = Some("postgresql://readonly:pw@127.0.0.1:5432/src".into());
+        o.schema = Some(dir.join("schema.json"));
+        let e = validate(&o).expect_err("两个都给必须失败");
+        assert_eq!(
+            super::super::exit_code_for(&e),
+            super::super::EXIT_BAD_INPUT,
+            "库结构的两个入口互斥属于入参错（2）"
+        );
+        let msg = format!("{e:#}");
+        for needle in ["--dsn", "--schema", "互斥"] {
+            assert!(msg.contains(needle), "要点名 {needle:?}：{msg}");
+        }
+        assert!(
+            !o.work_dir.exists(),
+            "入参闸不该建工作目录（那是第 0/① 段的事）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `--dsn ""` ⇒ exit 2（⛔ 不要拿空串去连库，那会报一条与真原因无关的错）。
+    #[test]
+    fn an_empty_dsn_is_an_input_error_and_points_at_the_flag() {
+        let dir = temp_dir("dsn-empty");
+        write_input(&dir);
+        let mut o = options(&dir);
+        o.dsn = Some("   ".into());
+        let e = validate(&o).expect_err("空 dsn 必须失败");
+        assert_eq!(super::super::exit_code_for(&e), super::super::EXIT_BAD_INPUT);
+        assert!(format!("{e:#}").contains("--dsn"), "{e:#}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 都不给 ⇒ 第 0 段是**空操作**（⛔ 不建工作目录、⛔ 不读任何文件）。
+    ///
+    /// 这条判据守的是零回归的**前提**：`build run`（无库）路径上不许出现任何
+    /// 与库结构有关的 I/O 或输出。
+    #[tokio::test]
+    async fn without_dsn_or_schema_the_schema_step_is_a_noop() {
+        let dir = temp_dir("no-schema");
+        write_input(&dir);
+        let o = options(&dir);
+        assert_eq!(resolve_schema(&o).await.unwrap(), None, "都不给 ⇒ None");
+        assert!(!o.work_dir.exists(), "⛔ 空操作不许建工作目录");
+
+        // 给了 `--schema` ⇒ 原样递下去（**不读、不复制**：文件由人维护）
+        let p = dir.join("given-schema.json");
+        std::fs::write(&p, r#"{"tables":[]}"#).unwrap();
+        let mut o2 = options(&dir);
+        o2.schema = Some(p.clone());
+        assert_eq!(resolve_schema(&o2).await.unwrap(), Some(p));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── QA 退回项（REQ-160）· 等价判据：③④ 只能在 ①② 之后 ──────────

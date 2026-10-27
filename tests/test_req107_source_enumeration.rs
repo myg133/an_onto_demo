@@ -928,6 +928,16 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
         1,
         "`build run` 第 ③ 段末尾的 **R3 声明**（固定文案，零数据）：⛔ 本命令不自动 apply / freeze",
     ),
+    // ⭐ REQ-170 · `build run --dsn` 的**勘查回执**（本机运维面，不是客户出口）。
+    // 打的是「这次勘查出多少张表 / 多少列 / 有几个单列主键 / 真实外键几条 → schema.json 落在哪」：
+    // 全是**库的形状**（元数据计数），零业务数据行、零客户视图字段（AC-101：只发元数据不发数据）。
+    (
+        "src/review_open/build_run.rs",
+        "源库勘查完成（只读）",
+        1,
+        "`build run` 第 0 段（`--dsn`）的**勘查回执**（REQ-170）：表/列/单列主键/外键**计数** + \
+         `schema.json` 落点。只有元数据计数，⛔ 没有任何数据行、⛔ 不回显 DSN 口令",
+    ),
     // ── ⭐ REQ-162 · 本地评审台的**文件落盘**（裁决 / 定版 / 构建包）──
     //
     // 一处 `fs::write`（`console::local::write_atomic`）承接三种写：`decisions.json`、
@@ -1866,6 +1876,12 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "build_cmd",
         "子命令 handler（REQ-160 `build run`：四段编排的装配点；实现全在 `review_open::build_run`）",
     ),
+    // ⭐ REQ-170 · 库结构摘要与 skill **走同一条 system 通道**（⇒ 同一个 `prompt_sha`）。
+    (
+        "src/cli.rs",
+        "with_digest",
+        "运维辅助（REQ-170：把 `--schema` 的摘要挂到 system 消息上；零 I/O、零写出）",
+    ),
     // ⚠️ REQ-159 的 6 个 bundle 函数登记在下面（develop 侧已补齐，REQ-160 不再重复登记）。
     // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
     (
@@ -2257,6 +2273,11 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-120 · FK 边补全（提名 / 值域重叠判决 / ADR-005 提案 / 签字注入）。
     // 独立成文件而不并进 `propose`：`retained_names.req084.tsv` 钉着后者的行号。
     ("src/extract/mod.rs", "fk"),
+    // ⭐ REQ-170 · **库结构摘要**（schema.json → 进 prompt 的那一小块 + maps_to 的校验面）。
+    // ⛔ 不是新的写出口：它只产出**字符串**（摘要正文）与校验结论，
+    // 写盘仍经 `cli::write_local` / `console::local::write_atomic`。
+    // 本表只登记模块（T6：新增模块即红）。
+    ("src/extract/mod.rs", "schema_digest"),
     ("src/mcp/mod.rs", "protocol"),
     ("src/mcp/mod.rs", "serve"),
     ("src/mcp/mod.rs", "tools"),
