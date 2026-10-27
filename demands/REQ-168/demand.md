@@ -42,3 +42,34 @@
 
 - v2 的**正式变更清单**（是不是只有 auth 一项）—— 若还有别的，按清单补
 - 真 AM 里 `auth.service` 到底补没补（我在 `.local/am-v2/am-tencent.v2.json` 里**没看到** `service`）
+
+
+---
+
+## 六 · 追加（2026-10-27 · 用户实测暴露的阻断）
+
+**现象（用户贴的真实回执）**：agent 在客户环境里试了三种"它以为的用法"全失败，于是**没有使用脚本**：
+
+```
+which ontok-builder        ⇒ 找不到（构建工具没装在客户环境）
+python -c "import ontok"   ⇒ ModuleNotFoundError（脚本不是 pip 包）
+ls fixtures                ⇒ No such file（不在 agent 的 cwd）
+```
+
+**根因（两个叠加）**：
+1. `SKILL.md` 写「脚本在同目录」+ 示例全是裸 `python access_fetch.py` ⇒ **假设 cwd = skill 目录**
+2. `--selftest` 按 **cwd** 找 `fixtures/`（实证：单独复制 `.py` 到空目录 ⇒ `17 passed, 2 failed`）
+
+**要做的**：
+| # | 改动 |
+| --- | --- |
+| A | `FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"`；凡读内置夹具都走它（⛔ 不靠 cwd） |
+| B | `fixtures/` 缺失时报**清楚的人话**（"请复制整个 ontok-query 目录"），⛔ 不崩栈 |
+| C | `SKILL.md` 补「要跑 selftest 就复制整个目录；只取数则 `--mapping` 指向客户 AM」 |
+
+**追加验收**：
+| # | 判据 |
+| --- | --- |
+| AC-006 | 把 `access_fetch.py` **单独**复制到空目录 ⇒ `--selftest` 仍 **86 passed / 0 failed** |
+| AC-007 | 删掉 `fixtures/` ⇒ 报人话错误并给修法，⛔ 不是 traceback |
+| AC-008 | 从**任意 cwd**（含 `D:\` 根）用**全路径**跑 `--selftest` / `--check` 均正常 |
