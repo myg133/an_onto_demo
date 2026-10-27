@@ -23,7 +23,6 @@
 
 | 目录 | 分支 | 用途 | 谁写 |
 | --- | --- | --- | --- |
-| *(仓库根)* | `workspace` | **根容器**：导航 + 工具层（`AGENTS.md` / `.agents/`）。**不跟踪任何业务内容** | BA Agent（极少） |
 | `BA/` | `demand` | **需求与设计**：设计规格（事实源）、实现计划、HTML 汇报、原始输入、历史存档、需求文档 | BA Agent |
 | `code/` | `develop` | **代码**：产品实现（Rust 后端 / Svelte 前端）。PR 目标分支 | Dev Agent |
 | `Deploy/` | `deploy` | **部署配置**：helm / 环境变量 / 发布脚本。**只做配置，不做构建** | Deploy Agent / CI |
@@ -45,7 +44,6 @@
 | 原始输入（老板 / 会议 / 调研，只读） | `BA/input/` |
 | 历史版本（仅供追溯） | `BA/archive/` |
 | **临时工作区**（审核 / 变异，不跟踪） | `.review-workspace/`（约定见其 README） |
-| Agent 工具层（skills + 角色定义） | `.agents/`（workspace 分支，跨 worktree 共享） |
 | Agent 入口指令 | `AGENTS.md`（workspace 分支） |
 
 ---
@@ -75,13 +73,7 @@ git worktree remove feature-REQ-001 && git branch -d feature/REQ-001
 
 | 角色 | 工作区 | 规范文件 |
 | --- | --- | --- |
-| **BA**（需求 / 架构） | `BA/` | [`.agents/agents/anspire-open-ba.md`](.agents/agents/anspire-open-ba.md) |
-| **Dev** | `feature-REQ-xxx/` | [`anspire-open-developer.md`](.agents/agents/anspire-open-developer.md) |
-| **QA** | `feature-REQ-xxx/` → `code/` | [`anspire-open-qa.md`](.agents/agents/anspire-open-qa.md) |
-| **Deploy** | `Deploy/` | [`anspire-open-deploy.md`](.agents/agents/anspire-open-deploy.md) |
-| **Explore** | 按需 | [`anspire-open-explore.md`](.agents/agents/anspire-open-explore.md) |
 
-统一规范：[`.agents/skills/agent-workspace/SKILL.md`](.agents/skills/agent-workspace/SKILL.md)
 
 ---
 
@@ -93,10 +85,8 @@ git worktree remove feature-REQ-001 && git branch -d feature/REQ-001
 git ls-files
 ```
 
-预期只输出 `README.md` / `AGENTS.md` / `.gitignore` 与 `.agents/` 下的文件。
 
 > **⚠ 已知偏离（2026-09-28）**：agent-workspace 原规范要求「只跟踪 README.md + .gitignore」两项。
-> 本项目额外跟踪 `AGENTS.md` 与 `.agents/`，因为它们是**跨 worktree 共享的工具层** ——
 > 放进 `BA/` 会导致 feature worktree 无法读取。详见 [`.gitignore`](.gitignore) 顶部注释。
 
 ---

@@ -13,10 +13,8 @@
 #   - README.md      项目导航
 #   - .gitignore     本文件
 #   - AGENTS.md      Agent 入口指令（跨 worktree 共享）
-#   - .agents/       Agent 工具层：skills + 角色定义（跨 worktree 共享）
 #
 # 偏离理由：
-#   1. AGENTS.md 与 .agents/ 是**工具层**，不属于任何业务分支。
 #      Dev Agent 在 feature-REQ-xxx/ 里干活时同样需要读到它们 ——
 #      若放进 BA/（demand 分支），feature worktree 将无法访问。
 #   2. 它们**不是业务代码**，不违反「workspace 禁止业务代码」这条核心约束。
@@ -41,7 +39,6 @@
 !/.gitignore
 !/README.md
 !/AGENTS.md
-!/.agents/
 !/skills/
 
 
@@ -61,7 +58,6 @@ Thumbs.db
 # ============================================================
 # 规范的 `/*/` 会**无差别忽略所有第一层子目录**。
 # 在纯代码仓库里这没问题（第一层子目录都是 worktree）。
-# 但本项目根层有 .agents/（工具层）必须跟踪，`/*/` 会把它一并吃掉。
 #
 # 改用 `/*` + 白名单的等价性：
 #   /*        忽略根层全部条目
@@ -71,5 +67,4 @@ Thumbs.db
 #
 # 效果验证（初始化后执行）：
 #   git ls-files
-#   应只输出 README.md / AGENTS.md / .gitignore / .agents/ 下的文件。
 #   任何 docs/ input/ archive/ code/ BA/ Deploy/ 出现在输出中即为违规。
