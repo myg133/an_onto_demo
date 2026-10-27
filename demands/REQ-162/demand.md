@@ -98,3 +98,33 @@
 | 与 Postgres 的任何交互 | 用户口径「纯本地」；库是服务面的事 |
 | 多项目/多版本并存 | 一个目录一个项目；定版号自增即可 |
 | 保留旧页面做兼容 | 两套并存会让人不知道该点哪个 —— 直接替换 |
+
+---
+
+## 八 · 边界与退场（2026-10-27 17:30 与 join 对齐后补）
+
+### 8.1 `src/console/` 里不属于 console 的三个模块
+
+`query serve` 在用它们，**REQ-162 一个字不许动**：
+
+| 模块 | 谁在用 |
+| --- | --- |
+| `src/console/provision_api.rs` | `query serve` 的 8 条写端点（P1c-1 的语义层） |
+| `src/console/dsn.rs` | DSN 加密列（`query serve` 启动要 `ONTOK_SECRET_KEY`） |
+| `src/console/bundle.rs` | 包解析（`query serve` 上传时用） |
+
+⇒ join 先把这三个搬到 `src/provision/`，之后 `src/console/**` 才是 lion 独占。
+
+### 8.2 `tests/test_req159_bundles.rs`（25 条）**退场**（有意为之，不是遗漏）
+
+| 项 | 说明 |
+| --- | --- |
+| 被测对象 | console 的 8 条 **DB 端点**（P1a 那批） |
+| 为什么退场 | console 变"无库"后这 8 条端点不存在 ⇒ 无被测对象 |
+| 覆盖去哪了 | `tests/test_req159c_write_plane.rs`（9 条）覆盖同一批语义在 `query serve` 上；`provision_api` 的语义层单测仍在 |
+| 纪律 | ⛔ **不许静默删** —— 必须写进 `BA/.local/dispatch/REQ-162-dev-changelog.md`，QA 按 changelog 核对 |
+
+### 8.3 编译边界的硬规则
+
+若因删/改 `src/console/**` 导致 `cargo check --lib` 失败（因为 `src/query/**` 还在用某个 console 模块）：
+**⛔ 不许去改 `src/query/**` 或 `src/db/**`**，停下汇报「X 模块仍被 query serve 依赖」。
