@@ -374,8 +374,20 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
     <div id="k-detail" class="panel" hidden></div>
   </section>
 
-  <!-- ── 8 · 构建包（REQ-159）────────────────────────────── -->
+  <!-- ── 8 · 构建包（REQ-159）· 已按 ADR-013 迁到 Studio ── -->
   <section id="v-bundles" class="view" hidden>
+    <div class="panel" style="border-color:var(--warn)">
+      <div class="note" style="color:var(--warn);font-weight:600">
+        ⚠️ 此流程已迁到 Studio（<code>/studio</code>）：本页的「构建包」入口仅为历史保留，新流程请在 Studio 里做。
+      </div>
+      <div class="note" style="margin-top:6px">
+        原因：这 8 条端点原先挂在 console（`ontok-builder` 的 CLI，不部署到服务器），客户侧点不到；
+        已按 ADR-013 迁到 `query serve` 并由 Studio 调用。
+        <b>本页代码保留</b>：门禁（requires_dsn + 测通才允许 import）、`already_imported` 当成功、
+        404 降级、key 查看与 `reveal_key` 审计提示 —— 这套逻辑是 Studio 的参考实现，
+        且 FDE 在本机直连库时仍可用。
+      </div>
+    </div>
     <div class="bar">
       <button id="b-refresh">刷新</button>
       <span class="note">当前项目：</span><span id="b-project">—</span>
@@ -2212,6 +2224,9 @@ mod tests {
             "progress.pending",
             "progress.vetoed",
             "it.biz === \"pending\" || it.model === \"pending\"",
+            // ⭐ ADR-013：这扇门已迁到 Studio —— 删掉这句提示，客户侧会继续在 console 里找入口
+            "已迁到 Studio",
+            "/studio",
         ] {
             assert!(
                 CONSOLE_HTML.contains(needle),
