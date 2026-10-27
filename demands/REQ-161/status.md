@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**进行中**（2026-10-27 · 已认领 · 已派 Dev · worktree `feature-REQ-161`）
+**已完成**（2026-10-27 · 合并 `ed9b356` · QA PASS 0 阻断 · worktree 与 target 均已回收）
 
 ## 一句话
 

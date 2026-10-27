@@ -514,3 +514,15 @@
 
 **worktree 状态**：`BA` / `code` / `Deploy` / `feature-REQ-161`（我在用）/ `feature-REQ-159c`（join 在用）保持；
 `feature-REQ-159b` 已并入 develop（`merge-base --is-ancestor` exit 0）⇒ **待 join 回收**；`.local/t159c-base` 是 join 的临时 detached worktree，我不动。
+
+## 2026-10-27 14:00 · REQ-161 Console 换皮 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **ed9b356**（`--no-ff`）← `feature/REQ-161` **492f927**（基线 b2e6b8e） |
+| 合并时 develop | `c37a6a9`（含 join 的 P1c-1：8 条构建包端点搬到 query serve） |
+| 冲突 | **零**（只动 `src/console/page.rs`；join 动的是 `src/query/**`） |
+| 改动 | 1 文件 +858/−258（换皮 +796/−257 与 r2rml 修复 +62/−1） |
+| 合并后守卫 | `console::page` **19/19** · `test_req125_page` **8/8** · `source_enumeration` **10/10** · `anchor_guard` **3/3** · `test_req159_bundle` **38/38** · `check --lib` 绿 |
+| 回收 | worktree + 分支已删；**`.local/cargo-161` 已删（释放 5.06 GB，剩余 117.1 GB）** |
+| 备注 | console 的 8 条 bundles handler **仍保留**（本地 FDE 直连可用）；query serve 侧另有一套（Studio 用）⇒ 页面那个 tab 不是死链 |
