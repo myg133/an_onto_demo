@@ -20,7 +20,7 @@
 //! | AC-004 | 8 个拒绝码**每一个**都有对应用例（见文末对照表） | `reject_*` |
 //! | AC-005 | `assemble` / `verify` 是**纯函数**（不出现 sqlx / 连接池 / 网络） | `assemble_and_verify_are_pure_functions` |
 //! | AC-006 | 连库只在 `cli.rs` 边缘，且 `verify` 在**连库之前**分派 | `cli_wires_bundle_after_the_pre_connect_dispatch` |
-//! | AC-007 | ⛔ 不新增 crate（zip / flate2 不许出现在 `Cargo.toml`） | `no_zip_crate_was_added` |
+//! | AC-007 | ⛔ 不新增 crate（zip / flate2 不许出现在 `Cargo.toml`） | `no_zip_packing_crate_was_added` |
 //!
 //! ## 8 个拒绝码 → 用例
 //!
@@ -927,7 +927,7 @@ fn cli_wires_bundle_after_the_pre_connect_dispatch() {
 /// ⇒ 判据换成更准的那一条：**`src/bundle/` 的代码里一行 flate2 都不许有**。
 /// 这比原来那条更贴题 —— 原来那条只能证明「没加依赖」，不能证明「没用压缩」。
 #[test]
-fn no_zip_crate_was_added() {
+fn no_zip_packing_crate_was_added() {
     let toml = repo_file("Cargo.toml");
     // ① 没有任何 zip crate（这才是「手写容器」的反面）。
     for forbidden in ["zip =", "zip_rs", "async_zip"] {

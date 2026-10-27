@@ -896,6 +896,57 @@ const NON_CUSTOMER_WRITES: &[(&str, &str, usize, &str)] = &[
          版本号 / 包格式 / zip method 与固定时间戳。FDE 面的打包回执，\
          零客户视图字段（与 `{verify_json}` 同一份口径）",
     ),
+    // ── ⭐ REQ-160 · 审核台与 build run 的终端回执（**本机运维面**，不是客户出口）──
+    //
+    // 这两处打的都不是客户视图：一处是「URL + 一次性口令」的启动正文（口令是**凭据**，
+    // 不是业务数据；它不进 URL / 不落盘 / 不进日志），另一处是「口令已到期」的固定文案。
+    // 审核台真正给客户看的东西走 `console::http`（页面壳零数据、7 个视图只调 /api/*）。
+    (
+        "src/review_open/mod.rs",
+        "one_shot_notice(",
+        1,
+        "`review open` 的启动正文（stdout）：URL + **一次性 admin 口令** + 有效期 + 提示。\
+         口令是凭据不是客户数据；⛔ 不进 URL / 不落盘 / 不进日志与审计原文，进程退出即失效",
+    ),
+    (
+        "src/review_open/mod.rs",
+        "一次性口令已到期",
+        1,
+        "TTL 到点的固定文案（零数据）：口令不再可用 + 要接着审就重新 open",
+    ),
+    (
+        "src/review_open/build_run.rs",
+        "写不出基础提案 {}",
+        1,
+        "`build run` 在 `--work-dir` 里写**基础提案**（空提案或人给的提案）：本地中间产物，\
+         用于 `doc merge` 的输入；⛔ 不是客户视图、也不进库（导入是第 ③ 段）",
+    ),
+    (
+        "src/review_open/build_run.rs",
+        "已导入，共 {} 个条目",
+        1,
+        "`build run` 第 ③ 段的导入回执：提案别名 + 条目数 + 基版本（与 `propose import` 同源，\
+         同属建模轨回执）",
+    ),
+    (
+        "src/review_open/build_run.rs",
+        "[{}] {} {}",
+        1,
+        "`build run` 的逐条回执 `[seq] kind target_key`（与 `propose import` 的同一形状）：\
+         `target_key` 是建模 key 本身，属建模轨内容",
+    ),
+    (
+        "src/review_open/build_run.rs",
+        "其余 {} 条在页面上看",
+        1,
+        "`build run` 的回执截断提示（零数据）：超过 20 条时让人去页面上看",
+    ),
+    (
+        "src/review_open/build_run.rs",
+        "终点是「你在页面上看到待审清单」",
+        1,
+        "`build run` 第 ③ 段末尾的 **R3 声明**（固定文案，零数据）：⛔ 本命令不自动 apply / freeze",
+    ),
 ];
 
 /// 整文件豁免：**只允许**「不承载客户视图」的文件（运维二进制 / 响应构造器）。
@@ -1629,6 +1680,7 @@ fn fn_definitions(code: &str) -> Vec<String> {
                 a + 3
             } else if t.starts_with("pub fn ")
                 || t.starts_with("pub(crate) fn ")
+                || t.starts_with("pub(crate) async fn ")
                 || t.starts_with("pub const fn ")
                 || t.starts_with("pub async fn ")
                 || t.starts_with("async fn ")
@@ -1805,6 +1857,19 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "doc_merge_cmd",
         "子命令 handler（`doc merge`：断言 + 提案 → 合并提案；**不连产品库、不调模型**）",
     ),
+    // ⭐ REQ-160 · `build run`：四段编排（① ② 段不碰库，实现全在 `review_open::build_run`）。
+    // 本文件里只留两个壳：一个把 clap 的字段映射成 `Options`，一个转调编排入口。
+    (
+        "src/cli.rs",
+        "build_options",
+        "运维辅助（REQ-160：`BuildCmd` → `build_run::Options` 的**唯一**映射点；零 I/O、零写出）",
+    ),
+    (
+        "src/cli.rs",
+        "build_cmd",
+        "子命令 handler（REQ-160 `build run`：四段编排的装配点；实现全在 `review_open::build_run`）",
+    ),
+    // ⚠️ REQ-159 的 6 个 bundle 函数登记在下面（develop 侧已补齐，REQ-160 不再重复登记）。
     // ⭐ REQ-129 · `doc sign`：给 doc/both 条目签字（写出口 I27 登记在 OUTLETS）。
     (
         "src/cli.rs",
@@ -2203,6 +2268,14 @@ const MODULES: &[(&str, &str)] = &[
     ("src/lib.rs", "review_ui"),
     ("src/review_ui/mod.rs", "http"),
     ("src/review_ui/mod.rs", "page"),
+    // ⭐ REQ-160 · 构建端的共同出口（`review open` + `build run`）。
+    // 与 `review_ui` 并列而不是并进去：`review serve` 审的是「提案双轨」，
+    // 这个审核台审的是「全流程」（demand §六：两者并存，不合并）。
+    // 它**不是**新的写出口：起的是 `console` 那一份路由（凭据换成一次性口令），
+    // 本表只登记模块（T6：新增模块即红）。
+    ("src/lib.rs", "review_open"),
+    ("src/review_open/mod.rs", "build_run"),
+    // ⚠️ `bundle` 的四个模块登记在上面（develop 侧已补齐，REQ-160 不再重复登记）。
     ("src/server/mod.rs", "http"),
     ("src/server/mod.rs", "page"),
     // ⭐ REQ-122 · SPARQL → SQL（解析 / 规划 / 声明 / SQL 文本 / 只读执行）。
@@ -2829,4 +2902,3 @@ fn t10_into_value_is_defined_only_in_the_pipeline_module() {
         bad.join("\n")
     );
 }
-

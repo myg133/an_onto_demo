@@ -98,6 +98,21 @@ pub enum Cmd {
     /// 指纹缓存也是本地文件（默认 `<out>.cache.json`）。
     #[command(verbatim_doc_comment)]
     Doc { #[command(subcommand)] cmd: DocCmd },
+    /// ⭐ REQ-160 · **构建端一条命令跑到审核台**：抽取 → 合并 → 导入 → 起审核台
+    ///
+    /// | 段 | 做什么 | 连库？ |
+    /// | --- | --- | --- |
+    /// | ① `doc ingest` | 文档 → 带证据的断言 JSONL（ACP 子进程逐块抽取） | 否 |
+    /// | ② `doc merge` | 断言 → 机械并进一份提案（同 `proposal.json` 形状） | 否 |
+    /// | ③ `proposal import` | 提案 → 元数据库（与 `import` / `POST /api/import` 同一个函数） | 是 |
+    /// | ④ `review open` | **起审核台**，人看到待审清单（本需求的共同出口） | 是 |
+    ///
+    /// ⛔ **不自动 apply / freeze**：终点是「人在页面上看到待审清单」，不是「本体已生效」。
+    /// ⚠️ 每一段都仍然可以单独跑（`--work-dir` 留着中间产物，重跑命中缓存即 0 token）；
+    /// 本命令只是**便利入口**，不是唯一入口。
+    /// ⚠️ 只做**文档路径**：库路径（`introspect` / `propose`）是另一条链，不在本命令里。
+    #[command(verbatim_doc_comment)]
+    Build { #[command(subcommand)] cmd: BuildCmd },
     /// REQ-118 · **名字提案**（决策点一：表名 / 属性名的中文名）
     ///
     /// ADR-005：涉及决策的先让 AI 提案，**提案永不权威**。本命令只产出提案文件，
@@ -1227,6 +1242,77 @@ pub enum ReviewCmd {
         #[arg(long)]
         confidence: bool,
     },
+    /// ⭐ REQ-160 · **起本机审核台**：构建端两种模式（agent / acp）**共同**的出口。
+    ///
+    /// 抽完之后由人在这一个页面上审、确认、签字。为什么是「所有模式同一个出口」：
+    /// 出口一分叉，就一定会出现「agent 模式跳过了人签」或「acp 模式产物形状不同」
+    /// 两种事故（demand §二）。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder review open --project demo --bind 127.0.0.1:0
+    ///
+    /// 然后浏览器打开它打印的 URL（`--bind` 给 `:0` 时由内核分配端口，
+    /// 具体端口被占用会自动顺延 —— 打印的**就是**真实端口）。
+    ///
+    /// # 安全边界（写在这里，因为 `--help` 是唯一必定被人读到的地方）
+    ///
+    /// | # | 规则 |
+    /// | --- | --- |
+    /// | S1 | **只绑回环**（127.0.0.1 / ::1）。任何非回环地址（含 `0.0.0.0` 与内网）必须显式 `--allow-public`，否则**启动即失败** |
+    /// | S2 | 口令是**一次性**的：随机生成、只在本进程内存里、**不落盘**、**不进 URL**、**不进日志 / 审计原文**（审计只记 sha256 前 12 位）；进程退出即失效 |
+    /// | S3 | 页面的既有纪律一字不变：壳内零数据、禁 `localStorage`、CSP 自包含（`src/console/page.rs`） |
+    ///
+    /// ⚠️ 口令只在终端打印**一次**：把它粘贴到页面的口令框（页面只存 sessionStorage）。
+    /// ⛔ 不要贴进浏览器地址栏、不要复制到共享文档 / 聊天工具 / 截图。
+    /// ⚠️ 前台运行，**没有**后台常驻（daemon）形态：Ctrl-C 结束即失效。
+    /// ⛔ **明文 HTTP**（本服务没有 TLS）：生产 / 远程访问**必须**走反向代理 + TLS；
+    /// 本机一次性口令只适合**单机审核** —— `--allow-public` 只是「允许绑非回环」，
+    /// 它**不**提供任何加密，⛔ 不要拿它当远程方案。
+    /// ⚠️ 起的是与 `console serve` **同一个**控制面（同一份路由表），区别只有
+    /// 「凭据从哪来」：那边读 `--tokens <文件>`，这边是内存里的一次性口令。
+    /// ⚠️ 需要 `ONTOK_SECRET_KEY`（32 字节 hex）。**本版即使只想审核也要给** ——
+    /// 控制面持有 DSN 加密器，缺密钥即拒绝启动（与 `console serve` 同一条纪律；
+    /// 不在本命令里单独降级：那会把「缺密钥」从启动期 fail-fast 变成运行期 500）。
+    /// 后续改进（另立单）：DSN 端点降级 503，那时才谈「没密钥也能审」。
+    /// ⚠️ 声明校验需要真实 schema：给 `--schema`，或用默认 `code/out/schema.json`；
+    /// 都没有时声明校验**关闭（fail-closed）**，页面审阅照常可用。
+    ///
+    /// 退出码：`0` 正常结束（含 TTL 到点）；`1` 环境 / 库错；`2` 入参不合法
+    /// （项目 / 版本不存在、`--bind` 不是回环却没给 `--allow-public`、`--schema` 读不动 …）。
+    #[command(verbatim_doc_comment)]
+    Open {
+        /// 项目名（必须是**已存在**的项目：本命令只读，不建项目）
+        #[arg(long)]
+        project: String,
+        /// 第几版。省略 = 该项目**最新**版本。
+        /// 一版都没有时照常起（页面上只有待审提案 —— `build run` 的产物就是这个形状）
+        #[arg(long)]
+        version: Option<i32>,
+        /// 监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配；具体端口被占会自动顺延）
+        #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
+        bind: String,
+        /// 允许绑非回环地址（`0.0.0.0` / 内网 / 公网）。⛔ 不加就只能绑回环
+        #[arg(long)]
+        allow_public: bool,
+        /// 不自动打开浏览器（CI / 远程 SSH / 无桌面环境）。⚠️ 只影响开不开浏览器，服务照起
+        #[arg(long)]
+        no_browser: bool,
+        /// 一次性口令的有效期（`4h` / `30m` / `45s`，裸数字按秒）。到点即关；进程退出也即失效
+        #[arg(long, default_value = crate::review_open::DEFAULT_TOKEN_TTL)]
+        token_ttl: String,
+        /// 真实 schema（`ontok-introspect` 产物）—— 声明校验的「表 / 列必须存在」只能来自它。
+        /// 省略时找默认落点 `code/out/schema.json`（工作树里会向上一级找）
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// IRI 基（必须与 `r2rml generate` / `ontology export` 用的是同一个）
+        #[arg(long)]
+        base: Option<String>,
+        /// 审计落点（**追加**写）。⚠️ 它不是审计的开关：省略时审计仍写 **stdout**；
+        /// 给了它 = stdout **+** 这个文件（同时写）
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
+    },
     /// ⭐ REQ-111 · 起一个**本地审核界面**（在 HTML 里做双轨审核）
     ///
     /// 与 `serve` 是**两个命令**，不是给 `serve` 加一个开关：
@@ -1262,6 +1348,95 @@ pub enum ReviewCmd {
         /// 访问口令（至少 8 个字符）。省略时读环境变量 `ONTOK_VIEW_TOKEN`
         #[arg(long)]
         token: Option<String>,
+    },
+}
+
+/// ⭐ REQ-160 · 构建端的**编排入口**（`ontok-builder build <子命令>`）。
+///
+/// 今天只有一个子命令 `run`。为什么不做成 `--all` 开关挂在 `doc ingest` 上：
+/// 「抽取」与「编排」的失败面完全不同（前者是模型 / 预算，后者是库 / 端口），
+/// 合成一个命令会让「只想重跑合并」也被迫走一遍抽取（demand §九-风险 2）。
+#[derive(Subcommand)]
+pub enum BuildCmd {
+    /// 文档 → 抽取 → 合并 → 导入 → **起审核台**（⛔ 不 apply / freeze）
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder build run --project demo --input docs/ --agent acp --agent-command pi-acp --agent-skill Deploy/skills/ontok-extract/SKILL.md
+    ///
+    /// # 四条裁定
+    ///
+    /// | 裁定 | 行为 |
+    /// | --- | --- |
+    /// | R1 | **任一阶段失败即整体失败**（退出码非 0），且**不留下半成品**：后面的段一个都不跑 |
+    /// | R2 | 末尾**自动**起审核台；`--no-browser` 只影响开不开浏览器，不影响起不起来 |
+    /// | R3 | ⛔ **不自动 apply / freeze** —— 决策只在页面上由人做 |
+    /// | R4 | 中间产物落 `--work-dir`（默认 `.ontok-build/`），可重跑；指纹缓存命中即 0 token |
+    ///
+    /// ⚠️ 基版本：项目不存在会新建（幂等），一版都没有会建 v1（**不冻结**）——
+    /// 这是为了让「从零开始」也能一条命令跑通；最新版**已冻结**时不会自动开新版本
+    /// （那是人的决定），报错并给出 `version new` 的写法。
+    /// ⚠️ 不给 `--proposal` 时会在工作目录里生成一份**空提案**并自动打开纯文档通路
+    /// （REQ-143）：新建实体 / 关系的档位是 `low`、`reviewed_by: null`，仍需人签。
+    /// ⚠️ 退出码：`0` 正常；`1` 环境 / 库错（含 agent 连不上）；`2` 入参不合法。
+    /// ⛔ 末尾起的是**本机**审核台（明文 HTTP，无 TLS）：生产 / 远程访问必须走
+    /// 反向代理 + TLS；一次性口令只适合**单机审核**。
+    #[command(verbatim_doc_comment)]
+    Run {
+        /// 项目名（不存在会新建；与 `import` 同一个 `get_or_create`）
+        #[arg(long)]
+        project: String,
+        /// 输入：一个 `.md` / `.txt` 文件，或一个目录（递归）。⛔ `.pdf` / `.docx` 直接报错
+        #[arg(long)]
+        input: PathBuf,
+        /// 抽取实现。**只认 `acp`**（R5：本命令只做文档路径）
+        #[arg(long)]
+        agent: String,
+        /// ACP 子进程命令行（如 `pi-acp`）。⛔ 没有默认值
+        #[arg(long)]
+        agent_command: String,
+        /// 抽取契约（skill）的路径 —— 一份 `.md`，或装着 `SKILL.md` 的目录
+        #[arg(long)]
+        agent_skill: PathBuf,
+        /// ACP 单轮往返截止（秒）。省略 = `doc ingest` 的默认值（180）
+        #[arg(long)]
+        agent_timeout_secs: Option<u64>,
+        /// 有块失败 / 回答不可用率 > 20% ⇒ 退出码非 0 且**一个产物都不写**（R1 的同一口径）
+        #[arg(long)]
+        strict_deterministic: bool,
+        /// 中间产物的落点。默认 `.ontok-build/`
+        #[arg(long, default_value = crate::review_open::build_run::DEFAULT_WORK_DIR)]
+        work_dir: PathBuf,
+        /// 基础提案（省略 = 生成空提案 + 打开纯文档通路）
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// 强制打开 `doc merge --allow-doc-only`（给了 `--proposal` 时默认**关**）
+        #[arg(long)]
+        allow_doc_only: bool,
+        /// 基版本序号（省略 = 最新一版；一版都没有就建 v1）
+        #[arg(long)]
+        base_version: Option<i32>,
+        /// 真实 schema（`doc merge` 的严格校验 + 审核台的声明校验）
+        #[arg(long)]
+        schema: Option<PathBuf>,
+        /// 审核台的监听地址。默认 `127.0.0.1:0`
+        #[arg(long, default_value = crate::review_open::DEFAULT_BIND)]
+        bind: String,
+        /// 审核台允许绑非回环地址（⛔ 不加就只能绑回环）
+        #[arg(long)]
+        allow_public: bool,
+        /// 不自动打开浏览器（只影响浏览器，不影响起不起来 —— R2）
+        #[arg(long)]
+        no_browser: bool,
+        /// 审核台一次性口令的有效期
+        #[arg(long, default_value = crate::review_open::DEFAULT_TOKEN_TTL)]
+        token_ttl: String,
+        /// IRI 基（透传给审核台）
+        #[arg(long)]
+        base: Option<String>,
+        /// 审核审计落点（**追加**写；省略时只写 stdout）
+        #[arg(long)]
+        audit_out: Option<PathBuf>,
     },
 }
 
@@ -2061,6 +2236,45 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // ⇒ 若把这条挪到下面那个 match（连库之后），`bundle verify` 会先被
         // 「连不上库」挡住，报错指向的原因就错了。
         Cmd::Bundle { cmd } => return bundle_cmd(cmd).await,
+        // ⭐ REQ-160 · `review open` 也在**连库之前**分派（理由与 `doc ingest` 同一条）：
+        // 它**先判入参**（`--bind 0.0.0.0:8899` 不带 `--allow-public` 是**入参错** ⇒ exit 2），
+        // 判完才自己连库（[`crate::review_open::open`]）。若留到下面那个 match（先连库），
+        // 没配库的机器上永远先看到「ONTOK_DATABASE_URL 未设置」——
+        // 报错指向错的原因，AC-005 的两条退出码判据也就无从跑起。
+        Cmd::Review { cmd } => match cmd {
+            ReviewCmd::Open {
+                project,
+                version,
+                bind,
+                allow_public,
+                no_browser,
+                token_ttl,
+                schema,
+                base,
+                audit_out,
+            } => {
+                let args = crate::review_open::OpenArgs {
+                    project,
+                    version,
+                    bind,
+                    allow_public,
+                    no_browser,
+                    token_ttl,
+                    schema,
+                    base,
+                    audit_out,
+                };
+                return crate::review_open::finish(crate::review_open::open(args).await);
+            }
+            cmd => Cmd::Review { cmd },
+        },
+        // ⭐ REQ-160 · `build run` 的**入参**也在连库之前判一遍（命令整体仍走下面那条路：
+        // ③④ 段要元数据库）。不这样做，没配库的机器上 `--input` 打错也只会看到
+        // 「ONTOK_DATABASE_URL 未设置」——报错指向错的原因，退出码也从 2 变成 1。
+        Cmd::Build { cmd } => {
+            crate::review_open::finish(crate::review_open::build_run::validate(&build_options(&cmd)))?;
+            Cmd::Build { cmd }
+        }
         cmd => cmd,
     };
 
@@ -2084,6 +2298,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Sparql { cmd } => sparql_cmd(&pool, cmd).await,
         // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化；⛔ 只暴露既有流程）
         Cmd::Console { cmd } => console_cmd(&pool, cmd).await,
+        // ⭐ REQ-160 · 一条命令跑到审核台（① ② 段不碰库，③ ④ 段要元数据库 ⇒
+        // 放在连库之后；两段的失败面在 `review_open::build_run` 里各自点名）。
+        Cmd::Build { cmd } => build_cmd(&pool, cmd).await,
         Cmd::Concept { cmd } => concept_cmd(&pool, cmd).await,
         // REQ-108 · AC-011：分箱命中率（分数 vs 人工决定）
         Cmd::Confidence { cmd } => confidence_cmd(&pool, cmd).await,
@@ -2365,7 +2582,7 @@ fn build_doc_transport(
 /// ⭐ REQ-147：本函数多了一个**岔口**（`--agent acp`），但默认那一支**一行没改** ——
 /// 不给 `--agent` 时走的还是 REQ-116 的原路（三件套 / `Prompts::standard()` /
 /// `max_tokens` 口径全部不变），所以产物与基线**逐字节相同**（R1 的判据是 sha256 对拍）。
-async fn doc_ingest_cmd(
+pub(crate) async fn doc_ingest_cmd(
     input: PathBuf,
     out: PathBuf,
     stats_path: Option<PathBuf>,
@@ -2799,7 +3016,7 @@ async fn doc_ingest_cmd(
 ///
 /// 它是**机械对齐**：输入是两份本地文件，判断依据全是文件里的字段（`maps_to` /
 /// 名字 / 别名）。⛔ 没有一次网络调用，所以没有 token 可花，也就没有预算闸。
-async fn doc_merge_cmd(
+pub(crate) async fn doc_merge_cmd(
     assertions: &std::path::Path,
     proposal: &std::path::Path,
     out: &std::path::Path,
@@ -5654,6 +5871,34 @@ async fn review_cmd(pool: &PgPool, cmd: ReviewCmd) -> anyhow::Result<()> {
                 .await?;
             println!("item {} 的 {} 轨 → {}", item, track, d.as_str());
         }
+        ReviewCmd::Open {
+            project,
+            version,
+            bind,
+            allow_public,
+            no_browser,
+            token_ttl,
+            schema,
+            base,
+            audit_out,
+        } => {
+            // ⚠️ 正常路径**走不到这里**：`run()` 在连库之前就把 `review open` 分派出去了
+            // （它先判入参、自己连库）。这一段是**兜底**：万一将来有人删掉那个提前返回，
+            // 得到的仍是同一个实现（[`crate::review_open::open_with`]），而不是「命令不存在」。
+            // 收尾在**边界**做（`finish` 只在这里翻译退出码：入参不合法 ⇒ 2，环境 / 库错 ⇒ 1）。
+            let args = crate::review_open::OpenArgs {
+                project,
+                version,
+                bind,
+                allow_public,
+                no_browser,
+                token_ttl,
+                schema,
+                base,
+                audit_out,
+            };
+            return crate::review_open::finish(crate::review_open::open_with(pool, args).await);
+        }
         ReviewCmd::Serve { project, proposal, bind, token } => {
             // 绑地址先解析：给错格式要报人话，不要把 axum 的栈倒给用户。
             let addr: std::net::SocketAddr = bind.parse().with_context(|| {
@@ -6806,6 +7051,62 @@ async fn console_cmd(pool: &PgPool, cmd: ConsoleCmd) -> anyhow::Result<()> {
         base,
     };
     crate::console::serve::serve(pool, args).await
+}
+
+/// ⭐ REQ-160 · `BuildCmd` → [`crate::review_open::build_run::Options`]。
+///
+/// **唯一**的映射点：连库之前先判入参那一路（[`run`] 的开头）也用它，
+/// 否则「CLI 的字段」会有两份抄写，改一个忘一个。
+fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
+    let BuildCmd::Run {
+        project,
+        input,
+        agent,
+        agent_command,
+        agent_skill,
+        agent_timeout_secs,
+        strict_deterministic,
+        work_dir,
+        proposal,
+        allow_doc_only,
+        base_version,
+        schema,
+        bind,
+        allow_public,
+        no_browser,
+        token_ttl,
+        base,
+        audit_out,
+    } = cmd;
+    crate::review_open::build_run::Options {
+        project: project.clone(),
+        input: input.clone(),
+        agent: agent.clone(),
+        agent_command: agent_command.clone(),
+        agent_skill: agent_skill.clone(),
+        agent_timeout_secs: *agent_timeout_secs,
+        strict_deterministic: *strict_deterministic,
+        work_dir: work_dir.clone(),
+        schema: schema.clone(),
+        proposal: proposal.clone(),
+        allow_doc_only: *allow_doc_only,
+        base_version: *base_version,
+        bind: bind.clone(),
+        allow_public: *allow_public,
+        no_browser: *no_browser,
+        token_ttl: token_ttl.clone(),
+        base: base.clone(),
+        audit_out: audit_out.clone(),
+    }
+}
+
+/// ⭐ REQ-160 · `ontok-builder build run` 的装配点。
+///
+/// 本函数**只做参数映射**：四段的实现、失败语义（R1）、「不自动签」（R3）全在
+/// [`crate::review_open::build_run`]，因为那里能被单测直接跑（①② 段不需要库）。
+/// 收尾走 [`crate::review_open::finish`]：入参不合法 ⇒ 退出码 2。
+async fn build_cmd(pool: &PgPool, cmd: BuildCmd) -> anyhow::Result<()> {
+    crate::review_open::finish(crate::review_open::build_run::run(pool, build_options(&cmd)).await)
 }
 
 // ── 提案指法 ────────────────────────────────────────────/// `p1` / `p2` … → **该项目内按创建时间倒序**的第 n 个提案（`p1` = 该项目里最新的那个）；/// 也可直接给 UUID（UUID 全局唯一，不需要作用域）。
