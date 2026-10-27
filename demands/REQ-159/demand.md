@@ -258,3 +258,77 @@ stateDiagram-v2
 - 第 1 条按 **(a)**：包里有 `db/schema.json`（表/列/关系映射），**数据不进包**
 - 第 2 条按**解析成功后展示**
 - 第 3 条按 **(a) 网页上传** —— 因为你说"手动上传"，而 FDE 用命令行也叫手动，两者差别很大；**这条我最不确定，请明确**
+
+
+---
+
+## 十一 · 给构建端（lion）的实现清单
+
+> 这一节是**给构建端照着做的**，不是备忘。凡是我会拒绝的，都列在 §十一-4。
+
+### 1 · 你要交付的命令
+
+```bash
+ontok-builder bundle pack --project <p> --version <v> --out <file>.ontokbundle
+```
+
+包内四件（可选部分按需）：
+
+| 包内路径 | 从哪来 | 硬要求 |
+| --- | --- | --- |
+| `manifest.json` | 你自己生成 | 符合 `BA/demands/REQ-159/manifest.schema.json` |
+| `ontology/snapshot.json` | **`PgStore` 读出的 `Snapshot` 原文**（`serde_json` 直出） | 见下面 ⚠️ |
+| `am/access-mapping.json` | 现在的 AM 文件原样 | 不含凭据 |
+| `db/schema.json` | 表/列/关系映射 | ⛔ **不含 DSN / 密码 / 数据行** |
+
+### 2 · ⚠️ `snapshot.json` 必须是 **`Snapshot` 原文**，⛔ 不能用 `ontology show` 的输出
+
+**这条最容易踩**：`ontology show`（默认 JSON）和 `--model-view` 打的是**视图**，不是快照。
+实测 `LinkTypeView` 只有 **5 个字段**：
+
+```rust
+pub struct LinkTypeView { key, from_type, to_type, cardinality, semantic }   // 就这 5 个
+```
+
+**没有 `evidence`、没有 `table`/`column`、没有 `joinVerified`。**
+拿视图 JSON 当包内容 ⇒ **服务端入库后关系的证据全丢**，而且**丢得无声无息**。
+
+**要求**：`ontology/snapshot.json` = `domain::snapshot::Snapshot` 的 `serde_json` 序列化**原文**，
+即从 `PgStore` 直接读结构体再 `to_vec`，**中途不要经过任何 view / filter / projection**。
+
+> 包的 `snapshot.json` 里 `version_id` / `seq` 是**构建端的标识**；
+> 服务端入库时会**重新分配**版本号，不用你操心。
+
+### 3 · 打包前自检（你跑，5 条，建议做成 `bundle verify`）
+
+| # | 检查 | 判据 |
+| --- | --- | --- |
+| 1 | manifest 能按 `manifest.schema.json` 校验通过 | 用任意 JSON Schema 校验器 |
+| 2 | `files[]` **覆盖包内每一个文件**（漏一个都不行） | 集合相等 |
+| 3 | `files[].sha256` 与真实文件一致 | 逐文件算 |
+| 4 | `snapshot.json` 里 `link_types[*].evidence` **存在**（哪怕是空数组） | 抽 1 条断言 |
+| 5 | 包里**搜不到** `password` / `dsn` / `postgres://` / `mysql://` | 正则扫全文 |
+
+### 4 · 我会拒绝的 8 种情况（提前避开）
+
+| # | 情况 | 错误码 | 我能给你的提示 |
+| --- | --- | --- | --- |
+| 1 | manifest 缺字段 / 类型不符 | `bundle.manifest.invalid` | 报**具体字段路径** |
+| 2 | `files[]` 与包内实际文件不一致 | `bundle.files.mismatch` | 列出**多/少/不符**的文件名 |
+| 3 | 任一文件 sha256 不符 | `bundle.sha256.mismatch` | 点名文件 |
+| 4 | `project` 与接收项目不同名 | `bundle.project.mismatch` | 两边名字都回显 |
+| 5 | `bundle_version` 不认识 | `bundle.version.unsupported` | 我支持的版本列表 |
+| 6 | 路径含 `..` / 绝对路径 / 符号链接 | `bundle.path.illegal` | 点名路径 |
+| 7 | `requires_dsn=true` 但没配 DSN 就 import | `db.dsn.missing` | 提示先配 DSN |
+| 8 | 包体积超上限（默认 100 MB） | `bundle.too_large` | 报实际大小与上限 |
+
+### 5 · 联调顺序（别一次全上）
+
+| 步 | 你给什么 | 我验什么 |
+| --- | --- | --- |
+| 1 | **只带 ontology** 的包（`cloud-resource` v5） | 能上传、能解析、新版本 == 现有 v5 的语义 |
+| 2 | 加 `am/` | AM 能加载、租户数对得上 |
+| 3 | 加 `db/schema.json` + `requires_dsn=true` | 我这边能弹 DSN、测连通、再解析 |
+
+**每一步跑通再进下一步。** 第 1 步就是最好的兼容性测试：**用 v5 打出来的包，服务端解析回库，
+应该得到与现有 v5 逐字节等价的快照**（这条我会当 AC 验）。
