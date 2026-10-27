@@ -4,6 +4,9 @@ description: 通用文档抽取契约：把任意文档变成「带逐字证据�
 category: contract
 ---
 
+> **适用工具版本**：`ontok-builder` ≥ **v0.2.9**（本文件 2026-10-27 更新）。
+> ⚠️ 构建类命令在 REQ-152 之后从 `ontok` 挪到了 `ontok-builder` —— 旧写法（`ontok doc ingest` / `ontok ontology export` 等）已失效。
+> 命令对不上时**先升级工具**，别照着旧材料猜参数。
 # 通用抽取契约
 
 > 你的唯一任务：**从文档里取出「概念」和「概念之间的关系」，并给每一条配上原文逐字引用。**
