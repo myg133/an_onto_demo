@@ -418,3 +418,14 @@
 | `skills/**` | **保留**（产品交付物，另一位 BA 复核时要用；迁走前须先知会） |
 
 > 两条记录并存不是矛盾 —— 上面是"当时有效"，这里是"现已取代"。**巡检时以本条为准。**
+
+## 2026-10-27 11:00 · REQ-159 构建端合并与回收（session ba-lion-michael-workstation-49056-20261027-094244）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | develop **cc8cc97**（--no-ff）← eature/REQ-159-builder **2701e14** |
+| 合并前 develop | deac561（join 的 G-1 守卫修复，与本合并无文件重叠） |
+| 合并后验证（在 code/ 上跑） | cargo check --lib 绿 · cargo test --lib bundle:: **15/15** · cargo test --test test_req159_bundle **33/33** |
+| QA 依据 | 复审 PASS 带非阻断（0 阻断），报告 docs/reports/2026-10-27-REQ-159构建端QA*.md |
+| 回收 | worktree eature-REQ-159-builder 已移除（--force，仅因未跟踪的 `.feature/`）；分支先 merge-base --is-ancestor … develop 确认已并入，再 -D 删除 |
+| 未回收（有意） | eature/REQ-159（join 服务端，a127f52）与 eature/REQ-159-console（页面，477e06d）仍在进行 |
