@@ -371,48 +371,29 @@
 | agent-registry | 上个会话 `ba-michael-worksta-14864-…`（最后活动 2026-10-21）按 30 分钟规则降 **stale**；本会话注册为 online |
 | req-registry 漂移 | REQ-151 实为**已完成**（`6682621`）；REQ-155 实为 **P1+P2 已完成、P3 待做**（原写"已就绪"） |
 
-### ⚠️ 未清理 · 需人裁定：**workspace 分支违规**
+### ✅ 已处置：workspace 分支违规（26 → 10 个文件）
 
-规范要求 `git ls-files` **只有 `README.md` + `.gitignore`** 两个文件，实际 **26 个**：
+**用户裁定**：`.agents/` 可删 —— 全局技能已接管。
 
-| 目录/文件 | 数量 | 性质 |
-| --- | ---: | --- |
-| `.agents/agents/*.md` | 5 | Agent 角色定义 |
-| `.agents/skills/agent-workspace/**` | 15 | 本 skill 本体（含模板与参考） |
-| `AGENTS.md` | 1 | 项目级 Agent 规范 |
-| `skills/**` | 7 | 产品 skill（ontok-build / extract / query） |
-
-**⛔ 没有擅自删除** —— 这些都是**真实内容**，删掉等于丢 `skills/` 与 Agent 规范。
-
-**三个选项（待定）**：
-
-| 选项 | 做法 | 代价 |
-| --- | --- | --- |
-| **A** | 迁移到独立分支（如 `docs`），workspace 回归 2 文件 | 要改 README 引用、CI/编辑习惯 |
-| **B** | 承认例外，在 `workspace/README.md` 与规范里写清"本项目允许这 4 类文件" | 规范与实现不一致，但不动内容 |
-| **C** | 保持现状、不记录 | ❌ 不推荐 —— 下次巡检还会报 |
-
-
-## 2026-10-27 09:45 · lion 入场巡检（session ba-lion-michael-workstation-49056-20261027-094244）
-
-### ✅ 无违规
-
-| 项 | 实测 |
+| 项 | 处置 |
 | --- | --- |
-| worktree | `an_onto_demo`(workspace `f6128ae`) / `BA`(demand `92528ba`) / `code`(develop `aa6e52d`) / `Deploy`(deploy `f85f0ea`) —— **4 个，无 feature/hotfix 遗留** |
-| `demand` 同步 | 与 `origin/demand` 同点（`0 ahead / 0 behind`） |
-| 分支 | `code` 只剩 `feature/REQ-147`（远程留档分支，REQ-147 已合并 `d6f300f`，留档不清理是有意的） |
+| `.agents/`（16 文件） | **已删**（workspace commit `6d5d73b`） |
+| 全局来源 | `~/.agents/skills/agent-workspace/`（含 `references/roles/` 下 8 份角色定义） |
+| `.gitignore` | 去掉 `.agents` 白名单条目（75 → 70 行） |
+| `README.md` | 去掉 15 处 `.agents/` 引用 |
+| 被跟踪文件 | **26 → 10** |
 
-### 📌 对 join 那条「workspace 分支违规」的补充：**一半已有裁定，别重复讨论**
+> ⚠️ **一处差异必须记住**：仓库里那 5 份角色定义是**项目定制版**
+> （`anspire-open-ba.md` 142 行，写着 `BA/` 路径、REQ 编号认领、session 规则）；
+> 全局的 `references/roles/ba.md` 是**通用版**（211 行）。
+> 按用户指示以全局为准；**旧文本可从这个 commit 的父提交取回**（`git show 6d5d73b^:.agents/agents/anspire-open-ba.md`）。
 
-本文件第 7 行（2026-09-28，**决策人：项目负责人**）已经登记过例外：
+### ⚠️ 仍未处置（规范要求 2 文件，现 10 个）
 
-> workspace 分支除 `README.md` / `.gitignore` 外，还跟踪 `AGENTS.md` 与 `.agents/` ——
-> 理由是二者是**跨 worktree 共享的工具层**，放进 `BA/` 会让 feature worktree 读不到。
+| 文件 | 数量 | 说明 |
+| --- | ---: | --- |
+| `AGENTS.md` | 1 | 项目级 Agent 规范（工作区说明） |
+| `skills/**` | 7 | 三个产品 skill + README + mcp 示例 |
 
-按此裁定，`git ls-files` 的 26 个里 **16 个（`AGENTS.md` + `.agents/` 15 个）是「已批准的例外」**，
-不是违规。**真正未记录的只有 `skills/**`（7 个）** —— 它们是产品 skill（`ontok-build` / `ontok-extract` / `ontok-query`），
-与既有例外的性质相同（跨 worktree 共享、非业务代码、FDE 要能读到）。
-
-⇒ **建议按选项 B 收口**：把 `skills/**` 补进上面的「已知规范偏离」表即可，**不必迁移、不必删**。
-⇒ 未动手：此项属 workspace 分支（join 面），留给 join 或用户裁定。
+**待裁定**：这两类是否也迁走（迁到 `code/` 或独立 `docs` 分支），或承认例外写进规范。
+⛔ 未擅自处理 —— 它们是真实交付物（FDE / 客户会用 `skills/`）。
