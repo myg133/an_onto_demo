@@ -90,6 +90,14 @@ patches:
         value:
           - name: postgres17-wal-registry
 
+  # ④''' 同 tag 重建后必须重拉：`IfNotPresent` 会继续用节点上缓存的老镜像，
+  #        ⇒ 改成 `Always`（我们发版习惯是"同版本号覆盖重建"，tag 可变就必须 Always）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+
   # ④'' 写面密钥：`query serve` 从 REQ-159 P1c-1 起承载写面（Studio 建项目/传包/配 DSN），
   #     必须用 ONTOK_SECRET_KEY 加密 DSN 与 query key；缺了**拒绝启动**（不是降级）。
   #     ⚠️ Secret `ontok-write` 由部署流程单独 provision（含真密钥），⛔ 不进版本库。
