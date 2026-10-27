@@ -252,7 +252,7 @@ token：首次实付；第二次 0（缓存）
 
 ## 7.3 · 工作台前端（REQ-125）与「两服务同源」
 
-`ontok console serve` 自带页面（`GET /`），但它**只含管理端点**；页面里的「查询台 / 目录浏览」要调的是
+`ontok-builder console serve` 自带页面（`GET /`），但它**只含管理端点**；页面里的「查询台 / 目录浏览」要调的是
 **REQ-123 的 `query serve`**（另一进程、另一套 query token）。
 
 ```
@@ -463,7 +463,7 @@ Remove-Item Env:ONTOK_LLM_API_KEY    # 别留在会话里
 | 界面 | 命令 | 给谁 | 能做什么 |
 | --- | --- | --- | --- |
 | 客户视图 | `ontok serve` | 业务/客户 | 看图、看对象、看总览；导出 TTL |
-| 内部工作台 | `ontok console serve` | FDE/实施 | 项目、评审、导出、声明编辑、审计、查询台（+反代） |
+| 内部工作台 | `ontok-builder console serve` | FDE/实施 | 项目、评审、导出、声明编辑、审计、查询台（+反代） |
 | 客户门户 | `ontok portal serve`（REQ-126） | 客户 | 只能点**预审过的问题**，租户锁死，无自由查询；结果只给业务名+覆盖警告 |
 
 **三套凭证、三个端口、互不复用。**
