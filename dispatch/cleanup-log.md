@@ -475,3 +475,14 @@
 | 合并后验证（code/） | `check --lib` 绿 · `--test test_req159_bundle` **38/38** · `--lib bundle::` **35/35** |
 | 真库验收（合并前） | `bundle pack --project anspire_real` ⇒ exit 0 · 171,735 B；`verify` ⇒ exit 0 且**无** credential 误报；deflate 重压包 ⇒ exit 2 + `bundle.unsupported.compression` |
 | 回收 | worktree + 分支已删（先确认 ancestor） |
+
+## 2026-10-27 13:20 · REQ-160 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **fd2ecb1**（`--no-ff`）← `feature/REQ-160` **65a0381**（已 rebase 到 `1c418ce`） |
+| 冲突 | **零**（rebase 阶段已把 4 个文件的差异抹平；Dev 按裁定统一取 develop 侧） |
+| 改动 | 7 文件 **+2958/−6**（新模块 `src/review_open/{mod,build_run}.rs` + 新测试） |
+| 合并后六条守卫 | `review_open` **21/21** · `test_req160` **9/9**（SKIP 0）· `source_enumeration` **10/10** · `anchor_guard` **3/3** · `test_req159_bundle` **38/38** · `check` 绿 |
+| 回收 | worktree + 分支已删（先确认 ancestor） |
+| 协作 | 合并前按规矩发「我要动 `code/`」；join 期间未做写操作 |

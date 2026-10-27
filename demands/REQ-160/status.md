@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**进行中**（2026-10-27 · 已派 Dev，worktree `feature-REQ-160`，基线 develop `e7c29aa`）
+**已完成**（2026-10-27 · 合并 `fd2ecb1` · QA PASS 带非阻断 + 定点复验 · worktree 已回收）
 
 ## 一句话
 
