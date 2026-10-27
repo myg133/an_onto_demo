@@ -6,10 +6,13 @@
 | --- | --- |
 | `compose/` | 单机 docker-compose（db + query + console） |
 | `k8s/` | Kubernetes 清单（kustomize：base + overlays/dev + overlays/prod） |
-
-> ⭐ **skill 不在本分支**：`ontok-build` / `ontok-extract` / `ontok-query` / `<项目>-ontology`
-> 统一放在**仓库根 `skills/`**（2026-10-26 从本分支迁出，避免两份副本漂移）。
+| `skills/` | ⭐ **产品 skill**（`ontok-build` / `ontok-extract` / `ontok-query` / `mcp.example.json`）—— 给 FDE 与客户数字员工看的说明书 |
 | `.local/` | 本地临时（不跟踪） |
+
+> ⭐ **2026-10-27：skill 统一回本分支维护**（用户口径，`Deploy` 分支唯一维护处）。
+> 历史：2026-10-26 曾从本分支迁到**仓库根 `skills/`**；现在搬回。
+> 注意防止漂移的关键**不是放在哪，而是只有一份** —— 仓库根已不再保留副本（workspace 分支的 `.gitignore` 也去掉了 `!/skills/`）。
+> 引用当前分支内的 skill 用相对路径：`../skills/...`（从 `digital-employee/` 出发）。
 
 ## 镜像
 

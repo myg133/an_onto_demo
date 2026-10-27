@@ -1,7 +1,7 @@
 # AGENTS.md · 数字员工接入 ontok 本体服务
 
 > **这份文件是给"你"（数字员工 / Agent）的说明书**，不是给运维的。
-> 通用流程的细节在 `skills/ontok-query/SKILL.md`；本文件补充**这套部署**的具体事实。
+> 通用流程的细节在 `../skills/ontok-query/SKILL.md`；本文件补充**这套部署**的具体事实。
 
 ---
 
@@ -181,7 +181,7 @@ set -a; . ./.env; set +a
 ### ② ⛔ 不要从零造签名/翻页/地域发现
 
 优先用**包里自带的执行器**（本部署：`ontok-builder access fetch`）；没有再自己写；
-写就照 `skills/ontok-query/SKILL.md` **附录 A** 抄（那份已用腾讯云**官方向量**验过签名逐字节一致）。
+写就照 `../skills/ontok-query/SKILL.md` **附录 A** 抄（那份已用腾讯云**官方向量**验过签名逐字节一致）。
 ⛔ **不要凭记忆写 version/参数**——实测有人把 SSL 接口猜成另一个版本（能跑通，但字段对不上本体）。
 
 ### ③ 路径用相对工作目录，⛔ 不要写 `/tmp`
