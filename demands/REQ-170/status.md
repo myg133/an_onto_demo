@@ -2,7 +2,7 @@
 
 ## 当前
 
-**待验证**（Dev 交付 `d7f2321`，未 push；待补 changelog §7 后派 QA）
+**待验证**（Dev 交付 `d7f2321`，未 push；changelog §7 已补；**QA 在跑**）
 
 ## 我复核过的（lion 亲跑）
 
@@ -37,6 +37,6 @@
 
 ## 待办
 
-- [ ] Dev 补 changelog §7「已知缺口」（R2RML TTL 无导入入口 · schema.json 无外键明细）
+- [x] Dev 补 changelog §7「已知缺口」（已补：7.1 R2RML TTL 无导入入口 · 7.2 schema.json 无外键明细）
 - [ ] QA（重点：**零回归的 sha256 证据能否复现**、maps_to 校验的 4 类丢弃码、大库闸）
 - [ ] 合并（待用户）
