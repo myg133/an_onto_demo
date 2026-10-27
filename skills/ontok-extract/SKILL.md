@@ -255,7 +255,7 @@ ontok-builder review open --project <项目>
 - **工具版本还没有这条命令时**（早于 REQ-160）：
 
 ```bash
-ontok console serve --bind 127.0.0.1:8899 --tokens <admin-tokens.json> --project <项目> --schema <schema.json>
+ontok-builder console serve --bind 127.0.0.1:8899 --tokens <admin-tokens.json> --project <项目> --schema <schema.json>
 ```
 
   然后把 **URL + 该填的口令**交给操作人，让**他**在页面顶部填。

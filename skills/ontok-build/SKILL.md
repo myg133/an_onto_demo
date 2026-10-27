@@ -252,7 +252,7 @@ ontok-builder relation verbs check --project <项目> --version <版本>
 **现在（v0.2.9 及以前）**
 
 ```bash
-ontok console serve --bind 127.0.0.1:8899 \
+ontok-builder console serve --bind 127.0.0.1:8899 \
   --tokens <admin-tokens.json> \
   --project <项目> --schema work/schema.json
 # 浏览器打开 http://127.0.0.1:8899/ → 顶部填 admin token（口令只留在本标签页）
