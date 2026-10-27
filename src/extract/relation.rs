@@ -818,30 +818,105 @@ fn qualified(schema: &str, table: &str, column: &str) -> String {
     )
 }
 
-/// 类型族（只用来判「能不能拿两个值比一比」）。
-fn type_family(t: &str) -> &'static str {
-    let t = t.to_ascii_lowercase();
-    if t.contains("int")
-        || t.contains("numeric")
-        || t.contains("decimal")
-        || t.contains("real")
-        || t.contains("double")
-        || t.contains("serial")
-        || t.contains("money")
-    {
-        "num"
-    } else if t.contains("timestamp") || t.contains("date") || t.contains("time") {
-        "time"
-    } else if t == "boolean" || t == "bool" {
-        "bool"
-    } else {
-        "text"
-    }
+/// 类型归一（小写、去 typmod、压空白）——`varchar(64)` 与 `varchar` 是同一族。
+fn normalized_type(t: &str) -> String {
+    let lower = t.trim().to_ascii_lowercase();
+    let head = match lower.find('(') {
+        Some(i) => &lower[..i],
+        None => lower.as_str(),
+    };
+    head.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// 两列的类型能不能比较（不同族 ⇒ 不测值域，记 `type_mismatch`）。
+/// 类型族（**唯一实现**：`probe` 的值域验证与 `judge` 的校验层共用）。
+///
+/// # 规则（QA F-1 的验收口径）
+///
+/// | 族 | 成员 | 依据 |
+/// | --- | --- | --- |
+/// | `uuid` | 只 `uuid` | `uuid` 与文本/数字的取值空间不同；⛔ 不与 `text` 混为一谈 |
+/// | `text` | `text` / `character varying` / `varchar` / `char` / `character` / `bpchar` | 字符类 |
+/// | `num` | `int2/int4/int8` / `smallint` / `integer` / `bigint` / `serial*` / `numeric` / `decimal` / `real` / `double precision` / `money` | 数值类（整数与定点/浮点互比） |
+/// | `time` | `timestamp` 族 / `date` / `time` 族 | 时间类 |
+/// | `bool` | `boolean` / `bool` | 布尔 |
+/// | `json` | `json` / `jsonb` | JSON |
+/// | 其它 | 归一后**逐字相等**才算可比 | 不认识的类型不猜 |
+///
+/// ⚠️ 不能用 `contains("int")`：`interval` 会因此被误判成数值族（上一版就是这个坑）。
+fn type_family(t: &str) -> Option<&'static str> {
+    let n = normalized_type(t);
+    let t = n.as_str();
+    if t == "uuid" {
+        return Some("uuid");
+    }
+    if t == "json" || t == "jsonb" {
+        return Some("json");
+    }
+    if matches!(
+        t,
+        "smallint"
+            | "integer"
+            | "bigint"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "smallserial"
+            | "serial"
+            | "bigserial"
+            | "numeric"
+            | "decimal"
+            | "real"
+            | "double precision"
+            | "float4"
+            | "float8"
+            | "money"
+    ) {
+        return Some("num");
+    }
+    if matches!(t, "boolean" | "bool") {
+        return Some("bool");
+    }
+    if matches!(
+        t,
+        "timestamp without time zone"
+            | "timestamp with time zone"
+            | "timestamp"
+            | "timestamptz"
+            | "date"
+            | "time without time zone"
+            | "time with time zone"
+            | "time"
+            | "timetz"
+    ) {
+        return Some("time");
+    }
+    if matches!(
+        t,
+        "text"
+            | "character varying"
+            | "varchar"
+            | "character"
+            | "char"
+            | "bpchar"
+            | "citext"
+            | "name"
+            | "nvarchar"
+            | "nchar"
+    ) {
+        return Some("text");
+    }
+    None
+}
+
+/// 两列的类型能不能比较（**需求 Step 4 的「类型可比较」唯一实现**）。
+///
+/// 不同族 ⇒ `false`：值域验证不会去撞（记 `type_mismatch`），judge 校验层直接丢弃
+/// （`type_incompatible`）。`timestamp` vs `text`、`uuid` vs `varchar` 都不可比。
 pub fn comparable(a: &str, b: &str) -> bool {
-    type_family(a) == type_family(b)
+    match (type_family(a), type_family(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => normalized_type(a) == normalized_type(b),
+    }
 }
 
 /// 一个值域查询的失败原因（**不吞错**：失败 ≠ 不匹配）。
@@ -1605,11 +1680,32 @@ mod tests {
 
     #[test]
     fn only_same_type_family_is_comparable() {
+        // 字符族
         assert!(comparable("character varying", "text"));
-        assert!(comparable("uuid", "character varying"));
-        assert!(!comparable("text", "timestamp without time zone"));
-        assert!(!comparable("integer", "character varying"));
+        assert!(comparable("varchar(64)", "text"));
+        assert!(comparable("character(8)", "bpchar"));
+        // uuid **只与 uuid** 可比（QA F-1：⛔ 不与 varchar 混为一谈）
+        assert!(comparable("uuid", "uuid"));
+        assert!(!comparable("uuid", "character varying"));
+        assert!(!comparable("uuid", "text"));
+        // 数值族：int2/int4/int8 互比；整数与定点/浮点也可比
+        assert!(comparable("int2", "int4"));
+        assert!(comparable("int4", "bigint"));
+        assert!(comparable("integer", "int8"));
         assert!(comparable("bigint", "numeric"));
+        assert!(!comparable("integer", "character varying"));
+        // 时间族互比；vs text 不可比
+        assert!(comparable("timestamp without time zone", "timestamp with time zone"));
+        assert!(comparable("timestamp", "date"));
+        assert!(!comparable("text", "timestamp without time zone"));
+        assert!(!comparable("timestamp without time zone", "character varying"));
+        // boolean / json 族
+        assert!(comparable("boolean", "bool"));
+        assert!(!comparable("boolean", "integer"));
+        assert!(comparable("json", "jsonb"));
+        // `interval` 不能被 contains("int") 误判成数值族（上一版的坑）
+        assert!(!comparable("interval", "integer"));
+        assert!(comparable("interval", "interval"));
     }
 
     #[test]

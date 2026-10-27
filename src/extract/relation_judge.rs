@@ -16,6 +16,7 @@
 //! | --- | --- |
 //! | `unknown_predicate` | 谓词不在 16 主键里（含 `uses` / `related_to` 这些禁用词） |
 //! | `unknown_table` / `unknown_column` | 端点不在 schema 里 / 列不存在 |
+//! | `type_incompatible` | 两端列类型不可比（`timestamp` vs `text`、`uuid` vs `varchar`…；QA F-1） |
 //! | `target_not_key` | 目标列不是主键也不是单列唯一列 |
 //! | `no_basis` | 没有 `basis`，或 `basis.kind/detail` 不成立（判据 3 的核心） |
 //! | `basis_column_unknown` | `basis.columns` 点了不存在的列 |
@@ -859,6 +860,23 @@ impl<'a> Validate<'a> {
         if !parent.has_column(parent_column) {
             return Err("unknown_column");
         }
+        // 需求 Step 4 的「类型可比较」（QA F-1）：`timestamp` 列不可能 join `text` 列。
+        // 同族判定在 `relation::comparable`（唯一实现；probe 的值域验证也用它）。
+        let child_type = child
+            .columns
+            .iter()
+            .find(|c| c.name == child_column)
+            .map(|c| c.data_type.as_str())
+            .unwrap_or("");
+        let parent_type = parent
+            .columns
+            .iter()
+            .find(|c| c.name == parent_column)
+            .map(|c| c.data_type.as_str())
+            .unwrap_or("");
+        if !super::relation::comparable(child_type, parent_type) {
+            return Err("type_incompatible");
+        }
         if !parent.key_columns().iter().any(|k| k == parent_column) {
             return Err("target_not_key");
         }
@@ -1464,6 +1482,26 @@ mod tests {
         }
     }
 
+    /// 带**真实类型**的名片（类型可比性判据要它）。
+    fn typed_card(name: &str, pk: &str, cols: &[(&str, &str, bool)]) -> TableCard {
+        TableCard {
+            name: name.to_string(),
+            display_cn: Some(format!("{name}中文")),
+            primary_key: Some(pk.to_string()),
+            unique_columns: vec![pk.to_string()],
+            columns: cols
+                .iter()
+                .map(|(c, ty, is_pk)| super::super::relation::ColumnCard {
+                    name: c.to_string(),
+                    data_type: ty.to_string(),
+                    nullable: false,
+                    is_primary_key: *is_pk,
+                    comment: None,
+                })
+                .collect(),
+        }
+    }
+
     fn candidate(id_child: &str, parent: &str, key: &str) -> RelationCandidate {
         RelationCandidate {
             child_table: id_child.to_string(),
@@ -1686,6 +1724,74 @@ mod tests {
                 "id",
                 "belongs_to",
                 Some(&b)
+            ),
+            Ok(())
+        );
+    }
+
+    /// QA F-1 · 需求 Step 4 的「类型可比较」：`timestamp` → `text` 必须被丢。
+    #[test]
+    fn incompatible_column_types_are_dropped_as_type_incompatible() {
+        let mut p = probe();
+        p.tables.push(typed_card(
+            "events",
+            "code",
+            &[("code", "text", true)],
+        ));
+        p.tables.push(typed_card(
+            "logs",
+            "id",
+            &[
+                ("id", "text", true),
+                ("created_at", "timestamp without time zone", false),
+            ],
+        ));
+        let v = Validate::new(&p);
+        let b = ModelBasis {
+            kind: "naming".to_string(),
+            columns: vec!["logs.created_at".to_string(), "events.code".to_string()],
+            detail: "命名看起来像".to_string(),
+        };
+        assert_eq!(
+            v.check(
+                "logs",
+                "created_at",
+                "events",
+                "code",
+                "belongs_to",
+                Some(&b)
+            ),
+            Err("type_incompatible"),
+            "timestamp 列不可能 join text 列"
+        );
+        // 同族（uuid → uuid）仍应通过：新规则只挡跨族
+        p.tables.push(typed_card(
+            "uuid_parent",
+            "id",
+            &[("id", "uuid", true)],
+        ));
+        p.tables.push(typed_card(
+            "uuid_child",
+            "id",
+            &[
+                ("id", "uuid", true),
+                ("parent_id", "uuid", false),
+            ],
+        ));
+        let v = Validate::new(&p);
+        let b2 = ModelBasis {
+            kind: "naming".to_string(),
+            columns: vec!["uuid_child.parent_id".to_string(), "uuid_parent.id".to_string()],
+            detail: "同为 uuid".to_string(),
+        };
+        assert_eq!(
+            v.check(
+                "uuid_child",
+                "parent_id",
+                "uuid_parent",
+                "id",
+                "belongs_to",
+                Some(&b2)
             ),
             Ok(())
         );

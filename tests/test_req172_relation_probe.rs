@@ -153,6 +153,9 @@ async fn build_tables(db: &TestDb, tag: &str) -> Vec<String> {
     let logs = t("logs");
     let tags = t("tags");
     let coupons = t("coupons");
+    // QA F-1：跨类型同名列（int 主键 vs text 子列）——judge 必须丢 `type_incompatible`
+    let legacy = t("legacy");
+    let usage = t("usage");
     let pool = sqlx::PgPool::connect(&db.url).await.expect("连本轮库");
     let stmts = vec![
         format!("CREATE TABLE \"{customers}\" (id text PRIMARY KEY, name text)"),
@@ -192,6 +195,13 @@ async fn build_tables(db: &TestDb, tag: &str) -> Vec<String> {
         format!("INSERT INTO \"{logs}\" VALUES ('l1','cust-secret-9f2a')"),
         format!("INSERT INTO \"{tags}\" VALUES ('t1','unk')"),
         format!("INSERT INTO \"{coupons}\" VALUES ('c1','batch-1')"),
+        // 跨类型同名列：legacy.code 是 integer 主键，usage.code 是 text
+        format!("CREATE TABLE \"{legacy}\" (code integer PRIMARY KEY)"),
+        format!("COMMENT ON TABLE \"{legacy}\" IS '旧编码'"),
+        format!("CREATE TABLE \"{usage}\" (id text PRIMARY KEY, code text)"),
+        format!("COMMENT ON TABLE \"{usage}\" IS '用量'"),
+        format!("INSERT INTO \"{legacy}\" VALUES (1)"),
+        format!("INSERT INTO \"{usage}\" VALUES ('u1','1')"),
     ];
     for sql in stmts {
         sqlx::query(&sql)
@@ -201,7 +211,8 @@ async fn build_tables(db: &TestDb, tag: &str) -> Vec<String> {
     }
     pool.close().await;
     vec![
-        customers, balances, orders, region_dim, region_map, payments, logs, tags, coupons,
+        customers, balances, orders, region_dim, region_map, payments, logs, tags, coupons, legacy,
+        usage,
     ]
 }
 
@@ -539,6 +550,28 @@ async fn judge_two_rounds_validate_and_drop() {
             >= 1,
         "B 轮点了不存在的列必须被丢：{}",
         doc["drops"]
+    );
+    // QA F-1 · 需求 Step 4「join 列类型可比较」：usage.code(text) → legacy.code(integer)
+    // 明明是同名列候选，但类型不可比 ⇒ 必须被丢，且计数 +1。
+    assert!(
+        drops
+            .get("type_incompatible")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            >= 1,
+        "跨类型 join（usage.code text → legacy.code integer）必须被丢并计数：{}",
+        doc["drops"]
+    );
+    assert!(
+        !rels.iter().any(|r| {
+            r["child_column"] == "code"
+                && r["parent_table"]
+                    .as_str()
+                    .unwrap_or("")
+                    .ends_with("_legacy")
+        }),
+        "跨类型的关系不许落地：{}",
+        doc["relations"]
     );
 
     // 缓存：同一输入第二次 0 调用、产物逐字节相同
