@@ -3973,14 +3973,18 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}"))?;
 
     // ⑤ 自检（打出来的包必须过得了自己的闸）。
+    //
+    // ⚠️ 这一档失败 ⇒ 退出码 **2**（与 `bundle verify` 同码）：产出的东西确实
+    // 是一个会被服务端拒的包，不是「命令参数错了」。⛔ 不走 `bail!`（那是 1）。
     let report = crate::bundle::verify(&bytes);
     if !report.ok {
         eprint!("{}", report.human());
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);
-        anyhow::bail!(
-            "打包产物**过不了自己的自检**（应当以退出码 {EXIT_BUNDLE_REJECTED} 结束）—— \
-             这是打包端的 bug（`pack` 与 `verify` 对同一份契约的两处实现打架），请报给维护者"
+        eprintln!(
+            "✗ 打包产物**过不了自己的自检** —— 这是打包端的 bug\
+             （`pack` 与 `verify` 对同一份契约的两处实现打架），请报给维护者"
         );
+        std::process::exit(EXIT_BUNDLE_REJECTED);
     }
 
     // ⑥ 落盘后把同一份自检报告打出来（人话 stderr / JSON stdout，与 `verify` 同口径）。
