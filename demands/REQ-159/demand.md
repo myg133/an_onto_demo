@@ -844,3 +844,52 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 | --- | --- |
 | v6 未冻结、未激活 | 刻意。它是**测试产物**，对外不可见（`query serve` 仍 `--version 5`） |
 | 只带本体、未带 `am/` / `db/schema.json` | 包 2 entries。AM/DB 两件需另打一次包（lion 已提醒） |
+
+
+---
+
+## 二十四 · 项目名允许下划线（2026-10-27 · F-1 阻断项）
+
+### 问题（另一位 BA 用真库跑出来的）
+
+```
+bundle pack --project anspire_real
+✗ 项目名 `anspire_real` 不符合 schema 的 pattern ^[a-z0-9][a-z0-9-]{1,62}$
+```
+
+**库里既有项目名大量带下划线**：
+
+```
+anspire_real · req129_ac006_22140_1793033086208 · req113 …
+```
+
+而 `^[a-z0-9][a-z0-9-]{1,62}$` 是 **REQ-159 自己定的**（不是历史的约束）。
+⇒ 升级到 REQ-159 之后，**凡项目名带 `_` 的历史项目全都打不了包**。
+
+### 决定：A（放宽），不改名
+
+**新 pattern**：`^[a-z0-9][a-z0-9_-]{1,62}$`
+
+| 项 | 值 |
+| --- | --- |
+| 允许 | 小写字母 / 数字 / `-` / **`_`** |
+| 仍然禁止 | 大写、空格、`/`、`\`、`.`（含 `..`）、非 ASCII |
+| 理由 | 下划线是**既成事实**；禁止它解决不了历史数据，只会把升级路径堵死。而 pattern 的真实目的是**防路径穿越与串包**，`_` 不构成这两种风险 |
+
+### 要同步的 5 处（漏一处就会"一处相信一处拒绝"）
+
+| # | 位置 | 归属 |
+| --- | --- | --- |
+| 1 | `manifest.schema.json` 的 `project.pattern` | **已改**（本文件同目录） |
+| 2 | `src/console/bundle.rs`（服务端校验 `manifest.project`） | join |
+| 3 | `src/console/provision.rs`（`create_project` 新建项目名校验，若有） | join |
+| 4 | `src/bundle/pack.rs` + `src/bundle/verify.rs`（构建端校验） | lion |
+| 5 | `src/console/page.rs` 的 JS 正则（新建项目输入校验） | lion |
+
+⚠️ **错误消息里的 pattern 文本也要同步** —— 消息写旧 pattern、代码用新 pattern，比不改更坏。
+
+### 附带确认（F-2，非阻断）
+
+`bundle verify` 的 `credential.suspect` 对**列名为 `password`** 的库稳定误报。
+**同意收紧判据**：只认「键 + 有值」的形态（如 `"password": "…"`），或排除列名数组；
+⛔ 不要因为误报就把这条告警关掉（它是"包里混进凭据"的唯一信号）。

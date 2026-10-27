@@ -5,7 +5,15 @@
   "description": "构建端产出、服务端校验。任何字段缺失或类型不符 => 服务端整包拒绝，不做默认值猜测。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["bundle_version", "project", "ontology_seq", "built_at", "builder", "components", "files"],
+  "required": [
+    "bundle_version",
+    "project",
+    "ontology_seq",
+    "built_at",
+    "builder",
+    "components",
+    "files"
+  ],
   "properties": {
     "bundle_version": {
       "const": "1.0",
@@ -13,8 +21,8 @@
     },
     "project": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
-      "description": "必须与接收项目的名字逐字相同（防串包）。"
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,62}$",
+      "description": "必须与接收项目的名字逐字相同（防串包）。允许下划线（既有项目名大量含 `_`，见 §二十四）。"
     },
     "ontology_seq": {
       "type": "integer",
@@ -29,21 +37,44 @@
     "builder": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version"],
+      "required": [
+        "name",
+        "version"
+      ],
       "properties": {
-        "name": { "type": "string", "examples": ["ontok-builder"] },
-        "version": { "type": "string", "examples": ["0.2.9"] },
-        "host": { "type": "string" }
+        "name": {
+          "type": "string",
+          "examples": [
+            "ontok-builder"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "examples": [
+            "0.2.9"
+          ]
+        },
+        "host": {
+          "type": "string"
+        }
       }
     },
     "components": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ontology"],
+      "required": [
+        "ontology"
+      ],
       "properties": {
-        "ontology": { "$ref": "#/$defs/component" },
-        "am": { "$ref": "#/$defs/component" },
-        "db": { "$ref": "#/$defs/dbComponent" }
+        "ontology": {
+          "$ref": "#/$defs/component"
+        },
+        "am": {
+          "$ref": "#/$defs/component"
+        },
+        "db": {
+          "$ref": "#/$defs/dbComponent"
+        }
       }
     },
     "files": {
@@ -53,15 +84,25 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "sha256", "bytes"],
+        "required": [
+          "path",
+          "sha256",
+          "bytes"
+        ],
         "properties": {
           "path": {
             "type": "string",
             "description": "相对路径，正斜杠分隔。禁止 .. / 绝对路径 / 符号链接。",
             "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$"
           },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "bytes": { "type": "integer", "minimum": 0 }
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     }
@@ -70,33 +111,68 @@
     "component": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["path", "sha256"],
+      "required": [
+        "path",
+        "sha256"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "dbComponent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sha256", "requires_dsn"],
+      "required": [
+        "path",
+        "sha256",
+        "requires_dsn"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
         "requires_dsn": {
           "type": "boolean",
           "description": "true => 服务端必须先拿到可用 DSN 才允许 import。false => 有 schema 描述但不连库（例如本体模式）。"
         },
         "dialect": {
           "type": "string",
-          "enum": ["postgresql", "mysql", "sqlserver", "oracle"],
+          "enum": [
+            "postgresql",
+            "mysql",
+            "sqlserver",
+            "oracle"
+          ],
           "description": "requires_dsn=true 时必填。"
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "requires_dsn": { "const": true } }, "required": ["requires_dsn"] },
-          "then": { "required": ["dialect"] }
+          "if": {
+            "properties": {
+              "requires_dsn": {
+                "const": true
+              }
+            },
+            "required": [
+              "requires_dsn"
+            ]
+          },
+          "then": {
+            "required": [
+              "dialect"
+            ]
+          }
         }
       ]
     }
