@@ -155,7 +155,7 @@ footer{padding:0 20px 20px;color:var(--mut2);font-size:11.5px}
   <span class="badge">本机 · 无口令</span>
 </header>
 
-<div id="banner">草稿在裁决之后变过 —— 这份裁决可能对不上当前草稿（定版会被拒绝）。请重新过一遍，或把草稿恢复成裁决时的那一份。</div>
+<div id="banner">草稿在裁决之后变过 —— 这份裁决可能对不上当前草稿（定版会被拒绝）。请逐条重签一遍（已签的条目仍保留），或把草稿恢复成裁决时的那一份。</div>
 <div id="error"><div class="t" id="errTitle"></div><div class="m" id="errMsg"></div><div class="h" id="errHint"></div></div>
 
 <main>
@@ -214,6 +214,7 @@ footer{padding:0 20px 20px;color:var(--mut2);font-size:11.5px}
 var state = null;
 var draft = null;
 var busy = false;
+var lastBundle = null;
 
 function $(id){ return document.getElementById(id); }
 function el(tag, cls, text){
@@ -235,6 +236,15 @@ function showError(title, msg, hint){
   $("error").className = "on";
 }
 function clearError(){ $("error").className = ""; }
+// 危险动作的**唯一**确认入口：每个动作都要写清「动作名 + 目标 + 后果」。
+// ⛔ 不要把 window.confirm 散落在业务函数里 —— 判据按 guarded 规格的个数计（恰好 5 个），
+// 并按「动作名 / 目标 / 后果」逐条对（`tests/test_req125_page.rs`）。
+function guarded(spec, run){
+  var msg = spec.action + "\n\n目标：" + spec.target + "\n后果：" + spec.after;
+  if (!window.confirm(msg)) return false;
+  run();
+  return true;
+}
 function setBusy(on, note){
   busy = on;
   $("btnAcceptAll").disabled = on || !draft || !draft.items.length;
@@ -355,7 +365,7 @@ function renderExport(){
   } else if (pending > 0){
     $("finalizeHint").textContent = "还差 " + pending + " 条没签完，签完才能定版。定版后不可改，要改就再定一版。";
   } else {
-    $("finalizeHint").textContent = "可以定版。定版后不可改，要改就再定一版。";
+    $("finalizeHint").textContent = "可以定版。定版后不可改，要改就再定一版；草稿改过就交增量草稿（同一份全量草稿再定版会冲突）。";
   }
   var b = state && state.bundle;
   $("bState").textContent = v ? (b ? b.file : "还没有（先导出）") : "还没有（先定版）";
@@ -401,9 +411,27 @@ function decide(key, track, value){
   });
 }
 
-function bulk(decision){
+function bulkAccept(){
   if (busy || !draft) return;
   var list = draft.items.slice();
+  guarded({
+    action: "全选接受",
+    target: "全部 " + list.length + " 条（业务轨 + 建模轨一起签）",
+    after: "一次写入 " + list.length + " 条裁决；裁决可以逐条改回，但这是批量动作，请先确认草稿"
+  }, function(){ runBulk(list, "accepted"); });
+}
+
+function bulkReject(){
+  if (busy || !draft) return;
+  var list = draft.items.slice();
+  guarded({
+    action: "全选拒绝",
+    target: "全部 " + list.length + " 条（业务轨 + 建模轨一起否决）",
+    after: "一次写入 " + list.length + " 条否决；被拒的条目不会进定版，可以逐条改回"
+  }, function(){ runBulk(list, "rejected"); });
+}
+
+function runBulk(list, decision){
   var i = 0;
   clearError();
   setBusy(true, "正在签 0 / " + list.length);
@@ -431,48 +459,66 @@ function bulk(decision){
 function finalize(){
   if (busy || !draft) return;
   if (draft.progress.pending > 0) return;
-  var ok = window.confirm("定版后不可改，要改就再定一版。\n\n确认把当前草稿（" +
-    draft.progress.total + " 条，已签 " + draft.progress.signed + " 条）定版吗？");
-  if (!ok) return;
-  clearError();
-  setBusy(true, "正在定版…");
-  request("POST", "/api/finalize").then(function(res){
-    setBusy(false, "");
-    return load().then(function(){
-      $("bundleResult").className = "result";
-      $("bFile").textContent = "已定版 v" + res.seq + " · " + res.items + " 条";
-      $("bBytes").textContent = "快照 sha256";
-      $("bSha").textContent = res.snapshot_sha256 || "";
-      $("bDownload").textContent = "下一步：导出构建包";
+  guarded({
+    action: "定版（冻结当前草稿）",
+    target: "草稿 " + draft.progress.total + " 条 / 已签 " + draft.progress.signed + " 条",
+    after: "定版后不可改，要改就再定一版（旧定版不跟着变）"
+  }, function(){
+    clearError();
+    setBusy(true, "正在定版…");
+    request("POST", "/api/finalize").then(function(res){
+      setBusy(false, "");
+      return load().then(function(){
+        $("bundleResult").className = "result";
+        $("bFile").textContent = "已定版 v" + res.seq + " · " + res.items + " 条";
+        $("bBytes").textContent = "快照 sha256";
+        $("bSha").textContent = res.snapshot_sha256 || "";
+        $("bDownload").textContent = "下一步：导出构建包";
+      });
+    }).catch(function(e){
+      setBusy(false, "");
+      showError("定版失败", e.message, e.hint || "");
     });
-  }).catch(function(e){
-    setBusy(false, "");
-    showError("定版失败", e.message, e.hint || "");
   });
 }
 
 function exportBundle(){
   if (busy || !state || !state.latest_version) return;
   var seq = state.latest_version.seq;
-  var ok = window.confirm("导出的是定版 v" + seq + "（不是草稿）。\n\n确认导出构建包吗？");
-  if (!ok) return;
-  clearError();
-  setBusy(true, "正在打包…");
-  request("POST", "/api/bundle", { seq: seq }).then(function(res){
-    setBusy(false, "");
-    $("bundleResult").className = "result on";
-    $("bFile").textContent = res.file;
-    $("bBytes").textContent = fmtBytes(res.bytes) + "（" + res.bytes + "）";
-    $("bSha").textContent = res.sha256;
-    $("bDownload").textContent = "下载 " + res.file;
-    $("bDownload").href = "/api/bundle/download?seq=" + res.seq;
-    return request("GET", "/api/state").then(function(s){
-      state = s; renderHeader(); renderExport();
+  guarded({
+    action: "导出构建包",
+    target: "定版 v" + seq + "（" + state.latest_version.items + " 条）",
+    after: "只导出定版、不导出草稿；包写进 .ontok/bundles/，之后手动上传到 Studio"
+  }, function(){
+    clearError();
+    setBusy(true, "正在打包…");
+    request("POST", "/api/bundle", { seq: seq }).then(function(res){
+      setBusy(false, "");
+      lastBundle = res;
+      $("bundleResult").className = "result on";
+      $("bFile").textContent = res.file;
+      $("bBytes").textContent = fmtBytes(res.bytes) + "（" + res.bytes + "）";
+      $("bSha").textContent = res.sha256;
+      $("bDownload").textContent = "下载 " + res.file;
+      $("bDownload").href = "/api/bundle/download?seq=" + res.seq;
+      return request("GET", "/api/state").then(function(s){
+        state = s; renderHeader(); renderExport();
+      });
+    }).catch(function(e){
+      setBusy(false, "");
+      showError("导出失败", e.message, e.hint || "");
     });
-  }).catch(function(e){
-    setBusy(false, "");
-    showError("导出失败", e.message, e.hint || "");
   });
+}
+
+function downloadBundle(ev){
+  ev.preventDefault();
+  if (!lastBundle) return;
+  guarded({
+    action: "下载构建包",
+    target: "定版 v" + lastBundle.seq + " 的 " + lastBundle.file,
+    after: "把包复制到本机下载目录（不改工作目录里的任何文件），之后手动上传到 Studio"
+  }, function(){ window.location.href = $("bDownload").href; });
 }
 
 function load(){
@@ -494,10 +540,11 @@ function load(){
   });
 }
 
-$("btnAcceptAll").addEventListener("click", function(){ bulk("accepted"); });
-$("btnRejectAll").addEventListener("click", function(){ bulk("rejected"); });
+$("btnAcceptAll").addEventListener("click", bulkAccept);
+$("btnRejectAll").addEventListener("click", bulkReject);
 $("btnFinalize").addEventListener("click", finalize);
 $("btnBundle").addEventListener("click", exportBundle);
+$("bDownload").addEventListener("click", downloadBundle);
 load();
 </script>
 </body>

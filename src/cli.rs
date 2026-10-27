@@ -2190,7 +2190,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // （`--dir` 一个目录 = 一个项目；不读 token / project / schema，不碰库）。
         // 若留到下面那个 match（先连库），`ONTOK_DATABASE_URL` 没配的机器上
         // 「本机评审」这件纯本地的事就根本起不来 —— AC-007 当场不成立。
-        Cmd::Console { cmd } => return console_cmd(cmd).await,        // ⭐ REQ-160 · `review open` 也在**连库之前**分派（理由与 `doc ingest` 同一条）：
+        Cmd::Console { cmd } => return console_cmd(cmd).await,
+        // ⭐ REQ-160 · `review open` 也在**连库之前**分派（理由与 `doc ingest` 同一条）：
         // 它**先判入参**（`--bind 0.0.0.0:8899` 不带 `--allow-public` 是**入参错** ⇒ exit 2），
         // 判完才自己连库（[`crate::review_open::open`]）。若留到下面那个 match（先连库），
         // 没配库的机器上永远先看到「ONTOK_DATABASE_URL 未设置」——
