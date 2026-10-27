@@ -1,6 +1,6 @@
 ---
 name: ontok-build
-description: FDE 用：把客户文档（和/或关系库）变成一套可发布的本体 —— 从摄取、合并、人签、冻结到导出 TTL 与发布。含每步的验证方法与「失败长相」对照表。不涉及消费侧调用（那见 ontok-query）。
+description: FDE 用：把客户文档（和/或关系库）变成一套可发布的本体 —— 从摄取、合并、人签、定版到导出构建包与发布。含每步的验证方法与「失败长相」对照表。不涉及消费侧调用（那见 ontok-query）。
 category: workflow
 ---
 
@@ -15,7 +15,29 @@ category: workflow
 
 ---
 
-## 〇 · 连接信息由部署注入（本文件不含地址与口令）
+## 〇 · 适用模式（**这是一份给人看的流程手册**）
+
+> ✅ **ACP 模式要读** · ✅ **独立 agent 模式也要读** —— 两种模式下读它的人都是 **FDE**，不是 agent。
+> ⛔ 不要把本文件当抽取契约塞给 agent：契约是 `ontok-extract`（**只有一份**，两模式共用）。
+
+| 模式 | 谁在跑 | 本文件怎么用 | 抽完之后谁起评审台 |
+| --- | --- | --- | --- |
+| **ACP 模式** | `ontok-builder build run --agent acp --agent-command <cli> --agent-skill <ontok-extract 路径>` **主动驱动**外部 agent | FDE 读它：选 A/B 路、照「怎么验」验数、按「失败长相」排查 | **工具自动**起（四段跑完直接进 §三·六，无口令） |
+| **独立 agent 模式** | 用户自己开 Claude Code / Codex / 其它 agent | FDE 读它（同上）；抽取契约由**人**装进那个 agent 的 skills 目录 | **人手动**跑 `console serve --dir <工作目录>`（§三·六） |
+
+三条不变的事实：
+
+| # | 事实 |
+| --- | --- |
+| 1 | 抽取契约**只有一份**（`ontok-extract`）—— ⛔ 别按模式拆成两份，拆了必漂移 |
+| 2 | 模式差别只有三处：**skill 怎么进 agent** · **谁起评审台** · **谁保证阶段顺序** |
+| 3 | 签字 / 定版 / 上传 Studio **永远是人**（两种模式都一样） |
+
+> 时序图与「谁负责什么」：`MODES.md`。
+
+---
+
+## 〇·五 · 连接信息由部署注入（本文件不含地址与口令）
 
 | 变量 | 用途 |
 | --- | --- |
@@ -24,6 +46,9 @@ category: workflow
 | `ONTOK_LLM_BASE_URL` / `ONTOK_LLM_API_KEY` / `ONTOK_LLM_MODEL` | 抽取用的模型三件套 |
 
 ⛔ 口令不进任何文件、不进 skill、不进截图。
+
+⚠️ **纯本地评审（§三·六）不需要 `ONTOK_DATABASE_URL`** —— 评审台只读工作目录里的文件。
+只有「旧 DB 链」（`proposal apply` / `version freeze` / `ontology export --project …`）才要连元数据库。
 
 ---
 
@@ -131,24 +156,29 @@ ontok-builder doc merge  --assertions work/assertions.jsonl --proposal work/prop
                  --schema work/schema.json --out work/merged.json --stats work/merge-stats.json
 #   ✅ 验：并入 / 排除不可对齐 / 未映射 / 冲突 五项
 
-# 5 人签（⛔ 不可自动化）—— 逐条签在**审核台**上做，见 §三·六
-ontok-builder project new --name <项目>
-ontok-builder version new --project <项目>
-ontok-builder propose import --file work/merged.json
-ontok-builder review open --project <项目>     # REQ-160 起；当前版本用 console serve（§三·六）
-#   👤 人在页面上：「评审」tab 逐条签 → 「项目与版本」tab apply → 冻结
-#   ⛔ 只有人明确说「全部接受」时才允许：
-#      ontok-builder review decide --proposal p1 --project <项目> --accept-all
-ontok-builder proposal apply --proposal p1 --project <项目>   # 人签完之后
-ontok-builder version freeze --project <项目> --version 2
+# 5 人签（⛔ 不可自动化）—— console v2 本机评审台，见 §三·六
+#   ① 草稿放到 <工作目录>/out/proposal.json（评审台只读这一个路径）
+#      有文档则用 work/merged.json，纯库路径用 work/proposal.json —— 复制过去即可
+#   ② 起评审台：一个工作目录 = 一个项目，无口令、无项目参数、不连库
+ontok-builder console serve --dir <工作目录>
+#   👤 人在页面上做四件事：逐条两轨签（业务/建模）→ 定版 → 导出构建包
 
-# 6 导出
-ontok-builder ontology export --project <项目> --version 2 --out out/customer.ttl
-ontok-builder ontology export --project <项目> --version 2 --model-view --schema work/schema.json \
-                      --tenancy work/tenancy.json --out out/model.ttl
-ontok-builder r2rml generate --project <项目> --version 2 --schema work/schema.json --out out/mapping.ttl
+# 6 导出（**导出的是定版**，不是草稿）
+#   6a 主路径：页面上点「导出构建包」→ 从定版快照打包
+#       产物 <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle（包内快照与定版逐字节相同）
+ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
+#   ✅ 验：exit 0（2=包不合规 / 1=环境问题）
+#   6b 附加：部署端还要 TTL / R2RML 时（**旧 DB 链**：要连元数据库、按项目/版本）
+ontok-builder ontology export --project <项目> --version <N> --out out/customer.ttl
+ontok-builder ontology export --project <项目> --version <N> --model-view \
+                      --schema work/schema.json --tenancy work/tenancy.json --out out/model.ttl
+ontok-builder r2rml generate --project <项目> --version <N> \
+                      --schema work/schema.json --out out/mapping.ttl
 #   ✅ 验：类 / 关系 / 属性 三个数；TTL sha256
 ```
+
+> ⚠️ **别两套并行**：旧 DB 链（`proposal import` → `proposal apply` → `version freeze` → `ontology export --project/--version`）只用于**仍有元数据库的部署**；
+> 纯本地工作目录用 console v2 的「签 → 定版 → 导出包」。⛔ 同一份本体不要两边各签发一次。
 
 ---
 
@@ -167,19 +197,18 @@ ontok-builder doc merge --assertions work/assertions.jsonl --proposal work/empty
 #   ✅ 验：新建实体数 / 未映射 / 冲突
 #   ⚠️ 空提案文件内容：{"version":"1.0.0","items":[]}
 
-# 3 人签（⛔ 不可自动化）—— 逐条签在审核台上做，见 §三·六
-ontok-builder project new --name <项目> && ontok-builder version new --project <项目>
-ontok-builder propose import --file work/merged.json
-ontok-builder review open --project <项目>     # REQ-160 起；当前版本用 console serve（§三·六）
-#   👤 人在页面上逐条签 → apply → freeze
-#   ⛔ 只有人明确说「全部接受」时才允许 review decide --accept-all
-ontok-builder proposal apply --proposal p1 --project <项目>   # 人签完之后
-ontok-builder version freeze --project <项目> --version 2
+# 3 人签（⛔ 不可自动化）—— console v2 本机评审台，见 §三·六
+#   草稿：把 work/merged.json 放到 <工作目录>/out/proposal.json（`doc merge` 的产物就是这个形状）
+ontok-builder console serve --dir <工作目录>
+#   👤 人在页面上：逐条两轨签（业务/建模）→ 定版 → 导出构建包
 
-# 4 导出（B 没有 schema ⇒ 不带 --schema）
-ontok-builder ontology export --project <项目> --version 2 --out out/customer.ttl
+# 4 导出（B 没有 schema ⇒ 不进库、也不导 TTL；**只要那个定版包**）
+#   页面上「导出构建包」→ .ontok/bundles/<目录名>-v<N>.ontokbundle
+ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
+#   ✅ 验：包内快照 == .ontok/versions/v<N>/snapshot.json（逐字节）；exit 0
 
-# 5 ✅ 验：类数 = 断言里的概念数（去重后）；关系数 = 两端都能解析的关系数
+# 5 ✅ 验（定版里）：类数 = 断言里的概念数（去重后）；关系数 = 两端都能解析的关系数；
+#   被 ✗ 拒的条目**不在**这一版里（也不在包里）
 ```
 
 ### ⚠️ 路径 B 的两个常识
@@ -212,6 +241,10 @@ ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
   --agent acp --agent-command "pi-acp" --agent-skill skills/ontok-extract/SKILL.md
 ```
 
+> ⚠️ 这条 `--agent …` 就是 **ACP 模式**：工具主动驱动外部 agent，`--agent-skill` 把 `ontok-extract` 的**路径**交给对端。
+> **独立 agent 模式没有这条命令** —— 你自己开 agent、自己把 skill 装进它的 skills 目录（见 §〇 与 `MODES.md`）。
+> 两种模式**产出同一份契约**（概念/关系/逐字证据），所以这张表对两种模式都成立。
+
 **怎么读**：
 
 | # | 判读 |
@@ -224,76 +257,116 @@ ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
 
 > 要重新测：`BA/demands/REQ-147/evidence-same-model.md` 有完整复现命令与判读。
 
-### ⭐ 冻结前必须跑：关系动词校验（REQ-157）
+### ⭐ 定版前必须跑：关系动词校验（REQ-157）
 
 ```bash
 ontok-builder relation verbs check --project <项目> --version <版本>
 ```
 
-| 退出码 | 含义 | 能不能冻结 |
+| 退出码 | 含义 | 能不能定版 |
 | ---: | --- | --- |
 | 0 | 干净；或用到的只是别名（自动归一） | ✅ 能 |
-| **4** | 有 `forbidden` 泛词 或 `unknown` 字典外动词 | ⛔ **不许冻结** |
+| **4** | 有 `forbidden` 泛词 或 `unknown` 字典外动词 | ⛔ **不许定版** |
 
 - `alias_normalized`（如 `attaches_to`）与 `deprecated`（如 `contains`）**只是提示**，不阻塞
 - 报告给两份：stderr 人话 + stdout JSON（带 `occurrences[].location / from / to`）
 - 动词字典是仓库根的 `relation-verbs.json`，**加动词要人审**
 
-> **为什么必须跑**：v3 实际就有 `uses` / `associated_with` 两个泛词混进了冻结版本 —— 那时还没有这道闸。
+> **为什么必须跑**：v3 实际就有 `uses` / `associated_with` 两个泛词混进了定版 —— 那时还没有这道闸。
 
 ---
 
-## 三·六 · 审核台：人签**在这一步**发生（⛔ 不许跳过、不许代签）
+## 三·六 · 审核台 = **console v2 本机评审台**：人签**在这一步**发生（⛔ 不许跳过、不许代签）
 
 > 抽取是机器做的，**签字只能是人做的**（ADR-005）。这一步就是那个「人」的入口。
+> 一句话状态模型：**agent 出草稿 → 人逐条签 → 定版 → 导出的是定版**。
 
-### 1 · 起审核台
-
-**现在（v0.2.9 及以前）**
-
-```bash
-ontok-builder console serve --bind 127.0.0.1:8899 \
-  --tokens <admin-tokens.json> \
-  --project <项目> --schema work/schema.json
-# 浏览器打开 http://127.0.0.1:8899/ → 顶部填 admin token（口令只留在本标签页）
-```
-
-**REQ-160 落地后（更省事，推荐）**
+### 1 · 起法（无口令、无项目、无库）
 
 ```bash
-ontok-builder review open --project <项目>
-# 自动选空闲端口 + 生成一次性 admin token（不落盘）+ 自动开浏览器
-# Ctrl-C 退出即失效；⛔ 口令不会进 URL
+# 一个工作目录 = 一个项目；--dir 指到它
+ontok-builder console serve --dir <工作目录> [--bind 127.0.0.1:8899] [--no-browser]
 ```
 
-### 2 · 页面上要做的四件事（顺序不能换）
+| 参数 | 说明 |
+| --- | --- |
+| `--dir` | **工作目录**（默认 `.`）。目录名 sanitize 后就是项目名（进包名 / 页面标题） |
+| `--bind` | 默认 `127.0.0.1:8899`。**只许回环**：非回环地址**启动即拒**（没有放行开关） |
+| `--no-browser` | 只影响开不开浏览器，不影响起不起来（SSH / 无桌面用） |
 
-| # | 在哪 | 做什么 | 判据 |
+⛔ v2 里**没有**这四类参数：口令表 · 项目作用域 · 声明校验 · 放行非回环。写了直接报参数错。
+✅ 不需要 `ONTOK_DATABASE_URL`：评审台**一行 SQL、一次网络都没有**（AC-007 是硬条件）。
+
+### 2 · 工作目录里只有四个落点（定版占两个文件；全在你本地）
+
+```
+<工作目录>/out/proposal.json                        草稿（agent 产出，**只读**：页面不改它一个字节）
+<工作目录>/.ontok/decisions.json                    人的裁决（两轨 + 理由；唯一可写状态）
+<工作目录>/.ontok/versions/v<N>/snapshot.json       定版快照（**冻结，不可改**）
+<工作目录>/.ontok/versions/v<N>/meta.json           {seq, created_at, items, snapshot_sha256, proposal_sha256}
+<工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle 导出包（**只含定版**）
+```
+
+### 3 · 页面上只有四个动作（顺序不能换）
+
+| # | 动作 | 在哪 | 判据 |
 | --- | --- | --- | --- |
-| 1 | **评审** tab | **逐条**两轨签（业务轨 / 建模轨），看证据原文再决定 | `review show --proposal p1` 里 `signed == total` |
-| 2 | **项目与版本** tab | 应用提案（apply）⇒ 生成**新版本** | 版本列表多一行、对象/关系计数非 0 |
-| 3 | 同上 | 冻结（freeze） | `frozen_at` 非空 |
-| 4 | **导出** tab 或 CLI | 导出 TTL / R2RML，记 sha256 | 与 CLI 导出**逐字节相同** |
+| 1 | **读草稿** | 左栏「评审（核心）」 | 看到条数 / 两轨进度；草稿缺失 ⇒ 页面提示先产出 `out/proposal.json` |
+| 2 | **逐条签** | 每条右侧 ✓ / ✗（**业务轨 + 建模轨都要签**），另有「全选接受 / 全选拒绝」 | 两轨都签 = 该条 signed；**只签一轨仍是 pending** |
+| 3 | **定版** | 右栏「定版」按钮 | 全部签完才能点；生成 v(N+1) 的 `snapshot.json` + `meta.json` |
+| 4 | **导出包** | 右栏「导出构建包」+ 下载 | 只从定版打包；包内快照与 `versions/vN/snapshot.json` **逐字节相同** |
 
-### 3 · ⛔ 三条禁令（外加一条前置检查）
+### 4 · 门禁：点不动就是没签完，**不是 bug**
+
+| 门禁 | 表现 | 为什么 |
+| --- | --- | --- |
+| **未签完 ⇒ 不能定版** | 「定版」报 `DRAFT_NOT_READY`（还有 pending，零产物） | 未签的条目 = 没人负责的结论 |
+| **未定版 ⇒ 不能导出** | 「导出构建包」报 `NO_VERSION` | 导出的是**定版**，不是草稿、不是页面当前状态 |
+| **草稿变了 ⇒ 旧签字过期** | 顶部亮 stale 横幅；定版报 `DECISIONS_STALE`（409）；**重签任意一条**即认当前草稿 | 人签的是"这一版草稿"，不是"随便哪版草稿" |
+
+### 5 · ⛔ 定版之后不可改（要改就**再定一版**）
+
+- 定版 = **冻结**：`versions/vN/snapshot.json` 此后**不再变**；草稿再改也**不回头改旧定版**
+- 要改 ⇒ 在草稿上继续签 → 再点「定版」→ 得到 **v(N+1)**；旧的 vN 仍在（可追溯，可导出老包）
+- 定版号 = `max(已有 vN) + 1`；v1 的 base 是空快照，v(N+1) 的 base 是 vN
+- ✗ 拒掉的条目**只是不进这一版**（不是删了）——草稿和 `decisions.json` 里都还在
+- ⛔ 不许手改 `out/proposal.json` 或 `.ontok/decisions.json` 绕过评审：评审记录是唯一"谁认可了什么"的证据
+
+### 6 · ⛔ 三条禁令（外加一条前置检查）
 
 | # | 禁令 | 为什么 |
 | --- | --- | --- |
-| 1 | ⛔ **不许用 `--accept-all` 代替逐条签**（除非人明确说「全部接受」并要求记下理由） | 批量放行会让「人签」退化成形式，ADR-005 的锚点就没了 |
-| 2 | ⛔ **agent 不许替人签**（agent 模式只到「起审核台」为止，见 `ontok-extract` §十） | 签字的语义是「这个人看过并负责」 |
-| 3 | ⛔ **不许跳过评审直接 apply** | 未签的条目进查询上下文 = 未经人确认的自动化结论 |
+| 1 | ⛔ **agent 不许替人签**（不许调 `decide`、不许点「全选接受」） | 签字的语义是「这个人看过并负责」 |
+| 2 | ⛔ **agent 不许替人定版**（`finalize` 只能人手点） | 定版是 ADR-005 的锚点；agent 到「草稿」为止（见 `ontok-extract` §十） |
+| 3 | ⛔ **不许手改文件冒充签字 / 跳过评审直接定版** | 未签的条目进查询上下文 = 未经人确认的自动化结论 |
 
-**前置检查**：冻结前**必须**跑 `relation verbs check`（`exit 4` ⇒ 不许冻结）—— 完整说明只在 §三 末节写一遍，这里不重复。
+**前置检查**：定版前**必须**跑 `relation verbs check`（`exit 4` ⇒ 不许定版）—— 完整说明只在 §三 末节写一遍，这里不重复。
 
-### 4 · 签完之后（要把本体交给服务端时）
+### 7 · ⛔ 旧审核台（**不要再用**）
+
+| 旧命令 | 是什么 | 现状 |
+| --- | --- | --- |
+| `review open --project <项目>` | **旧：DB 版审核台**（REQ-160；一次性 admin token + 连元数据库 + 建项目/版本） | **已被 console v2 取代**，别再当主路径 |
+| `review decide --accept-all …` | **旧：DB 版批量放行** | **已被取代**：v2 里没有这个概念，逐条签就是逐条签 |
+| `console serve` + 口令表 / 项目作用域 / 声明校验 | **旧：带口令 / 项目 / 声明的管理台** | **已被取代**：那些参数已删，写了直接报错 |
+
+⚠️ 若你的工具版本 `build run` 尾步仍落到旧的 `review open`（REQ-160），**Ctrl-C 掉**，按本节 §1 用 `console serve --dir <工作目录>` 起 console v2。
+
+### 8 · 定版之后：出包 →（**人工**）传 Studio
 
 ```bash
-ontok-builder bundle pack --project <项目> --version <版本> --out out/<项目>-v<版本>.ontokbundle
-ontok-builder bundle verify --file out/<项目>-v<版本>.ontokbundle   # 0=通过 2=包不合规 1=环境问题
+# 页面上点「导出构建包」= 从**定版快照**打包（复用 bundle::pack），不重算、不重新抽
+# 产物：<工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
+ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N>.ontokbundle
+#   0 = 通过 · 2 = 包不合规 · 1 = 环境问题
 ```
 
-⚠️ 包里 `snapshot.json` 是**入库快照原文**，不是 `ontology show` 的视图（视图只有 5 个字段，证据会丢）。
-⚠️ P1a 服务端对包里的 `am/` **只校验不落库** ⇒ 传上去也不会立刻生效（看 import 回执的 `warnings[]`）。
+| 项 | 事实 |
+| --- | --- |
+| **导出的是定版** | 不是草稿、不是"页面当前状态"、不是重新算一遍；包内 `snapshot.json` 与定版快照**逐字节相同** |
+| **上传是人工的** | console **不上传、不入库、不激活**（那些是 Studio 的事，ADR-013）；把包交给 Studio 的人去传 |
+| 包里是**入库快照原文** | 不是 `ontology show` 的视图（视图只有 5 个字段，证据会丢） |
+| `am/` 只校验不落库 | P1a 服务端对包里的 `am/` **只校验不落库** ⇒ 传上去也不会立刻生效（看 import 回执 `warnings[]`） |
 
 ---
 
@@ -304,13 +377,22 @@ ontok-builder bundle verify --file out/<项目>-v<版本>.ontokbundle   # 0=通�
 | 断言 **0 条** | 文档不是 UTF-8 / 全是 PDF / 目录为空 | 检查编码与扩展名；PDF 先转 |
 | 断言有，但合并后**并入 0** | 走了 A 的合并却没有库实体 | 纯文档必须 `--allow-doc-only` |
 | **TTL 里关系是 0** | 关系被 schema 对账吃掉（没有可用的列映射） | 检查 `excluded_relations`；文档类本体本来就容易 0 |
-| **catalog 里类少一半** | 冻结的版本不对 / 项目名写错 | `health` 里看 `project` + `ontology_version` |
+| **catalog 里类少一半** | 部署的版本不对 / 项目名写错 | `health` 里看 `project` + `ontology_version` |
 | 部署后**接口 503** | 部署是本体模式（`--ontology-only`），而你以为有数据 | 有库的部署**不能**加 `--ontology-only` |
-| 查询 **500 TENANT_UNRESOLVED** | 表在本体里但没登记进 `query-policy.json` | 补声明，或把表排除后重新冻结 |
+| 查询 **500 TENANT_UNRESOLVED** | 表在本体里但没登记进 `query-policy.json` | 补声明，或把表排除后重新发布 |
 | 审计里 `tenant=00000000-…` | token 里填了假租户 | 本体模式**不许**填 tenant（会被拒启）；普通模式必须用真实租户 |
 | **EXTRA**：实体名全变"对象 001" | 用了脱敏占位翻译表 | 必须用自己 schema 生成的 `table_names.json` |
 | **导出被拒**，报"发布闸"/敏感词 | 概念描述里出现内部术语（如 `evidence`）⇒ **整份拒绝**，不是跳过一条 | 改写该描述；原文仍在 `doc_evidence[]` 里，不丢 |
 | 纯文档路径里**实体名重复** | 某概念的**别名 = 另一概念的名字**（如 `CLI 直采` 与 `CLI`） | 已按「名字优先于别名」解析；若仍冲突，说明断言本身有歧义，回去看原文 |
+
+**console v2 评审台的四条「长相」**（都是门禁在干活，不是 bug）：
+
+| 现象 | 真实原因 | 怎么办 |
+| --- | --- | --- |
+| 「定版」点不动 / 报 `DRAFT_NOT_READY` | 还有条目 **pending**（业务轨与建模轨**都要签**） | 回去逐条签；⛔ 别用脚本刷裁决冒充签字 |
+| 「导出构建包」报 `NO_VERSION` | 还没定版 | 先定版（§三·六）；导出的是定版，不是草稿 |
+| 定版报 `DECISIONS_STALE`（409） | 草稿在签的过程中被改过（sha 不符） | 重签**任意一条**（= 认当前草稿）再定版；已签的不会丢 |
+| 页面打不开 / 端口占用 | `--bind` 的端口被别的进程占了 | 换端口，或 `--bind 127.0.0.1:0` 让内核分配（横幅会打真实端口） |
 
 ---
 
@@ -348,6 +430,12 @@ ontok-builder bundle verify --file out/<项目>-v<版本>.ontokbundle   # 0=通�
 
 ## 六 · 发布到环境
 
+> **主路径（console v2）**：`导出构建包` → 把 `.ontok/bundles/<目录名>-v<N>.ontokbundle` **人工**传到 Studio。
+> ⛔ console **不上传、不入库、不激活**；上传是人的动作，不是工具的动作（ADR-013）。
+> ⚠️ 传上去之后包里的 `am/` 只校验不落库（P1a），要生效走 Studio 的导入流程。
+
+**下面这条是「有元数据库的部署」的旧链路**（也能用，但它不是纯本地构建的主路径）：
+
 ```bash
 # 1 把本体推到集群元数据库（如果构建在本地）
 #    注意：TTL 是确定性的 —— 同一份 proposal 在另一台库重建，TTL 应逐字节相同
@@ -379,11 +467,14 @@ POST /api/sparql       → 有库应返回 JSON-LD 图；纯文档应 503 NO_DAT
 □ --names 显式给了真实翻译表？
 □ 纯文档走了 --allow-doc-only？
 □ 五项合并统计看过？（并入/排除/未映射/冲突/doc-only）
-□ 冻结前跑过 relation verbs check 了吗？（exit 4 ⇒ 不许冻结）
-□ 审核台起过了吗？（§三·六；review open 或 console serve）
-□ 人签是真的人签的吗？（signed == total，**不是 --accept-all 一把过**）
-□ 冻结后版本号记住了？
-□ 导出 TTL 的 sha256 记了？
-□ 发布后四条验证都过了？
-□ （要交给服务端时）bundle pack 打了、bundle verify 过了吗？（exit 0）
+□ 草稿落在 <工作目录>/out/proposal.json 了吗？（评审台只读这一个路径）
+□ 审核台起了吗？（console serve --dir <工作目录>；§三·六，无口令）
+□ 人签是真的人签的吗？（两轨**都**签；⛔ 不是 agent 代点「全选接受」）
+□ 签完才定版的吗？（未签完 ⇒ DRAFT_NOT_READY，零产物）
+□ 定版前跑过 relation verbs check 了吗？（exit 4 ⇒ 不许定版）
+□ 定版号记住了吗？（.ontok/versions/v<N>/；**定版后不可改**，要改再定一版）
+□ 导出的是**定版**吗？（包内快照 == versions/v<N>/snapshot.json，逐字节）
+□ bundle verify 过了吗？（exit 0）
+□ 包是**人工**传 Studio 的吗？（console 不上传、不入库、不激活）
+□ （有库部署才需要）导出 TTL 的 sha256 记了？发布后四条验证过了？
 ```
