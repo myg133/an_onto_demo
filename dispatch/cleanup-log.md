@@ -391,3 +391,28 @@
 | **A** | 迁移到独立分支（如 `docs`），workspace 回归 2 文件 | 要改 README 引用、CI/编辑习惯 |
 | **B** | 承认例外，在 `workspace/README.md` 与规范里写清"本项目允许这 4 类文件" | 规范与实现不一致，但不动内容 |
 | **C** | 保持现状、不记录 | ❌ 不推荐 —— 下次巡检还会报 |
+
+
+## 2026-10-27 09:45 · lion 入场巡检（session ba-lion-michael-workstation-49056-20261027-094244）
+
+### ✅ 无违规
+
+| 项 | 实测 |
+| --- | --- |
+| worktree | `an_onto_demo`(workspace `f6128ae`) / `BA`(demand `92528ba`) / `code`(develop `aa6e52d`) / `Deploy`(deploy `f85f0ea`) —— **4 个，无 feature/hotfix 遗留** |
+| `demand` 同步 | 与 `origin/demand` 同点（`0 ahead / 0 behind`） |
+| 分支 | `code` 只剩 `feature/REQ-147`（远程留档分支，REQ-147 已合并 `d6f300f`，留档不清理是有意的） |
+
+### 📌 对 join 那条「workspace 分支违规」的补充：**一半已有裁定，别重复讨论**
+
+本文件第 7 行（2026-09-28，**决策人：项目负责人**）已经登记过例外：
+
+> workspace 分支除 `README.md` / `.gitignore` 外，还跟踪 `AGENTS.md` 与 `.agents/` ——
+> 理由是二者是**跨 worktree 共享的工具层**，放进 `BA/` 会让 feature worktree 读不到。
+
+按此裁定，`git ls-files` 的 26 个里 **16 个（`AGENTS.md` + `.agents/` 15 个）是「已批准的例外」**，
+不是违规。**真正未记录的只有 `skills/**`（7 个）** —— 它们是产品 skill（`ontok-build` / `ontok-extract` / `ontok-query`），
+与既有例外的性质相同（跨 worktree 共享、非业务代码、FDE 要能读到）。
+
+⇒ **建议按选项 B 收口**：把 `skills/**` 补进上面的「已知规范偏离」表即可，**不必迁移、不必删**。
+⇒ 未动手：此项属 workspace 分支（join 面），留给 join 或用户裁定。

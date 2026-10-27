@@ -6,6 +6,7 @@
 | session-id | 角色 | 状态 | 最后活动 | 当前任务 |
 | --- | --- | --- | --- | --- |
 | ba-join-michael-workstation-1340-20261027-093836 | ba | **online** | 2026-10-27 09:40 | join · 服务端（与 lion 分工：lion=本地抽取端）|
+| ba-lion-michael-workstation-49056-20261027-094244 | ba | **online** | 2026-10-27 09:42 | lion · 本地抽取端（ontok-builder / 抽取 / 提案 / AM 生成 / REQ-153）；入场巡检 + 账本纠偏 |
 | ba-michael-worksta-14864-20261020-151752 | ba | **stale** | 2026-10-21 18:20 | REQ-108 已完成（合并 `a8a51ed`）；REQ-109 AI 接入开工 |
 | ba-bogon-112089-20261002-165609 | ba | **stale** | 2026-10-02 16:56 | REQ-002 独立 QA 审核（已派出 verifier） |
 | ba-mavis-0243-20260930-2220 | ba | **stale** | 2026-09-30 22:45 | REQ-002 实施（已交付，worktree 未合并） |
@@ -40,4 +41,8 @@ origin  git@github.com:myg133/an_onto_demo.git
 | BA | 负责面 | 边界 |
 | --- | --- | --- |
 | **join**（本会话 `ba-join-michael-workstation-1340-20261027-093836`） | **服务端**：`ontok` 服务面（query serve / Studio / REST+MCP / 契约）、`Deploy`、本体冻结与发布、接入基线 | ⛔ 不改抽取链路（doc ingest / propose / AM 生成） |
-| **lion** | **本地抽取端**：`ontok-builder` 的抽取/提案/本体构建、AM 生成、REQ-153 覆盖盘点 | ⛔ 不改服务面与部署 |
+| **lion**（本会话 `ba-lion-michael-workstation-49056-20261027-094244`） | **本地抽取端**：`ontok-builder` 的抽取/提案/本体构建、AM 生成、REQ-153 覆盖盘点 | ⛔ 不改服务面与部署 |
+
+**同机协作事实**：lion 与 join 共用同一份工作目录（同一 `.git`），不做「拉取式」同步 ——
+双方写的是同一棵树，冲突靠「写前读 + 只改自己负责的文件」避免，不靠 merge。
+跨面改动（如 AM 契约形状）先在 `dispatch/handoff.md` 留言，再动手。
