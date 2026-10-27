@@ -36,11 +36,23 @@
 //! | `bundle.too_large` | `reject_too_large` |
 //!
 //! 另有两条构建端补充码：`bundle.snapshot.evidence_missing`
-//! （`reject_evidence_missing`）与 `bundle.credential.suspect`
-//! （`credential_suspect_is_a_warning_and_does_not_reject`，**警告级**）。
+//! （`reject_evidence_missing` / `evidence_null_counts_as_missing`）与
+//! `bundle.credential.suspect`（`credential_suspect_is_a_warning_and_does_not_reject`，**警告级**）。
+//! 第三条补充码是**警告级**的 `bundle.manifest.not_first`
+//! （`manifest_not_first_is_only_a_warning`）。
 //!
-//! ⚠️ 本文件**一条用例都不连库、也不编译二进制**：全部对着
-//! `ontok::bundle::{assemble, verify}` 这两个纯函数断言。
+//! # QA 退回的 5 条各由谁钉住
+//!
+//! | # | 问题 | 用例 |
+//! | --- | --- | --- |
+//! | F-01 | `sha256` 报错路径被双前缀 | 库内单测 `bundle::verify::tests::sha256_must_be_64_lowercase_hex`（`cargo test --lib bundle::`） |
+//! | F-02 | `evidence: null` 被当「有证据」 | `evidence_null_counts_as_missing` |
+//! | F-03 | manifest 不是第一个 entry 应只警告 | `manifest_not_first_is_only_a_warning` |
+//! | F-04 | 派生 entry 名含 `..` ⇒ 打出「自己必拒」的包 | `pack_refuses_a_dotdot_entry_name_instead_of_a_self_rejected_bundle` + `pack_rejects_a_dotdot_declaration_name_before_db_and_writes_nothing`（真进程） |
+//! | F-05 | zip 名超长静默截断 | 库内单测 `bundle::zip::tests::name_too_long_is_rejected_instead_of_truncated` |
+//!
+//! ⚠️ 除 F-04 的那条**真进程**用例外，其余全部对着
+//! `ontok::bundle::{assemble, verify}` 这两个纯函数断言，一条都不连库。
 //!
 //! ⚠️ 本文件不加 `//! @guard-manifest: REQ-081`（与 REQ-107/157/158 的同类文件一致）。
 
@@ -50,6 +62,7 @@ use ontok::query::audit::sha256_hex;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::process::Command;
 
 // ══════════════════════════════════════════════════════════════
 // 夹具
@@ -904,4 +917,156 @@ fn no_zip_crate_was_added() {
     // 反空转：确认我们读到的确实是那份依赖段。
     assert!(toml.contains("[dependencies]"));
     assert!(toml.contains("serde_json = \"1\""));
+}
+
+// ══════════════════════════════════════════════════════════════
+// QA 退回项（F-02 / F-03 / F-04）—— 每条都钉「判据在**打包前**就成立」
+// ══════════════════════════════════════════════════════════════
+
+/// **F-04**（纯函数层）：`v1..2.json` 是合法文件名，但会派生出自检必拒的
+/// 包内路径 ⇒ 必须在 `assemble` 阶段就按**参数错误**拒，⛔ 不许打出包再自检失败。
+#[test]
+fn pack_refuses_a_dotdot_entry_name_instead_of_a_self_rejected_bundle() {
+    let mut bad = input();
+    bad.declarations = vec![("v1..2.json".to_string(), br#"{"version":1}"#.to_vec())];
+    let e = assemble(&bad).expect_err("含 `..` 的派生 entry 名必须在打包阶段就拒");
+    assert!(e.is_bad_entry_path(), "必须归到「参数不合规」这一档：{e}");
+    let msg = e.to_string();
+    assert!(msg.contains("--declarations"), "要点名 flag：{msg}");
+    assert!(msg.contains("v1..2.json"), "要点名文件名：{msg}");
+    assert!(
+        msg.contains("declarations/v1..2.json"),
+        "要点名它会变成哪个包内路径：{msg}"
+    );
+    assert!(msg.contains(".."), "要点明原因：{msg}");
+
+    // `--am` 的第二个文件同样要拒（第一个走规范槽位，永远合法）。
+    let mut bad_am = input();
+    bad_am.am = vec![
+        ("access-mapping.json".to_string(), am_bytes()),
+        ("v1..2.json".to_string(), am_bytes()),
+    ];
+    let e = assemble(&bad_am).expect_err("`--am` 的派生名同样必须拒");
+    assert!(e.to_string().contains("--am"), "{e}");
+
+    // 反空转：把双点换成单连字符就应当打得出来（否则这条判据是恒真的）。
+    let mut ok = input();
+    ok.declarations = vec![("v1-2.json".to_string(), br#"{"version":1}"#.to_vec())];
+    assert!(assemble(&ok).is_ok(), "`v1-2.json` 不该被拒");
+}
+
+/// **F-04**（真进程层）：报参数错误 + **不产出文件**，而且是在**连库之前**。
+///
+/// 为什么这条必须是真进程：`bundle_pack` 是 `async` 的 CLI handler，
+/// 单元测试够不到「有没有把文件写到盘上」「退出码是几」这两件事。
+#[test]
+fn pack_rejects_a_dotdot_declaration_name_before_db_and_writes_nothing() {
+    let dir = std::env::temp_dir().join(format!("req159-f04-{}", std::process::id()));
+    let decl = dir.join("declarations");
+    std::fs::create_dir_all(&decl).expect("建临时目录失败");
+    std::fs::write(decl.join("v1..2.json"), b"{\"version\":1}").expect("写不出声明文件");
+    let out = dir.join("never-written.ontokbundle");
+    let _ = std::fs::remove_file(&out);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ontok-builder"))
+        .args(["bundle", "pack", "--project", "cloud-resource", "--version"])
+        .arg(SEQ.to_string())
+        .arg("--built-at")
+        .arg(BUILT_AT)
+        .arg("--out")
+        .arg(&out)
+        .arg("--declarations")
+        .arg(&decl)
+        // 这条错误与数据库无关：⛔ 不许先撞「连不上库」。
+        .env_remove(ontok::config::DATABASE_URL_ENV)
+        .env_remove(ontok::config::TEST_DATABASE_URL_ENV)
+        .output()
+        .expect("跑不起 ontok-builder");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "参数不合法 ⇒ 退出码 2（与「包会被拒」同码）；stderr：\n{stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "⛔ 这条错误必须在**产出文件之前**报出来（`{}` 被创建了）",
+        out.display()
+    );
+    assert!(stderr.contains("--declarations"), "要点名 flag：\n{stderr}");
+    assert!(stderr.contains("v1..2.json"), "要点名文件名：\n{stderr}");
+    assert!(
+        !stderr.contains("连不上库") && !stderr.contains("ONTOK_DATABASE_URL"),
+        "这一档不该牵扯数据库：\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **F-03**：`manifest.json` 不是第一个 entry ⇒ **只警告**（契约没把顺序写成硬规则）。
+#[test]
+fn manifest_not_first_is_only_a_warning() {
+    let bytes = rebuild(&packed(), |entries| {
+        let pos = entries
+            .iter()
+            .position(|(p, _)| p == "manifest.json")
+            .expect("包里没有 manifest.json");
+        let m = entries.remove(pos);
+        entries.push(m);
+    });
+    let report = verify(&bytes);
+    assert!(
+        report.ok,
+        "顺序不是硬规则，⛔ 不许因此拒包：{:?}",
+        report.problems
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.code == code::MANIFEST_NOT_FIRST),
+        "应当给一条「不是第一个」的警告：{:?}",
+        report.warnings
+    );
+    // 反空转：本工具自己的产物恒把 manifest 放第一 ⇒ 不该有这条警告。
+    assert!(verify(&packed())
+        .warnings
+        .iter()
+        .all(|w| w.code != code::MANIFEST_NOT_FIRST));
+}
+
+/// **F-02**：`"evidence": null` 不是证据 —— 判据是「是数组」，不是「键存在」。
+#[test]
+fn evidence_null_counts_as_missing() {
+    let mut snap: Value = serde_json::from_slice(&serde_json::to_vec(&snapshot()).unwrap()).unwrap();
+    snap["link_types"][0]["evidence"] = Value::Null;
+    let bytes = replace_file(
+        &packed(),
+        "ontology/snapshot.json",
+        serde_json::to_vec(&snap).unwrap(),
+    );
+    let report = verify(&bytes);
+    assert!(
+        report
+            .problems
+            .iter()
+            .any(|p| p.code == code::EVIDENCE_MISSING),
+        "`evidence: null` 必须算缺失：{:?}",
+        report.problems
+    );
+
+    // 空数组是**合法**的（契约：「哪怕空数组」）—— 反空转，别把空数组也拒了。
+    let mut empty: Value =
+        serde_json::from_slice(&serde_json::to_vec(&snapshot()).unwrap()).unwrap();
+    empty["link_types"][0]["evidence"] = json!([]);
+    let bytes = replace_file(
+        &packed(),
+        "ontology/snapshot.json",
+        serde_json::to_vec(&empty).unwrap(),
+    );
+    assert!(
+        verify(&bytes).ok,
+        "`evidence: []` 必须放行（契约原文「存在（哪怕空数组）」）"
+    );
 }

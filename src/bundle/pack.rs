@@ -34,7 +34,23 @@ use std::fmt;
 pub enum PackError {
     /// 参数不合法（项目名 / 时间 / 方言 / 路径 / 重复文件名）。
     Invalid(String),
-    /// 容器写不出来（路径非法 / 超 4 GiB / 重名）。
+    /// 用户给的文件名派生出的**包内 entry 名不合规** —— 这是**参数错误**，
+    /// 而且打出来的包**必被自检拒**（QA F-04）。
+    ///
+    /// ⚠️ 单独一个变体（而不是塞进 [`PackError::Invalid`]）是为了让
+    /// `cli.rs` 能按 `exit 2` 收尾并打出「哪个 flag + 哪个文件名 + 为什么」，
+    /// 而不是笼统地报「打包失败」或（更糟）打完再报「这是打包端的 bug」。
+    IllegalEntryPath {
+        /// 来源 flag（`--am` / `--declarations`）。
+        flag: String,
+        /// 用户给的源文件名。
+        name: String,
+        /// 会被打成什么包内路径。
+        entry: String,
+        /// 不合规的原因（来自 [`crate::bundle::path_problem`]）。
+        why: String,
+    },
+    /// 容器写不出来（路径非法 / 超 4 GiB / 名字超长 / 重名）。
     Zip(zip::ZipError),
 }
 
@@ -42,8 +58,19 @@ impl fmt::Display for PackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PackError::Invalid(m) => write!(f, "{m}"),
+            PackError::IllegalEntryPath { flag, name, entry, why } => write!(
+                f,
+                "`{flag}` 的文件 `{name}` 会被打成包内路径 `{entry}`，但这个路径不合规：{why}"
+            ),
             PackError::Zip(e) => write!(f, "{e}"),
         }
+    }
+}
+
+impl PackError {
+    /// 是不是「参数合不合法」这一档（`cli.rs` 据此走 `exit 2`，而不是 `exit 1`）。
+    pub fn is_bad_entry_path(&self) -> bool {
+        matches!(self, PackError::IllegalEntryPath { .. })
     }
 }
 
@@ -134,6 +161,44 @@ pub fn is_valid_project_name(p: &str) -> bool {
 /// 读的是同一个常量 —— 两处各写一份迟早会漂移成「打得出来但过不了自检」。
 pub const DIALECTS: &[&str] = &["postgresql", "mysql", "sqlserver", "oracle"];
 
+// ───────────────── 源文件名 → 包内路径（**唯一**一份映射） ─────────────────
+
+/// 第 `index` 个 `--am` 落成什么包内路径。
+///
+/// 第一个走契约的**规范槽位** [`AM_PATH`]（`components.am.path` 指向它）；
+/// 其余落 `am/<原文件名>`。⚠️ 打包端与 CLI 的前置校验**共用**这个函数 ——
+/// 各写一份迟早会出现「校验看着没事、打出来却叫另一个名字」。
+pub fn am_entry_path(index: usize, file_name: &str) -> String {
+    if index == 0 {
+        AM_PATH.to_string()
+    } else {
+        format!("am/{file_name}")
+    }
+}
+
+/// `--declarations <dir>` 里的某个文件落成什么包内路径。
+pub fn declaration_entry_path(file_name: &str) -> String {
+    format!("{DECLARATIONS_DIR}/{file_name}")
+}
+
+/// 校验「一个源文件名 + 它派生出的 entry 名」是否合规。
+///
+/// 判据是 [`crate::bundle::path_problem`] —— **与 `verify` 同一条**，
+/// 于是「打得出来」与「过得了自检」在路径这件事上必然一致（QA F-04）。
+/// ⚠️ `cli.rs` 在**连库之前**就调它：别等打完再靠自检失败把参数问题
+/// 指成打包端的 bug。
+pub fn check_entry_path(flag: &str, name: &str, entry: &str) -> Result<(), PackError> {
+    match crate::bundle::path_problem(entry) {
+        None => Ok(()),
+        Some(why) => Err(PackError::IllegalEntryPath {
+            flag: flag.to_string(),
+            name: name.to_string(),
+            entry: entry.to_string(),
+            why,
+        }),
+    }
+}
+
 /// 打一个包，返回**完整 zip 字节**。
 ///
 /// 顺序（两条都是契约，不是口味）：
@@ -171,29 +236,31 @@ pub fn assemble(input: &PackInput) -> Result<Vec<u8>, PackError> {
     );
     payload.push((SNAPSHOT_PATH.to_string(), snapshot_bytes));
     for (i, (name, bytes)) in input.am.iter().enumerate() {
-        let path = if i == 0 {
-            // 第一个 --am 落契约的规范槽位；这是服务端文档里出现的那个路径。
-            AM_PATH.to_string()
-        } else {
-            format!("am/{}", name)
-        };
+        let path = am_entry_path(i, name);
+        // 用户给的文件名 → entry 名，**在这里**就按与 verify 同一条规则拒。
+        check_entry_path("--am", name, &path)?;
         payload.push((path, bytes.clone()));
     }
     if let Some(db) = &input.db {
         payload.push((DB_PATH.to_string(), db.bytes.clone()));
     }
     for (name, bytes) in &input.declarations {
-        payload.push((format!("{DECLARATIONS_DIR}/{name}"), bytes.clone()));
+        let path = declaration_entry_path(name);
+        check_entry_path("--declarations", name, &path)?;
+        payload.push((path, bytes.clone()));
     }
 
     // ④ 按 path 升序（契约要求；也让 "同一输入同一输出" 与调用顺序无关）。
     payload.sort_by(|a, b| a.0.cmp(&b.0));
 
     // ⑤ 路径与重名校验（`--declarations` 里两个同名文件、或某个名字撞上规范槽位）。
+    //    ⚠️ 路径判据用 `crate::bundle::path_problem`（与 verify 同一份），
+    //    ⛔ 不用 `zip::illegal_path_reason`：那一份只认「`..` **段**」，
+    //    会放行 `v1..2.json`，而吐出来的包自己会拒它（QA F-04）。
     for (path, _) in &payload {
-        if let Some(why) = zip::illegal_path_reason(path) {
+        if let Some(why) = crate::bundle::path_problem(path) {
             return Err(PackError::Invalid(format!(
-                "包内路径 `{path}` 非法：{why}（schema 只允许 [A-Za-z0-9._/-]）"
+                "包内路径 `{path}` 非法：{why}（schema 只允许 [A-Za-z0-9._/-]，且不许含 `..`）"
             )));
         }
     }

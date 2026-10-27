@@ -46,7 +46,7 @@
 
 use crate::bundle::zip;
 use crate::bundle::{
-    code, Problem, BUNDLE_VERSION, MANIFEST_PATH, MAX_BUNDLE_BYTES, SNAPSHOT_PATH,
+    code, path_problem, Problem, BUNDLE_VERSION, MANIFEST_PATH, MAX_BUNDLE_BYTES, SNAPSHOT_PATH,
     SUPPORTED_BUNDLE_VERSIONS,
 };
 use crate::query::audit::sha256_hex;
@@ -258,6 +258,25 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
     fill_summary(&manifest, &mut summary);
     problems.extend(structural);
 
+    // 3b · 顺序（**警告级**，QA F-03）：打包端把 `manifest.json` 写成第一个 entry，
+    // 方便流式读取器先拿到目录；契约**没有**把它列成服务端的硬拒绝条件 ⇒
+    // 这里只提示。⛔ 别升成拒绝：那会因为一条排序偏好去拒掉别的打包器
+    // 产出的、语义完全正确的包。
+    if let Some(first) = entries.first() {
+        if first.path != MANIFEST_PATH {
+            warnings.push(Problem::new(
+                code::MANIFEST_NOT_FIRST,
+                MANIFEST_PATH,
+                format!(
+                    "`manifest.json` 不是第一个 entry（第一个是 `{}`）—— 不影响校验通过，\
+                     但本工具产出的包恒把它放第一",
+                    first.path
+                ),
+                "想跟本工具保持一致就重新 `bundle pack`；别家的包只要 manifest 合规就不必改",
+            ));
+        }
+    }
+
     // 4 · 版本（不认识就在这里停：后面那套字段语义可能根本不是这一版的）。
     match manifest.get("bundle_version").and_then(Value::as_str) {
         Some(v) if SUPPORTED_BUNDLE_VERSIONS.contains(&v) => {}
@@ -420,8 +439,12 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
                 if let Some(links) = snap.get("link_types").and_then(Value::as_array) {
                     let mut offenders: Vec<usize> = Vec::new();
                     for (i, l) in links.iter().enumerate() {
-                        match l.as_object() {
-                            Some(o) if o.contains_key("evidence") => {}
+                        // ⚠️ 判据是「**是数组**」而不是「键存在」（QA F-02）：
+                        // `"evidence": null` 与 `"evidence": {}` 都不是证据 ——
+                        // 视图投影/手写 JSON 都可能造出这两种形状，
+                        // 而 `contains_key` 会把它们当「有证据」放行。
+                        match l.get("evidence") {
+                            Some(Value::Array(_)) => {}
                             _ => offenders.push(i),
                         }
                     }
@@ -435,7 +458,7 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
                             code::EVIDENCE_MISSING,
                             SNAPSHOT_PATH,
                             format!(
-                                "{} / {} 条关系没有 `evidence` 键（前几条：{}）",
+                                "{} / {} 条关系的 `evidence` 不是数组（缺键 / null / 空对象都算缺；前几条：{}）",
                                 offenders.len(),
                                 links.len(),
                                 shown.join("、")
@@ -477,20 +500,8 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
     Report::finish(problems, warnings, summary)
 }
 
-/// 路径判据的**唯一**入口（`zip::illegal_path_reason` + schema pattern 里的 `(?!.*\.\.)`）。
-///
-/// 为什么把 `..` 的单查并进来：`manifest.schema.json` 的 pattern 是
-/// `^(?!/)(?!.*\.\.)[A-Za-z0-9._/-]+$` —— 它连 `a..b.json` 这种**没有段**的
-/// 双点在中间也拒。我们按 schema 的字面来（打包端也用同一条 ⇒ 打得出来的一定过得了自检）。
-fn path_problem(p: &str) -> Option<String> {
-    if let Some(why) = zip::illegal_path_reason(p) {
-        return Some(why.to_string());
-    }
-    if p.contains("..") {
-        return Some("含 `..`（schema 的 path pattern 不许，防穿越）".to_string());
-    }
-    None
-}
+/// ⚠️ 路径判据本体在 [`crate::bundle::path_problem`]（**打包端与自检端共用一份**，
+/// 见那里的注释 —— 两边各写一份就会出现「打得出来、自己必拒」的包，QA F-04）。
 
 fn entry_list(entries: &[zip::Entry]) -> String {
     if entries.is_empty() {
@@ -662,7 +673,7 @@ fn validate_manifest(m: &Value, out: &mut Vec<Problem>) {
                 }
             }
             if let Some(sha) = want_str(d, "sha256", "components.db", out) {
-                check_sha256(sha, "components.db.sha256", out);
+                check_sha256(sha, "manifest.json.components.db.sha256", out);
             }
             want_str(d, "path", "components.db", out);
             want_bool(d, "requires_dsn", "components.db", out);
@@ -746,9 +757,12 @@ fn check_sha256(sha: &str, at: &str, out: &mut Vec<Problem>) {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
     if !ok {
+        // ⚠️ `at` 是**完整**的字段路径（调用方已经带 `manifest.json.` 前缀）。
+        // 这里⛔ 不许再拼一次 —— 拼两次会得到 `manifest.json.manifest.json.files[0].sha256`
+        // 这种包里、schema 里都不存在的路径（QA F-01）。
         out.push(Problem::new(
             code::MANIFEST_INVALID,
-            format!("manifest.json.{at}"),
+            at.to_string(),
             format!("`{sha}` 不是 64 位小写十六进制（schema 的 `^[0-9a-f]{{64}}$`）"),
             "sha256 由工具算，⛔ 不要手写；重新打包即可",
         ));

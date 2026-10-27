@@ -3895,6 +3895,26 @@ fn bundle_verify(file: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 一个源文件名派生出的包内路径不合规 ⇒ **立刻按参数错误退出 2**（QA F-04）。
+///
+/// 为什么是 2 而不是 1：这一档的产物**必然是会被服务端拒的包**，
+/// 与 `bundle verify` 的结论是同一件事（契约的 `bundle.path.illegal`）。
+/// 为什么在这里而不是等 `assemble`：`assemble` 在取快照（连库）之后才跑，
+/// 而「文件名里有个 `..`」跟数据库毫无关系 —— 让用户先撞上「连不上库」是误导。
+///
+/// 返回 `()`（不是 `Result`）：命中就直接 `exit`，函数没有「失败但继续」的路径。
+fn require_entry_path(flag: &str, name: &str, entry: &str) {
+    if let Err(e) = crate::bundle::pack::check_entry_path(flag, name, entry) {
+        eprintln!("✗ {e}");
+        eprintln!(
+            "  改法：给 `{flag}` 换个文件名 —— 包内路径只许 [A-Za-z0-9._-]、相对、不含 `..`\
+             （schema 的 `files[].path` pattern）。⛔ 也别改名后手改 manifest：重新跑 `bundle pack` 即可"
+        );
+        eprintln!("  （未产出任何文件：这一条在**连库之前**就拒了）");
+        std::process::exit(EXIT_BUNDLE_REJECTED);
+    }
+}
+
 /// `ontok-builder bundle pack` —— 读文件 + **只读**元数据库 → 纯函数组装 → 自检 → 落盘。
 ///
 /// 顺序（每条都在防一种具体的错）：
@@ -3902,6 +3922,7 @@ fn bundle_verify(file: &std::path::Path) -> anyhow::Result<()> {
 /// | 步 | 为什么在这个位置 |
 /// | --- | --- |
 /// | 本地输入先读齐 | 「`--am` 路径写错」不该拖到连库之后才报（与 `doc` / `access` 同一条理由） |
+/// | **派生 entry 名先验** | `v1..2.json` 这类文件名在 Windows / Linux 都合法，但会打成**自检必拒**的包内路径 ⇒ 在连库之前按参数错误拒（退出码 2），⛔ 不等打完再报「打包端的 bug」 |
 /// | `--requires-dsn` 与 `--db-schema` 配对校验 | 置了它却没有 schema 描述，服务端会拿到一个「要 DSN 但没有 db 组件」的包 |
 /// | 连库取快照 | **只读**（不迁移、不写、不冻结）；查询形状照抄 `relation_verbs_check` |
 /// | `assemble` | 纯函数；⚠️ 快照在这一层是**结构体**，不受任何 view 影响 |
@@ -3920,12 +3941,14 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
 
     // ② 本地输入（读不到就别去连库：报错要指向真原因）。
     let mut am: Vec<(String, Vec<u8>)> = Vec::new();
-    for p in &o.am {
+    for (i, p) in o.am.iter().enumerate() {
         let name = p
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| anyhow::anyhow!("`--am` 的文件名不是 UTF-8：{}", p.display()))?
             .to_string();
+        // ⚠️ QA F-04：派生出来的包内路径**在连库之前**就要验。
+        require_entry_path("--am", &name, &crate::bundle::pack::am_entry_path(i, &name));
         let bytes = std::fs::read(p)
             .with_context(|| format!("读不到 `--am` 文件：{}", p.display()))?;
         am.push((name, bytes));
@@ -3956,6 +3979,17 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
         Some(dir) => read_declarations(dir)?,
         None => Vec::new(),
     };
+    // 声明文件同理：`--declarations` 下的文件名直接决定 `declarations/<name>`。
+    for (name, _) in &declarations {
+        require_entry_path(
+            "--declarations",
+            name,
+            &crate::bundle::pack::declaration_entry_path(name),
+        );
+    }
+    if !declarations.is_empty() {
+        eprintln!("  （--declarations 收进 {} 个文件）", declarations.len());
+    }
 
     // ③ 快照（**只读**；⚠️ 直接拿结构体，不掉进 `--model-view` 那种视图）。
     let snapshot = snapshot_for_pack(&o.project, o.version).await?;
@@ -3969,8 +4003,19 @@ async fn bundle_pack(o: PackOpts) -> anyhow::Result<()> {
     input.am = am;
     input.db = db;
     input.declarations = declarations;
-    let bytes = crate::bundle::assemble(&input)
-        .map_err(|e| anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}"))?;
+    let bytes = match crate::bundle::assemble(&input) {
+        Ok(b) => b,
+        // 兜底：CLI 层已经按 flag 逐个验过，走到这里说明有新的派生路径没接上闸。
+        // 仍按**参数不合法**收尾（退出码 2），⛔ 不报成「打包端的 bug」。
+        Err(e) if e.is_bad_entry_path() => {
+            eprintln!("✗ {e}");
+            eprintln!(
+                "  改法：换个不含 `..`、不是绝对路径、只用 [A-Za-z0-9._-] 的文件名（schema 的 `files[].path` pattern）"
+            );
+            std::process::exit(EXIT_BUNDLE_REJECTED);
+        }
+        Err(e) => return Err(anyhow::anyhow!("打包失败（参数 / 输入文件）：{e}")),
+    };
 
     // ⑤ 自检（打出来的包必须过得了自己的闸）。
     //
@@ -4061,7 +4106,8 @@ fn read_declarations(dir: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u
             skipped.join("、")
         );
     }
-    eprintln!("  （--declarations 收进 {} 个文件）", out.len());
+    // ⚠️ 「收进 N 个文件」不在这里打：调用方要先把**派生 entry 名**验一遍
+    // （QA F-04），先报「收进 1 个」再报「这个文件名不行」会让人以为文件已经收下了。
     Ok(out)
 }
 

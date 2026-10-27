@@ -54,9 +54,11 @@
 //! | 7 | [`code::DSN_MISSING`] | `requires_dsn=true` 但服务端没配到可用 DSN | ⛔ **只有服务端**（构建端永远不该有 DSN） |
 //! | 8 | [`code::TOO_LARGE`] | 包体积超上限（默认 100 MB） | 构建端（提前避开）+ 服务端 |
 //!
-//! 另有两条**构建端专属**的补充码（服务端也有它们的对应物）：
-//! [`code::EVIDENCE_MISSING`]（快照里的关系证据被视图吞了）与
-//! [`code::CREDENTIAL_SUSPECT`]（**警告级**：v1 只告警不拒，见 demand §三-5）。
+//! 另有**三条构建端补充**的码（服务端也有它们的对应物）：
+//! [`code::EVIDENCE_MISSING`]（快照里的关系证据被视图吞了，**拒绝**）、
+//! [`code::CREDENTIAL_SUSPECT`]（**警告级**：v1 只告警不拒，见 demand §三-5）与
+//! [`code::MANIFEST_NOT_FIRST`]（**警告级**：manifest 不是第一个 entry，
+//! 只提示不改判 —— 契约没把它写成硬拒绝条件）。
 //!
 //! # 确定性
 //!
@@ -130,6 +132,12 @@ pub mod code {
     pub const EVIDENCE_MISSING: &str = "bundle.snapshot.evidence_missing";
     /// 10（构建端补充）· 包内疑似凭据 —— **警告级**，v1 只告警不拒。
     pub const CREDENTIAL_SUSPECT: &str = "bundle.credential.suspect";
+    /// 11（构建端补充）· `manifest.json` 不是第一个 entry —— **警告级**。
+    ///
+    /// 契约只把「manifest 第一个」写成**打包端**的产出规范，**没**把它列为
+    /// 服务端的硬拒绝条件 ⇒ 这里只提示。⛔ 别把它升成拒绝：那会因为一条
+    /// 排序偏好去拒掉别的打包器产出的、语义完全正确的包。
+    pub const MANIFEST_NOT_FIRST: &str = "bundle.manifest.not_first";
 
     /// 全部码（`Report` 的 `summary.codes` 与测试对账用）。
     pub const ALL: &[&str] = &[
@@ -143,7 +151,28 @@ pub mod code {
         TOO_LARGE,
         EVIDENCE_MISSING,
         CREDENTIAL_SUSPECT,
+        MANIFEST_NOT_FIRST,
     ];
+}
+
+/// 包内路径判据的**唯一**入口：`zip::illegal_path_reason` + schema pattern 里的 `(?!.*\.\.)`。
+///
+/// ⚠️ 为什么必须是**一个**函数（QA F-04 的根因）：
+/// `manifest.schema.json` 的 `files[].path.pattern` 是
+/// `^(?!/)(?!.*\.\.)[A-Za-z0-9._/-]+$` —— 它连 `v1..2.json` 这种**没有 `..` 段**
+/// 的连续双点也拒；而「`..` 段」判据（[`zip::illegal_path_reason`]）放行它。
+/// 若打包端只按「段」判、自检端按 schema 字面判，就会出现
+/// **打得出来、自己必拒**的包（`v1..2.json` 在 Windows / Linux 上都是合法文件名）。
+/// ⇒ 两端调用同一个函数；命中一律在**打包阶段**按参数错误拒（`exit 2`），
+/// ⛔ 不许等打完再靠自检失败把它指成「打包端的 bug」。
+pub fn path_problem(p: &str) -> Option<String> {
+    if let Some(why) = zip::illegal_path_reason(p) {
+        return Some(why.to_string());
+    }
+    if p.contains("..") {
+        return Some("含 `..`（schema 的 path pattern `(?!.*\\.\\.)` 不许，防穿越）".to_string());
+    }
+    None
 }
 
 // ───────────────────────── 报告里的一个问题 ─────────────────────────

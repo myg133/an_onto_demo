@@ -78,6 +78,12 @@ pub enum ZipError {
     TooLarge { path: String, bytes: usize },
     /// entry 数越过 u16（不做 zip64）。
     TooManyEntries { count: usize },
+    /// 文件名超过 u16 能表达的长度（zip 的 name length 字段只有 2 字节）。
+    ///
+    /// ⚠️ **必须报错，不许截断**（QA F-05）：`name.len() as u16` 会把 65537 字节的
+    /// 名字写成 1 —— 读回来是另一个文件名，而 CRC 仍对得上，于是得到一个
+    /// 「结构合法但内容错位」的容器，比直接拒难查得多。
+    NameTooLong { path: String, bytes: usize },
     /// 容器结构坏（截断 / 签名不对 / 字段组合不受支持）。
     BadFormat(String),
 }
@@ -93,6 +99,12 @@ impl fmt::Display for ZipError {
             ZipError::TooManyEntries { count } => {
                 write!(f, "有 {count} 个 entry，超过 65535（本实现不做 zip64）")
             }
+            ZipError::NameTooLong { path, bytes } => write!(
+                f,
+                "文件名有 {bytes} 字节，超过 65535（zip 的 name length 字段是 u16；\
+                 本实现不做 zip64 扩展）：`{}…`",
+                path.chars().take(60).collect::<String>()
+            ),
             ZipError::BadFormat(m) => write!(f, "容器结构不合规：{m}"),
         }
     }
@@ -196,12 +208,16 @@ pub fn write(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, ZipError> {
         return Err(ZipError::TooManyEntries { count: entries.len() });
     }
 
-    // ① 先整体校验（路径 / 重名 / 大小），**一个字节都不写**才落盘：
+    // ① 先整体校验（路径 / 重名 / 大小 / 名字长度），**一个字节都不写**才落盘：
     //    半份 zip 比没有 zip 更坏 —— 它看起来是合法的。
     let mut seen = std::collections::BTreeSet::new();
     for (path, data) in entries {
         if let Some(why) = illegal_path_reason(path) {
             return Err(ZipError::PathIllegal { path: path.clone(), why });
+        }
+        // ⚠️ 名字长度必须是 u16（QA F-05）：⛔ 不许 `as u16` 静默截断。
+        if path.len() > u16::MAX as usize {
+            return Err(ZipError::NameTooLong { path: path.clone(), bytes: path.len() });
         }
         if !seen.insert(path.as_str()) {
             return Err(ZipError::DuplicatePath { path: path.clone() });
@@ -538,5 +554,21 @@ mod tests {
         let back = read(&zip).expect("结构没坏，应当读得出来");
         assert_eq!(back.len(), 1);
         assert!(!back[0].crc_ok, "改了数据却没发现 CRC 不符");
+    }
+
+    /// QA F-05：名字超长必须**报错**，⛔ 不许 `as u16` 静默截断成另一个名字。
+    #[test]
+    fn name_too_long_is_rejected_instead_of_truncated() {
+        let too_long = "a".repeat(u16::MAX as usize + 1);
+        let e = write(&[(too_long.clone(), b"x".to_vec())]);
+        match e {
+            Err(ZipError::NameTooLong { bytes, .. }) => assert_eq!(bytes, too_long.len()),
+            other => panic!("超长名字应当报 NameTooLong，实际 {other:?}"),
+        }
+        // 反空转：正好 65535 字节的名字**可以**写（边界不是随手挑的数字）。
+        let edge = "a".repeat(u16::MAX as usize);
+        let zip = write(&[(edge.clone(), b"x".to_vec())]).expect("65535 字节的名字应当能写");
+        let back = read(&zip).expect("读不回来");
+        assert_eq!(back[0].path, edge, "读回来的名字必须与被写的一字不差");
     }
 }
