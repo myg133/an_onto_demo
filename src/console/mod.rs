@@ -17,6 +17,23 @@
 //! | `GET/PUT /api/config/*` | 三份声明的既有解析器（`Exclusions` / `QueryPolicy` / `TenancyDecl`） |
 //! | `GET /api/review` · `POST /api/decide` | [`crate::review_ui::http::review_json`] / [`decide_json`]（`review serve` 的同一份序列化与同一个 `decide_item`） |
 //!
+//! ⭐ **REQ-159 · 构建包导入（P1a）** 在这张表上新增 7 个端点，它们同样不是新写库路径：
+//!
+//! | 端点 | 它调的**既有**实现 |
+//! | --- | --- |
+//! | `POST /api/projects` | [`crate::db::project::PgProjectStore::create_labeled_in`] + [`crate::db::bundle_store::PgBundleStore::create_key_in`]（同一事务） |
+//! | `POST /api/projects/:p/bundles` | [`bundle::verify_and_read`]（校验）+ [`crate::db::bundle_store::PgBundleStore::create_bundle`] |
+//! | `GET /api/projects/:p/bundles/:id` | [`crate::db::bundle_store::PgBundleStore::get_bundle_in_project`] |
+//! | `PUT /api/projects/:p/database` | [`crate::console::dsn::SecretCipher::encrypt`] + [`crate::db::bundle_store::PgBundleStore::upsert_database`] |
+//! | `POST /api/projects/:p/database/test` | [`crate::console::dsn::probe`]（真连一次） |
+//! | `POST /api/projects/:p/bundles/:id/import` | [`crate::db::apply::begin_new_version`] + [`crate::db::apply::write_snapshot_in`]（**与 `proposal apply` 同一套**，单事务） |
+//! | `POST /api/projects/:p/bundles/:id/activate` | [`crate::db::project::PgProjectStore::activate`]（冻结 + 生效指针，同一事务） |
+//!
+//! ⚠️ **架构变化（要写 ADR）**：这 7 个端点让**控制面**第一次获得「写元数据库里的
+//! 本体内容」的能力（`project apply` 之外的第二条产出新版本的路径）。边界是硬的：
+//! 只有 **admin token** 能调（`query` token 一律 403），而 `query serve` 仍然**只读**、
+//! 仍然一进程一项目（多项目是 P1b，本刀一行没碰）。见 demand §六-4。
+//!
 //! ⭐ REQ-125 · `GET /` 是**工作台页面壳**（[`page`]）：自包含单文件、零外部依赖、
 //! **壳内零数据**、免 token（浏览器导航带不了 `Authorization`）。七个视图只消费上面
 //! 这些端点（外加 REQ-123 查询服务的 `/api/sparql` / `/api/catalog` / `/api/describe`，
@@ -47,10 +64,13 @@
 //!   并发两个 PUT 的结果是后写覆盖（没有乐观锁 / ETag）。
 
 pub mod audit;
+pub mod bundle;
 pub mod decl;
+pub mod dsn;
 pub mod http;
 pub mod ops;
 pub mod page;
+pub mod provision;
 pub mod serve;
 pub mod tokens;
 
@@ -193,6 +213,11 @@ pub struct ConsoleService {
     /// 实际绑定地址（横幅与 `/api/health` 之外的诊断用）。
     pub bind: SocketAddr,
     pub allow_public: bool,
+    /// ⭐ REQ-159 · DSN 的对称加密器（密钥来自 `ONTOK_DSN_KEY`）。
+    ///
+    /// ⛔ 它只在这里**持有**：加解密在 [`dsn`]，对外没有任何「打印密钥 / 打印明文」
+    /// 的出口（`Debug` 是手写的 `<redacted>`，见 [`dsn::SecretCipher`]）。
+    pub secret_cipher: dsn::SecretCipher,
 }
 
 /// 构造参数（`serve` 与测试共用**这一个**构造器）。
@@ -206,6 +231,8 @@ pub struct ConsoleParts {
     pub audit: audit::AuditLog,
     pub bind: SocketAddr,
     pub allow_public: bool,
+    /// ⭐ REQ-159 · 见 [`ConsoleService::secret_cipher`]。
+    pub secret_cipher: dsn::SecretCipher,
 }
 
 impl ConsoleService {
@@ -221,6 +248,7 @@ impl ConsoleService {
             metrics: crate::metrics::Metrics::for_console(),
             bind: p.bind,
             allow_public: p.allow_public,
+            secret_cipher: p.secret_cipher,
         }
     }
 }

@@ -86,6 +86,24 @@ axum = { version = "0.7", default-features = false, features = [
 #   `tokio-util` 拉进依赖（`Cargo.lock` 真新增一个包），比这一行贵。
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
+# ⭐ REQ-159 · 构建包（bundle）导入需要两件事，**不新增任何 crate**：
+#
+# | 用途 | crate | 为什么它不算新依赖 |
+# | --- | --- | --- |
+# | 包内 `deflate` 解压 | `flate2` | 已经在依赖树里（`ureq` 的 `gzip` feature 带进来），这里用**同一个版本**（1.1.x）、**同一组默认 feature**（`rust_backend` → `miniz_oxide`，也在树里） |
+# | DSN 加密列（AES-256-GCM + 口令学随机） | `ring` | 已经在依赖树里（`rustls` 的 AEAD 后端，`sqlx` 的 `runtime-tokio-rustls` 带进来），同一个版本 0.17.x |
+#
+# `Cargo.lock` 只多两条 `ontok → …` 的边，**不新增包** —— 编译的包集合与依赖树不变。
+# 与 REQ-123 加 `futures-util` 时同一条口径、同一份登记（见上面那段）。
+#
+# ⛔ 为什么不自己手写 AES-GCM：本仓手写过 SHA-256 / HMAC（`access/tc3.rs`，有 NIST /
+# RFC 向量钉着），但 AEAD 的**认证标签校验与常量时间比较**是「写错了看不出来」的那一类；
+# 而 `ring` 已经是这个二进制的一部分（TLS 在用），复用它的实现比新写一份风险更低。
+# ⛔ 为什么不用 PG 的 `pgcrypto`：那给部署多加一个前提（目标库必须装扩展），
+# 而且密钥要随 SQL 文本进 `pg_stat_statements` / 慢查询日志 —— 与「DSN 不进日志」直接冲突。
+flate2 = "1"
+ring = "0.17"
+
 [dev-dependencies]
 # 用外部测试库（PG 16.14），不引入 testcontainers
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

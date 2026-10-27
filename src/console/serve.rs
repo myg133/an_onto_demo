@@ -152,6 +152,16 @@ pub fn banner(
         "· 指标（免 token）：http://{addr}{METRICS_PATH}\n",
         METRICS_PATH = crate::metrics::METRICS_PATH
     ));
+    s.push_str(
+        "· ⭐ 构建包导入（REQ-159，admin token）：POST /api/projects（发一次性 query key）→ \
+         POST /api/projects/:p/bundles（application/octet-stream 原始字节，只校验不解析）→ \
+         PUT /api/projects/:p/database + POST …/database/test（需要时才要）→ \
+         POST …/bundles/:id/import（单事务产新版本，**不冻结**）→ POST …/activate（冻结 + 生效）\n",
+    );
+    s.push_str(
+        "· DSN 加密列：AES-256-GCM，密钥来自 ONTOK_SECRET_KEY（缺失即拒绝启动）；\
+         ⛔ 响应 / 日志 / 审计里都不出现明文\n",
+    );
     s.push_str(&format!(
         "· 工作台（页面壳零数据、免 token）：http://{addr}/ —— 口令只存 sessionStorage；\
          7 个视图只调 /api/*，且 ⛔ 不为前端新开端点\n"
@@ -189,6 +199,25 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     })?;
     let tokens = AdminTokens::parse(&raw)
         .map_err(|e| anyhow::anyhow!("token 表 {:?} 不合法：{e}", args.tokens))?;
+
+    // ── ②b ⭐ REQ-159 · DSN 加密列的密钥（**缺了就拒绝启动**）──────────
+    //
+    // 为什么在绑 socket 之前、而且是**无条件**的（哪怕这次启动一个人都不会配 DSN）：
+    // `PUT /api/projects/:p/database` 要把 DSN 加密后落库。带着一把坏密钥 / 没有密钥
+    // 启动，等于让那个端点在一个**会失败的**状态下对外可用 —— 那时用户已经上传了包、
+    // 点开 DSN 弹窗，才收到 500。启动期报错的成本是零，运行期报错的成本是一次联调。
+    //
+    // ⛔ 没有「本地调试可以先跳过」的开关（与 `ONTOK_VIEW_TOKEN` 同一条纪律）。
+    let secret_cipher = crate::console::dsn::SecretCipher::from_env().map_err(|e| {
+        anyhow::anyhow!(
+            "DSN 加密列的密钥不可用，拒绝启动控制面：\n{e}\n  \
+             设置方式（当前会话）：\n    \
+             PowerShell : $env:ONTOK_SECRET_KEY = '<64 位十六进制>'\n    \
+             bash/zsh   : export ONTOK_SECRET_KEY=<64 位十六进制>\n  \
+             ⚠️ 换密钥会让**已有**的 DSN 密文读不出来（v1 不做密钥轮换）：\
+             换完要重新 `PUT /api/projects/:p/database` 一次。"
+        )
+    })?;
 
     // ── ③ schema（声明校验的唯一事实来源）────────────────────
     // 默认值 `code/out/schema.json` 是**仓库根**的相对路径。工作树（feature-*）
@@ -291,6 +320,7 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         audit: AuditLog::new(sink),
         bind: addr,
         allow_public: args.allow_public,
+        secret_cipher,
     }));
 
     eprintln!(

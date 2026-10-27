@@ -104,6 +104,8 @@ fn test_service(tag: &str) -> Arc<ConsoleService> {
         audit: AuditLog::new(AuditSink::stdout_only()),
         bind: "127.0.0.1:8899".parse().unwrap(),
         allow_public: false,
+        // ⭐ REQ-159 · DSN 加密器（本文件不测 DSN 端点，用固定测试密钥）。
+        secret_cipher: ontok::console::dsn::SecretCipher::for_tests(),
     }))
 }
 

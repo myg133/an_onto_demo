@@ -2064,6 +2064,10 @@ const MODULES: &[(&str, &str)] = &[
     // REQ-109 · AI 语义判断的指纹缓存（`ai_cache` 表）
     ("src/db/mod.rs", "ai_cache"),
     ("src/db/mod.rs", "apply"),
+    // ⭐ REQ-159 · 构建包导入的四张表（key / bundle / payload / dsn）。
+    // 它**不新增任何响应写点**（JSON 写出口仍只有 I18 那一个 `Json(body)`）：
+    // 这里只有 SQL，HTTP 层照旧调 `console::http::respond`。
+    ("src/db/mod.rs", "bundle_store"),
     ("src/db/mod.rs", "pg"),
     ("src/db/mod.rs", "pool"),
     ("src/db/mod.rs", "project"),
@@ -2163,11 +2167,18 @@ const MODULES: &[(&str, &str)] = &[
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),
     ("src/console/mod.rs", "audit"),
+    // ⭐ REQ-159 · 构建包导入（P1a）：包校验 / 密文列 / 领域编排。
+    // ⛔ 三个模块都**不新增响应写点** —— 它们的产物经既有的 I18（`console::http::respond`）
+    // 送出去，所以 `OUTLETS` 不加行；本表只登记模块（T6：新增模块即红）。
+    ("src/console/mod.rs", "bundle"),
     ("src/console/mod.rs", "decl"),
+    ("src/console/mod.rs", "dsn"),
     ("src/console/mod.rs", "http"),
     ("src/console/mod.rs", "ops"),
     // ⭐ REQ-125 · 工作台页面壳（GET /）：零数据 HTML 骨架；出口 I22 登记在 OUTLETS。
     ("src/console/mod.rs", "page"),
+    // ⭐ REQ-159 · 7 个端点的领域编排（建项目发 key / 上传 / import / activate / DSN）。
+    ("src/console/mod.rs", "provision"),
     ("src/console/mod.rs", "serve"),
     ("src/console/mod.rs", "tokens"),
     // ⭐ REQ-155 · Studio 页面壳（`query serve` 的 `/studio` + 两个静态资源）。
