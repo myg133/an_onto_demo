@@ -121,114 +121,158 @@ pub const CONSOLE_HTML: &str = r####"<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>内部工作台</title>
 <style>
-:root{--bg:#141416;--fg:#f2f2f7;--mut:#9b9ba1;--line:#3c3c40;--card:#1c1c1f;--acc:#4d9bff;--ok:#3fbf6a;--bad:#ff6b5e;--warn:#ffb340;--head:#232327}
-@media (prefers-color-scheme: light){
-  :root{--bg:#fbfbfd;--fg:#1d1d1f;--mut:#6e6e73;--line:#d2d2d7;--card:#fff;--acc:#0a6cff;--ok:#0a8f3c;--bad:#c2261c;--warn:#b26a00;--head:#f2f2f5}
-}
+:root{color-scheme:dark;--bg:#070a10;--bg-2:#0b0f17;--card:#111721;--head:#0d131c;--line:rgba(255,255,255,.085);--line-2:rgba(255,255,255,.045);--fg:#e8edf6;--mut:#9aa7bd;--mut-2:#64708a;--acc:#6ec8ff;--ok:#5fd3a3;--warn:#e6b455;--bad:#ef7a8a;--mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;--row:32px;--ease:cubic-bezier(.22,.61,.36,1)}
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
-header{position:sticky;top:0;z-index:8;background:var(--head);border-bottom:1px solid var(--line);padding:8px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-h1{font-size:15px;margin:0;font-weight:600;white-space:nowrap}
-#who{color:var(--mut);font-size:13px}
-#who b{color:var(--fg)}
-input,select,textarea{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
-input[type=password]{width:190px}
-textarea{width:100%;min-height:260px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;padding:10px;resize:vertical}
-button{font:inherit;padding:4px 11px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer;white-space:nowrap}
-button:hover{border-color:var(--acc);color:var(--acc)}
-button:disabled{opacity:.45;cursor:default}
-button.danger{border-color:var(--bad);color:var(--bad)}
-button.danger:hover{background:var(--bad);color:#fff}
-button.ok{border-color:var(--ok);color:var(--ok)}
-#msg{font-size:13px;flex:1;min-width:220px;color:var(--mut)}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+/* ── 壳：左侧窄导航 + 单一主区 ─────────────────────────── */
+.app{height:100%;display:grid;grid-template-columns:212px minmax(0,1fr)}
+#nav{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.022),transparent 42%)}
+.brand{display:flex;align-items:center;gap:9px;padding:13px 13px 11px;border-bottom:1px solid var(--line-2)}
+.brand-mark{width:17px;height:17px;border-radius:50%;flex:none;background:radial-gradient(circle at 34% 30%,#dff1ff,#6ec8ff 42%,#1b4f77 78%);box-shadow:0 0 12px rgba(110,200,255,.45)}
+.brand-text{font-weight:600;font-size:13px;letter-spacing:.2px}
+.brand-text em{display:block;font-style:normal;font-weight:400;font-size:10px;color:var(--mut-2);letter-spacing:.14em;text-transform:uppercase;margin-top:1px}
+#nav-list{flex:1;min-height:0;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:2px}
+.nav-group{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut-2);opacity:.8;padding:9px 9px 3px}
+.nav-group:first-child{padding-top:2px}
+.nav-item{display:flex;align-items:center;gap:8px;height:auto;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:var(--mut);font:inherit;text-align:left;cursor:pointer;transition:background .16s var(--ease),color .16s var(--ease)}
+.nav-item:hover{background:rgba(255,255,255,.028);color:var(--fg)}
+.nav-item.is-on{background:rgba(255,255,255,.05);color:var(--fg);box-shadow:inset 2px 0 0 var(--acc)}
+.nav-i{font:10px/1 var(--mono);color:var(--mut-2)}
+.nav-item.is-on .nav-i{color:var(--acc)}
+#nav-foot{padding:9px 12px 11px;border-top:1px solid var(--line-2);display:grid;gap:4px}
+#nav-foot .kv{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--mut-2)}
+#who{color:var(--mut);font-weight:600;font-size:11.5px}
+.nav-note{font-size:10.5px;color:var(--mut-2);line-height:1.45}
+#main{min-width:0;min-height:0;display:flex;flex-direction:column}
+#topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:rgba(11,15,23,.72);flex-wrap:wrap}
+.ctx-label{font-size:11.5px;color:var(--mut-2)}
+#login{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#msg{padding:7px 14px;border-bottom:1px solid var(--line-2);font-size:12px;color:var(--mut);min-height:32px}
 #msg.bad{color:var(--bad);font-weight:600}
 #msg.ok{color:var(--ok)}
-#tabs{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:49px;z-index:7}
-#tabs button{border-radius:999px;padding:3px 13px;color:var(--mut)}
-#tabs button.on{border-color:var(--acc);color:var(--acc);font-weight:600}
-main{padding:14px 16px 80px;max-width:1280px;margin:0 auto}
+#views{flex:1;min-height:0;overflow:auto;padding:14px 16px 64px}
+/* ── 视图容器 ─────────────────────────────────────────── */
 .view[hidden]{display:none}
 .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .note{color:var(--mut);font-size:12px}
+.summary{color:var(--mut);font-size:12px;margin-bottom:10px}
+.summary b{color:var(--fg)}
+/* ── 面板 ─────────────────────────────────────────────── */
 .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px}
-.panel h2{font-size:13px;margin:0 0 8px;color:var(--fg);font-weight:600}
+.panel h2{font-size:12.5px;margin:0 0 8px;color:var(--fg);font-weight:600}
+.panel h3{font-size:12px;margin:10px 0 6px;color:var(--mut);font-weight:600}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:900px){.grid2{grid-template-columns:1fr}}
+/* ── 表格 / 表单 / 按钮（密度见检查点 2） ─────────────── */
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-weight:600;font-size:12px;color:var(--mut);white-space:nowrap}
-td.mono,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
-.badge{display:inline-block;font-size:12px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
-.badge.ok{color:var(--ok);border-color:var(--ok)}
-.badge.bad{color:var(--bad);border-color:var(--bad)}
-.badge.warn{color:var(--warn);border-color:var(--warn)}
-.badge.acc{color:var(--acc);border-color:var(--acc)}
+td.mono,.mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+input,select,textarea{font:inherit;color:var(--fg);background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:7px;padding:3px 8px;height:28px;outline:none;transition:border-color .16s var(--ease),background .16s var(--ease)}
+input:focus,select:focus,textarea:focus{border-color:rgba(110,200,255,.5);background:rgba(255,255,255,.05)}
+input::placeholder{color:var(--mut-2)}
+input[type=password]{width:200px;font:12px/1 var(--mono)}
+select option{background:var(--bg-2);color:var(--fg)}
+textarea{width:100%;height:auto;min-height:260px;font-family:var(--mono);font-size:12px;line-height:1.6;padding:10px;resize:vertical}
+button{font:inherit;height:28px;padding:3px 10px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.03);color:var(--mut);cursor:pointer;white-space:nowrap;transition:background .16s var(--ease),border-color .16s var(--ease),color .16s var(--ease)}
+button:hover{border-color:rgba(110,200,255,.5);color:var(--acc)}
+button:disabled{opacity:.45;cursor:default}
+button.danger{border-color:rgba(239,122,138,.4);color:var(--bad);background:rgba(239,122,138,.07)}
+button.danger:hover{background:rgba(239,122,138,.16);color:#ffc7ce}
+button.ok{border-color:rgba(95,211,163,.4);color:var(--ok);background:rgba(95,211,163,.07)}
+/* ── 状态 / 提示 ─────────────────────────────────────── */
+.badge{display:inline-block;font-size:11.5px;padding:0 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:rgba(95,211,163,.35);background:rgba(95,211,163,.08)}
+.badge.bad{color:var(--bad);border-color:rgba(239,122,138,.35);background:rgba(239,122,138,.08)}
+.badge.warn{color:var(--warn);border-color:rgba(230,180,85,.34);background:rgba(230,180,85,.08)}
+.badge.acc{color:var(--acc);border-color:rgba(110,200,255,.35);background:rgba(110,200,255,.09)}
 ul.warns{margin:6px 0;padding-left:18px}
 ul.warns li{margin:3px 0;color:var(--warn)}
 ul.warns li.bad{color:var(--bad);font-weight:600}
-#summary,.summary{color:var(--mut);font-size:13px;margin-bottom:10px}
-#summary b,.summary b{color:var(--fg)}
 article.item{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:8px}
 article.item.vetoed{border-color:var(--bad)}
 .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap}
-.idx{color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums}
+.idx{color:var(--mut-2);font-size:12px;font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .target{font-weight:600}
-.kind{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 8px}
+.kind{font-size:11.5px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 8px}
 .why{font-size:12px;color:var(--mut);margin-top:4px}
 .why b{color:var(--fg)}
 .tracks{display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;font-size:13px}
 .track{display:flex;gap:6px;align-items:center}
 .track .name{color:var(--mut)}
-.st{font-size:12px;border:1px solid var(--line);border-radius:5px;padding:0 6px}
+.st{font-size:11.5px;border:1px solid var(--line);border-radius:5px;padding:0 6px}
 .st.accepted{color:var(--ok);border-color:var(--ok)}
 .st.rejected{color:var(--bad);border-color:var(--bad)}
 .st.pending{color:var(--mut)}
-pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font-size:12px;overflow:auto;max-height:300px;white-space:pre-wrap;word-break:break-all}
-.pager{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:13px;color:var(--mut)}
+pre{margin:6px 0 0;padding:8px;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:6px;font-size:12px;overflow:auto;max-height:300px;white-space:pre-wrap;word-break:break-all}
+.pager{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:12px;color:var(--mut)}
 .err{background:var(--card);border:1px solid var(--bad);border-radius:10px;padding:10px 12px;margin:10px 0}
-.err .code{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--bad);font-weight:600}
+.err .code{font-family:var(--mono);font-size:12px;color:var(--bad);font-weight:600}
 .err .msg{margin-top:4px}
 .err .hint{margin-top:4px;color:var(--mut);font-size:12px}
 .okbox{background:var(--card);border:1px solid var(--ok);border-radius:10px;padding:10px 12px;margin:10px 0}
-.kv{display:grid;grid-template-columns:160px 1fr;gap:2px 12px;font-size:13px}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:2px 12px;font-size:12.5px}
 .kv dt{color:var(--mut)}
 .kv dd{margin:0;word-break:break-all}
-#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:30}
+.empty{color:var(--mut-2);text-align:center;padding:26px 0}
+/* ── 弹窗（危险动作确认：目标 + 后果） ────────────────── */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:20px;z-index:30}
 #modal[hidden]{display:none}
 #mbox{background:var(--card);border:1px solid var(--line);border-radius:12px;max-width:640px;width:100%;max-height:82vh;overflow:auto;padding:16px 20px}
 #mbox h2{margin:0 0 10px;font-size:16px}
-#m-rows{display:grid;grid-template-columns:72px 1fr;gap:6px 10px;margin:0 0 12px;font-size:13px}
+#m-rows{display:grid;grid-template-columns:72px 1fr;gap:6px 10px;margin:0 0 12px;font-size:12.5px}
 #m-rows dt{color:var(--mut)}
 #m-rows dd{margin:0;word-break:break-all}
 #mbox .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:6px}
-.empty{color:var(--mut);text-align:center;padding:30px 0}
+/* ── 滚动条 ───────────────────────────────────────────── */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.16);background-clip:content-box}
+@media (max-width:1080px){.app{grid-template-columns:64px minmax(0,1fr)}.brand-text,.nav-foot,.nav-group,.nav-i{display:none}.nav-item{justify-content:center;padding:9px 4px}.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<header>
-  <h1>内部工作台</h1>
-  <span id="who">未连接</span>
-  <span id="login">
-    <input id="token" type="password" placeholder="管理口令（admin token）" autocomplete="off">
-    <input id="qtoken" type="password" placeholder="查询口令（query token，可选）" autocomplete="off">
-    <button id="go">载入</button>
-  </span>
-  <span id="msg">口令只留在本标签页的 sessionStorage 里：不进地址栏、不写长期存储。</span>
-</header>
+<div class="app">
+  <aside id="nav" aria-label="视图导航">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">内部工作台<em>Console</em></span>
+    </div>
+    <nav id="nav-list">
+      <div class="nav-group">建库</div>
+      <button id="tab-projects" class="nav-item is-on" data-tab="projects"><span class="nav-i">01</span>项目与版本</button>
+      <button id="tab-review" class="nav-item" data-tab="review"><span class="nav-i">02</span>评审</button>
+      <button id="tab-export" class="nav-item" data-tab="export"><span class="nav-i">03</span>导出</button>
+      <div class="nav-group">运维</div>
+      <button id="tab-config" class="nav-item" data-tab="config"><span class="nav-i">04</span>声明编辑</button>
+      <button id="tab-audit" class="nav-item" data-tab="audit"><span class="nav-i">05</span>审计</button>
+      <div class="nav-group">查询</div>
+      <button id="tab-query" class="nav-item" data-tab="query"><span class="nav-i">06</span>查询台</button>
+      <button id="tab-catalog" class="nav-item" data-tab="catalog"><span class="nav-i">07</span>目录浏览</button>
+      <div class="nav-group">构建</div>
+      <button id="tab-bundles" class="nav-item" data-tab="bundles"><span class="nav-i">08</span>构建包</button>
+    </nav>
+    <div id="nav-foot">
+      <div class="kv"><span>连接</span><b id="who">未连接</b></div>
+      <div class="nav-note">口令只在本标签页的 sessionStorage</div>
+    </div>
+  </aside>
 
-<nav id="tabs">
-  <button id="tab-projects" data-tab="projects" class="on">项目与版本</button>
-  <button id="tab-review" data-tab="review">评审</button>
-  <button id="tab-export" data-tab="export">导出</button>
-  <button id="tab-config" data-tab="config">声明编辑</button>
-  <button id="tab-audit" data-tab="audit">审计</button>
-  <button id="tab-query" data-tab="query">查询台</button>
-  <button id="tab-catalog" data-tab="catalog">目录浏览</button>
-  <button id="tab-bundles" data-tab="bundles">构建包</button>
-</nav>
+  <main id="main">
+    <header id="topbar">
+      <span class="ctx-label">管理口令 / 查询口令</span>
+      <span id="login">
+        <input id="token" type="password" placeholder="管理口令（admin token）" autocomplete="off">
+        <input id="qtoken" type="password" placeholder="查询口令（query token，可选）" autocomplete="off">
+        <button id="go">载入</button>
+      </span>
+    </header>
+    <div id="msg">口令只留在本标签页的 sessionStorage 里：不进地址栏、不写长期存储。</div>
 
-<main>
-  <!-- ── 1 · 项目与版本 ─────────────────────────────────── -->
+    <div id="views">  <!-- ── 1 · 项目与版本 ─────────────────────────────────── -->
   <section id="v-projects" class="view">
     <div class="bar">
       <button id="p-refresh">刷新</button>
@@ -479,7 +523,10 @@ pre{margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line)
       <div id="b-key-out"></div>
     </div>
   </section>
-</main>
+    </div>
+  </main>
+</div>
+
 
 <div id="modal" hidden>
   <div id="mbox" role="dialog" aria-modal="true">
@@ -1942,9 +1989,13 @@ function switchTab(name) {
   S.tab = name;
   TABS.forEach(function (t) {
     $("v-" + t).hidden = (t !== name);
+    // 左导航：`is-on` 只是视觉态，⛔ 别整段重写 className（会把 nav-item 一起抹掉）。
     var btn = $("tab-" + t);
-    btn.className = (t === name) ? "on" : "";
+    if (btn.classList) btn.classList.toggle("is-on", t === name);
+    else btn.className = (t === name) ? "nav-item is-on" : "nav-item";
   });
+  var host = $("views");
+  if (host) host.scrollTop = 0;
   if (name === "review" && !S.review) loadReview().catch(function () {});
   if (name === "audit" && !S.audit) loadAudit().catch(function () {});
   if (name === "export" && !S.projects) loadProjects().catch(function () {});
