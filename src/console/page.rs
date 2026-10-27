@@ -41,7 +41,7 @@
 //! | 审计 | `GET /api/audit` |
 //! | 查询台 | `POST /api/sparql`（⭐ REQ-142：请求体显式带 `format:"rows"` —— 服务默认是 JSON-LD 图） |
 //! | 目录浏览 | `GET /api/catalog` · `GET /api/describe` |
-//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects`（建项目 + 发 key，`key_label` 必填；路径作用域 `:p`，不读启动参数） · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import` · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate`（成功后固定写一句「对外服务等 P1b」） · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate` |
+//! | 构建包（REQ-159） | `GET /api/projects` · `POST /api/projects`（建项目 + 发 key，`key_label` 必填；路径作用域 `:p`，不读启动参数） · `POST /api/projects/<p>/bundles` · `PUT /api/projects/<p>/database` · `POST /api/projects/<p>/database/test` · `POST /api/projects/<p>/bundles/<id>/import`（重复调用 ⇒ `200` + `already_imported:true`，幂等） · `GET /api/review?proposal=` · `POST /api/projects/<p>/bundles/<id>/activate`（成功后固定写一句「对外服务等 P1b」） · `GET /api/projects/<p>/key`（每次查看写一条 `reveal_key` 审计） · `POST /api/projects/<p>/key/rotate`（P1a 未实现 ⇒ 404 ⇒ 显示「服务端未就绪」）。`GET /api/projects/<p>` 在 P1a **未实现，页面不调它**（不依赖）。 |
 //!
 //! 前四组由 `console serve` 自己提供；查询台与目录浏览是 **REQ-123 的查询服务**
 //! （`ontok query serve` 的 `/api/sparql` / `/api/catalog` / `/api/describe`），
@@ -70,6 +70,15 @@
 //! | --- | --- |
 //! | key **按需拉取**（`GET …/key`），明文只放内存（`LAST_KEY`），⛔ 不进 sessionStorage / 输入框 | 能再次查看 ⇒ 每次查看必须留痕：服务端写一条 `reveal_key` 审计，页面把这句话**固定在按钮下面** |
 //! | DSN 口令框保存成功后**只清 value**，不回显、不记录 | 页面没有回读 DSN 的端点，回显等于凭空造一份明文 |
+//!
+//! 四条与实际服务端（P1a，join `a127f52`）**真实行为**对齐的点 —— 别按直觉改回去：
+//!
+//! | 服务端行为 | 页面怎么跟 |
+//! | --- | --- |
+//! | 重复 import ⇒ **`200` + `already_imported:true`**（不是 409） | 当**幂等成功**渲染：版本照常算「已入库」，⛔ 不清状态、不禁用按钮、不进错误分支 |
+//! | `POST …/key/rotate` 在 P1a 是 **404** | 走「服务端未就绪」（不登出），并在 `guarded()` 确认框里先写明「P1b 起可用」 |
+//! | `GET /api/projects/<p>` 在 P1a **未实现** | 页面**不调**它（不依赖），只在本文件端点表登记 |
+//! | `am/` 在 P1a 只被**校验**、未解析入 metadb | 组件区固定写「AM 随包收录，P1b 生效」（warn 色），⛔ 不写「已生效」；回执 `warnings[]` 里那条照原样展示 |
 //!
 //! 上传走 `fetch` 的**原始字节**（`Content-Type: application/octet-stream`），
 //! ⛔ 不能用 `post()`：它会把 body `JSON.stringify` 成字符串，文件字节当场写坏。
@@ -1489,12 +1498,21 @@ function showBundle(res) {
     ["requires_db", flagOf(res.requires_db)]
   ]));
   var comps = res.components || {};
-  box.appendChild(makeTable(["组件", "计数", "requires_dsn", "dialect"], ["ontology", "am", "db"].map(function (k) {
+  box.appendChild(makeTable(["组件", "计数", "requires_dsn", "dialect", "状态"], ["ontology", "am", "db"].map(function (k) {
     var c = comps[k] || null;
-    return [k, c ? countOf(c) : "—", c ? flagOf(c.requires_dsn) : "—", c ? (c.dialect || "—") : "—"];
+    return [k, c ? countOf(c) : "—", c ? flagOf(c.requires_dsn) : "—", c ? (c.dialect || "—") : "—",
+      compStatus(k)];
   }), "组件清单为空。"));
   needDsn(res);
   renderBundleGates();
+}
+
+// 组件状态（照服务端 P1a 的真实行为写，⛔ 别夸大成「已经可用」）：
+// `am/` 在 P1a 只被**校验**、不解析入 metadb ⇒ 固定写「AM 随包收录，P1b 生效」，用 warn 色。
+// ontology / db 的状态不在这里下结论（本体由 import 回执的版本 / counts 说话）。
+function compStatus(k) {
+  if (k === "am") return badge("AM 随包收录，P1b 生效", "warn");
+  return "—";
 }
 
 // requires_dsn ⇒ 自动展开 DSN 面板（不是让用户自己猜要不要填）。
@@ -1595,13 +1613,23 @@ function importBundle() {
   return bjson(bundlePath("/bundles/" + encodeURIComponent(b.bundle_id) + "/import"), "POST", {}).then(function (r) {
     r = r || {};
     clear(out);
+    // ⚠️ 重复 import 是 **200 + already_imported:true**（不是 409）：那是**幂等成功**，
+    // 不是错误。所以不能进 catch、不能清状态、不能禁用按钮 —— 版本照常算「已入库」。
     if (r.version !== undefined) b.version = r.version;
     if (r.state) b.state = r.state;
     S.bundle = b;
-    out.appendChild(okBox([
-      "版本：" + (r.version === undefined ? "—" : ("第 " + r.version + " 版")),
-      "state：" + (r.state || "—")
-    ]));
+    if (r.already_imported === true) {
+      out.appendChild(okBox([
+        "这个包已经导入过（幂等）：版本 " + (r.version === undefined ? "—" : ("第 " + r.version + " 版")) +
+          "，没有重复建版本",
+        "state：" + (r.state || "—") + " · 后续步骤照常：这个版本仍算「已入库」，可以继续往下走。"
+      ]));
+    } else {
+      out.appendChild(okBox([
+        "版本：" + (r.version === undefined ? "—" : ("第 " + r.version + " 版")),
+        "state：" + (r.state || "—")
+      ]));
+    }
     var counts = r.counts || {};
     out.appendChild(el("div", "note", "counts："));
     var keys = Object.keys(counts);
@@ -1613,7 +1641,9 @@ function importBundle() {
       warns.forEach(function (w) { ul.appendChild(el("li", null, w)); });
       out.appendChild(ul);
     } else out.appendChild(el("div", "note", "warnings：0 条。"));
-    setMsg("已解析入库。", "ok");
+    setMsg(r.already_imported === true
+      ? "幂等：这个包之前就导入过，没有重复建版本。"
+      : "已解析入库。", "ok");
     renderBundleGates();
     return r;
   }).catch(function (e) {
@@ -1759,7 +1789,7 @@ function activateBundle() {
     r = r || {};
     var out = $("b-import-out");
     out.appendChild(okBox([
-      "已生效：state " + (r.state || "—") +
+      "已激活：state " + (r.state || "—") +
       " · 版本 " + (r.version === undefined ? "—" : r.version) +
       " · ontology_version " + (r.ontology_version === undefined ? "—" : r.ontology_version)
     ]));
@@ -1771,7 +1801,7 @@ function activateBundle() {
     setMsg("已冻结并切流量。", "ok");
     renderBundleGates();
     // 激活成功后**自动拉一次** key（服务端会为这次查看写一条 reveal_key 审计），
-    // 不再从内存/回执里打印；`quiet` 表示别覆盖上面那条「已生效」状态。
+    // 不再从内存/回执里打印；`quiet` 表示别覆盖上面那条「已激活」状态。
     // 拉失败只影响 key 区块（显示 code/message + 按钮还在），不影响激活结果。
     return viewKey(true);
   }).catch(function (e) {
@@ -1798,7 +1828,7 @@ function showKey(row) {
   return LAST_KEY;
 }
 // 查看 key：GET …/key（每次调用服务端都记一条 reveal_key 审计）。
-// `quiet`：激活后自动拉取时用 —— 别把「已生效」那条状态栏消息覆盖掉。
+// `quiet`：激活后自动拉取时用 —— 别把「已激活」那条状态栏消息覆盖掉。
 function viewKey(quiet) {
   var p = bundleProject();
   var out = $("b-key-out");
@@ -1836,7 +1866,7 @@ function rotateKey() {
     title: "换 key（项目 " + p + "）",
     rows: [
       ["目标", "项目 " + p + " 的访问 key（key/rotate）"],
-      ["后果", "旧 key **立刻失效**：还在用旧 key 的调用方会 401；新 key 可以随时用「查看 key」再看到（每次查看写一条 reveal_key 审计），但旧 key 换不回来。"]
+      ["后果", "旧 key **立刻失效**：还在用旧 key 的调用方会 401；新 key 可以随时用「查看 key」再看到（每次查看写一条 reveal_key 审计），但旧 key 换不回来。（P1b 起可用；当前服务端会返回未实现）"]
     ],
     ok: "换 key"
   }, function () {
@@ -2113,6 +2143,9 @@ mod tests {
             // 激活成功后的固定警示：删了它，用户会拿着新 key 去查、拿到 503/404 再来问
             "P1b",
             "query serve 仍绑定单一项目",
+            // 与 P1a 真实行为对齐的两条：重复 import 是幂等 200（不是 409）、am/ 只校验不落库
+            "already_imported",
+            "P1b 生效",
             // key 能再次查看 ⇒ 每次查看都要留痕：审计提示是这条需求的唯一补偿，不许删
             "reveal_key",
             "id=\"b-key-view\"",
