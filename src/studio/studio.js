@@ -25,6 +25,28 @@
   /* ── 口令：只进 sessionStorage ───────────────────────────────── */
   var TOKEN_KEY = "ontok_studio_token";
 
+  /* ⭐ REQ-159 P1c-2b · 节点着色的**模式**：只进 sessionStorage
+     （⛔ URL：会进日志/收藏/截图；⛔ 长期存储：那是跨会话的，与口令同一条纪律）。 */
+  var COLOR_KEY = "ontok_studio_color_mode";
+  var COLOR_MODES = [
+    { key: "verifiability", label: "可查性" },
+    { key: "degree", label: "中心度" }
+  ];
+  var DEFAULT_COLOR_MODE = "verifiability";
+  var colorMode = DEFAULT_COLOR_MODE;
+
+  /* ⭐ REQ-159 P1c-2b · 中心度四档的**颜色表** —— 颜色是**占位，用户待定稿**。
+     改色只改这一处：球面/泛光渐变也从这里派生，别处不写第二份色值。
+     ⚠️ 与模式 A「可查性」的色值撞车没关系（两个模式不同时显示），
+     但**图例文案必须不同** —— 图例不跟着变，颜色就在撒谎（AC-e4）。 */
+  var DEGREE_TIERS = [
+    { key: "hub",   label: "枢纽", color: "#ef7a8a" },
+    { key: "core",  label: "中心", color: "#e6b455" },
+    { key: "mid",   label: "一般", color: "#6ec8ff" },
+    { key: "leaf",  label: "边缘", color: "#5d6a80" }
+  ];
+  var DEGREE_PCTS = { p50: 50, p80: 80, p95: 95 };
+
   var API = {
     health: "/api/health",
     catalog: "/api/catalog",
@@ -363,6 +385,122 @@
     return { key: "ok", label: "可查", tone: "ok", why: "库源，可走 SPARQL" };
   }
 
+  /* ══════════════════════════════════════════════════════════════
+     ⭐ REQ-159 P1c-2b · 节点着色的**两种模式**
+     ──────────────────────────────────────────────────────────────
+     模式 A「可查性」= 现状：三态三色（需取数 / 可查 / 不可查）。
+        ⛔ 一字不改 —— 这是已验收的语义（AC-e7 钉住返回值和色值）。
+     模式 B「中心度」= 按连接数 `deg` 的**分位数**四档。
+        ⛔ 不用绝对阈值：`deg ≥ 5` 在 500 个类上会全红、在 10 个类上会全灰；
+        分位数保证「无论多少类，四档都有人」。
+
+     切换只做两件事：① 重刷**已有节点**的描边/填充 ② 重画图例。
+     ⛔ 不重建图、⛔ 不重跑布局、⛔ 不 reload —— 布局一跳用户就以为页面在闪。
+     ══════════════════════════════════════════════════════════════ */
+
+  function colorModeOf(v) {
+    for (var i = 0; i < COLOR_MODES.length; i++) {
+      if (COLOR_MODES[i].key === v) return v;
+    }
+    return DEFAULT_COLOR_MODE;
+  }
+
+  function readColorMode() {
+    var v = "";
+    try { v = window.sessionStorage.getItem(COLOR_KEY) || ""; } catch (e) {}
+    return colorModeOf(v);
+  }
+
+  /* 分位数用**最近秩法**（nearest-rank）：sorted[ceil(p/100 × n) − 1]。
+     不用线性插值 —— 图上没有 3.5 条边，判档要一个真实存在的 deg。 */
+  function pct(sorted, p) {
+    var n = sorted.length;
+    if (!n) return 0;
+    var rank = Math.ceil(p / 100 * n);
+    if (rank < 1) rank = 1;
+    if (rank > n) rank = n;
+    return sorted[rank - 1];
+  }
+
+  /* 三个切点 = 全体节点 deg 的 P50 / P80 / P95（每次现算：几百个整数排序，可忽略） */
+  function degreeCuts() {
+    var ds = nodes.map(function (n) { return n.deg; })
+      .sort(function (a, b) { return a - b; });
+    return {
+      n: ds.length,
+      p50: pct(ds, DEGREE_PCTS.p50),
+      p80: pct(ds, DEGREE_PCTS.p80),
+      p95: pct(ds, DEGREE_PCTS.p95)
+    };
+  }
+
+  function tierIndex(t) {
+    for (var i = 0; i < DEGREE_TIERS.length; i++) {
+      if (DEGREE_TIERS[i].key === t.key) return i;
+    }
+    return DEGREE_TIERS.length - 1;
+  }
+
+  /* 档位判定：deg ≥ P95 枢纽 / ≥ P80 中心 / ≥ P50 一般 / 其余边缘。
+     `>=` 从高到低落下来，P80==P95 这类退化情况也不会把节点判进两个档。 */
+  function degreeTier(deg, cuts) {
+    if (deg >= cuts.p95) return DEGREE_TIERS[0];
+    if (deg >= cuts.p80) return DEGREE_TIERS[1];
+    if (deg >= cuts.p50) return DEGREE_TIERS[2];
+    return DEGREE_TIERS[3];
+  }
+
+  /* 图例里显示的**实际阈值**：空档说「无」，单值档说一个数，⛔ 不印反的区间（"5–4"） */
+  function tierRange(t, cuts) {
+    function span(lo, hi) {
+      if (lo > hi) return "无";
+      return lo === hi ? String(lo) : lo + "–" + hi;
+    }
+    if (t.key === "hub") return "≥" + cuts.p95;
+    if (t.key === "core") return span(cuts.p80, cuts.p95 - 1);
+    if (t.key === "mid") return span(cuts.p50, cuts.p80 - 1);
+    return "<" + cuts.p50;
+  }
+
+  /* 一个节点的**颜色**只由模式决定：tone = 描边色，grad = 球面/泛光渐变的键 */
+  function paintOf(n, cuts) {
+    if (colorMode === "degree") {
+      var t = degreeTier(n.deg, cuts || degreeCuts());
+      return { tone: t.color, grad: "d" + tierIndex(t) };
+    }
+    /* ⚠️ 下面三行是**模式 A 的已验收语义**（AC-e7 钉的就是这个表达式，⛔ 别改） */
+    var v = verifiability(n.c);
+    return {
+      tone: v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#5d6a80",
+      grad: v.key === "api" ? "warn" : v.key === "ok" ? "ok" : "dim"
+    };
+  }
+
+  /* ⭐ 切换着色：**只改已有节点**的描边/填充（⛔ 不建元素、⛔ 不动几何） */
+  function applyColorMode() {
+    var cuts = degreeCuts();
+    nodeEls.forEach(function (o) {
+      var p = paintOf(o.n, cuts);
+      o.tone = p.tone;
+      o.orbit.setAttribute("stroke", p.tone);
+      o.rim.setAttribute("stroke", p.tone);
+      o.ring.setAttribute("stroke", p.tone);
+      o.halo.setAttribute("fill", "url(#glow-" + p.grad + ")");
+      o.sphere.setAttribute("fill", "url(#sphere-" + p.grad + ")");
+    });
+  }
+
+  /* 换模式：存 sessionStorage + 重刷颜色 + **换图例**。
+     图例必须跟着模式变，否则颜色就在撒谎（AC-e4 的守卫就是这条）。 */
+  function setColorMode(next) {
+    colorMode = colorModeOf(next);
+    try { window.sessionStorage.setItem(COLOR_KEY, colorMode); } catch (e) {}
+    var sel = byId("color-mode");
+    if (sel && sel.value !== colorMode) sel.value = colorMode;
+    applyColorMode();
+    if (S.loaded) buildLegend();
+  }
+
   function acronym(key) {
     var seg = String(key || "").split("_").filter(Boolean);
     if (!seg.length) return "?";
@@ -475,6 +613,19 @@
     });
   }
 
+  /* 十六进制混色：把 DEGREE_TIERS 的占位色派生成球面高光/暗部（色值仍只有那一份） */
+  function hexMix(hex, to, t) {
+    var a = String(hex).replace("#", ""), b = String(to).replace("#", "");
+    var out = "#";
+    for (var i = 0; i < 3; i++) {
+      var x = parseInt(a.slice(i * 2, i * 2 + 2), 16);
+      var y = parseInt(b.slice(i * 2, i * 2 + 2), 16);
+      var v = Math.round(x + (y - x) * t);
+      out += (v < 16 ? "0" : "") + v.toString(16);
+    }
+    return out;
+  }
+
   /* defs：立体球用的渐变（曾用 SVG 滤镜做泛光，会在每帧重算导致闪烁，⛔ 不要加回来） */
   function injectDefs() {
     var defs = s("defs", {});
@@ -494,6 +645,17 @@
     radialGrad("glow-warn", [[0, "#e6b455", 0.55], [55, "#e6b455", 0.16], [100, "#e6b455", 0]]);
     radialGrad("glow-dim", [[0, "#7f8ea8", 0.4], [55, "#7f8ea8", 0.12], [100, "#7f8ea8", 0]]);
     radialGrad("glow-ok", [[0, "#6ec8ff", 0.55], [55, "#6ec8ff", 0.16], [100, "#6ec8ff", 0]]);
+    /* ⭐ P1c-2b · 中心度四档的球面/泛光（`d0..d3`，顺序 = DEGREE_TIERS 顺序）。
+       ⚠️ 两个模式不同时显示，所以和上面三个渐变撞 id 之外的颜色都没关系。 */
+    DEGREE_TIERS.forEach(function (t, i) {
+      radialGrad("sphere-d" + i, [
+        [0, hexMix(t.color, "#ffffff", 0.62), 0.95],
+        [26, hexMix(t.color, "#ffffff", 0.18), 0.9],
+        [62, hexMix(t.color, "#000000", 0.52), 0.85],
+        [100, hexMix(t.color, "#000000", 0.82), 0.92]
+      ]);
+      radialGrad("glow-d" + i, [[0, t.color, 0.5], [55, t.color, 0.15], [100, t.color, 0]]);
+    });
     svg.appendChild(defs);
   }
 
@@ -576,10 +738,12 @@
 
   function buildNodeEls() {
     nodeEls = [];
+    /* ⭐ P1c-2b：切点只算一次（全体 deg 的 P50/P80/P95），逐个节点复用它 */
+    var cuts = degreeCuts();
     nodes.forEach(function (n) {
-      var v = verifiability(n.c);
-      var tone = v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#5d6a80";
-      var kind = v.key === "api" ? "warn" : v.key === "ok" ? "ok" : "dim";
+      var p = paintOf(n, cuts);
+      var tone = p.tone;
+      var kind = p.grad;
       var g = s("g", { "class": "node-g", "data-key": n.key });
       n.g = g;
 
@@ -899,18 +1063,22 @@
     drawer.classList.add("is-open");
   }
 
-  /* 图例：按真实数据生成（外加"全部未验证"的诚实提示） */
+  /* 图例：按真实数据生成（外加"全部未验证"的诚实提示）。
+     ⭐ P1c-2b：**节点在哪个着色模式，图例就必须说哪个模式** ——
+     图例不跟着变，颜色就在撒谎（AC-e4 的守卫就是这条）。 */
   function buildLegend() {
+    var box = byId("legend");
+    if (!box) return;
+    clear(box);
+    var rows = (colorMode === "degree") ? degreeLegendRows() : verifiabilityLegendRows();
+    rows.forEach(function (r) { box.appendChild(r); });
+  }
+
+  /* 模式 A「可查性」的图例：与改造前**逐字一致**（AC-e7：已验收的语义不动） */
+  function verifiabilityLegendRows() {
     /* ⭐ REQ-156：本体**有**语义动词了（34 条 / 15 种），边标签优先用 catalog 的
        `semantic_label`；未知动词没有标签就退回英文 key —— ⛔ 别在 UI 里"编"一个好看的动词。 */
-    var box = byId("legend");
-    clear(box);
     var apiN = S.classes.filter(isApi).length;
-    var evCount = {};
-    S.relations.forEach(function (r) {
-      var k = String(r.evidence_level || "").toLowerCase() || "unknown";
-      evCount[k] = (evCount[k] || 0) + 1;
-    });
     var rows = [];
     rows.push(h("div", { class: "legend-row" }, [
       h("span", { class: "legend-swatch", style: "color:#e6b455;background:#e6b455" }),
@@ -920,6 +1088,44 @@
       h("span", { class: "legend-swatch", style: "color:#5d6a80;background:#5d6a80" }),
       h("span", { text: "库源 " + (S.classes.length - apiN) + " 类" })
     ]));
+    return rows.concat(relationLegendRows());
+  }
+
+  /* 模式 B「中心度」的图例：**必须写出实际阈值**（P50/P80/P95 是现算的，
+     ⛔ 不写"大约"、⛔ 不写死一个数字 —— 换个本体阈值就变了） */
+  function degreeLegendRows() {
+    var cuts = degreeCuts();
+    var counts = [0, 0, 0, 0];
+    nodes.forEach(function (n) { counts[tierIndex(degreeTier(n.deg, cuts))] += 1; });
+    var rows = [h("div", { class: "legend-row legend-head" }, [
+      h("span", { text: "中心度着色：按连接数（deg）分位四档" })
+    ])];
+    if (!nodes.length) {
+      rows.push(h("div", { class: "legend-row" }, [h("span", { text: "暂无节点" })]));
+      return rows.concat(relationLegendRows());
+    }
+    DEGREE_TIERS.forEach(function (t, i) {
+      rows.push(h("div", { class: "legend-row" }, [
+        h("span", { class: "legend-swatch", style: "color:" + t.color + ";background:" + t.color }),
+        h("span", { text: t.label + "（" + tierRange(t, cuts) + "）· " + counts[i] + " 类" })
+      ]));
+    });
+    /* 节点大小本来就被 deg 控制：模式 B 里颜色与大小表达同一件事，
+       这是**可接受的冗余**，但必须在图例里说清（AC：大小与颜色同源）。 */
+    rows.push(h("div", { class: "legend-row legend-note" }, [
+      h("span", { text: "大小与颜色同源：半径也按 deg（42 + deg×2.6，上限 +16）" })
+    ]));
+    return rows.concat(relationLegendRows());
+  }
+
+  /* 边的图例：与节点着色模式**无关**（边的颜色 = 证据等级），两种模式共用这一份 */
+  function relationLegendRows() {
+    var evCount = {};
+    S.relations.forEach(function (r) {
+      var k = String(r.evidence_level || "").toLowerCase() || "unknown";
+      evCount[k] = (evCount[k] || 0) + 1;
+    });
+    var rows = [];
     Object.keys(evCount).forEach(function (k) {
       var ev = EV[k] || EV.unverified;
       rows.push(h("div", { class: "legend-row" }, [
@@ -941,7 +1147,7 @@
           + "文档推断、无实测证据（evidence 为空）—— 当作语义提示，不要当已验证的事实。"
       })]));
     }
-    rows.forEach(function (r) { box.appendChild(r); });
+    return rows;
   }
 
   /* 左侧栏 */
@@ -1409,11 +1615,16 @@
   var tip = byId("tip");
   function showTip(ev, n) {
     var v = verifiability(n.c);
+    /* 模式 A 的这句**一字不改**；模式 B 追加档位，让 hover 也能解释颜色从哪来 */
+    var head = v.label;
+    if (colorMode === "degree") {
+      head += " · " + degreeTier(n.deg, degreeCuts()).label + "（deg " + n.deg + "）";
+    }
     clear(tip);
     tip.appendChild(h("div", {}, [h("b", { text: n.c.display_name || n.key })]));
     tip.appendChild(h("div", { class: "k", text: iri(n.key) }));
     tip.appendChild(h("div", { style: "margin-top:4px", text:
-      v.label + " · " + (n.c.property_count || 0) + " 属性 · " + (n.c.relation_count || 0) + " 关系" }));
+      head + " · " + (n.c.property_count || 0) + " 属性 · " + (n.c.relation_count || 0) + " 关系" }));
     tip.classList.add("is-on");
     moveTip(ev);
   }
@@ -1489,7 +1700,7 @@
   function projectMeta(p) {
     if (!p) return "未连接";
     if (p.active_version === null || p.active_version === undefined) {
-      return "未激活 · " + num(p.entity_types) + " 类（先上传包并激活）";
+      return "未激活 · " + num(p.entity_types) + " 类 · 待上传";
     }
     return "第 " + p.active_version + " 版 · " + (p.frozen ? "已冻结" : "未冻结")
       + " · " + num(p.entity_types) + " 类 / " + num(p.link_types) + " 关系";
@@ -2410,6 +2621,15 @@
 
   function start() {
     bindInteractions();
+
+    /* ⭐ REQ-159 P1c-2b · 着色模式：**先**从 sessionStorage 读（必须早于 buildGraph，
+       否则首屏会先用默认色画一遍再改 = 一次肉眼可见的闪），再把下拉对齐，最后接线。 */
+    colorMode = readColorMode();
+    var colorSel = byId("color-mode");
+    if (colorSel) {
+      colorSel.value = colorMode;
+      colorSel.addEventListener("change", function () { setColorMode(colorSel.value); });
+    }
 
     byId("token-connect").addEventListener("click", function () {
       var input = byId("token");
