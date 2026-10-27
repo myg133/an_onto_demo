@@ -18,7 +18,7 @@
 //! | 7 | 逐文件 sha256 与 `bytes` | [`code::SHA256_MISMATCH`] |
 //! | 8 | `requires_dsn` / `dialect` / `components.*.path` 都在包内 | [`code::MANIFEST_INVALID`] |
 //! | 9 | `link_types[*]` 必须带 `evidence` 键 | [`code::EVIDENCE_MISSING`] |
-//! | 10 | 全文扫凭据（**警告级**，v1 只告警不拒） | [`code::CREDENTIAL_SUSPECT`] |
+//! | 10 | 扫凭据（字面串 + 「键名: 非空字符串值」；**警告级**，v1 只告警不拒） | [`code::CREDENTIAL_SUSPECT`] |
 //!
 //! 顺序上的两处刻意调整，理由都是「让报告指向真原因」：
 //!
@@ -57,14 +57,32 @@ use std::collections::BTreeSet;
 /// 包级问题（不属于某个包内文件）的 `path` 占位符。
 const PKG: &str = "(package)";
 
-/// 凭据扫描的 5 个模式（demand §十一-3 第 5 条 + 派单 §4 第 8 条）。
-const CREDENTIAL_PATTERNS: &[&str] = &[
-    "postgres://",
-    "mysql://",
-    "-----BEGIN",
-    "\"password\"",
-    "\"dsn\"",
-];
+/// 凭据扫描的**字面**模式（demand §十一-3 第 5 条）：这些串一出现就是凭据本身，
+/// 与它出现在键里还是值里无关。
+const CREDENTIAL_LITERALS: &[&str] = &["postgres://", "mysql://", "-----BEGIN"];
+
+/// 凭据扫描的**键名**白名单（**必须是「键 + 带值的字符串」才算命中**）。
+///
+/// # 为什么要收紧（REQ-159 · join 拍板，但⛔ 不许关掉告警）
+///
+/// 老判据是「全文出现 `"password"` 这个词就告警」。而快照里有**业务列名**叫
+/// `password`（`{"name":"password"}`：这是列/属性的名字，不是口令）⇒ 稳定误报，
+/// 每份带该列的包都会挂一条假警。
+///
+/// 收紧后的形状等价于正则 `"(password|passwd|secret|token|dsn)"\s*:\s*"[^"]+"`：
+/// 键是这五个之一、后面跟冒号、再跟一个**非空字符串字面值**。
+/// 于是：
+///
+/// | 输入 | 命中 | 为什么 |
+/// | --- | --- | --- |
+/// | `{"name":"password"}` | ❌ | `password` 是**值**，键是 `name` |
+/// | `{"password":{"type":"text"}}` | ❌ | 值是对象（那是 schema 描述，不是口令） |
+/// | `{"password":""}` | ❌ | 空字符串不是凭据 |
+/// | `{"password":"hunter2"}` | ✅ | 键 + 非空字面值 = 真凭据形态 |
+///
+/// ⛔ **不许**把这段判据删掉或降级成「永不触发」：**为了消噪把哨兵撤了**，
+/// 等于让 credit.suspect 这个码变成装饰。`credential_key_value_still_warns` 钉着这条。
+const CREDENTIAL_KEYS: &[&str] = &["password", "passwd", "secret", "token", "dsn"];
 
 // ───────────────────────── 报告 ─────────────────────────
 
@@ -480,13 +498,12 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
     }
 
     // 10 · 凭据（**警告级**：v1 只告警不拒，见 demand §三-5）。
+    //
+    // 判据见 [`CREDENTIAL_KEYS`] 的表格：字面串（`postgres://` 等）一出现就算；
+    // 键名必须**带着非空字符串值**才算 —— 业务列名叫 `password` 不该再误报。
     for e in &entries {
         let text = String::from_utf8_lossy(&e.data);
-        let hits: Vec<&str> = CREDENTIAL_PATTERNS
-            .iter()
-            .copied()
-            .filter(|p| text.contains(p))
-            .collect();
+        let hits = credential_hits(&text);
         if !hits.is_empty() {
             warnings.push(Problem::new(
                 code::CREDENTIAL_SUSPECT,
@@ -498,6 +515,62 @@ pub fn verify_with_limit(bytes: &[u8], max_bytes: u64) -> Report {
     }
 
     Report::finish(problems, warnings, summary)
+}
+
+/// 凭据扫描的**唯一**实现：字面串 + 「键名 + 非空字符串值」两种形态。
+///
+/// 返回值是给报告用的命中描述（人话）：去重后按字典序（**稳定**，两次跑同一份包
+/// 打出来的报告逐字节相同）。
+fn credential_hits(text: &str) -> Vec<String> {
+    let mut hits: Vec<String> = Vec::new();
+    for lit in CREDENTIAL_LITERALS {
+        if text.contains(lit) {
+            hits.push((*lit).to_string());
+        }
+    }
+    // 键名大小写不敏感（`"Password": "…"` 也是凭据形态）：
+    // `to_ascii_lowercase` 不改变字节长度 ⇒ 下面按下标定位仍然安全。
+    let lower = text.to_ascii_lowercase();
+    for key in CREDENTIAL_KEYS {
+        let needle = format!("\"{key}\"");
+        let mut from = 0usize;
+        while let Some(rel) = lower[from..].find(&needle) {
+            let after_key = from + rel + needle.len();
+            if quoted_value_follows(&lower, after_key) {
+                hits.push(format!("`{key}` 带字面值"));
+                break;
+            }
+            from = after_key;
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    hits
+}
+
+/// `at` 之后是否是「可选空白 + `:` + 可选空白 + `"` + 至少一个非引号字符」。
+///
+/// 手写而不用 regex（⛔ 不新增 crate）。按**字节**推进，只在 ASCII 标点上判定，
+/// 遇到多字节字符一律当「不是空白、不是引号」⇒ 返回 `false`（宁可漏，不误判）。
+fn quoted_value_follows(s: &str, mut at: usize) -> bool {
+    let b = s.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    at = skip_ws(at);
+    if at >= b.len() || b[at] != b':' {
+        return false;
+    }
+    at = skip_ws(at + 1);
+    if at >= b.len() || b[at] != b'"' {
+        return false;
+    }
+    // 值必须**非空**：`"password": ""` 不是凭据。
+    at += 1;
+    at < b.len() && b[at] != b'"'
 }
 
 /// ⚠️ 路径判据本体在 [`crate::bundle::path_problem`]（**打包端与自检端共用一份**，
@@ -598,14 +671,18 @@ fn validate_manifest(m: &Value, out: &mut Vec<Problem>) {
     // bundle_version：类型（取值由第 4 步判）
     want_str(obj, "bundle_version", "", out);
 
-    // project：pattern
+    // project：pattern（原文引用 [`PROJECT_NAME_PATTERN`] —— ⛔ 不要在这里再手写一份，
+    // 文案与实现分家就是「照着消息改了名还是被拒」）
     if let Some(p) = want_str(obj, "project", "", out) {
         if !crate::bundle::pack::is_valid_project_name(p) {
             out.push(Problem::new(
                 code::MANIFEST_INVALID,
                 "manifest.json.project",
-                format!("`{p}` 不符合 pattern `^[a-z0-9][a-z0-9-]{{1,62}}$`"),
-                "项目名只许小写字母 / 数字 / 连字符，首字符是字母或数字，总长 2..=63",
+                format!(
+                    "`{p}` 不符合 pattern `{}`",
+                    crate::bundle::pack::PROJECT_NAME_PATTERN
+                ),
+                "项目名只许小写字母 / 数字 / 连字符 / 下划线，首字符是字母或数字，总长 2..=63",
             ));
         }
     }
@@ -949,5 +1026,43 @@ mod tests {
         assert!(out
             .iter()
             .any(|p| p.path == "manifest.json.files[0].sha256"));
+        // ⚠️ 路径里**只有一层** `manifest.json.`（QA F-01 的回归钉子）：
+        // 双前缀会得到包里、schema 里都不存在的字段路径。
+        assert!(
+            !out.iter().any(|p| p.path.contains("manifest.json.manifest.json")),
+            "报错路径被双前缀了：{:?}",
+            out.iter().map(|p| p.path.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// F-2 · 凭据判据：**业务列名叫 `password` 不告警**，`"password": "hunter2"` 必须告警。
+    #[test]
+    fn credential_scan_needs_a_key_with_a_value_not_just_the_word() {
+        // ① 误报源：`password` 是**值**（列名），不是键。
+        assert!(
+            credential_hits(r#"{"columns":[{"name":"password"}]}"#).is_empty(),
+            "业务列名叫 password 不该告警（这是 join 要消掉的那条稳定误报）"
+        );
+        // ② 哨兵仍在：键 + 非空字面值 ⇒ 必须命中。
+        assert!(!credential_hits(r#"{"password":"hunter2"}"#).is_empty());
+        // ③ 空值不算凭据（没有「值」就没有机密可泄露）。
+        assert!(credential_hits(r#"{"password":""}"#).is_empty());
+        // ④ 值是对象 = schema 描述，不是口令。
+        assert!(credential_hits(r#"{"password":{"type":"text"}}"#).is_empty());
+        // ⑤ 空白与大小写不影响判定。
+        assert!(!credential_hits("{ \"Password\" :  \"hunter2\" }").is_empty());
+        // ⑥ 五个键名都在册。
+        for k in CREDENTIAL_KEYS {
+            assert!(
+                !credential_hits(&format!(r#"{{"{k}":"x"}}"#)).is_empty(),
+                "键 `{k}` 带值必须命中"
+            );
+        }
+        // ⑦ 字面串仍然算（`postgres://` / `mysql://` / `-----BEGIN`）。
+        assert!(!credential_hits("dsn=postgres://u:p@h:5432/db").is_empty());
+        assert!(!credential_hits("x=mysql://u:p@h/db").is_empty());
+        assert!(!credential_hits("-----BEGIN RSA PRIVATE KEY-----").is_empty());
+        // ⑧ 干净文本不命中（反空转：这条判据不是恒真）。
+        assert!(credential_hits(r#"{"tables":[{"name":"t_cvm"}]}"#).is_empty());
     }
 }
