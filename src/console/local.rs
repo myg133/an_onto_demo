@@ -746,12 +746,22 @@ fn state_json(svc: &LocalConsole) -> Result<Value, OpError> {
     });
 
     Ok(json!({
-        "dir": svc.dir().display().to_string(),
+        "dir": display_path(svc.dir()),
         "project": svc.project(),
         "draft": draft_block,
         "latest_version": latest_version,
         "bundle": bundle,
     }))
+}
+
+/// 给人看的路径：Windows 上 `canonicalize` 会给出 `\\?\D:\…`（扩展长度路径）——
+/// 页面上显示它既长又像乱码。这里**只影响显示**（横幅 / 响应），实际读写仍用 `Path`。
+pub fn display_path(p: &Path) -> String {
+    let s = p.display().to_string();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => rest.to_string(),
+        None => s,
+    }
 }
 
 fn is_stale(decisions: &DecisionsFile, draft_sha: &str) -> bool {

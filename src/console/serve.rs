@@ -231,7 +231,7 @@ pub fn desk_banner(addr: SocketAddr, console: &LocalConsole) -> String {
     ));
     s.push_str(&format!(
         "· 工作目录 {} · 项目 {}\n",
-        console.dir().display(),
+        crate::console::local::display_path(console.dir()),
         console.project()
     ));
     let draft = console.draft_summary();
