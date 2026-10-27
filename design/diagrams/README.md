@@ -11,5 +11,8 @@
 - 底部黄框 = **四道闸**：任何一道缺了，都会出现"看起来成功、实际不可用"
 
 ## 维护
-生成脚本：`.local/_gen_flow_svg2.py`（数据驱动，改 `STEPS` 数组即可重出图；本机临时文件，未入库）。
+生成脚本：[`gen_flow_svg.py`](gen_flow_svg.py)（**已入库**，数据驱动：改 `STEPS` 数组即可重出图）。
+```bash
+python BA/design/diagrams/gen_flow_svg.py   # 覆盖重出 build-to-consume.svg
+```
 改动流程时**同一次提交里改图和脚本描述**，否则图会变成假话。
