@@ -1268,7 +1268,10 @@ pub enum ReviewCmd {
     /// ⚠️ 前台运行，**没有**后台常驻（daemon）形态：Ctrl-C 结束即失效。
     /// ⚠️ 起的是与 `console serve` **同一个**控制面（同一份路由表），区别只有
     /// 「凭据从哪来」：那边读 `--tokens <文件>`，这边是内存里的一次性口令。
-    /// ⚠️ 需要 `ONTOK_SECRET_KEY`（控制面无条件持有 DSN 加密器，与 `console serve` 同一条纪律）。
+    /// ⚠️ 需要 `ONTOK_SECRET_KEY`（32 字节 hex）。**本版即使只想审核也要给** ——
+    /// 控制面持有 DSN 加密器，缺密钥即拒绝启动（与 `console serve` 同一条纪律；
+    /// 不在本命令里单独降级：那会把「缺密钥」从启动期 fail-fast 变成运行期 500）。
+    /// 后续改进（另立单）：DSN 端点降级 503，那时才谈「没密钥也能审」。
     /// ⚠️ 声明校验需要真实 schema：给 `--schema`，或用默认 `code/out/schema.json`；
     /// 都没有时声明校验**关闭（fail-closed）**，页面审阅照常可用。
     ///
