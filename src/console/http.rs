@@ -371,15 +371,16 @@ fn read_json_file(path: &Path, code: &'static str, what: &'static str) -> Result
 // GET / · 工作台页面壳（免 token · 零数据）
 // ══════════════════════════════════════════════════════════════
 
-/// ⭐ REQ-125 · `GET /` —— **自包含**的工作台页面壳。
+/// ⭐ REQ-125/162 · `GET /` —— **自包含**的页面壳（**零数据**、免口令）。
 ///
 /// 三件事各自只在一处：
-/// - 正文：`console::page::CONSOLE_HTML`（壳里零数据，AC-001）；
+/// - 正文：`console::page::CONSOLE_HTML`（REQ-162 起是本地评审台的一屏两栏；壳里仍然零数据）；
 /// - 响应头：`console::page::security_headers()`（CSP / nosniff / no-referrer，AC-011）；
-/// - 入口：本函数（`require_token` 对 `/` 放行）。
+/// - 入口：本函数（旧控制面的 `require_token` 对 `/` 放行；REQ-162 的
+///   [`super::local::build_router`] 直接把它挂在 `/` 上 —— **同一个写点**，没有第二份）。
 ///
-/// ⛔ 不许在这里拼任何数据（项目名 / 版本 / 声明路径）：`/` 是匿名的。
-async fn index() -> Response {
+/// ⛔ 不许在这里拼任何数据（项目名 / 版本 / 对象名）：`/` 是匿名的，数据只走 `/api/*`。
+pub(crate) async fn index() -> Response {
     // ⚠️ `Html` 的写点由 OUTLETS 的 I22 登记；`(headers, Html)` 的顺序保证
     // `content-type` 由 `Html` 给，三个安全头另外叠上去。
     let mut res = Html(crate::console::page::CONSOLE_HTML).into_response();
