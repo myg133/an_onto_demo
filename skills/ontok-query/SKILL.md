@@ -49,30 +49,32 @@ category: scenario
 
 ---
 
-## 〇·五 · AM 从哪来：**本体只给指针，AM 本体在调用方手上**
+## 〇·五 · 取数配方从哪来：**先查本体，看它给不给配方**
 
-先分清两件东西，别混：
+API 源要取数，只有一条路：**拿到取数配方**（接口 / action / 分页 / 字段映射 / 签名方式）。
+配方从哪来，**取决于这份部署用的是哪版契约** —— 先查一次本体就知道：
 
-| | 是什么 | 从哪拿 |
+```bash
+# 查一个 API 源类，看 @pending.get 里有什么
+curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
+  -H "Authorization: Bearer $ONTOK_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"SELECT ?s WHERE { ?s a <https://<命名空间>#<类名>> } LIMIT 1"}'
+```
+
+| `@pending.get` 里有什么 | 说明 | 你该怎么做 |
 | --- | --- | --- |
-| **本体里的取数指引** | 这个类**是 API 源**、`@pending.get.ref = access#<条目>@v<版本>`、允许的 `pushdown` 字段 | ✅ **查本体就有**（`/api/sparql` 回执的 `@pending`） |
-| **AM（access mapping）本体** | 接口地址、action/version、请求模板、分页、字段映射、签名方式 | ❌ **服务端不提供**（没有 `/api/access` 这类端点，MCP 也只有两份 TTL） |
+| 有 `source` / `operation` / `request` / `iterator` / `fields` / `auth` | **v2 契约：配方已经给了** | ✅ 直接用 `scripts/access_fetch.py --recipe -`（见 §4.5②·五）——**不需要 AM 文件** |
+| 只有 `class` / `filter` / `pushdown` / `ref` | **v1 契约：只给指针，不给配方** | 带上 `ref` **问调用方要 AM 文件**（「我需要包含 `access#<条目>@v<版本>` 的那份 AM」） |
 
-⇒ 正确顺序是**两步**：
+| ⛔ 永远别做 |
+| --- |
+| 去文件系统里找"看起来像数据"的东西；拿历史报表 / 导出 JSON / 别人的巡检结果顶替 |
+| 自己写签名/分页（`def call(host, service, ...)` 那种）—— 配方里有现成的，用脚本 |
+| 猜 `service`、猜主键、猜分页参数 —— 缺什么就报什么 |
 
-1. **先查本体**：拿到 `@pending.get` ⇒ 确认"这个类要取数"，并记下 **`ref`** 与 **`pushdown`**
-2. **再要 AM**：拿这个 `ref` 去问调用方——「我需要包含 `access#<条目>@v<版本>` 的那份 AM 文件」
-
-| 情形 | ✅ 正确做法 | ⛔ 错误做法 |
-| --- | --- | --- |
-| 调用方给了 AM | `scripts/access_fetch.py --mapping <它>` | — |
-| **没给** | 带上 `ref` **直接问调用方要** | 去文件系统里找"看起来像数据"的东西；拿历史报表 / 导出 JSON / 别人的巡检结果顶替；**以为服务端能查出来** |
-| 手上是旧版 AM | 跑 `--check`，**把错误原样报给调用方** | 自己改 AM；自己去找别的副本；猜参数硬跑 |
-
-**为什么不能拿"看起来像数据"的东西顶替**：AM 里那几项（接口/action/分页/签名）决定了取回来的行**和本体能不能对上**。
+**为什么不能拿"看起来像数据"的东西顶替**：配方那几项决定了取回来的行**和本体能不能对上**。
 用别人的巡检 JSON 顶替，格式看着像，但**类的粒度、字段、口径都不是你这次的本体**。
 
-⛔ 也不要搜索、猜测任何路径。缺输入就问调用方，这是最快的路。
 
 ## 一 · 第 0 步：先弄清自己在**哪种模式**（决定你能做什么）
 
@@ -529,6 +531,38 @@ $FETCH --mapping <am.json> --entity <entity id> \
    ⛔ **不要按 `auth.mode` 猜一个默认值**。源码注释说得很直接：
    「**猜出来的签名头是错的，而错签名比没签名更难查**」。
    ⇒ 缺 `auth.service`（`tc3` 的必填项）时脚本**直接拒**（`am.invalid`），不会替你补。
+
+
+#### ②·五 `--recipe`：**配方到手就能取数**（不需要 AM 文件）
+
+v2 契约下 `@pending.get` 就是完整配方（`source` / `operation` / `request` / `iterator` / `fields` / `auth`）。
+把它整段喂给脚本：
+
+```bash
+# 从文件
+python scripts/access_fetch.py --recipe recipe.json --format rows --out ./rows.json
+
+# 从管道（查到就直接用，不用落盘）
+curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"query":"…"}' \
+  | python -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["@pending"][0]))' \
+  | python scripts/access_fetch.py --recipe - --format rows --out ./rows.json
+```
+
+**脚本替你做的**：把配方合成一份最小 AM（`source` → `sources[0]`，其余 → `entities[0]`），
+之后走与 `--mapping` **完全相同**的流程（校验 → 签名 → 分页 → 字段映射 → 输出）。
+
+**三条边界（⛔ 脚本不替你补，也不会猜）**：
+
+| 项 | 配方里有吗 | 你怎么办 |
+| --- | --- | --- |
+| 接口/参数/分页/签名 | ✅ 有 | 不用管 |
+| `reviewed_by`（人签） | ❌ 没有 | 脚本标成 `server:<ref>`（服务端只对**已签**条目发配方）——这是**如实标注来源**，不是伪造签名 |
+| `identity` / `iri_template`（`@id` 用） | ❌ 没有 | 要 jsonld 就加 `--id-property <属性名>`；否则用 `--format rows`（⛔ 不猜主键） |
+| `fixture`（离线试跑用） | ❌ 没有 | `--dry-run` 在配方模式下会明确拒（`recipe.no_fixture`）；要试跑就用 `--mapping` 带 fixture 的 AM |
+
+> **v1 契约**：`@pending.get` 只有 4 键 ⇒ `--recipe` 会拒（`am.invalid` 并说明"该部署可能是 v1"）
+> ⇒ 这种部署下必须向调用方要 AM 文件。
 
 
 #### ③ 必填 vs 可选
