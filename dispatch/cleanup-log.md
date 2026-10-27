@@ -526,3 +526,16 @@
 | 合并后守卫 | `console::page` **19/19** · `test_req125_page` **8/8** · `source_enumeration` **10/10** · `anchor_guard` **3/3** · `test_req159_bundle` **38/38** · `check --lib` 绿 |
 | 回收 | worktree + 分支已删；**`.local/cargo-161` 已删（释放 5.06 GB，剩余 117.1 GB）** |
 | 备注 | console 的 8 条 bundles handler **仍保留**（本地 FDE 直连可用）；query serve 侧另有一套（Studio 用）⇒ 页面那个 tab 不是死链 |
+
+## 2026-10-27 14:45 · REQ-161b 页面收口 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **05c0e69**（`--no-ff`）← `feature/REQ-161b` **e94d578**（基线 ed9b356） |
+| 触发 | 用户 14:09：「页面逻辑好像有问题…不属于我们范围的先去掉」「没看到构建包的操作」 |
+| 内容 | 删查询台/目录浏览（打 `query serve` 的 sparql/catalog/describe）+ 抽屉 + `QUERY_*`；构建包 08→**02**、去掉「已迁到 Studio…仅历史保留」黄条；端点 **12→9**；夹具与文档同步 |
+| 冲突 | **零** |
+| 合并后验证 | `console::page` **19/19** · `test_req125_page` **9/9** · `source_enumeration` 10/10 · `anchor_guard` 3/3 · `test_req159_bundle` 38/38 · `check` 绿 · **probe 45/45** |
+| QA | PASS 0 阻断（死 id 悬空 0；`assert_eq!` 删 0 增 2、`assert!` 删 13 增 17 ⇒ 0 处降级；端点 2 变异均红） |
+| 回收 | worktree + 分支已删；`cargo-161b` 已删 |
+| 遗留（非阻断） | L-1：`coverage` / `used === false` 两个 needle 归零但未反钉（下一单顺手补）；L-2：已立规矩要求 Dev 交付附 changelog 文件 |
