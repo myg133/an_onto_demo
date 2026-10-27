@@ -117,3 +117,33 @@ console token: { label, token, kind, ... }
 6. 用 `kubectl kustomize` 先渲染，核对 args / image / 有没有 ConfigMap
 7. 部署后冒烟五条：health / catalog / 无 token 401 / SPARQL 503 / TTL sha
 ```
+
+---
+
+## 2026-10-27 · v0.3.0 发版（REQ-166/169 之后）
+
+### ⛔ 发版前必做（本次踩到的坑，写成硬步骤）
+
+**换镜像前，用「要发的那份 AM」跑一次校验，必须 0 error：**
+
+```bash
+python Deploy/skills/ontok-query/scripts/access_fetch.py --check \
+  --mapping Deploy/k8s/overlays/uat-ops360/am-tencent.json
+# 或：ontok-builder access validate --mapping <同一份>
+```
+
+**非 0 ⇒ 卡住不发**，把错误贴出来。原因：REQ-166 起 `tc3` 的 `auth.service` 是**必填、fail-closed**
+（不从 `base_url` 猜），而 AM 是**人写的**（`access` 只有 validate/fetch/publish，**没有生成器**）。
+⇒ 不存在"生成器会兜住"，只能靠**出厂前验一遍**。
+
+本次实测：UAT 那份 AM 8 个 source **全缺 `service`** ⇒ 直接换镜像会**起不来**；补完后 `0 error`。
+
+### 发版内容
+
+| 项 | 值 |
+| --- | --- |
+| 版本 | `0.1.0` → **`0.3.0`**（Cargo.toml + overlay `newTag`） |
+| 镜像 | `aigccontainer.azurecr.cn/an_onto/ontok:0.3.0` |
+| overlay | `k8s/overlays/uat-ops360`（注意：live 命名空间 `anspire-ontok-uat` 由它管） |
+| AM 变更 | 8 个 source 补 `auth.service`（`cvm/vpc/cbs/clb/cdb/ssl/monitor/billing`） |
+| 元数据库 | 已清（62 → 1，只剩 `cloud-resource`） |
