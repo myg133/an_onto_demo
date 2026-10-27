@@ -539,3 +539,14 @@
 | QA | PASS 0 阻断（死 id 悬空 0；`assert_eq!` 删 0 增 2、`assert!` 删 13 增 17 ⇒ 0 处降级；端点 2 变异均红） |
 | 回收 | worktree + 分支已删；`cargo-161b` 已删 |
 | 遗留（非阻断） | L-1：`coverage` / `used === false` 两个 needle 归零但未反钉（下一单顺手补）；L-2：已立规矩要求 Dev 交付附 changelog 文件 |
+
+## 2026-10-27 16:20 · REQ-162 Console v2 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **8c4d6f5**（`--no-ff`）← `feature/REQ-162` **0f5d9c9**（已 rebase 到 ab98422） |
+| 冲突 | **零** |
+| 改动 | 11 文件 **+4097/−3920**；新增 `src/console/local.rs`(1482) 与 `tests/test_req162_console.rs`(972) |
+| 合并后复跑（空库 `req162_merge`） | `req162_console` **12/12** · `req125_page` **7/7** · `req159_bundles` **25/25** · `req160_review_open` **9/9** · `source_enumeration` 10 · `anchor` 3 · `req159_bundle` 38 · `req124_console` 16 · `check` 绿 |
+| 回收 | worktree + 分支已删；`cargo-162` 已删 |
+| 关键结论 | console 变「本地评审台」：`--dir` / 无口令 / 无项目 / **无库**（AC-007 真进程 + 反向实验证明） |
