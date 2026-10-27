@@ -739,6 +739,7 @@ QA 的判断（BA 采纳）：**「有没有第三层」无解，但「规则不
 | REQ-166 | ✅ **已完成**（`0c47cb4`）· **AM 契约补齐**：`tc3` 模式 `auth.service` 必填（脚本 fail-closed，不猜 host 首段）· `auth` 补 `signed_headers`/`timestamp`/`scope`（显式写，不留运行时默认）· 数组参数补 `shape: array`（`instance_ids` 整串当一 ID 的坑） | **已就绪** | ba-lion-michael-workstation-49056-20261027-094244 | 2026-10-27 | **触发**：join 把 `access_fetch.py` 做成产品态（REQ-164/165）后，AM 里三处「靠猜」的缺口暴露。**归属**：AM 生成 = `ontok-builder access`（构建面，lion）。**关键裁定**：⛔ 不因「旧 AM 过不了」把 `service` 改回猜——fail-closed 是对的；缺省值也必须**显式写进 AM**，因为 AM 是声明。**不做**：改 `access_fetch.py`（join 的面）。|
 | REQ-167 | **收掉最后一处「猜」**：分页参数兜底（`"Offset"`/`"Limit"`/`100`）改 fail-closed；实体级 `offset_param`/`limit_param` 与请求级 `offset`/`page`/`limit` **两层**都要显式 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 | REQ-168 | **脚本认 `contract_version=2`**：`CONTRACT_VERSION=1` 硬编码导致真 AM 被拒（生产不可用）；改 `SUPPORTED=(1,2)`，v3+ 仍 fail-closed；v2 的 auth 显式参数须与默认值签名逐字节相同 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
+| REQ-169 | **`@pending.get` 配方补 `auth.service`**：服务端已发完整配方但 `RecipeAuth` 少 `service` ⇒ 数字员工拿配方也签不了名（fail-closed）。`RecipeAuth` 加字段 + `build_recipe` 填值；v1 行为不变 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-27 |
 
 ## REQ-066 验收结论（2026-10-10，**PASS · 三轮 · 建议合并**）
 
