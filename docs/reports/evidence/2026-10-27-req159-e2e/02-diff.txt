@@ -1,0 +1,28 @@
+# v5 vs v6 建模视图 diff（原文）
+
+## 复现命令
+
+```
+ontok-builder ontology export --project cloud-resource --version 5 --model-view --out v5-model.ttl
+ontok-builder ontology export --project cloud-resource --version 6 --model-view --out v6-model.ttl
+diff -u v5-model.ttl v6-model.ttl
+```
+
+## 结果
+
+v5 7853 行 / v6 7853 行；差异行数：4
+
+```diff
+--- v5-model.ttl
++++ v6-model.ttl
+@@ -19,3 +19,3 @@
+ <https://ontok.local/cloud_resource> a owl:Ontology ;
+-    rdfs:label "cloud-resource 本体（v5）"@zh ;
++    rdfs:label "cloud-resource 本体（v6）"@zh ;
+     rdfs:comment "本导出为 OWL 本体，只描述「世界由什么构成」，不描述「能对它做什么」。源模型中另有 0 个 ActionType（写回、副作用、权限、审计），OWL/SHACL/SWRL 均无干净对应，故未导出。见规格 §5.5。"@zh ;
+@@ -26,3 +26,3 @@
+     ontok:sourceProject "cloud-resource" ;
+-    ontok:version 5 ;
++    ontok:version 6 ;
+     ontok:rangeSourceSchema 0 ;
+```

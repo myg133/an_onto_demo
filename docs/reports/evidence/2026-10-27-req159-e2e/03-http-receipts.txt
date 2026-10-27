@@ -1,0 +1,21 @@
+# HTTP 回执原文（2026-10-27 11:1x，本机 127.0.0.1:18931，连真元数据库）
+
+## 0 健康检查
+GET /api/health → 200
+{"api":"v1","service":"ontok-console","version":"0.1.0"}
+
+## 1 上传（application/octet-stream，body = 包原始字节）
+POST /api/projects/cloud-resource/bundles → **201**
+{"bundle_id":"bdl_4ba82691-a10c-40ad-9bdf-b9afe51d1f7d","bundle_sha256":"8ec983f3fad2145c6561f794b8cfc366934424c39feb4fbd98aba58f178f92bd","bytes":184592,"components":{"ontology":{"entity_types":30,"link_types":34,"path":"ontology/snapshot.json","properties":752,"sha256":"49e7bbfe3d3b2237bcdce66456aa97bc84e28822545aa17270546fbef3ab2b1b"}},"counts":{"action_types":0,"concept_groups":0,"entity_types":30,"functions":0,"link_types":34,"properties":752},"project":"cloud-resource","requires_db":false,"sha256_verified":true,"state":"uploaded","uploaded_at":"2026-10-27T03:20:50.689Z"}
+
+## 2 解析入库
+POST /api/projects/cloud-resource/bundles/bdl_4ba82691-a10c-40ad-9bdf-b9afe51d1f7d/import → **200**
+{"already_imported":false,"bundle_id":"bdl_4ba82691-a10c-40ad-9bdf-b9afe51d1f7d","counts":{"action_types":0,"concept_groups":0,"entity_types":30,"functions":0,"link_types":34,"properties":752},"frozen":false,"project":"cloud-resource","state":"imported","version":6,"version_id":"7ad0ad47-a93f-4a5e-8898-81df43430944","warnings":[]}
+
+## 3 导出（判据的输入）
+ontok-builder ontology export --version 5 --model-view → · 已写出建模视图 TTL（30 类 / 34 关系）
+ontok-builder ontology export --version 6 --model-view → · 已写出建模视图 TTL（30 类 / 34 关系）
+
+## 4 未做的事（刻意）
+· 未冻结 v6、未激活 → 对外仍 v5
+· 未打 am/ 与 db/schema.json 两件
