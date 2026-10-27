@@ -1977,13 +1977,16 @@ def run_fetch(am, am_path, args):
              "让映射作者补 `reviewed_by`（形如 `name@YYYY-MM-DD`）并重新签；"
              "或换一个已签的 entity。")
     source = find_source(am, entity.get("source"))
-    # `@id` 只有 jsonld 输出才需要；`--format rows` 是平表，⛔ 不该因为缺主键就拒
-    # （2026-10-27 实测出来的：`--recipe --format rows` 被这条挡了，与设计矛盾）
-    if args.format == "jsonld" and not (entity.get("identity") or {}).get("key_path"):
+    # ⚠️ **两种输出格式都需要 identity**：`--format rows` 不是"原始记录"，而是
+    # `rows → graph`（用 identity 拼 @id）之后再摊平 ⇒ 没有 identity 时每一行都会被
+    # `skipped_no_identity` 丢掉，最后拿到 **0 行且不报错**（静默空结果，最坏的一种）。
+    # 实测来源：数字员工平台的适配版 `ontok-query-fix` 就记着这个坑；agent 也确实踩过。
+    if not (entity.get("identity") or {}).get("key_path"):
         fail("am.invalid", EXIT_INPUT,
              "entity `%s` 没有 identity.key_path，无法把一行变成 `@id`" % entity.get("id"),
-             "补 `\"identity\": {\"key_path\": \"<记录里的键名>\"}`，或用 `--format rows` "
-             "（平表不需要主键）；⛔ 不要拿 fields 里随便一个属性当主键（RECIPE §六）。")
+             "配方模式用 `--id-property <fields 里的属性名>`（**rows 也要**：没有 @id 的行会被"
+             " `skipped_no_identity` 丢掉，你会拿到 0 行还不报错）；`--mapping` 模式补 "
+             "`\"identity\": {\"key_path\": \"<记录里的键名>\"}`；⛔ 不要拿 fields 里随便一个属性当主键（RECIPE §六）。")
     plan = paging_plan(entity)
     params = parse_params(args.param, entity)
     check_required(entity, params, plan, source)

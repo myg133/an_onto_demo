@@ -76,6 +76,10 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 用别人的巡检 JSON 顶替，格式看着像，但**类的粒度、字段、口径都不是你这次的本体**。
 
 
+**⚠️ 类名照抄 catalog / TTL，⛔ 别手拼 IRI**：优先用前缀写法（`:alarm_policy`）或 TTL 里的完整 IRI。
+**命名空间拼错不报 404**，只会拿到误导性的 `503 NO_DATA_SOURCE` —— 你会误以为"这个类查不了"，
+其实只是 IRI 不对。
+
 ## 一 · 第 0 步：先弄清自己在**哪种模式**（决定你能做什么）
 
 ```
@@ -567,8 +571,32 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | --- | --- | --- |
 | 接口/参数/分页/签名 | ✅ 有 | 不用管 |
 | `reviewed_by`（人签） | ❌ 没有 | 脚本标成 `server:<ref>`（服务端只对**已签**条目发配方）——这是**如实标注来源**，不是伪造签名 |
-| `identity` / `iri_template`（`@id` 用） | ❌ 没有 | 要 jsonld 就加 `--id-property <属性名>`；否则用 `--format rows`（⛔ 不猜主键） |
+| `identity` / `iri_template`（`@id` 用） | ❌ 没有 | **两种输出格式都要给 `--id-property <fields 里的属性名>`**：jsonld 缺它直接拒（`recipe.no_identity`）；**rows 缺它不报错，但每行会被 `skipped_no_identity` 丢掉 ⇒ 你拿到 0 行还以为查询没数据**（⛔ 不猜主键） |
 | `fixture`（离线试跑用） | ❌ 没有 | `--dry-run` 在配方模式下会明确拒（`recipe.no_fixture`）；要试跑就用 `--mapping` 带 fixture 的 AM |
+
+**配方模式下两个必给参数**（缺一不可，都是实测踩过的）：
+
+| 参数 | 缺了会怎样 | 怎么填 |
+| --- | --- | --- |
+| `--entity <配方里的 class>` | `am.invalid`：合成的最小 AM 只有一条 entity，但**选择仍按 id/class 匹配** | 填 `get.class`，如 `cvm_instance` |
+| `--id-property <fields 里的属性名>` | 见上表：jsonld 直接拒；**rows 静默空结果** | 填 `fields` 里的**属性名**（不是源的字段名，如 `instance_id` 而非 `InstanceId`） |
+
+**若凭据由平台注入**（变量名带前缀，如 `SKILL_CREDENTIAL_SECRETID`），而配方 `auth.credential_env`
+写的是**源侧名字**（如 `TENCENT_SECRET_ID`）—— 两边对不上，脚本会报 `credential.missing`（退出 3）。
+**在同一条命令里桥接**（每条 shell 都是新进程，桥接必须与取数同行；⛔ 值不落盘、不回显）：
+
+```bash
+TENCENT_SECRET_ID="$SKILL_CREDENTIAL_SECRETID" \
+TENCENT_SECRET_KEY="$SKILL_CREDENTIAL_SECRETKEY" \
+python scripts/access_fetch.py --recipe recipe.json --entity <class> \
+    --id-property <fields 里的属性名> --format rows --out ./rows.json
+```
+
+| ⛔ 不要 | ✅ 要 |
+| --- | --- |
+| 问用户要 SecretId/SecretKey 明文 | 平台注入的 `SKILL_CREDENTIAL_*` 里**已经有了** |
+| `env` 全量打印找变量 | `env \| grep '^SKILL_CREDENTIAL_' \| sed 's/=.*//'`（只看名字，⛔ 不看值） |
+| 对应关系靠猜 | 配方约定：`credential_env` **第 1 个 = SecretId、第 2 个 = SecretKey** |
 
 > **v1 契约**：`@pending.get` 只有 4 键 ⇒ `--recipe` 会拒（`am.invalid` 并说明"该部署可能是 v1"）
 > ⇒ 这种部署下必须向调用方要 AM 文件。
