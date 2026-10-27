@@ -1,0 +1,758 @@
+{
+  "Response": {
+    "TotalCount": 150,
+    "MiniVmSet": [
+      {
+        "VmId": "vm-0076",
+        "VmName": "mini-vm-0076",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0077",
+        "VmName": "mini-vm-0077",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0078",
+        "VmName": "mini-vm-0078",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0079",
+        "VmName": "mini-vm-0079",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0080",
+        "VmName": "mini-vm-0080",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0081",
+        "VmName": "mini-vm-0081",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0082",
+        "VmName": "mini-vm-0082",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0083",
+        "VmName": "mini-vm-0083",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0084",
+        "VmName": "mini-vm-0084",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0085",
+        "VmName": "mini-vm-0085",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0086",
+        "VmName": "mini-vm-0086",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0087",
+        "VmName": "mini-vm-0087",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0088",
+        "VmName": "mini-vm-0088",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0089",
+        "VmName": "mini-vm-0089",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0090",
+        "VmName": "mini-vm-0090",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0091",
+        "VmName": "mini-vm-0091",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0092",
+        "VmName": "mini-vm-0092",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0093",
+        "VmName": "mini-vm-0093",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0094",
+        "VmName": "mini-vm-0094",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0095",
+        "VmName": "mini-vm-0095",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0096",
+        "VmName": "mini-vm-0096",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0097",
+        "VmName": "mini-vm-0097",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0098",
+        "VmName": "mini-vm-0098",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0099",
+        "VmName": "mini-vm-0099",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0100",
+        "VmName": "mini-vm-0100",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0101",
+        "VmName": "mini-vm-0101",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0102",
+        "VmName": "mini-vm-0102",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0103",
+        "VmName": "mini-vm-0103",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0104",
+        "VmName": "mini-vm-0104",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0105",
+        "VmName": "mini-vm-0105",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0106",
+        "VmName": "mini-vm-0106",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0107",
+        "VmName": "mini-vm-0107",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0108",
+        "VmName": "mini-vm-0108",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0109",
+        "VmName": "mini-vm-0109",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0110",
+        "VmName": "mini-vm-0110",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0111",
+        "VmName": "mini-vm-0111",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0112",
+        "VmName": "mini-vm-0112",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0113",
+        "VmName": "mini-vm-0113",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0114",
+        "VmName": "mini-vm-0114",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0115",
+        "VmName": "mini-vm-0115",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0116",
+        "VmName": "mini-vm-0116",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0117",
+        "VmName": "mini-vm-0117",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0118",
+        "VmName": "mini-vm-0118",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0119",
+        "VmName": "mini-vm-0119",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0120",
+        "VmName": "mini-vm-0120",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0121",
+        "VmName": "mini-vm-0121",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0122",
+        "VmName": "mini-vm-0122",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0123",
+        "VmName": "mini-vm-0123",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0124",
+        "VmName": "mini-vm-0124",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0125",
+        "VmName": "mini-vm-0125",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0126",
+        "VmName": "mini-vm-0126",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0127",
+        "VmName": "mini-vm-0127",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0128",
+        "VmName": "mini-vm-0128",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0129",
+        "VmName": "mini-vm-0129",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0130",
+        "VmName": "mini-vm-0130",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0131",
+        "VmName": "mini-vm-0131",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0132",
+        "VmName": "mini-vm-0132",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0133",
+        "VmName": "mini-vm-0133",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0134",
+        "VmName": "mini-vm-0134",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0135",
+        "VmName": "mini-vm-0135",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0136",
+        "VmName": "mini-vm-0136",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0137",
+        "VmName": "mini-vm-0137",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0138",
+        "VmName": "mini-vm-0138",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0139",
+        "VmName": "mini-vm-0139",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0140",
+        "VmName": "mini-vm-0140",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0141",
+        "VmName": "mini-vm-0141",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0142",
+        "VmName": "mini-vm-0142",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0143",
+        "VmName": "mini-vm-0143",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0144",
+        "VmName": "mini-vm-0144",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0145",
+        "VmName": "mini-vm-0145",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0146",
+        "VmName": "mini-vm-0146",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0147",
+        "VmName": "mini-vm-0147",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0148",
+        "VmName": "mini-vm-0148",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-6"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0149",
+        "VmName": "mini-vm-0149",
+        "Cpu": 2,
+        "Memory": 4,
+        "Placement": {
+          "Zone": "ap-guangzhou-7"
+        },
+        "InstanceState": "RUNNING"
+      },
+      {
+        "VmId": "vm-0150",
+        "VmName": "mini-vm-0150",
+        "Cpu": 4,
+        "Memory": 8,
+        "Placement": {
+          "Zone": "ap-guangzhou-5"
+        },
+        "InstanceState": "RUNNING"
+      }
+    ],
+    "RequestId": "selftest-request-id"
+  }
+}

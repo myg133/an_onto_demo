@@ -1,6 +1,6 @@
 ---
 name: ontok-query
-description: 用 ontok 本体服务回答业务问题。核心顺序是「先取本体（TTL）→ 定位概念 → 决定能否查数据 → 解读回执 → 转达限制」。含 v1 SPARQL 边界、两种部署模式的区别、以及每种错误的处置。适用于任意接入了 ontok 的环境，不含任何具体业务名词。
+description: 用 ontok 本体服务回答业务问题。核心顺序是「先取本体（TTL）→ 定位概念 → 决定能否查数据 → 解读回执 → 转达限制」。含 v1 SPARQL 边界、两种部署模式的区别、每种错误的处置，以及 API 源的取数脚本（access_fetch.py，零依赖，别手写签名）。
 category: scenario
 ---
 
@@ -97,7 +97,7 @@ MCP 用户也可以读资源：`ontok://ontology/customer.ttl`、`ontok://ontolo
 
 | 标记 | 含义 | 你该怎么做 |
 | --- | --- | --- |
-| 有 `ontok:sourceKind "api"` | 平台**不执行**这类数据源 | 查它只会拿到 `@pending`；要**按指引自己调接口** |
+| 有 `ontok:sourceKind "api"` | 平台**不执行**这类数据源 | 查它只会拿到 `@pending`；要**用 `access_fetch.py` 取数**（§4.5） |
 | **没有**这个谓词 | 库源（平台能查） | 正常写 SPARQL |
 
 **写查询之前先扫一遍**——不然你会拿 SPARQL 去查 api 类，然后拿到空图还以为是"没数据"。
@@ -184,7 +184,7 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 | 你查的类 | 结果 | 你该做什么 |
 | --- | --- | --- |
 | **库源类**（`access.kind = "db"`） | `503 NO_DATA_SOURCE` | **重试无效**。转成本体回答：「这里没有数据，只有概念与口径」 |
-| **API 源类**（`access.kind = "api"`） | **200 + `@graph: []` + `@pending` + `complete: false`** | ✅ **按 `@pending[].get` 自己去取数**（见 §4.3） |
+| **API 源类**（`access.kind = "api"`） | **200 + `@graph: []` + `@pending` + `complete: false`** | ✅ **用 `access_fetch.py` 取数**（§4.5；`get` 的字段含义见 §4.3） |
 | **混合**（库类 + api 类） | `503` | 它确实需要库 ⇒ 拆开：先问本体、再按 `get` 取 |
 
 **怎么提前知道查的是哪类**：`describe` / `catalog` 的 `access.kind`（`db` 走 SPARQL、`api` 走 fetch）。
@@ -194,7 +194,10 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 
 ---
 
-### 4.3 API 源：平台只给「取数指引」，数据你自己取
+### 4.3 API 源：平台只给「取数指引」，数据**用脚本取**
+
+> ✅ **这一节只讲「指引长什么样」；真正取数用 `access_fetch.py`，命令与错误码见 §4.5。**
+> ⛔ **不要照 `AUTH-SPEC.md` 自己实现 TC3 签名**——那份规格是脚本的来源，不是让你再抄一遍。
 
 对 `access.kind = "api"` 的类，平台返回的是**半成品**：
 
@@ -234,9 +237,9 @@ SELECT ?x WHERE { ?x a :<某类> . ?x :<某属性> ?v } LIMIT 10
 **跨源边**：如果两个类一个在库、一个在 API，那条边**不会给你 `get`** ⇒ 拆两段：先查库拿 ID，再按 ID 调接口。
 硬走会得到 `CROSS_SOURCE_UNSUPPORTED`——**重试无效**。
 
-### 4.4 取数侧怎么落地（**实测踩过的六个坑**）
+### 4.4 取数侧怎么落地（**实测踩过的坑**）
 
-拿到 `get` 之后，取数由你完成。以下四条是实测总结，照做能省掉一轮返工。
+拿到 `get` 之后，取数由**脚本**完成（§4.5）。下面几条是「把脚本用对」的经验，⛔ 不是让你照着自己实现一遍。
 
 #### ① 凭据**只注入一次**，⛔ 不要每次调用都重新贴
 
@@ -261,7 +264,8 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 
 实测一轮里 9 次错误，**6 次**都在这上面（模块名猜错、并发代码写崩、地域列表没有）。
 
-优先级：**先用包里自带的执行器** → 没有再自己写 → 写就照附录 A 抄，⛔ 别重新发明。
+✅ 正确姿势：**调用 `access_fetch.py`**（§4.5）。TC3 签名、分页、剪枝、字段映射、9 个固定错误码，它都实现好了。
+只有当包里**没有**这个脚本（例如客户环境根本没有 Python）才考虑手写，那时照附录 A 抄，⛔ 别重新发明。
 
 #### ③ 路径用**相对工作目录**，⛔ 不要写 `/tmp`；⛔ 也别每条命令都 `cd`
 
@@ -283,24 +287,19 @@ set -a; . ./.env; set +a     # 每条命令前 source 一次，⛔ 不要 echo �
 ✅ 做法：**先取一页，看返回里有没有 `TotalCount`**；有 `TotalCount` 就按它算页数，
 没有就"取到空页为止"。⛔ 不要写死 `while offset < 1000` 这种假设。
 
-#### ⑤ 取数层**写成一个文件**，之后只传参数（⛔ 别每次 heredoc 重写）
+#### ⑤ 取数**不要写脚本**，分析**要写成文件**
 
 实测最坏的一轮：47 次 bash 调用里，**大量是重复定义同一套 helper**（写一次 `tc.py`，却几乎没复用它）。
 
 ✅ 正确姿势：
 
 ```bash
-# 一次性写好（签名 + 翻页 + 重试 + 收窄，都在里面）
-cat > fetch.py <<'PY'
-# … appendix A 的实现，加一个命令行入口 …
-PY
-
-# 之后每条命令只传参数
-python fetch.py cvm_instance --region ap-guangzhou --limit 100
-python fetch.py cbs_disk     --region ap-beijing
+# 取数：用现成的（签名 / 翻页 / 剪枝 / 错误码都在里面，见 §4.5）
+python access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-guangzhou --out ./cvm.json
+python access_fetch.py --mapping am.json --entity CbsDisk     --param region=ap-beijing  --out ./cbs.json
 ```
 
-**分析也一样要落成文件**（实测：分析阶段 25 次 `python - <<'PY'`，每次重导 `json`/`collections`）：
+**分析照样要落成文件**（实测：分析阶段 25 次 `python - <<'PY'`，每次重导 `json`/`collections`）：
 
 ```bash
 # 一次写好，按"问题"分子命令
@@ -316,14 +315,17 @@ python ana.py bill --class cvm_instance
 
 > **判断标准**：同一种"取数/解析"要做第 2 次时，就该抽成文件；⛔ 不要复制粘贴改三个字符。
 
-#### ⑦ 配套文档（**遇到细节就翻这两份，别猜**）
+#### ⑦ 配套文档与脚本（**遇到细节就翻这些，别猜**）
 
-| 文档 | 讲什么 |
+| 文件 | 讲什么 |
 | --- | --- |
-| [`AUTH-SPEC.md`](AUTH-SPEC.md) | 签名怎么实现：规范化、时间戳、scope、签名字符串、`Authorization` 拼法、常见坑 |
+| [`access_fetch.py`](access_fetch.py) | **取数脚本本体**（零依赖）。怎么跑见 §4.5 —— 这一份就够了，⛔ 不用自己写 |
+| [`AM-FIELDS.md`](AM-FIELDS.md) | AM 每个键是什么、脚本用了哪些、哪些不用；改映射之前先看它 |
+| [`AUTH-SPEC.md`](AUTH-SPEC.md) | 签名算法：规范化、时间戳、scope、签名字符串、`Authorization` 拼法、常见坑（**规格**，脚本已实现） |
 | [`RECIPE.md`](RECIPE.md) | `get` 的 10 个键怎么用：占位符来源、**剪枝四规则**、分页 `value_type`、`required` 语义、`iterator`/`fields` |
 
-> ⚠️ 这两份是**给客户端写的**，不是给我们写的。照它做就能接。
+> ⚠️ 后两份是**给客户端实现者的规格**。你只要会**调用脚本**（§4.5）就能接上；
+> 只有在脚本不可用时才需要读它们、自己实现。
 
 #### ⑥ ⛔ 不要"找接口规格"，也不要翻 SDK 源码
 
@@ -338,14 +340,115 @@ python ana.py bill --class cvm_instance
 **正确顺序**：
 
 1. 参数与版本优先从 **`get`** 拿（`pushdown` / `operation` / `request`——本部署正在补齐）
-2. 拿不到 ⇒ **找运维要那份已签映射**（`ref` 就是它的编号），或者用附录 A 的实现
+2. 拿不到 ⇒ **找运维要那份已签映射**（`ref` 就是它的编号），然后交给 `access_fetch.py`（§4.5）
 3. ⛔ 最后才考虑翻文档；**⛔ 不要翻 SDK 源码，⛔ 不要探端点**
-
 
 ---
 
-## 附录 A · 参考实现（**可直接跑**，约 60 行）
+### 4.5 API 源取数：**用脚本，别手写**
 
+> **一句话**：⛔ **不要照 `AUTH-SPEC.md` 自己实现 TC3 签名、翻页、剪枝。**
+> 直接调用 `access_fetch.py`——它就是那份参考实现，零第三方依赖（Python 3.8+ 标准库）。
+>
+> 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
+> 9 次错误里 6 次出在这几件事上（§4.4②）。
+
+脚本在同目录：`access_fetch.py`；离线夹具在 `fixtures/`。
+
+#### ① 三条最常用的命令
+
+```bash
+# 0) 先跑一次「不需要 AM、不需要凭据」的离线自检（断网也能过）
+python access_fetch.py --selftest
+
+# 1) 体检 AM：结构对不对、entity 签没签、夹具在不在。不取数、不要凭据
+python access_fetch.py --mapping am.json --check
+
+# 2) 试跑：用 entity.fixture 走完整流程，不发网络、不要凭据
+python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
+
+# 3) 真取数：凭据只从 auth.credential_env 命名的环境变量读
+export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 只 export 一次，⛔ 别 echo
+python access_fetch.py --mapping am.json --entity CvmInstance \
+    --param region=ap-guangzhou --max-rows 500 --out ./cvm.json
+```
+
+参数就这些（`--param` 可重复，**只允许 `capability.pushdown` 里的键**）：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--mapping <am.json>` | 已签的 access mapping（`--check` / 取数必填） |
+| `--entity <id\|class>` | 取哪个实体（`CvmInstance` 或 `cvm_instance` 都行） |
+| `--param K=V` | 下推参数；不在 `pushdown` 里会被拒，并**列出可用参数** |
+| `--limit N` | 每页条数（会被 `paging.max_limit` 夹住） |
+| `--max-rows N` | 最多取多少条（默认 1000；**取不全要如实说**） |
+| `--dry-run` | 用夹具，不发网络 |
+| `--check` | 只体检 AM，不取数 |
+| `--format jsonld\|rows` | 默认 JSON-LD；要平表用 `rows` |
+| `--out FILE` | 写文件（默认 stdout） |
+| `--selftest` | 离线自检（无网络、无凭据） |
+
+输出形状（`meta` 是给你判断「够不够」的，**必须读**）：
+
+```json
+{ "@context": { "ontok": "https://ontok.dev/ns#" },
+  "@graph": [
+    { "@id": "ontok:cvm_instance/ins-abc123", "@type": "ontok:cvm_instance",
+      "ontok:instance_id": "ins-abc123", "ontok:cpu": 4 } ],
+  "meta": { "entity": "CvmInstance", "class": "cvm_instance",
+            "rows": 1, "pages": 1, "truncated": false,
+            "source": "tencent-cvm", "mapping_version": 1 } }
+```
+
+#### ② 两条铁律（最容易踩）
+
+| 铁律 | 说明 |
+| --- | --- |
+| **未签的 entity 取不了** | `reviewed_by` 为空 ⇒ `[am.unsigned] …还没签`，退出码 **2**，一个请求都不发（与 R6 同一条纪律）。**别绕**：让映射作者补 `reviewed_by`（`name@YYYY-MM-DD`），或换一个已签的 entity（`--check` 会列出哪个没签） |
+| **截断时退出码是 8** | `meta.truncated: true` = **没取全**（到 `--max-rows`，或到 1000 页保险丝）。它不是一个警告，是把「数据不完整」写进契约。⛔ 别把 `truncated=true` 当"取全了"去作答：调大 `--max-rows` 或收窄 `--param`，实在取不全就在答案里说「这是前 N 条」 |
+
+#### ③ 常见错误表（9 个码：你看到它说明什么、怎么修）
+
+| 退出码 | 码 | 你看到它说明什么 | 怎么修 |
+| --- | --- | --- | --- |
+| **2** | `am.invalid` | AM 结构/版本不对，或 `request.required` 里的名字这次没给值 | 看消息点名的那一处：`contract_version` 只认 `1`；缺键补键；缺业务标识就补 `--param`（例如 `--param month=2026-09`）。改完先 `--check` |
+| **2** | `am.unsigned` | 这个 entity 的 `reviewed_by` 为空——**未签不许取数** | 找映射作者签（`name@YYYY-MM-DD`），或换已签的 entity。⛔ 不要自己填个名字糊过去 |
+| **2** | `param.not_pushdown` | 你给的 `--param` 不在 `capability.pushdown` 里 | 用消息里列出的可用参数；其余条件只能拉回来自己筛（或在 AM 里加 pushdown 声明） |
+| **3** | `credential.missing` | `auth.credential_env` 命名的环境变量没设 | 在当前 shell export 一次（消息里会点名变量）；⛔ 不要把值写进命令行/脚本/AM |
+| **4** | `auth.rejected` | 401/403，或签名不匹配（`AuthFailure.*`） | 先确认凭据有效、机器时钟准（时间戳是 **UTC 秒**）；再确认 AM 的 `auth.*` 与实际发的 header 一致。⛔ 不要自己重写签名 |
+| **5** | `api.throttled` | 429 / `RequestLimitExceeded`——被限流 | 降 `--limit` / `--max-rows`，分地域取，隔一会儿再来。脚本**不自动退避**，重试由你决定 |
+| **6** | `api.invalid` | 400 / `InvalidParameter` / `UnknownParameter`——参数不对 | 看 `--dry-run` 打出的 `meta.request_body`；注意 `X-TC-Region` 这类只能走 header，⛔ 别两处都写（RECIPE §七①） |
+| **7** | `net.timeout` / `net.error` | 超时 / 连不上 / 5xx | 查 DNS、代理、出网策略；5xx 稍后重试。⛔ 不要改成猜地址（会连到别的环境） |
+| **8** | `rows.truncated` | 到 `--max-rows`（或分页保险丝）还没取全 | **数据可用但没取全**：调大 `--max-rows`、收窄 `--param`；答题时说清范围。⛔ 别当取全了 |
+
+> `--check` 就红（退出 2）时：先修 AM，⛔ 别急着取数——那是白跑一次请求，还可能计费。
+
+#### ④ 规格还在，但不再是唯一交付物
+
+| 文件 | 现在该怎么用 |
+| --- | --- |
+| [`AUTH-SPEC.md`](AUTH-SPEC.md) | 签名算法**规格**。脚本已按它实现（对官方 §7 向量逐字节相等）；只有你要读算法、换厂商、或怀疑脚本时才看 |
+| [`RECIPE.md`](RECIPE.md) | `get` 的 10 个键、剪枝四规则、分页 `value_type`、`required` 语义。脚本已实现 |
+| [`AM-FIELDS.md`](AM-FIELDS.md) | AM 每个键是什么、脚本用了哪些、哪些不用。**改映射前必看** |
+
+> 脚本的行为就是这两份规格的实现。**两者冲突时以脚本为准**，并把「哪条规格写错了」报上来——别各自解释。
+
+#### ⑤ 脚本**不做**的事（别指望）
+
+| 不做 | 原因 |
+| --- | --- |
+| 自动重试 / 指数退避 | v1 只负责「把错报清楚」，重试策略交给调用方 |
+| 用 `local_only` 帮你本地筛 | 返回的是**原始行**；筛了却不说是更危险的错 |
+| 把结果推回服务端 | 行只在你手上（服务端不存这些行） |
+| 支持 `mysql` 等别的源类型 | v1 只做 `http-json` |
+
+---
+
+## 附录 A · 参考实现（**旧·仅当拿不到 `access_fetch.py` 时**）
+
+> ⛔ **先看 §4.5**：正常路径是调用 `access_fetch.py`，本附录只在「包里没有脚本且环境有 Python」
+> 时作为最后兜底，且**不推荐**——它没有错误码、没有剪枝、没有截断标记，正是 §4.4② 说过的坑。
+>
 > ⚠️ **为什么附录里出现具体厂商**：本部署的 `get` 指向腾讯云，签名算法必须逐字节正确，
 > 抽象描述不足以实现。**换厂商只需替换 `call()` 里的签名段**，其余（翻页/重试/收窄）通用。
 >
@@ -479,7 +582,9 @@ if __name__ == "__main__":
 7. ⛔ **猜地址** —— 连到别的环境比连不上更糟
 8. ⛔ **把 `complete: false` 当答案** —— 那是半成品；`@pending` 必须处理完
 9. ⛔ **拿 SPARQL 反复试 api 源** —— TTL 里 `sourceKind "api"` 已经告诉你平台不执行它
-8. ⛔ **以为默认会回表格** —— 默认是 JSON-LD 图；要表必须显式传 `format="rows"`
+10. ⛔ **以为默认会回表格** —— 默认是 JSON-LD 图；要表必须显式传 `format="rows"`
+11. ⛔ **自己再手写一份取数脚本** —— 用 `access_fetch.py`（§4.5）；手写一份就多一份对不齐的实现
+12. ⛔ **把 `meta.truncated: true` 当"取全了"** —— 那是没取全；退出码 8 就是在说这件事
 
 ---
 
@@ -492,7 +597,7 @@ if __name__ == "__main__":
 ④ 用户问「X 的情况」
    ├─ 本体模式 → 用 TTL 里的定义回答，并说明没有数值
    ├─ X 是 db 源 → SELECT ?x ?v WHERE { ?x a :X . ?x :p1 ?v } LIMIT 20
-   └─ X 是 api 源 → 平台给 @pending，按 get 调接口自己取
+   └─ X 是 api 源 → 平台给 @pending，用 `access_fetch.py` 取（§4.5；未签的取不了）
 ⑤ 读回执（默认是图：看 `summary` + `meta`；要表先传 `format="rows"`）：warnings / coverage / truncated / evidence_level
 ⑥ 若 `meta.complete: false` ⇒ 先处理完 `@pending` 再答；答案里标出哪部分来自外部接口
 ⑦ 回答里带上限制；不确定的地方说「不确定」，不要补全
