@@ -440,3 +440,14 @@
 | 合并后验证（在 code/ 上） | `cargo check --lib` 绿 · `cargo test --lib console::page` **9/9** · `cargo test --test test_req125_page` **8/8** |
 | 回收 | worktree `feature-REQ-159-console` 移除、分支删除（先 `merge-base --is-ancestor … develop` 确认） |
 | 仍在跑 | `feature-REQ-159b`（join 的 P1b：多项目 serve / AM 落库 / key rotate），**不动** |
+
+## 2026-10-27 11:40 · skill 迁入 Deploy + workspace 回到 3 文件（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 用户口径 | 「skill 统一进 Deploy 里维护」 |
+| 迁入 | `Deploy/skills/` **7 个文件**（ontok-build / ontok-extract / ontok-query×3 / README / mcp.example.json）—— `Deploy 466d7f0` |
+| 迁出 | 仓库根 `skills/` 删除；workspace 分支 `8881728`，`.gitignore` 去掉 `!/skills/` |
+| 被跟踪文件 | workspace：**10 → 3**（`README.md` / `.gitignore` / `AGENTS.md`）⇒ 挂了很久的「10 文件 vs 规范 2 个」**收口**，只剩 2026-09-28 已批准的 `AGENTS.md` 例外 |
+| 引用修正 | `Deploy/digital-employee/AGENTS.md` 两处 `skills/…` → `../skills/…`（原路径是相对仓库根的，搬走后会 404） |
+| 决策记录 | `BA/decisions/ADR-012-skill归Deploy维护.md`（含对 2026-10-26 决定的反转说明：防漂移靠「只有一份」，不靠位置） |
