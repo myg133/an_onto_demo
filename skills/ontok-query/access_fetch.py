@@ -46,6 +46,9 @@ AM 是**本体 ↔ 取数方式的声明式映射**，它由人签（`reviewed_b
 设计约束
 --------
 * Python 3.8+ **标准库**，零第三方依赖（`requests` / `urllib3` 一律不许）。
+* `contract_version` 只认白名单 `SUPPORTED_CONTRACT_VERSIONS`（当前 `1`、`2`）：
+  在名单里就按那个版本的形状读，不在就 `am.invalid` + **列出支持的版本** + 退出 2，
+  ⛔ 不「尽力解析」、⛔ 不按最新版硬读。
 * 凭据**只**从 `auth.credential_env` 命名的环境变量读，⛔ 绝不回显。
 * `--param` 只接受 `capability.pushdown` 里的名字。
 * 未签 entity（`reviewed_by` 为空）一律拒绝。
@@ -86,11 +89,41 @@ EXIT_API = 6         # 400 参数错
 EXIT_NETWORK = 7     # 超时/连不上
 EXIT_TRUNCATED = 8   # 没取全
 
-CONTRACT_VERSION = 1          # 本脚本认识的 AM 契约版本
+#: 本脚本支持的 AM `contract_version` **白名单**（判定的唯一依据；不在里面就拒）。
+#:
+#: * **v1** —— 原始契约：`auth` 只声明 `mode` + `credential_env`；签名四件套
+#:   （`signed_headers` / `timestamp` / `scope` / `content_type`）由**签名器默认值**兜底。
+#: * **v2** —— `auth` 可**显式**声明 `signed_headers` / `timestamp` / `scope`（+ `content_type`）：
+#:   签名输入完全由契约决定；缺的仍回落到签名器默认值。
+#:   显式值与签名器默认值必须签出**逐字节相同**的 `Authorization`（`--selftest` 对拍）。
+#:
+#: ⚠️ 版本决定的是「契约**期望**什么」，不是「脚本读什么」：两个版本下脚本读的键相同，
+#: 所以加一个版本**不需要**在读取逻辑里分支。3 及以上一律拒绝（⛔ 不「尽力解析」）。
+SUPPORTED_CONTRACT_VERSIONS = (1, 2)
+
+#: 每个支持版本的一句话形状（`--check` 打印；`--selftest` 校验它和白名单不漂）。
+CONTRACT_VERSION_NOTES = {
+    1: "v1 —— 原始契约：`auth` 只声明 mode + credential_env，签名四件套由签名器默认值兜底",
+    2: "v2 —— `auth` 可显式声明 signed_headers / timestamp / scope（+ content_type）",
+}
+
+#: 兼容别名：= **最新一版**。仅为既有引用保留；**任何判断都必须用白名单**
+#: （写成 `version != CONTRACT_VERSION` 就等于又把旧版本拒掉了）。
+CONTRACT_VERSION = SUPPORTED_CONTRACT_VERSIONS[-1]
+
+#: 脚本在 `auth` 段**实际会读**的键（两版相同）。`--check` 打印它，让「版本差异」可见。
+AUTH_KEYS_REQUIRED_BY_SIGNER = "mode · credential_env（两个变量名） · service"
+AUTH_KEYS_DEFAULTABLE = "signed_headers · timestamp.header/.format · scope · content_type"
+
 DEFAULT_MAX_ROWS = 1000       # --max-rows 缺省
 DEFAULT_TIMEOUT = 60          # 单次请求超时（秒）
 MAX_PAGES_HARD_CAP = 1000     # 分页保险丝：再多就停（并标记 truncated）
 JSONLD_CONTEXT = {"ontok": "https://ontok.dev/ns#"}
+
+#: 内置夹具目录：**按脚本自身位置**解析，⛔ 不看 cwd。
+#: 数字员工常在别的目录里跑本脚本（`python <skill目录>/ontok-query/access_fetch.py …`），
+#: 用 cwd 找 `fixtures/` 会让 `--selftest` 假红。
+FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
 #: 码 → 退出码（**唯一一份**）。加码只加在这里；既有 9 个码的值一位不动。
 CODE_EXIT = {
@@ -333,6 +366,28 @@ def load_am(path):
     return am
 
 
+def supported_versions_text():
+    """支持列表拼成一句话（`--check` 与错误消息共用，不各写一遍）。"""
+    return ", ".join(str(v) for v in SUPPORTED_CONTRACT_VERSIONS)
+
+
+def contract_version_problem(version):
+    """`contract_version` 在白名单里就返回 None，否则返回一句「支持哪些」。
+
+    ⛔ 这里**没有**「尽力解析」：不认识就是不认识，绝不按最新版硬读
+    （按错的形状读一份 AM，比直接拒绝更危险 —— 它会安静地取错数）。
+    """
+    if isinstance(version, bool) or not isinstance(version, int):
+        # 顺带挡住 `true`：Python 里 `True == 1`，不显式挡掉它会被当成 v1。
+        return ("contract_version 必须是整数，实际是 %r（%s）；本脚本支持：%s"
+                % (version, type(version).__name__, supported_versions_text()))
+    if version not in SUPPORTED_CONTRACT_VERSIONS:
+        return ("contract_version=%d，本脚本不支持；支持：%s"
+                "（不认识的值一律拒绝，⛔ 不「尽力解析」）"
+                % (version, supported_versions_text()))
+    return None
+
+
 def _require(obj, key, where, report, kind=None):
     """取必填键；缺了就记一条 error 并返回 None（好让 --check 一次报完）。"""
     if not isinstance(obj, dict) or key not in obj:
@@ -361,9 +416,9 @@ def validate_am(am, check_fixtures=True, am_path=None):
         return report
 
     version = am.get("contract_version")
-    if version != CONTRACT_VERSION:
-        report.error("am.invalid",
-                     "contract_version=%r，本脚本只认 %d" % (version, CONTRACT_VERSION))
+    version_problem = contract_version_problem(version)
+    if version_problem:
+        report.error("am.invalid", version_problem)
     mapping_version = am.get("mapping_version")
     if mapping_version is not None and not isinstance(mapping_version, int):
         report.error("am.invalid", "mapping_version 必须是整数，实际 %r" % (mapping_version,))
@@ -1677,6 +1732,25 @@ def print_err(error):
 # 子命令：--check
 # --------------------------------------------------------------------------- #
 
+def print_contract_version(version):
+    """`--check` 的版本可见性：识别到哪一版 + 该版本下脚本实际读了哪些键。
+
+    版本差异要让用户看见：v1/v2 的差别在「`auth` 四件套写不写进 AM」，
+    而脚本的**读取键集两版相同** —— 加一个版本不改读取逻辑，改的是契约期望。
+    所以这里同时打「识别到哪版」和「读哪些键」，避免有人以为 v2 有特殊分支。
+    """
+    note = None if isinstance(version, bool) else CONTRACT_VERSION_NOTES.get(version)
+    if note is None:
+        print("  ⇒ 识别：不支持（脚本支持 %s）—— 见下方错误" % supported_versions_text())
+        return
+    print("  ⇒ 识别：%s" % note)
+    print("  该版本下脚本实际读的 auth 键（v1/v2 相同，版本不改变读取）：")
+    print("    · 必填：%s ← 缺则 am.invalid（签名器要求显式，⛔ 不从 host 猜）"
+          % AUTH_KEYS_REQUIRED_BY_SIGNER)
+    print("    · 可缺：%s ← 缺则用签名器默认值（末尾会提示）"
+          % AUTH_KEYS_DEFAULTABLE)
+
+
 def cmd_check(am, am_path, entity_ref=None):
     """`--check`：只校验 AM 结构，不取数。有 error 退出 2，只有 warning 退出 0。"""
     report = validate_am(am, am_path=am_path)
@@ -1684,6 +1758,7 @@ def cmd_check(am, am_path, entity_ref=None):
     print("  contract_version = %r    mapping_version = %r    ontology_version = %r"
           % (am.get("contract_version"), am.get("mapping_version"),
              am.get("ontology_version")))
+    print_contract_version(am.get("contract_version"))
     print("  sources  : %d     entities : %d（已签 %d / 未签 %d）    relations : %d（脚本不用）"
           % (len(am.get("sources") or []), len(am.get("entities") or []),
              len(am.get("entities") or []) - len(report.unsigned),
@@ -2080,8 +2155,8 @@ def _selftest_pruning(selftest):
 
 
 def _mini_fixture(selftest, name):
-    """读 skill 自带的 fixtures/ 文件（相对本脚本所在目录）。"""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", name)
+    """读 skill 自带的 fixtures/ 文件（**按脚本自身位置**解析，⛔ 不看 cwd）。"""
+    path = os.path.join(FIXTURES_DIR, name)
     if not os.path.isfile(path):
         selftest.check("fixtures/%s 存在" % name, False, "缺文件：%s" % path)
         return None
@@ -2266,6 +2341,21 @@ def _selftest_check(selftest, am):
         if report.errors:
             selftest.equal("%s ⇒ 退出码 2" % label, first_error(report).exit_code, 2)
 
+    # REQ-168：契约版本白名单 = (1, 2)。v2 不再当成「坏版本」，3+ 仍拒且列出支持列表。
+    v2_am = json.loads(json.dumps(am))
+    v2_am["contract_version"] = 2
+    v2_report = validate_am(v2_am, check_fixtures=False)
+    selftest.check("contract_version=2（v2）通过校验：不再报版本错",
+                   v2_report.ok, str(v2_report.errors[:2]))
+
+    v3_am = json.loads(json.dumps(am))
+    v3_am["contract_version"] = 3
+    v3_report = validate_am(v3_am, check_fixtures=False)
+    version_msgs = [msg for code, msg in v3_report.errors if code == "am.invalid"]
+    selftest.check("contract_version=3 ⇒ am.invalid 且列出支持版本 1, 2",
+                   any("1, 2" in msg for msg in version_msgs),
+                   str(v3_report.errors[:2]))
+
 
 def _selftest_signers(selftest, am):
     """AC-004 / AC-005 / AC-008：签名器注册表、未知 mode、必填 auth 键、码表。"""
@@ -2347,6 +2437,19 @@ def cmd_selftest():
     selftest = SelfTest()
     print("access_fetch.py · self-test（离线：不联网、不要凭据）")
     print("python: %s   platform: %s" % (sys.version.split()[0], sys.platform))
+
+    # 内置夹具目录不在 ⇒ 一行「怎么办」，⛔ 不逐条刷「缺文件」、⛔ 不崩栈。
+    # 场景：agent 只把 access_fetch.py 复制走，没带 fixtures/（最常见的用法错误）。
+    if not os.path.isdir(FIXTURES_DIR):
+        print("\n✗ 找不到内置 fixtures 目录：%s" % FIXTURES_DIR)
+        print("  自检要用 fixtures/ 里的签名向量、AM 与分页夹具（不是可选项，⛔ 不能降级跳过）。")
+        print("  修：把**整个 ontok-query/ 目录**一起复制过去 —— ⛔ 只复制 access_fetch.py 不够；")
+        print("      或者直接把 `--mapping` 指向你自己的 AM、跳过自检：")
+        print("      `python <skill目录>/ontok-query/access_fetch.py --mapping <am.json> --check`。")
+        print("  注：脚本按**自身所在目录**找 fixtures（与 cwd 无关），所以 `cd` 到别处不影响；")
+        print("      但换一个目录复制**就必须连 fixtures/ 一起**。")
+        print("\n结果：无法自检（缺内置 fixtures 目录，退出 1）")
+        return 1
 
     original_socket = socket.socket
     original_getaddrinfo = socket.getaddrinfo

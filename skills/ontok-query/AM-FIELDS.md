@@ -18,7 +18,7 @@
 
 | 键 | 是什么 | 脚本 |
 | --- | --- | --- |
-| `contract_version` | AM **契约形状**的版本。**只有 `1` 是本脚本认识的** | ✅ 不认识就 `am.invalid`（退出 2），⛔ 不做「尽力兼容」 |
+| `contract_version` | AM **契约形状**的版本。脚本认 `1` / `2`（差别见 §1.1） | ✅ **白名单**：不在名单 ⇒ `am.invalid`（退出 2）并**列出支持的版本**，⛔ 不做「尽力兼容」 |
 | `mapping_version` | 这份映射的**内容**修订号（`@pending.get.ref` 里的 `@v<版本>`） | ✅ 原样抄进输出 `meta.mapping_version` |
 | `project` | 生成这份 AM 的项目标记 | ⛔ |
 | `ontology_version` | 对应本体版本 | ⛔（`--check` 只打印，不判断） |
@@ -27,6 +27,20 @@
 | `relations` | 实体间关系（跨源边） | ⛔ 取数不需要边；跨源拼装由上层做（`SKILL.md` §4.3 的「跨源边」） |
 
 > `relations` 常常是空数组。脚本不读它，**也不因为它是空就报错**——取数只关心「一个 entity → 一次接口」。
+
+### 1.1 `contract_version`：脚本认哪两版，对它们分别怎么对待
+
+| 版本 | 契约形状的差别 | 脚本对它的行为 |
+| --- | --- | --- |
+| `1`（原始） | `auth` 只声明 `mode` + `credential_env`；签名四件套（`signed_headers` / `timestamp` / `scope` / `content_type`）不在契约里，按**签名器默认值**理解 | ✅ 照读；四项缺了用**签名器默认值**（`--check` 末尾会明说在用什么默认值） |
+| `2` | **唯一的契约增量**：`auth` 可**显式**声明 `signed_headers` / `timestamp` / `scope`（+ `content_type`） | ✅ 照读；显式写的值与签名器默认值必须签出**逐字节相同**的 `Authorization`（`--selftest` 用同一签名向量对拍 —— 否则就是「换个写法把签名签坏了」） |
+| `3` 及以上 / 非整数 | — | ⛔ **一律拒绝**：`am.invalid`（退出 2）+ 消息**列出支持的版本**（`1, 2`）；⛔ 不「尽力解析」、不按最新版硬读 |
+
+> **版本改的是「契约期望」，不是脚本的读取逻辑。**
+> 两版下脚本读的键**完全相同**，所以 v1 / v2 之间**没有任何按版本的行为分支**；
+> `--check` 每次都会打印「识别到哪一版 + 该版本下脚本实际读了哪些 `auth` 键」。
+> 下面 §二 / §三 的逐键表**不按版本分栏**：一个键在哪个版本都是同一个意思
+> （某份 v2 数据多写了 `operation.path` / `.headers` / `.vars`，那是**数据侧差异**，不是契约新增能力）。
 
 ---
 
@@ -52,7 +66,7 @@
 | `auth.timestamp.header` / `.format` | 时间戳放哪个头、什么格式 | ◐ 缺 ⇒ 签名器默认（`X-TC-Timestamp` / `unix-seconds`） |
 | `auth.scope` | scope 由哪几段拼（段名顺序即拼接顺序） | ◐ 缺 ⇒ 签名器默认（`["date","service","tc3_request"]`） |
 | `auth.service` | **该接口所属的服务名**，进待签名 scope 与派生密钥。**`tc3-hmac-sha256` 必填** | ✅ 缺/空 ⇒ `am.invalid`（退出 2）并**点名 `auth.service`**；⛔ **不再从 `base_url` 的 host 猜** |
-| `defaults` | 默认值表（契约 v1 放这里，v2 在 `request.defaults`） | ✅ `bindings.<名>.source = "default"` 时从这里取值；键名大小写可与占位符不同（先精确、再大小写不敏感） |
+| `defaults` | 默认值表。两处都读：`sources[].defaults` 是基础，`request.defaults`（若写了）覆盖它 —— **与 `contract_version` 无关** | ✅ `bindings.<名>.source = "default"` 时从这里取值；键名大小写可与占位符不同（先精确、再大小写不敏感） |
 
 ⚠️ **`auth.service` 是签名输入，不是装饰**：它和 `auth.signed_headers` / `timestamp` / `scope` 一起决定
 `Authorization` 的字节。猜错**不会报错**，只会签出一个「看起来对」的错签名 —— 所以脚本要求它显式声明。

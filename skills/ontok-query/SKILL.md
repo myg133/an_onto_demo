@@ -353,26 +353,60 @@ python ana.py bill --class <class>
 > 手写一遍的代价是实测过的：签名不匹配、时间戳用了本地日期、分页死循环、字段路径写错，
 > 9 次错误里 6 次出在这几件事上（§4.4②）。
 
-脚本在同目录：`access_fetch.py`；离线夹具在 `fixtures/`（含签名向量与几份演示 AM）。
+#### ① 先定位脚本（**别假设它就在当前目录**）
 
-#### ① 最常用的命令
+脚本是**一个普通的 `.py` 文件**，随本 skill 一起分发。它：
+
+| 不是 | 所以 ⛔ 别做 |
+| --- | --- |
+| 不是 pip 包 | `python -c "import ontok"` ⇒ `ModuleNotFoundError`（**这是正常的**） |
+| 不是命令 | `which ontok-builder` ⇒ 找不到（**这是正常的**，构建工具不一定装在客户环境） |
+| 不在你的工作目录 | `python access_fetch.py` ⇒ `No such file`（**先定位再跑**） |
+
+**定位三步（任选其一）**：
+
+```bash
+# A) 你知道 skill 装在哪 ⇒ 直接用全路径（最推荐，不用 cd）
+python <skill目录>/ontok-query/access_fetch.py --selftest
+
+# B) 不知道 ⇒ 先找它（找 access_fetch.py 这个文件，而不是找命令）
+ls <skill目录>/ontok-query/access_fetch.py
+find / -maxdepth 6 -name access_fetch.py 2>/dev/null        # 兜底
+
+# C) 想省事 ⇒ 复制到你自己的工作目录，之后用短命令
+cp -r <skill目录>/ontok-query .        # 整个目录（脚本 + fixtures）
+FETCH="python ontok-query/access_fetch.py"     # 后续示例统一用 $FETCH
+$FETCH --selftest
+```
+
+> ⚠️ **`--selftest` 是"路径对不对"的唯一判据**：不需要 AM、不需要凭据、不需要网络。
+> 报 `No such file` ⇒ **你路径写错了，不是脚本坏了**；跑出 `88 passed` 才说明定位成功。
+>
+> ⚠️ **`--selftest` 要连 `fixtures/` 一起**（签名向量、AM 与分页夹具都在里面）：
+> 只复制 `access_fetch.py` 会报 `找不到内置 fixtures 目录`（**这是有意的**，不是脚本坏）。
+> 只要取数、不跑自检，可以只放 `access_fetch.py`，`--mapping` 指向客户自己的 AM 即可。
+>
+> ⚠️ 同目录的 `fixtures/` 是**自检与演示用**（签名向量 + 几份假 AM），
+> ⛔ **不要拿它当生产 AM**；`--mapping` 永远指向**客户自己的 AM 文件**。
+
+#### ② 最常用的命令
 
 ```bash
 # 0) 先跑一次「不需要 AM、不需要凭据」的离线自检（断网也能过）
-python access_fetch.py --selftest
+$FETCH --selftest
 
 # 0.5) 看当前支持哪些 auth.mode（AM 里只能写这里列出来的）
-python access_fetch.py --list-signers
+$FETCH --list-signers
 
 # 1) 体检 AM：结构对不对、entity 签没签、夹具在不在。不取数、不要凭据
-python access_fetch.py --mapping <am.json> --check
+$FETCH --mapping <am.json> --check
 
 # 2) 试跑：用 entity.fixture 走完整流程，不发网络、不要凭据
-python access_fetch.py --mapping <am.json> --entity <entity id> --dry-run
+$FETCH --mapping <am.json> --entity <entity id> --dry-run
 
 # 3) 真取数：凭据只从 auth.credential_env 命名的环境变量读
 export <变量名1>=<值>  <变量名2>=<值>    # 变量名照 AM 的 auth.credential_env 写；只 export 一次，⛔ 别 echo
-python access_fetch.py --mapping <am.json> --entity <entity id> \
+$FETCH --mapping <am.json> --entity <entity id> \
     --param <名>=<值> --max-rows 500 --out ./rows.json
 ```
 
@@ -406,18 +440,18 @@ python access_fetch.py --mapping <am.json> --entity <entity id> \
 
 > 一份填了具体厂商值的同名样例在**附录 B**（标了「示例不是规格」）：形状一样，名字只是那一家的。
 
-#### ② 两条铁律（最容易踩）
+#### ③ 两条铁律（最容易踩）
 
 | 铁律 | 说明 |
 | --- | --- |
 | **未签的 entity 取不了** | `reviewed_by` 为空 ⇒ `[am.unsigned] …还没签`，退出码 **2**，一个请求都不发（与 R6 同一条纪律）。**别绕**：让映射作者补 `reviewed_by`（`name@YYYY-MM-DD`），或换一个已签的 entity（`--check` 会列出哪个没签） |
 | **截断时退出码是 8** | `meta.truncated: true` = **没取全**（到 `--max-rows`，或到 1000 页保险丝）。它不是一个警告，是把「数据不完整」写进契约。⛔ 别把 `truncated=true` 当"取全了"去作答：调大 `--max-rows` 或收窄 `--param`，实在取不全就在答案里说「这是前 N 条」 |
 
-#### ③ 常见错误表（10 个码：你看到它说明什么、怎么修）
+#### ④ 常见错误表（10 个码：你看到它说明什么、怎么修）
 
 | 退出码 | 码 | 你看到它说明什么 | 怎么修 |
 | --- | --- | --- | --- |
-| **2** | `am.invalid` | AM 结构/版本/必填键不对（含 `auth.service` 缺失），或 `request.required` 里的名字这次没给值 | 看消息点名的那一处：`contract_version` 只认 `1`；缺键补键；缺业务标识就补 `--param`（例如 `--param <名>=<值>`）。改完先 `--check` |
+| **2** | `am.invalid` | AM 结构/版本/必填键不对（含 `auth.service` 缺失），或 `request.required` 里的名字这次没给值 | 看消息点名的那一处：`contract_version` 只认 `1` / `2`（别的值消息里会列出支持列表）；缺键补键；缺业务标识就补 `--param`（例如 `--param <名>=<值>`）。改完先 `--check` |
 | **2** | `am.unsigned` | 这个 entity 的 `reviewed_by` 为空——**未签不许取数** | 找映射作者签（`name@YYYY-MM-DD`），或换已签的 entity。⛔ 不要自己填个名字糊过去 |
 | **2** | `param.not_pushdown` | 你给的 `--param` 不在 `capability.pushdown` 里 | 用消息里列出的可用参数；其余条件只能拉回来自己筛（或在 AM 里加 pushdown 声明） |
 | **3** | `credential.missing` | `auth.credential_env` 命名的环境变量没设 | 在当前 shell export 一次（消息里会点名变量）；⛔ 不要把值写进命令行/脚本/AM |
@@ -430,7 +464,7 @@ python access_fetch.py --mapping <am.json> --entity <entity id> \
 
 > `--check` 就红（退出 2）时：先修 AM，⛔ 别急着取数——那是白跑一次请求，还可能计费。
 
-#### ④ 规格还在，但不再是唯一交付物
+#### ⑤ 规格还在，但不再是唯一交付物
 
 | 文件 | 现在该怎么用 |
 | --- | --- |
@@ -440,7 +474,7 @@ python access_fetch.py --mapping <am.json> --entity <entity id> \
 
 > 脚本的行为就是这两份规格的实现。**两者冲突时以脚本为准**，并把「哪条规格写错了」报上来——别各自解释。
 
-#### ⑤ 脚本**不做**的事（别指望）
+#### ⑥ 脚本**不做**的事（别指望）
 
 | 不做 | 原因 |
 | --- | --- |
@@ -469,12 +503,28 @@ python access_fetch.py --mapping <am.json> --entity <entity id> \
 
 | 版本号 | 管什么 | 脚本怎么用它 |
 | --- | --- | --- |
-| `contract_version` | **契约形状**（有哪些键、键是什么意思、哪些必填） | **只认自己支持的值**（当前 `1`）。不认识 ⇒ `am.invalid`（退出 2），⛔ 不「尽力解析」 |
+| `contract_version` | **契约形状**（有哪些键、键是什么意思、哪些必填） | **白名单**：`1` / `2`（对照见下）。不在名单 ⇒ `am.invalid`（退出 2），消息**列出支持的版本**，⛔ 不「尽力解析」 |
 | `mapping_version` | 映射**内容**的修订号 | 不判断，原样抄进输出 `meta.mapping_version` 供追溯 |
 | `ontology_version` | 这份映射绑的是哪版本体 | 不判断（`--check` 只打印，不拦） |
 
 **不一致时谁说了算**：能不能执行**只看** `contract_version`；`mapping_version` / `ontology_version`
 不一致**不拦**，但必须能在回执的 `meta` 里看见。
+
+**版本对照**（`--check` 每次都会打印「识别到哪一版 + 该版本下脚本读了哪些 `auth` 键」）：
+
+| 版本 | 是什么 · 脚本怎么对待 |
+| --- | --- |
+| `1` | **原始契约**：`auth` 只声明 `mode` + `credential_env`；`signed_headers` / `timestamp` / `scope` / `content_type` 由**签名器默认值**兜底（`--check` 末尾会提示正在用默认值）。 |
+| `2` | **契约增量只有一个**：`auth` 可显式声明 `signed_headers` / `timestamp` / `scope`（+ `content_type`）。⚠️ 数据侧差异（**不是契约差异**）：v2 的 AM 数据里用上了 `operation.path` / `.headers` / `.vars`，并把 `Region` 从 `request.template` 挪进 `operation.headers` 的 `{region}` 占位符。**脚本对两版一视同仁**，这三个键两版都读、缺了按兜底（见 [`AM-FIELDS.md`](AM-FIELDS.md) §3.2）。 |
+| `3` 及以上 / 非整数 | ⛔ **一律拒绝**：`am.invalid`（退出 2），消息**列出支持的版本**（`1, 2`）。⛔ 不「尽力解析」、不按最新版硬读。 |
+
+两条最容易误读的点：
+
+1. **脚本读哪些键，与版本无关**：两版读的是同一组 `auth` 键 —— `mode` · `credential_env` · `service` 必填
+   （`service` 由签名器要求显式），`signed_headers` · `timestamp` · `scope` · `content_type` 可缺（缺则签名器默认）。
+   版本只决定「契约**期望**你写不写」，⛔ **不要因为 AM 是 v2 就在调用侧加分支**。
+2. **显式写 ≠ 改签名**：v2 把四件套写进 AM 后，签出的 `Authorization` 必须与走签名器默认值时**逐字节相同**
+   （`--selftest` 用同一签名向量对拍：同一份 `Signature`，否则就是「换个写法把签名签坏了」）。
 
 #### ③ 必填 vs 可选
 
@@ -627,7 +677,7 @@ if __name__ == "__main__":
 > 名字（`CvmInstance` / `tencent-cvm` / `X-TC-*` / `TENCENT_*`）都属于**那一家的 AM**，不是本 skill 的规定。
 > 换成别的厂商/别的本体时，命令里的 `<entity id>`、参数名、环境变量名都按**你拿到的 AM** 填。
 
-**命令的填法**（对应 §4.5 ① 的三步）：
+**命令的填法**（对应 §4.5 ② 的命令示例）：
 
 ```bash
 python access_fetch.py --mapping am.json --entity CvmInstance --dry-run
@@ -635,7 +685,7 @@ python access_fetch.py --mapping am.json --entity CvmInstance --param region=ap-
 export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM 的 auth.credential_env
 ```
 
-**输出形状**（对应 §4.5 ① 的 JSON；`meta` 字段一个不少）：
+**输出形状**（对应 §4.5 ② 的 JSON；`meta` 字段一个不少）：
 
 ```json
 { "@context": { "ontok": "https://ontok.dev/ns#" },
@@ -647,7 +697,7 @@ export TENCENT_SECRET_ID=...  TENCENT_SECRET_KEY=...     # 变量名来自 AM �
             "source": "tencent-cvm", "mapping_version": 1 } }
 ```
 
-**错误消息长什么样**（对应 §4.5 ③；码与退出码是规格，具体串是示例）：
+**错误消息长什么样**（对应 §4.5 ④；码与退出码是规格，具体串是示例）：
 
 | 你会看到 | 这一家云里的样子 |
 | --- | --- |
