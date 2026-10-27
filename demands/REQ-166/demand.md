@@ -72,3 +72,29 @@ BA 建议形状（不是最终契约）：
 脚本读序（`access_fetch.py:862-865`）：`paging.offset_param → request.paging.offset → request.paging.page → "Offset"`，`limit`/`max_limit` 同理（`100` 也是字面量）。
 ⇒ **"猜"的是最后那几个字面量**。REQ-167 会把「两层都缺」改成 `am.invalid`，且 `max_limit` 不再默认 100。
 ⇒ 本单要求：**每个有 `iterator` 的 entity 两层都必须非空**（缺一层就红）。
+
+---
+
+## 实测发现（2026-10-27 19:35，lion 用真 AM 跑 `access_fetch.py --check`）
+
+**输入**：`.local/am-v2/am-tencent.v2.json`（8 sources / 14 entities）
+
+| # | 结果 |
+| --- | --- |
+| 1 | `service` 缺失的是 **8 个 source**（不是 8 条 error 的同一个）⇒ 按 base_url 补齐后，service 类错误**全部消失** |
+| 2 | **只剩一个阻断，且在脚本侧**：`✗ [am.invalid] contract_version=2，本脚本只认 1` |
+
+### 关于 #2（跨到 join 的面）
+
+| 侧 | 事实 |
+| --- | --- |
+| Rust | `CONTRACT_VERSION=1` + `CONTRACT_VERSION_V2=2`，`contract_version_supported` 接受 **1|2** |
+| 真 AM | `contract_version: 2`（v2 = `operation` 泛化成 `headers{}`+`vars{}`，REQ-152） |
+| 脚本 + `AM-FIELDS.md:21` | **只认 1** |
+
+⇒ **已请 join 支持 v2**（⛔ 不把 AM 降级回 1，那会丢 `headers{}`/`vars{}`）。
+⇒ 本单的 fixtures 也要从 2 个 source 扩到**8 个**（cvm/vpc/cbs/clb/cdb/ssl/monitor/billing）。
+
+### service 值（按 base_url 人工确认，待 join 二次核）
+
+cvm · vpc · cbs · clb · cdb · **ssl**（不是 sslcert）· monitor · **billing**（不是 bill）
