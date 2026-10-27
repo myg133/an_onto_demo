@@ -1030,6 +1030,24 @@ pub enum ConsoleCmd {
     /// GET  /api/review                       ?project&proposal
     /// POST /api/decide                       body {project, proposal, item, track, decision}
     ///
+    /// ⭐ REQ-159 · 构建包导入（P1a，全部 admin token；query token ⇒ 403）：
+    ///
+    /// POST /api/projects                     body {project, label?, key_label} → 201 + **一次性 query key**
+    ///                                        （库里存 sha256 + AES-256-GCM 密文，明文可再次查看）
+    /// POST /api/projects/:p/bundles          body = 包的**原始字节**（Content-Type: application/octet-stream，⛔ 不是 multipart）
+    /// GET  /api/projects/:p/bundles/:id      包状态与组件清单
+    /// POST /api/projects/:p/bundles/:id/import    解析入库（单事务产**新版本**，⛔ 不冻结）
+    /// POST /api/projects/:p/bundles/:id/activate  冻结该版本 + 写 projects.active_version_id
+    /// PUT  /api/projects/:p/database        body {dsn, dialect} → 加密存；响应**没有** dsn
+    /// POST /api/projects/:p/database/test   真连一次；**失败也返 200** + {ok:false, error:{code,message}}
+    /// GET  /api/projects/:p/key             再次查看 key（每次调用写一条 reveal_key 审计）
+    ///
+    /// ⚠️ 包校验顺序：体积（100 MB）→ zip 合法 → 路径安全 → manifest → files[] sha256 →
+    /// project 同名 → 组件计数。8 个错误码：bundle.manifest.invalid /
+    /// bundle.files.mismatch / bundle.sha256.mismatch / bundle.project.mismatch /
+    /// bundle.version.unsupported / bundle.path.illegal / bundle.too_large / db.dsn.missing。
+    /// ⚠️ DSN 的加密列需要 `ONTOK_SECRET_KEY`（64 位十六进制 = 32 字节）；**缺了就拒绝启动**。
+    ///
     /// ⚠️ 鉴权只认 `Authorization: Bearer <token>`。`--tokens` 里装两套凭据
     /// （`kind: "admin" | "query"`）：query token 调管理端点 ⇒ **403**；无 token ⇒ 401。
     /// ⛔ 同一个 token 不许两用 —— 加载时直接拒绝整份表。

@@ -25,6 +25,11 @@ pub mod agent_registry;
 // 它是**存储层**：编排（`extract::ai_semantic`）是同步的，库读写在它前后各一次。
 pub mod ai_cache;
 pub mod apply;
+// ⭐ REQ-159 · 构建包导入的四张表（`project_keys` / `project_bundles` /
+// `project_bundle_payloads` / `project_databases`）。⛔ 不并进 `project`：
+// 那是最老的一对概念（项目 / 版本），混进去会让「这条 SQL 属于哪条流水线」
+// 变成读代码才能回答的问题。
+pub mod bundle_store;
 pub mod pg;
 pub mod pool;
 pub mod project;
@@ -33,6 +38,7 @@ pub mod snapshot_store;
 
 pub use agent_registry::PgAgentRegistry;
 pub use ai_cache::PgAiCache;
+pub use bundle_store::PgBundleStore;
 pub use pg::StoreError;
 pub use pool::DbError;
 pub use snapshot_store::PgStore;

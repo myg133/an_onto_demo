@@ -95,7 +95,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     // 容量按「全都要发」估算 —— 稳态下真实长度短得多，但多出来的容量
     // 只是没被用到的 Vec 内存，不是一次分配失败。
-    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + JOIN_STATE_PATCH.len() + 512;
+    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + JOIN_STATE_PATCH.len() + SCHEMA_PROJECT_BUNDLES.len() + 512;
     let mut batch = String::with_capacity(cap);
     batch.push_str(MIGRATE_LOCK_PREFIX);
     batch.push_str(SCHEMA);
@@ -117,6 +117,9 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     // REQ-109 · `ai_cache` 与 agent-registry 同一条 batch（同一把交易级咨询锁）。
     // 新表、无外键、无历史遗留 ⇒ 不需要 ALTER 补列那条路径。
     batch.push_str(crate::db::ai_cache::SCHEMA_AI_CACHE);
+    // ⭐ REQ-159 · 项目 / key / 构建包 / 源库 DSN 四张表（+ 一张包字节卫星表）。
+    // 它们是**新表、无历史遗留** ⇒ 不进 [`ALTER_PATCHES`]（那张表的跳过判据是逐列的）。
+    batch.push_str(SCHEMA_PROJECT_BUNDLES);
     batch.push_str(MIGRATE_COMMIT);
     sqlx::raw_sql(batch.as_str()).execute(pool).await?;
     Ok(())
@@ -439,7 +442,7 @@ CREATE TABLE IF NOT EXISTS concept_groups (
 /// 的结果把「已存在」的列从 batch 里摘掉，一大坨字符串没法逐条摘。
 /// 元组里的 `(表名, 列名)` 同时就是探查询「查什么」的答案 ——
 /// 「改什么」与「查什么」永远同源，加第 4 条只改这一张表。
-const ALTER_PATCHES: [(&str, &str, &str); 16] = [
+const ALTER_PATCHES: [(&str, &str, &str); 18] = [
     // REQ-004 · 抽取来源（ADR-001：apply 时原样取提案的值，缺失记 NULL，
     // 不继承 base、不推断）。
     (
@@ -570,6 +573,31 @@ const ALTER_PATCHES: [(&str, &str, &str); 16] = [
         "join_evidence",
         "ALTER TABLE link_types ADD COLUMN IF NOT EXISTS join_evidence TEXT;",
     ),
+    // ── REQ-159 · `projects` 补两列（构建包导入：项目备注 + 生效版本指针）──────
+    //
+    // 为什么 **位置固定在最末两格**：`ALTER_PATCHES` 与 `patched_columns_present`
+    // 的探查询是**按列序号**对账的（N 变了几条，那段代码一个字都不用改），
+    // 所以「加列」只许**追加**，⛔ 不许插到中间 —— 插进去会让已部署库上的
+    // 探查询顺序与 DDL 顺序错位（虽然目前两者都以本数组为唯一来源，
+    // 但「只许追加」是这张表的可维护性前提，写在最能被看到的地方）。
+    //
+    // `label`：项目备注（`POST /api/projects` 的 `label`）。允许 NULL = 没写备注，
+    // 与 `Some("")`（写了但为空）不是一回事 —— 建项目时**空串归一成 NULL**。
+    //
+    // `active_version_id`：**人工激活**写的那一格（`POST …/activate`）。
+    // ⛔ 不加 UNIQUE / NOT NULL：新项目还没有生效版本（NULL 有意义），
+    // 而 REQ-159 的 P1a **不碰** `query serve` 的读取路径（多项目模式是 P1b），
+    // 所以这一列此刻只是「被写下来」，读它的是 P1b。
+    (
+        "projects",
+        "label",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS label TEXT;",
+    ),
+    (
+        "projects",
+        "active_version_id",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_version_id UUID REFERENCES ontology_versions(id);",
+    ),
 ];
 
 /// REQ-120 · **把 `link_types.join_verified` 从布尔归一成文本**（三态）。
@@ -668,3 +696,119 @@ WHERE a.id = sub.id
 /// 在表已存在时实测**一把锁都不取**（见 [`patched_columns_present`] 的锁表），
 /// 放进那张表只会平白多一次存在性判断。
 const SCHEMA_AGENT_REGISTRY_PATCH: &str = crate::db::agent_registry::SCHEMA_AGENT_REGISTRY;
+
+/// ⭐ REQ-159 · **构建包导入**的四张表（+ 一张包字节卫星表）。
+///
+/// # 为什么是独立常量、且**不进** [`ALTER_PATCHES`]
+///
+/// 它们是**新表**，没有历史遗留列要补 —— 而 `ALTER_PATCHES` 的跳过判据是
+/// 「某一列是否存在」（见 [`patched_columns_present`] 的锁表）。新表塞进去
+/// 只会在稳态库上多几次存在性判断，不改变任何行为。
+///
+/// `CREATE TABLE IF NOT EXISTS` 在表已存在时**一把锁都不取**（同
+/// `SCHEMA_AGENT_REGISTRY` / `ai_cache` 的先例），所以每轮 `migrate()` 照发无代价。
+///
+/// # 与契约（`BA/demands/REQ-159/demand.md` §十六 · §五）的逐条对应
+///
+/// | 表 | 契约给的形状 | 本文件 |
+/// | --- | --- | --- |
+/// | `project_keys` | 一项目一把 key，只存 `sha256` | 逐字（+ `ON CONFLICT` 不写，靠唯一索引兜） |
+/// | `project_keys_one_active` | 部分唯一索引 | 逐字 —— 「一项目一把」落在**数据库**上（AC-010） |
+/// | `project_bundles` | 包的状态机 + manifest 原文 + 整包 sha256 | 逐字 |
+/// | `project_databases` | DSN 密文（⛔ 永不回显） | 逐字 |
+/// | （无） | 契约里**没有**存包字节的列 | 见下面的 `project_bundle_payloads` |
+///
+/// # ⚠️ 唯一一处对契约的**扩展**：`project_bundle_payloads`
+///
+/// 契约的 `project_bundles` 只有 `bytes BIGINT`（**大小**）与 `bundle_sha256`
+/// （指纹），**没有**存字节的地方。而端点的分工是「上传时只校验不解析、
+/// import 时才解析」—— 包字节必须活过这两次请求。三条路里：
+///
+/// - 放进程内存 ⇒ 重启即丢，`import` 变成「看运气」；
+/// - 放磁盘 spool ⇒ 多一个 `--bundle-dir` 参数、多一个「文件与行不一致」的失败面，
+///   而且它在 `tests/test_req107_source_enumeration.rs` 的写点登记里是**又一条出口**
+///   （包字节不是客户视图，但那次登记的必要性本身就说明它不是免费的）；
+/// - **放一张卫星表** ⇒ 与行同生共死、幂等、可事务、零残留（AC-006）。
+///
+/// 选第三条。**四张契约表的形状逐字未改**，扩展只多一张表 —— 交付里显式登记。
+/// 包体积的真实量级是百 KB 级（demand §十-1：DB 只带描述不带数据），
+/// 上限 100 MB 是**拒绝阈值**，不是常态；`BYTEA` 在 PG 里走 TOAST，不影响别的列的行宽。
+const SCHEMA_PROJECT_BUNDLES: &str = r#"
+-- ⭐ REQ-159 · key 表：**只存 sha256**，明文只在 `POST /api/projects` 的响应里出现一次。
+CREATE TABLE IF NOT EXISTS project_keys (
+  id                UUID PRIMARY KEY,
+  project_id        UUID NOT NULL REFERENCES projects(id),
+  token_sha256      TEXT NOT NULL UNIQUE,
+  -- ⭐ 契约变更（2026-10-27 10:25）：key 要**能再次查看**，所以多一列可逆密文。
+  -- 两列都留：鉴权走 `token_sha256`（快、不碰密钥），查看走 `token_ciphertext`
+  -- （要密钥才能解）。⛔ 只留 ciphertext 的方案会让每次鉴权都解密。
+  token_ciphertext  TEXT NOT NULL,
+  -- ⛔ NOT NULL：这把 key 给谁用（审计归属）。空串在建 key 的那一层就被拒。
+  label             TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at        TIMESTAMPTZ
+);
+
+-- ⚠️ 幂等补列：`token_ciphertext` 是契约变更之后才加的，而本表在**同一个 PR** 里
+-- 已经存在过一小段时间（本分支的本地测试库）。`CREATE TABLE IF NOT EXISTS` 不会
+-- 给已存在的表补列，所以这里补一条；补完**尽可能**把 NOT NULL 收上去 ——
+-- 有 NULL 行时（本地遗留行，明文已不可考）保持可空并留给运行期拒绝，⛔ 不伪造密文。
+ALTER TABLE project_keys ADD COLUMN IF NOT EXISTS token_ciphertext TEXT;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'project_keys'
+               AND column_name = 'token_ciphertext'
+               AND is_nullable = 'YES')
+     AND NOT EXISTS (SELECT 1 FROM project_keys WHERE token_ciphertext IS NULL)
+  THEN
+    ALTER TABLE project_keys ALTER COLUMN token_ciphertext SET NOT NULL;
+  END IF;
+END $$;
+
+-- 「一项目一把」**落在数据库上**（AC-010）：并发两把 active key 时，
+-- 第二把必须被 23505 拒掉，而不是只靠应用层先查后插（那是 TOCTOU）。
+CREATE UNIQUE INDEX IF NOT EXISTS project_keys_one_active
+  ON project_keys(project_id) WHERE revoked_at IS NULL;
+
+-- ⭐ REQ-159 · 构建包：状态机 + manifest 原文 + 整包指纹。
+--
+-- `state` 的取值集合由 `console::bundle::BundleState` 收口
+-- （uploaded / db_pending / imported / activated / failed），
+-- 这里不加 CHECK：状态机的**唯一**权威是那个枚举，加一份 CHECK 就是两份定义。
+CREATE TABLE IF NOT EXISTS project_bundles (
+  id                   UUID PRIMARY KEY,
+  project_id           UUID NOT NULL REFERENCES projects(id),
+  state                TEXT NOT NULL,
+  manifest             JSONB NOT NULL,
+  bundle_sha256        TEXT NOT NULL,
+  bytes                BIGINT NOT NULL,
+  uploaded_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  imported_version_id  UUID REFERENCES ontology_versions(id),
+  imported_at          TIMESTAMPTZ,
+  error_code           TEXT,
+  error_message        TEXT
+);
+
+-- 包字节（见上面 SCHEMA_PROJECT_BUNDLES 的说明：这是对契约的唯一扩展）。
+CREATE TABLE IF NOT EXISTS project_bundle_payloads (
+  bundle_id  UUID PRIMARY KEY REFERENCES project_bundles(id),
+  data       BYTEA NOT NULL
+);
+
+-- ⭐ REQ-159 · 源库 DSN：**密文列**（AES-256-GCM，密钥来自环境变量）。
+-- ⛔ 这一列的值在任何响应 / 日志 / 审计里都不出现 —— 判据见
+-- `tests/test_req159_bundles.rs` 的 AC-009。
+CREATE TABLE IF NOT EXISTS project_databases (
+  project_id       UUID PRIMARY KEY REFERENCES projects(id),
+  dialect          TEXT NOT NULL,
+  dsn_ciphertext   TEXT NOT NULL,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 三态：NULL = 还没测过 / true = 上次测通 / false = 上次测不通。
+  -- `import` 只认 true（「配 DSN」与「DSN 可用」是两件事，demand §四 状态机）。
+  last_check_ok    BOOLEAN,
+  last_check_at    TIMESTAMPTZ,
+  last_error_code  TEXT
+);
+"#;

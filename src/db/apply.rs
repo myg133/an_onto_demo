@@ -89,24 +89,12 @@ impl PgApplier {
         // ── 落库，单事务 ──
         let mut tx = self.pool.begin().await?;
 
-        // 在事务内再建版本：锁 project 行拿 seq，避免与并发 apply 撞 seq
-        let locked: (Uuid,) = sqlx::query_as("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
-            .bind(proposal.project_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        let _ = locked;
-
-        let new_version: (Uuid, i32) = sqlx::query_as(
-            "INSERT INTO ontology_versions (id, project_id, seq)
-             VALUES ($1, $2, COALESCE((SELECT MAX(seq)+1 FROM ontology_versions WHERE project_id=$2),1))
-             RETURNING id, seq",
-        )
-        .bind(Uuid::new_v4())
-        .bind(proposal.project_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        next.version_id = new_version.0;
-        next.seq = new_version.1;
+        // 在事务内再建版本：锁 project 行拿 seq，避免与并发 apply 撞 seq。
+        // ⭐ REQ-159 起这一步是**共用入口**（`begin_new_version`）：构建包 import
+        // 也走它 —— 「建版本 + 拿 seq」只有一份实现，锁的粒度与 SQL 不会分叉。
+        let new_version = begin_new_version(&mut tx, proposal.project_id).await?;
+        next.version_id = new_version.version_id;
+        next.seq = new_version.seq;
 
         // 写快照行（复用 save 的 SQL，但走同一事务）
         write_snapshot_in(&mut tx, &next).await?;
@@ -122,8 +110,49 @@ impl PgApplier {
     }
 }
 
-fn map_apply_error(e: ApplyError) -> StoreError {
-    match e {
+/// ⭐ REQ-159 · 在**调用方的事务里**新建一个版本行（锁项目 → 取下一个 seq）。
+///
+/// # 为什么抽出来（而不是让构建包 import 自己写一遍 INSERT）
+///
+/// 「新版本 = `max(seq)+1`，并发下必须串行」这件事只有一处实现才谈得上正确：
+/// 锁的是 **project 行**（首次建版时版本行一条都没有，`FOR UPDATE` 锁不到任何东西
+/// ⇒ 并发全算出 seq=1 ⇒ 撞 `UNIQUE(project_id, seq)`）。
+/// 抄一份到 import 那边，两处锁的粒度迟早分叉，而分叉的后果是**偶发**的唯一冲突。
+///
+/// 语义与 `proposal apply` 逐字相同：本函数**不冻结**（冻结是显式动作），
+/// 也不碰 `proposals`（那是 apply 自己的状态回写）。
+pub(crate) struct NewVersion {
+    pub version_id: Uuid,
+    pub seq: i32,
+}
+
+pub(crate) async fn begin_new_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: Uuid,
+) -> Result<NewVersion, StoreError> {
+    // 锁 project 行 —— 它必定存在，串行化同一 project 的建版本。
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+
+    let row: (Uuid, i32) = sqlx::query_as(
+        "INSERT INTO ontology_versions (id, project_id, seq)
+         VALUES ($1, $2, COALESCE((SELECT MAX(seq)+1 FROM ontology_versions WHERE project_id=$2),1))
+         RETURNING id, seq",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(NewVersion {
+        version_id: row.0,
+        seq: row.1,
+    })
+}
+
+fn map_apply_error(e: ApplyError) -> StoreError {    match e {
         ApplyError::NotPassed { blocked, dangling } => {
             StoreError::ProposalNotPassed { blocked, dangling }
         }
