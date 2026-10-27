@@ -383,10 +383,11 @@
 | `README.md` | 去掉 15 处 `.agents/` 引用 |
 | 被跟踪文件 | **26 → 10** |
 
-> ⚠️ **一处差异必须记住**：仓库里那 5 份角色定义是**项目定制版**
-> （`anspire-open-ba.md` 142 行，写着 `BA/` 路径、REQ 编号认领、session 规则）；
-> 全局的 `references/roles/ba.md` 是**通用版**（211 行）。
-> 按用户指示以全局为准；**旧文本可从这个 commit 的父提交取回**（`git show 6d5d73b^:.agents/agents/anspire-open-ba.md`）。
+> ✅ **纠错（同日 10:20）**：我先写了"项目定制角色定义会丢"，**这是错的**。
+> 实测：`AGENTS.md`（140 行）就是那份项目定制版，与被删的
+> `.agents/agents/anspire-open-ba.md`（142 行）**只差 4 行**（一处路径措辞 + 两行巡检说明）。
+> ⇒ **项目约定没有丢失**，`AGENTS.md` 仍在 workspace 分支里。
+> 全局 `references/roles/ba.md`（211 行）是通用版，两者用途不同。
 
 ### ⚠️ 仍未处置（规范要求 2 文件，现 10 个）
 
