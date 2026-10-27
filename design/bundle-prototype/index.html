@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ontok · 新建项目 / 上传构建包（静态样机）</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #070a10; --bg-2: #0b0f17;
+  --panel: rgba(255,255,255,0.028); --panel-2: rgba(255,255,255,0.05);
+  --line: rgba(255,255,255,0.085); --line-soft: rgba(255,255,255,0.045);
+  --text: #e8edf6; --text-2: #9aa7bd; --text-3: #64708a;
+  --accent: #6ec8ff; --accent-soft: rgba(110,200,255,0.16);
+  --warn: #e6b455; --warn-soft: rgba(230,180,85,0.14);
+  --ok: #5fd3a3; --ok-soft: rgba(95,211,163,0.14);
+  --danger: #ef7a8a; --danger-soft: rgba(239,122,138,0.14);
+  --radius: 12px; --radius-sm: 8px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
+  --shadow-2: 0 24px 64px rgba(0,0,0,.55);
+  --ease: cubic-bezier(.22,.61,.36,1);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font); font-size: 13.5px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+input, select { font: inherit; }
+
+/* ── 顶部：模拟 Studio 头 ───────────────────────────────── */
+.appbar {
+  display: flex; align-items: center; gap: 14px;
+  height: 56px; padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,.03), transparent);
+}
+.brand { display: flex; align-items: center; gap: 9px; }
+.brand .logo {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: radial-gradient(circle at 35% 30%, #7fd4ff, #2b6c9e 60%, #0d2a3f);
+  box-shadow: 0 0 18px rgba(110,200,255,.45);
+}
+.brand b { font-size: 14px; letter-spacing: .3px; }
+.brand small { display: block; color: var(--text-3); font-size: 9.5px; letter-spacing: 1.6px; }
+.appbar .sep { width: 1px; height: 26px; background: var(--line); margin: 0 2px; }
+.proj { display: flex; align-items: center; gap: 8px; }
+.proj .name { font-weight: 600; }
+.proj .meta { color: var(--text-3); font-size: 12px; }
+.plus {
+  width: 26px; height: 26px; padding: 0; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--accent); font-size: 17px; line-height: 1;
+  display: grid; place-items: center; transition: all .18s var(--ease);
+}
+.plus:hover { background: var(--accent-soft); border-color: rgba(110,200,255,.5); transform: translateY(-1px); }
+.plus:disabled { opacity: .35; cursor: not-allowed; transform: none; }
+.tag { font-size: 11px; padding: 1.5px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--text-2); }
+.tag.admin { color: var(--accent); border-color: rgba(110,200,255,.35); background: var(--accent-soft); }
+.spacer { flex: 1; }
+.hint { color: var(--text-3); font-size: 12px; }
+
+/* ── 舞台 ───────────────────────────────────────────────── */
+.stage { padding: 18px 16px 40px; max-width: 980px; }
+.steps { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.step {
+  display: flex; align-items: center; gap: 7px; padding: 6px 11px;
+  border-radius: 999px; border: 1px solid var(--line-soft);
+  color: var(--text-3); font-size: 12.5px; background: transparent;
+  transition: all .2s var(--ease);
+}
+.step .n {
+  width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10.5px; border: 1px solid currentColor;
+}
+.step.done { color: var(--ok); border-color: rgba(95,211,163,.3); background: var(--ok-soft); }
+.step.now  { color: var(--accent); border-color: rgba(110,200,255,.45); background: var(--accent-soft); }
+
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-1);
+  margin-bottom: 14px;
+}
+.card h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.card .sub { color: var(--text-3); font-size: 12px; margin-bottom: 14px; }
+
+label.f { display: block; margin-bottom: 12px; }
+label.f > span { display: block; color: var(--text-2); font-size: 12px; margin-bottom: 5px; }
+label.f input, label.f select {
+  width: 100%; padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+  outline: none; transition: border-color .18s var(--ease);
+}
+label.f input:focus { border-color: rgba(110,200,255,.55); box-shadow: 0 0 0 3px var(--accent-soft); }
+label.f .tip { color: var(--text-3); font-size: 11.5px; margin-top: 4px; }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.btn {
+  padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); transition: all .18s var(--ease);
+}
+.btn:hover { border-color: rgba(255,255,255,.2); transform: translateY(-1px); }
+.btn.primary { background: var(--accent-soft); border-color: rgba(110,200,255,.5); color: #cbe8ff; }
+.btn.primary:hover { background: rgba(110,200,255,.24); }
+.btn.ghost { background: transparent; color: var(--text-2); }
+.btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+/* ── 一次性 key ─────────────────────────────────────────── */
+.keybox {
+  border: 1px dashed rgba(230,180,85,.5); background: var(--warn-soft);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin: 12px 0;
+}
+.keybox .k { font-family: var(--mono); font-size: 13px; color: #ffe3ad; word-break: break-all; }
+.keybox .w { color: var(--warn); font-size: 11.5px; margin-top: 6px; }
+
+/* ── 上传区 ─────────────────────────────────────────────── */
+.drop {
+  border: 1.5px dashed var(--line); border-radius: var(--radius);
+  padding: 26px; text-align: center; color: var(--text-3);
+  transition: all .2s var(--ease); cursor: pointer;
+}
+.drop:hover, .drop.over { border-color: rgba(110,200,255,.55); background: var(--accent-soft); color: var(--text-2); }
+.drop b { color: var(--accent); }
+
+/* ── 组件清单 ───────────────────────────────────────────── */
+table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.tbl th, table.tbl td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line-soft); }
+table.tbl th { color: var(--text-3); font-weight: 500; font-size: 11.5px; }
+table.tbl td.mono, .mono { font-family: var(--mono); }
+.okmark { color: var(--ok); }
+.badmark { color: var(--danger); }
+
+/* ── 提示条 ─────────────────────────────────────────────── */
+.alert { border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12.5px; margin: 10px 0; border: 1px solid; }
+.alert.info { background: var(--accent-soft); border-color: rgba(110,200,255,.3); color: #bfe4ff; }
+.alert.ok { background: var(--ok-soft); border-color: rgba(95,211,163,.3); color: #bdf0d9; }
+.alert.warn { background: var(--warn-soft); border-color: rgba(230,180,85,.3); color: #f4dcae; }
+.alert.err { background: var(--danger-soft); border-color: rgba(239,122,138,.3); color: #ffc9d0; }
+.alert code { font-family: var(--mono); font-size: 11.5px; }
+
+/* ── 弹窗 ───────────────────────────────────────────────── */
+.mask {
+  position: fixed; inset: 0; background: rgba(4,6,10,.72);
+  backdrop-filter: blur(3px); display: none; place-items: center; z-index: 50;
+}
+.mask.open { display: grid; }
+.modal {
+  width: min(560px, calc(100vw - 32px));
+  background: linear-gradient(180deg, #0d121b, #0a0e16);
+  border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow-2); padding: 20px;
+  animation: pop .18s var(--ease);
+}
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+.modal h2 { margin: 0 0 2px; font-size: 15px; }
+.modal .sub { color: var(--text-3); font-size: 12px; margin-bottom: 16px; }
+.modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* ── 进度 ───────────────────────────────────────────────── */
+.bar { height: 4px; border-radius: 999px; background: var(--line-soft); overflow: hidden; margin: 10px 0 4px; }
+.bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3aa0d8, #6ec8ff); transition: width .4s var(--ease); }
+.log { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); margin-top: 8px; min-height: 18px; }
+.dsnmask { font-family: var(--mono); color: var(--text-3); }
+.switchline { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; margin: 6px 0 0; }
+.switchline input { accent-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- 顶部：模拟 Studio 头部，红框处就是加号 -->
+<div class="appbar">
+  <div class="brand">
+    <div class="logo"></div>
+    <div><b>元方本体平台</b><small>TURING · ONTOLOGY PLATFORM</small></div>
+  </div>
+  <div class="sep"></div>
+  <div class="proj">
+    <span class="name" id="projName">cloud-resource</span>
+    <span class="meta" id="projMeta">第 5 版 · 已冻结</span>
+    <!-- ⭐ 就是截图红框里那个加号 -->
+    <button class="plus" id="btnPlus" title="新建项目（需要 admin 权限）">＋</button>
+  </div>
+  <div class="spacer"></div>
+  <span class="tag admin" id="roleTag">admin 已登录</span>
+  <button class="btn ghost" id="btnRole">切换为匿名</button>
+</div>
+
+<div class="stage">
+  <div class="steps" id="steps">
+    <div class="step" data-s="1"><span class="n">1</span>建项目</div>
+    <div class="step" data-s="2"><span class="n">2</span>上传构建包</div>
+    <div class="step" data-s="3"><span class="n">3</span>配置 DB</div>
+    <div class="step" data-s="4"><span class="n">4</span>解析入库</div>
+    <div class="step" data-s="5"><span class="n">5</span>人工激活</div>
+  </div>
+
+  <div class="card">
+    <h3>这就是「＋」的完整链路</h3>
+    <div class="sub">
+      点右上角 <b style="color:var(--accent)">＋</b> 开始。这是**静态样机**：所有请求都是本地状态机模拟，不连后端、不发网络请求。
+      界面用的就是 Studio 那套 tokens（深色 + 能量球那套色板）。
+    </div>
+    <div class="alert info">
+      模拟数据：<code>cloud-resource</code> · 本体 v5 · 30 类 / 34 关系 / 752 属性。
+      包内 <code>db.requires_dsn = true</code>，所以会走到第 3 步（配置 DB）。
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="btnStart">开始演示</button>
+      <button class="btn ghost" id="btnReset">重置</button>
+      <span class="hint" id="stateHint">当前：等待操作</span>
+    </div>
+  </div>
+
+  <!-- 各步的展示区（由 JS 填） -->
+  <div id="panel"></div>
+</div>
+
+<!-- 弹窗：建项目 -->
+<div class="mask" id="mCreate">
+  <div class="modal">
+    <h2>新建项目</h2>
+    <div class="sub">一个项目 = 一套本体。部署只有一份，项目可以有很多个。</div>
+    <label class="f"><span>项目名 <b style="color:var(--danger)">*</b></span>
+      <input id="fName" placeholder="my-ontology" autocomplete="off">
+      <div class="tip">小写字母、数字、连字符；2–63 位。⛔ 建好后不可改名。</div>
+    </label>
+    <label class="f"><span>备注</span>
+      <input id="fLabel" placeholder="可选，例如：生产资源本体">
+    </label>
+    <label class="f"><span>这把 key 给谁用 <b style="color:var(--danger)">*</b></span>
+      <input id="fKeyLabel" placeholder="例如：数字员工 · 运维助手" autocomplete="off">
+      <div class="tip">一项目一把 key。写清用途，审计才追得到人。</div>
+    </label>
+    <div id="createErr"></div>
+    <div class="foot">
+      <button class="btn ghost" data-close>取消</button>
+      <button class="btn primary" id="btnCreate">创建并生成 key</button>
+    </div>
+  </div>
+</div>
+
+<!-- 弹窗：DSN -->
+<div class="mask" id="mDsn">
+  <div class="modal">
+    <h2>配置源数据库</h2>
+    <div class="sub">包里带 <code class="mono">db.requires_dsn = true</code>，必须先配通才能解析。</div>
+    <label class="f"><span>类型</span>
+      <select id="fDialect"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option></select>
+    </label>
+    <label class="f"><span>DSN <b style="color:var(--danger)">*</b></span>
+      <input id="fDsn" type="password" placeholder="postgresql://user:pass@host:5432/db" autocomplete="off">
+      <div class="tip">加密存进元数据库。⛔ 保存后永不回显，日志里也不会出现。</div>
+    </label>
+    <div class="row" style="margin-bottom:4px">
+      <button class="btn" id="btnTest">测试连通性</button>
+      <span class="hint" id="testHint"></span>
+    </div>
+    <div id="dsnResult"></div>
+    <div class="foot">
+      <button class="btn ghost" data-close>取消</button>
+      <button class="btn primary" id="btnDsnSave" disabled>保存并继续</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ══ 状态机 ══════════════════════════════════════════════ */
+  var S = {
+    role: "admin",              // admin | anon
+    step: 0,                    // 0..5
+    project: null,              // {name,label,key,keyLabel}
+    bundle: null,               // {id, requiresDb, components}
+    db: null,                   // {ok:true}
+    imported: null,             // {version,counts}
+    activated: false
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function el(tag, attrs, kids) {
+    var e = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") e.textContent = attrs[k];
+      else if (k === "class") e.className = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (c) { e.appendChild(c); });
+    return e;
+  }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+
+  /* ══ 顶部 ════════════════════════════════════════════════ */
+  function renderRole() {
+    var admin = S.role === "admin";
+    $("btnPlus").style.display = admin ? "" : "none";   // ⭐ 匿名看不到加号
+    $("roleTag").textContent = admin ? "admin 已登录" : "匿名浏览";
+    $("roleTag").className = "tag" + (admin ? " admin" : "");
+    $("btnRole").textContent = admin ? "切换为匿名" : "切换为 admin";
+  }
+  $("btnRole").onclick = function () {
+    S.role = S.role === "admin" ? "anon" : "admin";
+    renderRole();
+    if (S.role === "anon") setHint("匿名会话：⛔ 看不到加号（建项目是写操作）");
+    else setHint("admin 会话：加号已出现");
+  };
+
+  function setHint(t) { $("stateHint").textContent = "当前：" + t; }
+  function renderSteps() {
+    Array.prototype.forEach.call(document.querySelectorAll(".step"), function (n) {
+      var s = Number(n.getAttribute("data-s"));
+      n.className = "step" + (s < S.step || (S.activated && s <= 5) ? " done" : (s === S.step ? " now" : ""));
+      if (S.activated && s === 5 && S.step === 5) n.className = "step now";
+    });
+  }
+
+  /* ══ 第 1 步：建项目 ════════════════════════════════════ */
+  $("btnPlus").onclick = $("btnStart").onclick = function () {
+    if (S.role !== "admin") { alert("匿名会话不能建项目"); return; }
+    $("createErr").innerHTML = "";
+    open("mCreate");
+    setTimeout(function () { $("fName").focus(); }, 40);
+  };
+
+  $("btnCreate").onclick = function () {
+    var name = $("fName").value.trim();
+    var label = $("fLabel").value.trim();
+    var keyLabel = $("fKeyLabel").value.trim();
+    var err = $("createErr");
+    clear(err);
+    if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(name)) {
+      err.appendChild(el("div", { class: "alert err", text: "项目名不合法：小写字母/数字/连字符，2–63 位" }));
+      return;
+    }
+    if (!keyLabel) {
+      err.appendChild(el("div", { class: "alert err", text: "「这把 key 给谁用」必填 —— 否则审计里追不到人" }));
+      return;
+    }
+    // 模拟：同名冲突（cloud-resource 已存在）
+    if (name === "cloud-resource") {
+      err.appendChild(el("div", { class: "alert err" }, [
+        el("b", { text: "409 project.exists  " }),
+        el("span", { text: "项目 cloud-resource 已存在" })
+      ]));
+      return;
+    }
+    S.project = { name: name, label: label, keyLabel: keyLabel,
+      key: "ontok_q_" + rand(40) };
+    S.step = 2;
+    close("mCreate");
+    renderSteps();
+    renderPanel();
+    setHint("项目已建，key 只出现在下方一次");
+  };
+
+  function rand(n) {
+    var a = "abcdefghijklmnopqrstuvwxyz0123456789", s = "";
+    for (var i = 0; i < n; i++) s += a[Math.floor(Math.random() * a.length)];
+    return s;
+  }
+
+  /* ══ 面板渲染 ═══════════════════════════════════════════ */
+  function renderPanel() {
+    var p = $("panel");
+    clear(p);
+    if (S.step === 2) p.appendChild(panelKeyAndUpload());
+    else if (S.step === 3) p.appendChild(panelUploaded());
+    else if (S.step === 4) p.appendChild(panelImport());
+    else if (S.step === 5) p.appendChild(panelActivate());
+    renderSteps();
+  }
+
+  /* 2 · key + 上传 */
+  function panelKeyAndUpload() {
+    var c = el("div", { class: "card" });
+    c.appendChild(el("h3", { text: "项目已创建：" + S.project.name }));
+    c.appendChild(el("div", { class: "sub", text: "第 1 步完成。下面是**一次性 key** —— 关掉就再也看不到。" }));
+    var kb = el("div", { class: "keybox" }, [
+      el("div", { class: "k", text: S.project.key }),
+      el("div", { class: "w", text: "⚠️ 只显示这一次。服务端只存 sha256；丢了只能 rotate。给它配上：" + S.project.keyLabel })
+    ]);
+    c.appendChild(kb);
+    c.appendChild(el("div", { class: "alert warn", text: "⚠️ 现在还没有本体 —— 拿这把 key 去查会 503。等你上传包并激活之后才可用。" }));
+
+    var drop = el("div", { class: "drop" }, [
+      el("div", {}, [el("b", { text: "点这里选择" }), document.createTextNode(" 或拖入 "), el("code", { class: "mono", text: ".ontokbundle" })]),
+      el("div", { style: "margin-top:6px;font-size:11.5px", text: "样机：点一下就等于上传了一个包" })
+    ]);
+    drop.onclick = function () { S.step = 3; renderPanel(); setHint("包已上传（未解析）"); };
+    c.appendChild(el("div", { style: "margin-top:14px" }, [drop]));
+    return c;
+  }
+
+  /* 3 · 已上传：组件清单 + 要 DSN */
+  function panelUploaded() {
+    S.bundle = {
+      id: "bdl_01H" + rand(8).toUpperCase(),
+      requiresDb: true,
+      components: [
+        ["ontology", "ontology/snapshot.json", "30 类 / 34 关系 / 752 属性", true],
+        ["am", "am/access-mapping.json", "3 个租户", true],
+        ["db", "db/schema.json", "postgresql · requires_dsn = true", true]
+      ]
+    };
+    var c = el("div", { class: "card" });
+    c.appendChild(el("h3", { text: "构建包已上传（只校验，未解析）" }));
+    c.appendChild(el("div", { class: "sub", text: "bundle_id " + S.bundle.id + " · sha256 全部匹配 · project 与接收项目一致" }));
+
+    var t = el("table", { class: "tbl" });
+    t.appendChild(el("tr", {}, [
+      el("th", { text: "组件" }), el("th", { text: "文件" }), el("th", { text: "内容" }), el("th", { text: "校验" })
+    ]));
+    S.bundle.components.forEach(function (r) {
+      t.appendChild(el("tr", {}, [
+        el("td", { class: "mono", text: r[0] }),
+        el("td", { class: "mono", text: r[1] }),
+        el("td", { text: r[2] }),
+        el("td", { class: "okmark", text: "✓" })
+      ]));
+    });
+    c.appendChild(t);
+
+    c.appendChild(el("div", { class: "alert info", text: "包里含 DB → 按契约要先配 DSN 并测通，才允许解析。" }));
+    var b = el("button", { class: "btn primary", text: "配置源数据库" });
+    b.onclick = function () { open("mDsn"); $("dsnResult").innerHTML = ""; $("btnDsnSave").disabled = true; $("testHint").textContent = ""; };
+    c.appendChild(el("div", { class: "row", style: "margin-top:12px" }, [b]));
+    return c;
+  }
+
+  /* 4 · 解析 */
+  function panelImport() {
+    var c = el("div", { class: "card" });
+    c.appendChild(el("h3", { text: "解析构建包" }));
+    c.appendChild(el("div", { class: "sub", text: "单事务：中途失败 ⇒ 一个字节都不落；成功 ⇒ 产生新版本（未冻结）" }));
+    var bar = el("div", { class: "bar" }, [el("i", { id: "barI" })]);
+    c.appendChild(bar);
+    var log = el("div", { class: "log", id: "impLog", text: "准备中…" });
+    c.appendChild(log);
+    var out = el("div", { id: "impOut" });
+    c.appendChild(out);
+
+    var steps = [
+      [18, "读取 ontology/snapshot.json …"],
+      [38, "反序列化 Snapshot · 30 类 / 34 关系 / 752 属性"],
+      [58, "写入 object_types / link_types（复用 apply 落库路径）…"],
+      [78, "分配新版本号 seq=6（包里的是构建端标识，不用）"],
+      [96, "校验：link_types[*].evidence 存在 ✓"],
+      [100, "提交事务 ✓"]
+    ];
+    var i = 0;
+    (function tick() {
+      if (i >= steps.length) {
+        S.imported = { version: 6, counts: "30 类 / 34 关系 / 752 属性" };
+        S.step = 5;
+        out.appendChild(el("div", { class: "alert ok", text: "解析成功 → 新版本 v6（未冻结，对外还不可见）" }));
+        var b = el("button", { class: "btn primary", text: "去激活（人工）" });
+        b.onclick = function () { renderPanel(); setHint("等人工激活"); };
+        out.appendChild(el("div", { class: "row", style: "margin-top:10px" }, [b]));
+        renderSteps();
+        return;
+      }
+      var s = steps[i++];
+      $("barI").style.width = s[0] + "%";
+      $("impLog").textContent = s[1];
+      setTimeout(tick, 320);
+    })();
+    return c;
+  }
+
+  /* 5 · 激活 */
+  function panelActivate() {
+    var c = el("div", { class: "card" });
+    c.appendChild(el("h3", { text: "人工激活（解析 ≠ 生效）" }));
+    c.appendChild(el("div", { class: "sub", text: "激活 = 冻结该版本 + 把项目指针指过去。之后数字员工用 key 就能查到。" }));
+
+    var t = el("table", { class: "tbl" });
+    [["项目", S.project ? S.project.name : "—"],
+     ["新版本", "v6（" + (S.imported ? S.imported.counts : "") + "）"],
+     ["当前生效", S.activated ? "v6 ✓" : "仍是 v5"],
+     ["冻结", S.activated ? "已冻结" : "未冻结"]
+    ].forEach(function (r) {
+      t.appendChild(el("tr", {}, [el("th", { text: r[0] }), el("td", { class: "mono", text: r[1] })]));
+    });
+    c.appendChild(t);
+
+    if (!S.activated) {
+      var b = el("button", { class: "btn primary", text: "冻结并激活 v6" });
+      b.onclick = function () {
+        S.activated = true;
+        renderPanel();
+        setHint("已激活 · key 可以用了");
+      };
+      c.appendChild(el("div", { class: "row", style: "margin-top:12px" }, [b,
+        el("span", { class: "hint", text: "⛔ 不可逆？不 —— 激活旧版本即可回滚（v5 仍冻结可查）" })]));
+    } else {
+      c.appendChild(el("div", { class: "alert ok", text: "✓ v6 已生效。数字员工现在可以用这把 key 查项目了。" }));
+      c.appendChild(el("div", { class: "keybox" }, [
+        el("div", { class: "k", text: S.project.key }),
+        el("div", { class: "w", text: "给「" + S.project.keyLabel + "」用 · 一项目一把 · 要换就 rotate" })
+      ]));
+      var two = el("div", { class: "row" }, [
+        el("button", { class: "btn", text: "再建一个项目", id: "btnAgain" }),
+        el("button", { class: "btn ghost", text: "重置演示", id: "btnAgainReset" })
+      ]);
+      c.appendChild(two);
+    }
+    return c;
+  }
+
+  /* ══ 弹窗工具 ═══════════════════════════════════════════ */
+  function open(id) { $(id).classList.add("open"); }
+  function close(id) { $(id).classList.remove("open"); }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-close]"), function (b) {
+    b.onclick = function () { close(b.closest(".mask").id); };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll(".mask"), function (m) {
+    m.onclick = function (e) { if (e.target === m) m.classList.remove("open"); };
+  });
+
+  /* ══ DSN 测试（模拟三种结果）═════════════════════════════ */
+  $("btnTest").onclick = function () {
+    var dsn = $("fDsn").value.trim();
+    var out = $("dsnResult"); clear(out);
+    $("testHint").textContent = "";
+    $("btnDsnSave").disabled = true;
+    if (!dsn) { out.appendChild(el("div", { class: "alert err", text: "请先填 DSN" })); return; }
+
+    $("testHint").textContent = "连接中…";
+    setTimeout(function () {
+      // 三个分支：口令错 / 网络不通 / 成功。DSN 里含 bad / timeout 来触发前两种。
+      if (dsn.indexOf("bad") >= 0) {
+        out.appendChild(el("div", { class: "alert err" }, [
+          el("b", { text: "db.connect.auth  " }),
+          el("span", { text: "口令错误（SQLSTATE 28P01）" })
+        ]));
+        $("testHint").textContent = "失败";
+        return;
+      }
+      if (dsn.indexOf("timeout") >= 0) {
+        out.appendChild(el("div", { class: "alert err" }, [
+          el("b", { text: "db.connect.timeout  " }),
+          el("span", { text: "10s 内连不上 —— 检查网络/白名单/端口" })
+        ]));
+        $("testHint").textContent = "失败";
+        return;
+      }
+      out.appendChild(el("div", { class: "alert ok" }, [
+        el("b", { text: "ok  " }),
+        el("span", { text: "42 ms · PostgreSQL 15.4 · 只读账号 ✓" })
+      ]));
+      out.appendChild(el("div", { class: "alert info" }, [
+        el("span", { text: "存下来的形态：" }),
+        el("code", { class: "mono", text: "host=172.16.x.x db=ontok user=ontok_ro · dsn_ciphertext=" }),
+        el("code", { class: "mono", text: "aes-gcm:7f3c…（32B key from env）" })
+      ]));
+      $("testHint").textContent = "通过";
+      $("btnDsnSave").disabled = false;
+    }, 600);
+  };
+
+  $("btnDsnSave").onclick = function () {
+    S.db = { ok: true };
+    S.step = 4;
+    close("mDsn");
+    renderPanel();
+    setHint("DSN 已存（加密）· 开始解析");
+  };
+
+  /* ══ 重置 ═══════════════════════════════════════════════ */
+  function reset() {
+    S.step = 0; S.project = null; S.bundle = null; S.db = null; S.imported = null; S.activated = false;
+    $("panel").innerHTML = "";
+    $("projName").textContent = "cloud-resource";
+    $("projMeta").textContent = "第 5 版 · 已冻结";
+    renderSteps();
+    setHint("等待操作");
+  }
+  $("btnReset").onclick = reset;
+  document.addEventListener("click", function (e) {
+    if (e.target && e.target.id === "btnAgain") { reset(); open("mCreate"); }
+    if (e.target && e.target.id === "btnAgainReset") { reset(); }
+  });
+
+  renderRole();
+  renderSteps();
+  setHint("点右上角 ＋ 开始");
+})();
+</script>
+</body>
+</html>
