@@ -27,10 +27,10 @@
 | 项 | 状态 | 证据 |
 | --- | --- | --- |
 | 通路实现（`--agent acp` 四参数 + `doc_acp` 模块 + 18 条单测 + 6 条端到端） | ✅ 已提交 `b99c914` | 与 develop 差 1 个提交 |
-| **补件 R-2**：`--strict-deterministic` + "N 块失败"提示 | 🟡 **在做** | 源码已出现 `strict-deterministic` 4 处；工作区 4 个未提交文件 |
-| **补件 R-3**：同模型对照（`session/set_config_option` 切 deepseek） | ❌ 未开始 | grep `set_config_option` = **0** |
-| **补件 R-1**：按宽口径重报 AC-006 | ❌ 待做 | —— |
-| QA | ⬜ 未派 | 补件没完不派 |
+| **补件 R-2**：`--strict-deterministic` + "N 块失败"提示 | ✅ **已完成** | `src/extract/doc_acp.rs` 有实现；`tests/test_req147_doc_acp.rs::r2a_failed_blocks_are_announced_on_screen`（不加开关 ⇒ 出产物 + 屏幕提示；加了 ⇒ exit≠0 且零产物） |
+| **补件 R-3**：同模型对照 | ✅ **已完成**（2026-10-26） | `evidence-same-model.md`：两边都是 `deepseek-v4.1-flash`、3 篇 / 39 块 ⇒ 断言 397→593（+49%）· 关系 139→258（+86%）· 谓词种类 27→40 |
+| **补件 R-1**：按宽口径重报 AC-006 | ✅ **已完成** | `acceptance.md`：泛动词 18.65%→1.31%；宽口径归属类 1.19%→32.76%；关系两端是概念 26.2%→96.4% |
+| QA | ✅ 已做（抢救版） | `qa-review-salvage.md`：**PASS 带非阻断**（默认路径产物逐字节相同 · ACP 通路 10/10 e2e · 失败要响且无回落） |
 
 ## 第一轮交付的事实（供对照）
 
