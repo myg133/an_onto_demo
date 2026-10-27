@@ -30,6 +30,10 @@
 //!   **多项目模式**（`query serve` 不带 `--project`）下**必填** —— 一个进程服务多套本体，
 //!   「你是谁」只能由 key 决定（见 [`TokenTable::parse_multi`]）；**单项目模式**下可省，
 //!   给了也**不生效**（项目与版本由启动参数钉死，⛔ 不按 token 切项目）。
+//! - ⭐ REQ-159 P1c-1 · **`kind`**（`"admin"` / `"query"`，缺省 = `query`）：`query serve`
+//!   从 REQ-159 P1c-1 起承载**写面**（建项目 / 传包 / 解析 / 激活 / 查看 key，Studio 调），
+//!   那 8 条**只认 `kind=admin`**；数字员工的 query key 调它们 ⇒ 403 `key.not_admin`。
+//!   见下面的 [`TokenKind`] 与 [`TokenTable::validate`]。
 //! - ⭐ REQ-137 · **本体服务模式（`--ontology-only`）必须不填 `tenant`**；填了（任何值，
 //!   含 `null` / 空串）⇒ **拒绝启动**。那个模式没有业务库、没有租户概念，
 //!   `SPARQL` 恒 503（**需要库的查询**；纯 api 类给 `@pending`，REQ-151）——
@@ -54,6 +58,49 @@ use serde::Deserialize;
 
 use super::audit::{digest_prefix, sha256_hex};
 use super::ServiceMode;
+
+/// ⭐ REQ-159 P1c-1 · 一条 token 的**用途**（ADR-013 §三）。
+///
+/// | 取值 | 能干什么 | 能不能绑项目 |
+/// | --- | --- | --- |
+/// | [`TokenKind::Admin`] | 8 条写端点（建项目 / 传包 / 解析 / 激活 / 查看 key） | **必须不绑**（给了就拒绝整份表） |
+/// | [`TokenKind::Query`] | 查询 / 目录 / 详情 / TTL / MCP（**读面**） | 多项目模式必填；单项目模式可省 |
+///
+/// # ⚠️ 缺省值是 `Query`，而控制面（`console::tokens`）的 `kind` 是**必填**
+///
+/// 两个默认值的方向**故意相反**，理由不是风格：
+///
+/// - 控制面的默认值如果是 `admin`，一张查数 token 会**悄悄拿到管理权**（提权）；
+/// - 这里的默认值如果是 `admin`，**既有部署的每一张 query key 都会变成能写库的钥匙**
+///   —— 而 P1c-1 之前写这张表的运维**根本不知道有个 `kind` 字段**（它是这一刀才有的）。
+///
+/// 所以：**没写 = 最弱的那个能力**（`query`）。要写库就显式写 `"kind": "admin"` ——
+/// 多打 20 个字符，换「不会因为漏写一个字段而把写权限发出去」。
+/// 判据：`tokens.rs` 的 `a_missing_kind_is_a_query_key_never_an_admin_key`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenKind {
+    /// 写面（Studio / FDE）：建项目、上传构建包、解析、激活、查看 key。
+    Admin,
+    /// 读面（数字员工）：查询 / 目录 / 详情 / TTL / MCP。**缺省值**。
+    #[default]
+    Query,
+}
+
+impl TokenKind {
+    /// 人读的短语（审计 / 错误消息 / 横幅里用；⛔ 不另写一份字面量）。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TokenKind::Admin => "admin",
+            TokenKind::Query => "query",
+        }
+    }
+
+    /// 能不能调那 8 条写端点（唯一的判据；两个面的身份门都读它）。
+    pub const fn is_admin(self) -> bool {
+        matches!(self, TokenKind::Admin)
+    }
+}
 
 /// token 的最小长度。短于此值直接拒绝加载。
 pub const MIN_TOKEN_LEN: usize = 24;
@@ -110,6 +157,9 @@ pub struct TokenSpec {
     /// ⭐ REQ-159 P1b · 这张 key 绑哪个项目（多项目模式必填；单项目模式可省）。
     #[serde(default)]
     pub project: Option<String>,
+    /// ⭐ REQ-159 P1c-1 · 用途（`admin` / `query`）。**缺省 = query**（见 [`TokenKind`]）。
+    #[serde(default)]
+    pub kind: TokenKind,
 }
 
 /// ⭐ REQ-137 · **本体服务模式**的 token 登记：`tenant` **必须缺省**。
@@ -138,6 +188,9 @@ struct OntologyTokenSpec {
     /// ⭐ REQ-159 P1b · 同 [`TokenSpec::project`]（本体模式也可以多项目）。
     #[serde(default)]
     project: Option<String>,
+    /// ⭐ REQ-159 P1c-1 · 同 [`TokenSpec::kind`]（本体模式也能有 admin key）。
+    #[serde(default)]
+    kind: TokenKind,
 }
 
 /// 本体模式的 `tokens.json` 顶层形状（与 [`TokenFile`] 只差在 spec）。
@@ -180,6 +233,8 @@ struct RawTokenSpec {
     label: Option<String>,
     /// ⭐ REQ-159 P1b · 绑定的项目（多项目模式必填；单项目模式可省/不生效）。
     project: Option<String>,
+    /// ⭐ REQ-159 P1c-1 · 用途（缺省是 [`TokenKind::Query`]，见那个类型的注释）。
+    kind: TokenKind,
 }
 
 impl From<TokenSpec> for RawTokenSpec {
@@ -191,6 +246,7 @@ impl From<TokenSpec> for RawTokenSpec {
             max_concurrency: t.max_concurrency,
             label: t.label,
             project: t.project,
+            kind: t.kind,
         }
     }
 }
@@ -204,6 +260,7 @@ impl From<OntologyTokenSpec> for RawTokenSpec {
             max_concurrency: t.max_concurrency,
             label: t.label,
             project: t.project,
+            kind: t.kind,
         }
     }
 }
@@ -233,7 +290,11 @@ pub struct TokenEntry {
     /// - **多项目模式**：恒 `Some`（启动闸门保证；缺一条就拒绝启动，见 [`TokenTable::parse_multi`]）；
     /// - **单项目模式**：可以 `None`；即使写了也**不参与路由**（项目由 `--project` 决定，
     ///   ⛔ 不按 token 切项目 —— R6）。
+    ///
+    /// ⭐ REQ-159 P1c-1 · `kind = admin` 的条目**恒 `None`**（启动闸门：写了就整份拒绝）。
     pub project: Option<String>,
+    /// ⭐ REQ-159 P1c-1 · 用途。8 条写端点只认 [`TokenKind::Admin`]。
+    pub kind: TokenKind,
 }
 
 impl TokenEntry {
@@ -396,25 +457,41 @@ impl TokenTable {
                 problems.push(format!("{at} 的 token 与前面的重复 —— 两条登记会互相覆盖限额"));
             }
             // ⭐ REQ-159 P1b · `project`：多项目模式下必填，且必须是个像项目名的东西。
+            // ⭐ REQ-159 P1c-1 · `kind = admin` **必须不绑项目**（ADR-013 §三 / AC-c3）：
+            // admin 是运维的钥匙，它改的是**所有**项目；给它绑一个项目只会让人以为
+            // 「这张 key 只对那个项目有权限」，而它其实不是。与 `console::tokens` 同一条规则、
+            // 同一套话术（两个面的 token 表是两份，规则必须是一条）。
             let project = t
                 .project
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            match (binding, &project) {
-                (ProjectBinding::PerToken, None) => problems.push(format!(
+            let is_admin = t.kind.is_admin();
+            match (is_admin, binding, &project) {
+                (true, _, Some(p)) => problems.push(format!(
+                    "{at} 的 kind = admin 却写了 project = {p:?} —— ⛔ admin key 必须**不绑项目**。\n    \
+                     写端点（建项目 / 传包 / 解析 / 激活 / 查看 key）是**运维**的钥匙，\
+                     不属于任何一个项目；给它绑项目会让人以为「这张 key 只对那个项目有权限」，\
+                     而它其实能改所有项目。\n    要一张只读某个项目数据的 key，\
+                     请用 kind = \"query\" + project。"
+                )),
+                // admin 条目**豁免**「多项目模式必须绑项目」那一条：它本来就不属于任何项目。
+                (false, ProjectBinding::PerToken, None) => problems.push(format!(
                     "{at} 没有 project —— 这是**多项目模式**（启动时没给 `--project`）：\
                      一个进程服务多套本体，每张查询 key 必须用 `\"project\": \"<项目名>\"` 绑定一个项目。\n    \
                      数字员工换项目 = 换 key，⛔ 服务端不会替你猜一个项目（猜错就是串包）。\n    \
                      只服务一个项目的部署请用单项目模式启动：`--project <项目名> --version <第几版>`。"
                 )),
-                (_, Some(p)) => {
+                (_, _, Some(p)) => {
                     if p.chars().any(char::is_whitespace) {
                         problems.push(format!("{at} 的 project = {p:?} 里含空白字符 —— 项目名不含空格"));
                     }
                 }
-                (ProjectBinding::StartupPinned, None) => {}
+                (_, ProjectBinding::StartupPinned, None) => {}
+                // admin + 多项目 + 无 project：上面第一条已覆盖（`Some`）；这里不可能到达，
+                // 但 match 必须穷尽 —— 写成与单项目模式同一件「不缺就是不缺」的事。
+                (true, ProjectBinding::PerToken, None) => {}
             }
             if !token.is_empty() {
                 entries.push(TokenEntry {
@@ -426,6 +503,7 @@ impl TokenTable {
                     max_concurrency: t.max_concurrency,
                     label: t.label.clone(),
                     project,
+                    kind: t.kind,
                 });
             }
         }
@@ -504,6 +582,24 @@ impl TokenTable {
     /// 被绑定的项目个数（多项目模式横幅用）。
     pub fn project_count(&self) -> usize {
         self.projects().len()
+    }
+
+    /// ⭐ REQ-159 P1c-1 · 表里有几张 `kind = admin` 的 key。
+    ///
+    /// 启动横幅据此决定要不要多印一行「写面已启用」（没有 admin ⇒ **一行都不多印**，
+    /// 既有部署的启动输出一个字节不变）；判据也用它证明「admin 不绑项目」。
+    pub fn admin_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.kind.is_admin()).count()
+    }
+
+    /// 有没有 admin key（= 这个部署能不能调那 8 条写端点）。
+    pub fn has_admin(&self) -> bool {
+        self.admin_count() > 0
+    }
+
+    /// 全部 `kind = admin` 的条目（判据用）。
+    pub fn admins(&self) -> impl Iterator<Item = &TokenEntry> {
+        self.entries.iter().filter(|e| e.kind.is_admin())
     }
 
     /// 表里最大的 `max_rows`（横幅用；每次调用仍按**各自** token 的上限执行）。
@@ -812,6 +908,134 @@ mod tests {
             let err = TokenTable::parse_multi(&raw, ServiceMode::Query)
                 .expect_err(&format!("project={project} 必须拒绝"));
             assert!(err.contains("project"), "{err}");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-159 P1c-1 · `kind` 的三种边界（AC-c2 / AC-c3）
+    // ══════════════════════════════════════════════════════════
+
+    /// **边界 ①：缺 `kind` ⇒ `query`**（⛔ 不是 admin）。
+    ///
+    /// 为什么这一条的**方向**比实现重要：P1c-1 之前写 token 表的运维根本不知道有个
+    /// `kind` 字段。如果缺省值是 `admin`，那么**升级一次二进制，既有部署的每一张
+    /// 查数 key 都会变成能建项目 / 传包的钥匙** —— 一次静默提权。
+    ///
+    /// 变异（纪律 G · 红绿自证 ②）：把 `#[default]` 挪到 `Admin` 上
+    /// ⇒ 本测试红，且 `http` 的 `ac_c2` 会红（query key 能写）。
+    #[test]
+    fn a_missing_kind_is_a_query_key_never_an_admin_key() {
+        let t = TokenTable::parse(&good()).expect("合法表（老表，没有 kind）");
+        for e in [&t.find("FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa").unwrap()] {
+            assert_eq!(e.kind, TokenKind::Query, "缺 kind 必须是 query");
+            assert!(!e.kind.is_admin(), "缺 kind 不许拿到写权限");
+        }
+        assert_eq!(t.admin_count(), 0);
+        assert!(!t.has_admin());
+        // 显式写 `"kind": "query"` 与不写是**同一个结果**（两条路，一个事实）。
+        let explicit = TokenTable::parse(
+            r#"{"version":"1.0.0","tokens":[
+                {"token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+                 "kind":"query"}]}"#,
+        )
+        .expect("显式 query");
+        assert_eq!(
+            explicit.find("FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa").unwrap().kind,
+            TokenKind::Query
+        );
+    }
+
+    /// **边界 ②：`kind=admin` + `project` ⇒ 整份拒绝，并点名第几条**（AC-c3）。
+    ///
+    /// 与 `console::tokens` 的规则**逐字同一条**（两个面各有一份 token 表，
+    /// 但「admin 不绑项目」只能是一条规则）：admin 是运维的钥匙，它改所有项目；
+    /// 绑一个项目只会让人以为「这张 key 只对那个项目有权限」。
+    ///
+    /// 变异：去掉这一条（或只警告不拒绝）⇒ 本测试红（AC-c3 的「拒绝启动」就不再成立）。
+    #[test]
+    fn an_admin_key_with_a_project_is_rejected_and_named() {
+        let raw = r#"{"version":2,"tokens":[
+            {"label":"fde-michael","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+             "kind":"admin"},
+            {"label":"wrong","token":"FAKE-TOKEN-bbbbbbbbbbbbbbbbbbbb","tenant":"C0001",
+             "kind":"admin","project":"cloud-resource"}
+        ]}"#;
+        let err = TokenTable::parse_multi(raw, ServiceMode::Query)
+            .expect_err("admin 带 project 必须拒绝整份表");
+        assert!(err.contains("第 2 条"), "要点名是第几条：{err}");
+        assert!(err.contains("wrong"), "要点名是哪个 label：{err}");
+        assert!(err.contains("不绑项目"), "{err}");
+        assert!(err.contains("kind = \"query\""), "要给出正确写法：{err}");
+        // 第 1 条（合法的 admin）不被牵连。
+        assert!(!err.contains("第 1 条"), "合法条目不该被点名：{err}");
+    }
+
+    /// **边界 ②的正面**：`kind=admin` + **没有 project** ⇒ 在**两种**绑定模式下都收；
+    /// 而 `kind=query` 在多项目模式下仍然必须有 project（老规矩一分不让）。
+    ///
+    /// 变异：把 admin 也纳入「多项目必须绑项目」⇒ 第一条断言红（admin 永远起不来）。
+    #[test]
+    fn an_admin_key_is_exempt_from_the_multi_project_binding_rule() {
+        let raw = r#"{"version":2,"tokens":[
+            {"label":"fde","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+             "kind":"admin"},
+            {"label":"agent","token":"FAKE-TOKEN-bbbbbbbbbbbbbbbbbbbb","tenant":"C0002",
+             "kind":"query","project":"cloud-resource"}
+        ]}"#;
+        let t = TokenTable::parse_multi(raw, ServiceMode::Query).expect("admin 不必绑项目");
+        assert_eq!(t.admin_count(), 1);
+        assert!(t.has_admin());
+        assert_eq!(
+            t.find("FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa").unwrap().project,
+            None,
+            "admin 恒不绑项目"
+        );
+        assert_eq!(t.projects(), vec!["cloud-resource"], "项目集合只来自 query key");
+
+        // query 仍然必须有 project（多项目模式）—— 不能因为这次放宽被顺带放宽。
+        let no_project = r#"{"version":2,"tokens":[
+            {"label":"fde","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+             "kind":"admin"},
+            {"label":"agent","token":"FAKE-TOKEN-bbbbbbbbbbbbbbbbbbbb","tenant":"C0002",
+             "kind":"query"}
+        ]}"#;
+        let err = TokenTable::parse_multi(no_project, ServiceMode::Query).unwrap_err();
+        assert!(err.contains("第 2 条") && err.contains("没有 project"), "{err}");
+
+        // 单项目模式：admin 同样不绑项目、也不报错（表能起）。
+        let single = TokenTable::parse(raw).expect("单项目模式也收 admin");
+        assert_eq!(single.admin_count(), 1);
+    }
+
+    /// `kind` 的取值是**严格枚举**：拼错（`"administrator"` / 大写 / 数字）⇒ 整份拒绝，
+    /// ⛔ 不回退成 query（静默回退会让「我配了 admin」变成一张读 key —— 最难查的一类错）。
+    #[test]
+    fn an_unknown_kind_is_rejected_instead_of_silently_becoming_query() {
+        for kind in ["administrator", "Admin", "root", "1"] {
+            let raw = format!(
+                r#"{{"version":2,"tokens":[
+                    {{"label":"x","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa","tenant":"C0001",
+                     "kind":{kind:?}}}]}}"#
+            );
+            let err = TokenTable::parse(&raw).expect_err(&format!("kind={kind:?} 必须拒绝"));
+            assert!(err.contains("tokens.json"), "{err}");
+            // 报错必须点出**能用的两个值**（运维才知道该改成什么）。
+            assert!(
+                err.contains("`admin` or `query`"),
+                "拒绝时要说清合法取值：{err}"
+            );
+        }
+        // 对照：合法的两个值都能读（证明上面拒绝的是**取值**，不是整个字段）。
+        for kind in ["admin", "query"] {
+            let raw = format!(
+                r#"{{"version":2,"tokens":[
+                    {{"label":"x","token":"FAKE-TOKEN-aaaaaaaaaaaaaaaaaaaa",
+                     "kind":{kind:?}}}]}}"#
+            );
+            assert!(
+                TokenTable::parse_for_mode(&raw, ServiceMode::OntologyOnly).is_ok(),
+                "本体模式下 kind={kind:?} 应当能读"
+            );
         }
     }
 }

@@ -293,6 +293,22 @@ pub fn banner(
     s
 }
 
+/// ⭐ REQ-159 P1c-1 · **写面启用**时多印一行（⛔ 没有 admin key 就一行都不多印）。
+///
+/// 为什么只在这一种情况下多印：既有部署（token 表里一张 admin 都没有）的启动输出
+/// 因此**一个字节不变**——那正是 P1b 的 R6 与 AC-c5 的口径。而 Studio 部署里
+/// 运维必须知道「这台进程现在可以写元数据库了」，否则「谁有写权限」只存在于 token 文件里。
+pub(crate) fn announce_write_plane(tokens: &TokenTable, mode_label: &str) {
+    if !tokens.has_admin() {
+        return;
+    }
+    eprintln!(
+        "· 写面（管理端点）已启用：admin key {} 张（{mode_label}模式）—— 建项目 / 上传构建包 / \
+         解析 / 激活 / 查看 key 只认 kind=admin；query key 调它们 ⇒ 403 key.not_admin",
+        tokens.admin_count()
+    );
+}
+
 /// 载入 → 起服务。
 ///
 /// ⭐ REQ-159 P1b · **一个入口两种模式**，判据只有一个 —— `--project` 给没给：
@@ -390,6 +406,14 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     // ── ④ token 表 ──────────────────────────────────────────
     let tokens = load_tokens(&args, mode, ProjectBinding::StartupPinned)?;
 
+    // ── ④b ⭐ REQ-159 P1c-1 · 写面的密钥（**缺了就拒绝启动**，在绑 socket 之前）──
+    //
+    // 位置：**token 表之后**（同一张表的另一个问题先报更基础的那个：表读不出来时
+    // 运维不该先被密钥的报错带走）、**连库 / 绑 socket 之前**（AC-c4）。
+    // 无条件（哪怕这次一个人都不会配 DSN）：带着一把坏密钥起来，等于让写端点在一个
+    // **会失败的**状态下对外可用 —— 用户在 Studio 里传完包、点开 DSN 弹窗才收到 500。
+    let cipher = super::write_plane::load_secret_cipher()?;
+
     // ── ⑤ 声明 / schema ─────────────────────────────────────
     let policy = load_policy(&args)?;
     let (schema, schema_path) = load_schema(&args)?;
@@ -448,19 +472,39 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
 
     // ── ⑧ 源库（只读；读回校验）──────────────────────────────
     let (source, facts) = connect_source(&dep).await?;
+    let dep = Deployment {
+        source,
+        facts,
+        ..dep
+    };
 
-    // ── ⑨ 审计落点 + 服务状态 ───────────────────────────────
+    // ── ⑨ 审计落点 + 写面 + 服务状态 ────────────────────────
     let audit = open_audit(&args)?;
-    let svc = std::sync::Arc::new(assemble(
-        &Deployment {
-            source: source.clone(),
-            facts: facts.clone(),
-            ..dep
-        },
-        prepared,
-        tokens,
-        audit,
+
+    // ⭐ REQ-159 P1c-1 · **写面**（8 条管理端点，Studio 调）。
+    // 密钥在上面 ④ 之后就 fail-fast 过了（缺密钥根本走不到这里）。
+    let write = std::sync::Arc::new(super::write_plane::WritePlane::new(
+        pool.clone(),
+        cipher,
+        audit.clone(),
     ));
+
+    // ⭐ REQ-159 P1c-1（追加）· admin 的 `?project=` 要能在**同一个进程**里读另一套本体。
+    // 单项目模式因此也装一个注册表 —— 但它**只被那个参数用到**：
+    // 不带参数时仍然只用启动时这一份（R6：单项目模式的字节与 REQ-123 一致）。
+    // ⚠️ 这是「读」的扩展，⛔ 不改变「一个进程只服务一套本体」的默认语义：
+    // 快照按 `version_id` 懒加载（与 P1b 同一条路径、同一个缓存上限）。
+    let overrides = std::sync::Arc::new(super::http::ProjectOverride::pinned(
+        project.clone(),
+        std::sync::Arc::new(super::multi::MultiProject::new(
+            pool.clone(),
+            tokens.clone(),
+            dep.clone(),
+            audit.clone(),
+        )),
+    ));
+
+    let svc = std::sync::Arc::new(assemble(&dep, prepared, tokens, audit));
 
     let tenants = svc.tokens.tenants();
     eprintln!(
@@ -479,8 +523,13 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             svc.mode,
         )
     );
+    announce_write_plane(&svc.tokens, "单项目");
 
-    let app = super::http::build_router(std::sync::Arc::clone(&svc));
+    let app = super::http::build_router_with_write(
+        std::sync::Arc::clone(&svc),
+        write,
+        Some(overrides),
+    );
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
     })?;
@@ -611,6 +660,11 @@ pub(crate) fn open_audit(args: &ServeArgs) -> anyhow::Result<AuditSink> {
 /// 源库只留**连接池**（`source`），连接串在 [`connect_source`] 里读完就丢 ——
 /// 于是「缓存里不许放 DSN / token」在类型上就成立（缓存装的是 `Arc<QueryService>`，
 /// 而它拿不到连接串）。
+///
+/// ⭐ REQ-159 P1c-1（追加）· `Clone`：单项目模式还要把一个**同内容**的副本交给
+/// [`super::multi::MultiProject`]，用来服务 admin 的 `?project=`（同一个进程读另一套
+/// 已激活的本体）。克隆的是**连接池**（`Arc` 内部）与声明，⛔ 不是新开一条连接。
+#[derive(Clone)]
 pub struct Deployment {
     pub mode: ServiceMode,
     pub schema: crate::domain::ttl::SchemaTypes,

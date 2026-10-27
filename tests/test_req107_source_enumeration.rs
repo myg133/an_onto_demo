@@ -2235,10 +2235,18 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-145 · access 映射（`--access-mapping`）：只做**判定**（哪些类来自 API、
     // 查询落到哪一类），⛔ 不写任何出口 —— 它的产物经既有 I14/I25 与 TTL 两视图送出。
     ("src/query/mod.rs", "source_gate"),
+    // ⭐ REQ-159 P1c-1 · 写面的**进程级状态**（元数据库池 + `ONTOK_SECRET_KEY` 的加密器 +
+    // 控制面审计）。⛔ 不新增出口：8 条写端点的 JSON 仍走 I18
+    // （`console::http::respond`，与 console 同一个写点）。
+    ("src/query/mod.rs", "write_plane"),
     // ⭐ REQ-124 · 控制面 API（管理流水线的 HTTP 化）。
     // 四条写出口 I18–I21 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "console"),
     ("src/console/mod.rs", "audit"),
+    // ⭐ REQ-159 P1c-1 · 8 条写端点的**共享适配层**（console 与 `query serve` 各挂一份
+    // 路由、语义只有这一份）。⛔ 不新增出口：它调 `console::http::{respond,fail}` ——
+    // 也就是 I18 那一个 `Json(` 写点（「写面只有一个 JSON 写点」是刻意保留的性质）。
+    ("src/console/mod.rs", "provision_api"),
     // ⭐ REQ-159 · 构建包导入（P1a）：包校验 / 密文列 / 领域编排。
     // ⛔ 三个模块都**不新增响应写点** —— 它们的产物经既有的 I18（`console::http::respond`）
     // 送出去，所以 `OUTLETS` 不加行；本表只登记模块（T6：新增模块即红）。

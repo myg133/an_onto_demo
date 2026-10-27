@@ -223,6 +223,41 @@ pub enum QueryCmd {
     /// 多项目模式的 token 表（`version: 2`）里**每一条**都要写
     /// `"project": "<项目名>"`（缺一条 ⇒ **拒绝启动**并点名第几条）；`version: 1` 的老表
     /// 在单项目模式下仍然照常可用。
+    ///
+    /// ⭐ **写面（REQ-159 P1c-1 / ADR-013）** —— 这个进程现在也能**写元数据库**了：
+    ///
+    /// ```text
+    /// POST /api/projects                          建项目 + 发一把 query key（201）
+    /// POST /api/projects/:p/bundles               上传构建包（application/octet-stream，body 就是包字节）
+    /// GET  /api/projects/:p/bundles/:id           包状态与组件清单
+    /// POST /api/projects/:p/bundles/:id/import    解析入库（单事务，不冻结）
+    /// POST /api/projects/:p/bundles/:id/activate  冻结 + 写生效指针
+    /// PUT  /api/projects/:p/database              配 DSN（加密列；响应里没有明文）
+    /// POST /api/projects/:p/database/test         测连通（失败也 200，由 ok 区分）
+    /// GET  /api/projects/:p/key                   再次查看 query key（每次写审计）
+    /// ```
+    ///
+    /// - 这几条**只认 `kind = "admin"` 的 key**；query key 调它们 ⇒ **403 `key.not_admin`**；
+    /// - 它们原来在 `ontok console serve`（FDE 本地）—— 那里**仍然保留**，与这里共用
+    ///   同一个适配层（状态码 / 审计 action / 错误码只有一份）；
+    /// - ⛔ 只写**元数据库**（projects / versions / snapshots / keys / DSN 密文），
+    ///   ⛔ 不碰客户源库（`database/test` 只连一次、只 `SELECT version()`）；
+    /// - ⚠️ 需要环境变量 **`ONTOK_SECRET_KEY`**（64 位十六进制 = 32 字节；DSN 与 query key
+    ///   的加密列）。**缺了就拒绝启动**（在绑 socket 之前），没有「先跳过后补」的开关。
+    ///
+    /// token 表里 `kind` 的规矩（ADR-013 §三）：
+    ///
+    /// | 写法 | 结果 |
+    /// | --- | --- |
+    /// | 不写 `kind` | 视为 `"query"`（**向后兼容**：既有 token 表一个字节不用改） |
+    /// | `"kind": "admin"` | 能调上面 8 条；**必须不绑项目**（写了 `project` ⇒ 整份拒绝启动） |
+    /// | `"kind": "query"` | 只能读；多项目模式下必须有 `project` |
+    ///
+    /// ⭐ **`?project=<名>`（REQ-159 P1c-1 追加）** —— Studio 顶栏切项目：
+    /// `GET /api/catalog` / `GET /api/describe` / `GET /api/ontology.ttl` /
+    /// `POST /api/sparql` 接受这个**可选**参数，**只有 admin** 能用（query key 带它 ⇒
+    /// **403 `key.project_pinned`**：数字员工的项目只能来自 key，跳项目就是串包）。
+    /// **不给这个参数时行为完全不变**（单项目模式按 `--project`、多项目模式按 key）。
     #[command(verbatim_doc_comment)]
     Serve {
         /// 监听地址。默认只允许内网/回环；绑 0.0.0.0 或公网地址要显式 `--allow-public`

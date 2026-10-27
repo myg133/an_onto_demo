@@ -94,9 +94,31 @@ impl AuditLog {
         result: impl Into<String>,
         started: Instant,
     ) {
+        self.record_digest(Some(&auth.audit_digest()), action, target, result, started);
+    }
+
+    /// ⭐ REQ-159 P1c-1 · 记一条**按摘要**的操作（不要求 `console::tokens::TokenEntry`）。
+    ///
+    /// 为什么需要它：这 8 条写端点现在挂在**两个面**上（console 与 `query serve`），
+    /// 而两个面的 token 是**两个类型**（`console::tokens::TokenEntry` /
+    /// `query::tokens::TokenEntry`）—— 但审计行的**形状只有一种**（本模块）。
+    /// 于是 `record` 变成「先算摘要，再走这一条」的薄包装：控制面与查询面写出来的行
+    /// 逐字同形，⛔ 不是两套实现。（判据：`tests/test_req159_bundles.rs` 的 AC-012
+    /// 数的是 `action=reveal_key` 的行数，两边的写法必须都能被它数到。）
+    ///
+    /// `token = None` ⇒ 行里写 `token=-`（与 [`Self::record_anonymous`] 同一个事实：
+    /// 此刻没有可用的身份）。
+    pub fn record_digest(
+        &self,
+        token: Option<&str>,
+        action: &'static str,
+        target: impl Into<String>,
+        result: impl Into<String>,
+        started: Instant,
+    ) {
         self.push(AuditEntry {
             ts: AuditRecord::now_ts(),
-            token: Some(auth.audit_digest()),
+            token: token.map(str::to_string),
             action,
             target: target.into(),
             result: result.into(),

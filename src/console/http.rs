@@ -66,7 +66,11 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// 而 `DefaultBodyLimit` 的拒绝是 axum 自己拼的纯文本 413 —— 那条错误里没有错误码。
 /// 所以闸门放在比包上限高 8 MiB 的位置：留出 multipart 的头部/边界开销，
 /// 让「刚好超一点」的包能进到 handler 里被**我们的**判据接住。
-const MAX_UPLOAD_BODY_BYTES: usize = crate::console::bundle::MAX_BUNDLE_BYTES + 8 * 1024 * 1024;
+///
+/// ⭐ REQ-159 P1c-1 · 查询面（`query::http`）也用这一格上限：同一个端点搬到
+/// `query serve` 之后，**包体上限必须还是这一个数** —— 两个面各写一份，第一次改就漂。
+pub(crate) const MAX_UPLOAD_BODY_BYTES: usize =
+    crate::console::bundle::MAX_BUNDLE_BYTES + 8 * 1024 * 1024;
 
 /// 身份门放进请求扩展的那一行 token（handler 只能拿到它）。
 #[derive(Debug, Clone)]
@@ -85,6 +89,13 @@ pub fn build_router(svc: Arc<ConsoleService>) -> Router {
         .route("/api/projects", get(get_projects).post(post_create_project))
         // ⭐ REQ-159 · 构建包导入的 7 个端点（前一条的 POST 与这六条）。
         // 全部在既有身份门**之后** ⇒ 只有 admin token 能到（query token 一律 403）。
+        //
+        // ⚠️ **REQ-159 P1c-1（ADR-013）· 这 8 条已经搬到 `query serve`**（Studio 在
+        // `/studio` 上调它们）。console 侧**保留**这一份实现，供本地 FDE 使用
+        //（console 不部署到服务器；部署形态里只有 `ontok query serve` 一个进程）。
+        // ⛔ 两侧的 handler 是**同一个函数**（`console::provision_api`），
+        // 这里只负责「从 `ConsoleService` 借出 pool / cipher / audit」——
+        // 于是状态码、审计 action、错误码在两边不可能漂。
         .route(
             "/api/projects/:p/bundles",
             post(post_bundle).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
@@ -123,7 +134,11 @@ pub fn build_router(svc: Arc<ConsoleService>) -> Router {
 // ══════════════════════════════════════════════════════════════
 
 /// JSON 响应。全文件只有这一处 `Json(`（登记为 OUTLETS 的 I18）。
-fn respond(status: StatusCode, body: Value) -> Response {
+///
+/// ⭐ REQ-159 P1c-1 · `pub(crate)`：8 条写端点的共享适配层
+/// （[`super::provision_api`]）也从这个**唯一**写点回 JSON ——
+/// 于是「查询面写出来的 JSON 走的是控制面这一个出口」，没有第二个 `Json(` 字面量。
+pub(crate) fn respond(status: StatusCode, body: Value) -> Response {
     (status, Json(body)).into_response()
 }
 
@@ -148,11 +163,12 @@ fn respond_r2rml(text: String) -> Response {
 }
 
 /// 错误的**唯一**出口（正文来自 [`ApiError::body`]，与查询面同一个形状）。
-fn fail(e: ApiError) -> Response {
+pub(crate) fn fail(e: ApiError) -> Response {
     respond(e.status, e.body())
 }
 
-fn fail_op(e: OpError) -> Response {
+/// [`OpError`] → 错误契约（先 [`OpError::into_api`]，再走同一个出口）。
+pub(crate) fn fail_op(e: OpError) -> Response {
     fail(e.into_api())
 }
 
@@ -286,7 +302,10 @@ async fn require_token(
 // ══════════════════════════════════════════════════════════════
 
 /// 请求体 → 强类型 DTO（`deny_unknown_fields` 在 DTO 上：拼错字段名 ⇒ 400 + 点名）。
-fn parse_body<T: DeserializeOwned>(body: &Bytes, hint: &'static str) -> Result<T, ApiError> {
+pub(crate) fn parse_body<T: DeserializeOwned>(
+    body: &Bytes,
+    hint: &'static str,
+) -> Result<T, ApiError> {
     if body.is_empty() {
         return Err(ApiError::bad_request("请求体是空的。", hint));
     }
@@ -1039,57 +1058,16 @@ async fn post_decide(
 // `console::provision` 的模块头：「建了项目却不能往里传包」是不成立的组合。
 // ══════════════════════════════════════════════════════════════
 
-/// `POST /api/projects` 的请求体。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CreateProjectRequest {
-    project: String,
-    /// 项目备注（可选）。
-    #[serde(default)]
-    label: Option<String>,
-    /// **这把 key 给谁用**（v1 必填：一项目一把 key，审计归属只能靠它）。
-    #[serde(default)]
-    key_label: Option<String>,
-}
-
+/// `POST /api/projects` —— 建项目 + 发 key（**201**）。
+///
+/// ⭐ REQ-159 P1c-1 · 语义在 [`super::provision_api::create_project`]（与 `query serve`
+/// 上那条**同一个函数**）；这里只做「state → [`Deps`]」这一层适配。
 async fn post_create_project(
     State(svc): State<Arc<ConsoleService>>,
     Extension(auth): Extension<Auth>,
     body: Bytes,
 ) -> Response {
-    let started = Instant::now();
-    let mut target = String::from("-");
-    let result = async {
-        let req: CreateProjectRequest = parse_body(
-            &body,
-            "body 形如 {\"project\":\"cloud-resource\",\n  \
-             \"label\":\"腾讯云资源本体\",\n  \
-             \"key_label\":\"数字员工：运维助手\"}。",
-        )?;
-        target = format!("project={}", req.project.trim());
-        let out = super::provision::create_project(
-            &svc.pool,
-            &svc.secret_cipher,
-            &req.project,
-            req.label.as_deref(),
-            req.key_label.as_deref(),
-        )
-        .await
-        .map_err(OpError::into_api)?;
-        target = format!("project={} key={}", out.project, out.key_digest);
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit.record(&auth.0, "project.create", target, "OK", started);
-            respond(StatusCode::CREATED, v)
-        }
-        Err(e) => {
-            svc.audit.record(&auth.0, "project.create", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::create_project(&deps(&svc), &auth.0.audit_digest(), &body).await
 }
 
 /// `POST /api/projects/:p/bundles` —— **`application/octet-stream`，body 就是包字节**。
@@ -1109,40 +1087,14 @@ async fn post_bundle(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let started = Instant::now();
-    let mut target = String::from("-");
-    let result = async {
-        target = format!("project={project}");
-        let ct = headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ct.starts_with("multipart/form-data") {
-            return Err(super::bundle::reject_encapsulated(&ct).into_api());
-        }
-        let file = body.to_vec();
-        target = format!("project={project} bytes={}", file.len());
-        let out = super::provision::upload_bundle(&svc.pool, &project, file)
-            .await
-            .map_err(OpError::into_api)?;
-        target = format!(
-            "project={project} bundle={} bytes={}",
-            out.bundle_id, out.bytes
-        );
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit.record(&auth.0, "bundle.upload", target, "OK", started);
-            respond(StatusCode::CREATED, v)
-        }
-        Err(e) => {
-            svc.audit.record(&auth.0, "bundle.upload", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::upload_bundle(
+        &deps(&svc),
+        &auth.0.audit_digest(),
+        &project,
+        &headers,
+        body,
+    )
+    .await
 }
 
 /// `GET /api/projects/:p/bundles/:id` —— 状态与组件清单（只读，不记审计行）。
@@ -1150,13 +1102,7 @@ async fn get_bundle_status(
     State(svc): State<Arc<ConsoleService>>,
     AxumPath((project, id)): AxumPath<(String, String)>,
 ) -> Response {
-    match super::provision::bundle_status(&svc.pool, &project, &id).await {
-        Ok(out) => respond(
-            StatusCode::OK,
-            serde_json::to_value(out).unwrap_or(Value::Null),
-        ),
-        Err(e) => fail_op(e),
-    }
+    super::provision_api::bundle_status(&deps(&svc), &project, &id).await
 }
 
 /// `GET /api/projects/:p/key` —— **再次查看** query key。
@@ -1171,43 +1117,17 @@ async fn get_project_key(
     Extension(auth): Extension<Auth>,
     AxumPath(project): AxumPath<String>,
 ) -> Response {
-    let started = Instant::now();
-    let mut target = format!("project={project}");
-    let result = async {
-        let out = super::provision::reveal_key(&svc.pool, &svc.secret_cipher, &project)
-            .await
-            .map_err(OpError::into_api)?;
-        // 审计只记项目与摘要（⛔ 不记明文）：
-        target = format!(
-            "project={project} key=sha256:{}",
-            crate::query::audit::digest_prefix(
-                &crate::query::audit::sha256_hex(out.key.as_bytes()),
-                12
-            )
-        );
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit.record(&auth.0, "reveal_key", target, "OK", started);
-            respond(StatusCode::OK, v)
-        }
-        Err(e) => {
-            svc.audit
-                .record(&auth.0, "reveal_key", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::reveal_key(&deps(&svc), &auth.0.audit_digest(), &project).await
 }
 
-/// `PUT /api/projects/:p/database` 的请求体。
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DatabaseRequest {
-    dsn: String,
-    #[serde(default)]
-    dialect: Option<String>,
+/// ⭐ REQ-159 P1c-1 · 从控制面的 state 里借出写端点的领域依赖
+/// （[`super::provision_api::Deps`]）—— 两个面唯一的差别就是这四行。
+fn deps(svc: &ConsoleService) -> super::provision_api::Deps<'_> {
+    super::provision_api::Deps {
+        pool: &svc.pool,
+        cipher: &svc.secret_cipher,
+        audit: &svc.audit,
+    }
 }
 
 /// `PUT /api/projects/:p/database` —— 存 DSN（加密列）。⛔ 响应里没有 `dsn`。
@@ -1217,38 +1137,7 @@ async fn put_database(
     AxumPath(project): AxumPath<String>,
     body: Bytes,
 ) -> Response {
-    let started = Instant::now();
-    // ⚠️ 审计的 target **永远**只写 host / db（见下面赋值处），
-    // 绝不把请求体或 DSN 拼进去 —— AC-009 的判据就在这一行上。
-    let mut target = format!("project={project}");
-    let result = async {
-        let req: DatabaseRequest = parse_body(
-            &body,
-            "body 形如 {\"dsn\":\"postgresql://user:pass@host:5432/db\",\
-             \"dialect\":\"postgresql\"}。",
-        )?;
-        let dialect = req.dialect.as_deref().unwrap_or("postgresql");
-        let out =
-            super::provision::put_database(&svc.pool, &svc.secret_cipher, &project, &req.dsn, dialect)
-                .await
-                .map_err(OpError::into_api)?;
-        target = format!(
-            "project={project} host={} database={}",
-            out.host, out.database
-        );
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit.record(&auth.0, "database.put", target, "OK", started);
-            respond(StatusCode::OK, v)
-        }
-        Err(e) => {
-            svc.audit.record(&auth.0, "database.put", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::put_database(&deps(&svc), &auth.0.audit_digest(), &project, &body).await
 }
 
 /// `POST /api/projects/:p/database/test` —— **失败也返 200**。
@@ -1257,33 +1146,7 @@ async fn post_test_database(
     Extension(auth): Extension<Auth>,
     AxumPath(project): AxumPath<String>,
 ) -> Response {
-    let started = Instant::now();
-    let target = format!("project={project}");
-    match super::provision::test_database(&svc.pool, &svc.secret_cipher, &project).await {
-        Ok(out) => {
-            let result = if out.ok {
-                "OK"
-            } else {
-                out.error.as_ref().map(|e| e.code).unwrap_or("db.connect.unknown")
-            };
-            svc.audit
-                .record(&auth.0, "database.test", target, result, started);
-            // ⚠️ 成功与失败都 200：由 `ok` 区分（demand §五-5）。
-            respond(
-                StatusCode::OK,
-                json!({
-                    "ok": out.ok,
-                    "latency_ms": out.latency_ms as u64,
-                    "server_version": out.server_version,
-                    "error": out.error.map(|e| json!({"code": e.code, "message": e.message})),
-                }),
-            )
-        }
-        Err(e) => {
-            svc.audit.record(&auth.0, "database.test", target, e.code, started);
-            fail_op(e)
-        }
-    }
+    super::provision_api::test_database(&deps(&svc), &auth.0.audit_digest(), &project).await
 }
 
 /// `POST /api/projects/:p/bundles/:id/import` —— 解析入库（单事务，**不冻结**）。
@@ -1292,29 +1155,7 @@ async fn post_import_bundle(
     Extension(auth): Extension<Auth>,
     AxumPath((project, id)): AxumPath<(String, String)>,
 ) -> Response {
-    let started = Instant::now();
-    let mut target = format!("project={project} bundle={id}");
-    let result = async {
-        let out = super::provision::import_bundle(&svc.pool, &project, &id)
-            .await
-            .map_err(OpError::into_api)?;
-        target = format!(
-            "project={project} bundle={} version={}",
-            out.bundle_id, out.version
-        );
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit.record(&auth.0, "bundle.import", target, "OK", started);
-            respond(StatusCode::OK, v)
-        }
-        Err(e) => {
-            svc.audit.record(&auth.0, "bundle.import", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::import_bundle(&deps(&svc), &auth.0.audit_digest(), &project, &id).await
 }
 
 /// `POST /api/projects/:p/bundles/:id/activate` —— 冻结 + 写生效指针。
@@ -1323,31 +1164,7 @@ async fn post_activate_bundle(
     Extension(auth): Extension<Auth>,
     AxumPath((project, id)): AxumPath<(String, String)>,
 ) -> Response {
-    let started = Instant::now();
-    let mut target = format!("project={project} bundle={id}");
-    let result = async {
-        let out = super::provision::activate_bundle(&svc.pool, &project, &id)
-            .await
-            .map_err(OpError::into_api)?;
-        target = format!(
-            "project={project} bundle={} version={}",
-            out.bundle_id, out.version
-        );
-        Ok::<Value, ApiError>(serde_json::to_value(out).unwrap_or(Value::Null))
-    }
-    .await;
-    match result {
-        Ok(v) => {
-            svc.audit
-                .record(&auth.0, "bundle.activate", target, "OK", started);
-            respond(StatusCode::OK, v)
-        }
-        Err(e) => {
-            svc.audit
-                .record(&auth.0, "bundle.activate", target, e.code, started);
-            fail(e)
-        }
-    }
+    super::provision_api::activate_bundle(&deps(&svc), &auth.0.audit_digest(), &project, &id).await
 }
 
 

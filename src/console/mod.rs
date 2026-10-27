@@ -71,6 +71,9 @@ pub mod http;
 pub mod ops;
 pub mod page;
 pub mod provision;
+/// ⭐ REQ-159 P1c-1 · 8 条写端点的**共享适配层**（console 与 `query serve` 各挂一份路由，
+/// 端点语义只有这一份）。见模块头。
+pub mod provision_api;
 pub mod serve;
 pub mod tokens;
 
