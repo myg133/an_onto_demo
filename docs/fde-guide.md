@@ -247,7 +247,7 @@ ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N
 
 ```bash
 ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
-  --agent acp --agent-command "pi-acp" --agent-skill skills/ontok-extract/SKILL.md
+  --agent acp --agent-command "pi-acp" --agent-skill Deploy/skills/ontok-extract/SKILL.md
 ```
 
 > ⚠️ 这条 `--agent …` 就是 **ACP 模式**：工具主动驱动外部 agent，`--agent-skill` 把 `ontok-extract` 的**路径**交给对端。
