@@ -729,3 +729,42 @@ v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员�
 | 1 | `warnings[]` **原样透传**（包括本服务端不认识的码） |
 | 2 | ⛔ 不因为 `warnings` 非空就拒绝 |
 | 3 | 服务端自己的拒码仍只有那 8 个（§十一-4），**不新增** |
+
+
+---
+
+## 二十一 · P1a 交付裁定（2026-10-27 · 四项亲验后）
+
+### 亲验结果（BA 自己跑的，不是 Dev 自述）
+
+| # | 判据 | 结果 |
+| --- | --- | --- |
+| 1 | 迁移幂等（同一库连跑 3 次） | ✅ `第 1/2/3 次 migrate() ⇒ Ok` |
+| 2 | 解析失败零残留 | ✅ 版本 0→0、`object_types` 0→0、返 **422 `bundle.parse.failed`** |
+| 3 | DSN 三分类（失败也 200） | ✅ `auth` / `dns` / `ok(latency=269ms, PG 16.14)` |
+| 4 | 404 三态 | ✅ `project.not_found` / `bundle.not_found` / `NOT_FOUND`（hint 列全部端点） |
+| 5 | 没碰 `src/console/page.rs` | ✅ `git status` 无输出 |
+| 6 | `Cargo.lock` 无新包 | ✅ **+2 行**（只把已在树里的 `flate2`/`ring` 提为直接依赖） |
+
+### 四条偏差裁定
+
+| # | 偏差 | 裁定 | 理由 |
+| --- | --- | --- | --- |
+| 1 | 多一张 `project_bundle_payloads(BYTEA)` | **接受** | 「上传只校验、import 才解析」要求字节活过两次请求；放库比磁盘 spool 更省失败面（同事务、随行删除、零残留）。**契约同步改为 5 张表** |
+| 2 | 重复 `import` 返 **200 + `already_imported:true`**（契约原写 409） | **接受 200** | 契约自相矛盾（「返回已有结果」与 409 不能同时成立）；200 + 标志对重试更友好。**契约同步改** |
+| 3 | `am/` **只校验不落库** | **接受但有条件** | 包里的 AM 在 P1a **不生效**（服务仍读 `--access-mapping` 文件）。⇒ **记入 P1b 必做**，且 import 的 `warnings[]` 必须明说 |
+| 4 | `GET /api/projects/:p`、`POST …/key/rotate` 未实现 ⇒ 404 | **接受，转 P1b** | v1 前端已对 404 防御。⚠️ 但 `rotate` 是**key 泄漏时的唯一补救**，P1b 必须做 |
+
+### 顺带记一条 Dev 的设计决定（我认可）
+
+**DNS 判定提到连接之前**（`probe` 里先 `resolve_host`）。
+实测 sqlx 对解析不出来的域名报 `pool timed out`，文本里没有 dns ⇒ 照文本分类会把 DNS 误判成 timeout。
+这条值得写进注释（Dev 已写）。
+
+### 契约同步（本次一并改）
+
+| 项 | 改为 |
+| --- | --- |
+| 表数量 | 4 → **5**（`projects` 加 2 列；`project_keys` / `project_bundles` / `project_bundle_payloads` / `project_databases`） |
+| §五-6 `import` 幂等 | 409 → **200 + `already_imported:true`** |
+| AM 落库 | 标为 **P1a 不做 · P1b 必做** |
