@@ -463,3 +463,15 @@
 | 冲突 | 零（只动 `src/console/page.rs` 一个文件） |
 | 回收 | worktree + 分支已移除（先 `merge-base --is-ancestor` 确认） |
 | 工具沉淀 | `BA/tools/ui-check/`（Playwright + 本机 chromium；README 记了两轮结果与 `executablePath` 坑） |
+
+## 2026-10-27 12:30 · REQ-159 F-1/F-2/容器码 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **be9bcb3**（`--no-ff`）← `feature/REQ-159-bundle-fix` **bcfd309** |
+| 合并前 develop | `6062085`（join 修的 4 条合并遗留红守卫 + F-1 服务端） |
+| 内容 | 项目名允许下划线（`PROJECT_NAME_PATTERN` 唯一出处）· 凭据判据收紧为「键名+非空字面值」· 非 store 容器改报 `bundle.unsupported.compression` |
+| 冲突 | **零**（`tests/test_req159_bundle.rs` 两边都改，git 自动合，我复核守卫未重复定义） |
+| 合并后验证（code/） | `check --lib` 绿 · `--test test_req159_bundle` **38/38** · `--lib bundle::` **35/35** |
+| 真库验收（合并前） | `bundle pack --project anspire_real` ⇒ exit 0 · 171,735 B；`verify` ⇒ exit 0 且**无** credential 误报；deflate 重压包 ⇒ exit 2 + `bundle.unsupported.compression` |
+| 回收 | worktree + 分支已删（先确认 ancestor） |
