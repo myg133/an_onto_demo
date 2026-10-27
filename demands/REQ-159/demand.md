@@ -120,15 +120,28 @@ stateDiagram-v2
 ### 1 · `POST /api/projects`
 
 ```json
-// 请求
-{ "project": "cloud-resource", "label": "腾讯云资源本体" }
+// 请求（admin token）
+{ "project": "cloud-resource",
+  "label": "腾讯云资源本体",
+  "key_label": "数字员工：运维助手" }        // 给这把 key 起名，便于审计归属
 // 201
 { "project": "cloud-resource",
   "key": "ontok_q_9f3c…",          // ⚠️ 只在这里出现一次，之后永不可取
+  "key_kind": "query",             // ← 数字员工用的，不是 admin
   "key_digest": "sha256:3f2a1b0c9d8e",
+  "bound_project": "cloud-resource",
   "created_at": "2026-10-27T10:00:00Z" }
 // 409  project.exists
 ```
+
+**这把 key 的定位（2026-10-27 明确）**：
+
+| 项 | 值 |
+| --- | --- |
+| 谁用 | **数字员工**（agent / MCP 客户端） |
+| kind | **`query`**（只能读：catalog / describe / sparql / TTL / MCP） |
+| 绑定 | **一个 key ↔ 一个本体项目**（`bound_project` 写死在服务端 token 表里） |
+| ⛔ 不能做 | 建项目 / 上传包 / 配 DSN / 解析 / 冻结 / 切流量（那些要 **admin** token） |
 
 ### 2 · `POST /api/projects/:p/bundles`
 
@@ -367,7 +380,7 @@ let snap = store.get_snapshot(v.id).await?;                      // ← 只加�
 | --- | --- | --- | --- |
 | 1 | **快照解析时机** | 启动时一次 | **首次请求时懒加载**（或启动预热），`activate` 后失效重载 |
 | 2 | **`QueryService`** | 单实例持有单 `model` | `ProjectRegistry: Map<项目, Arc<QueryService>>` |
-| 3 | **token 表** | `{token, kind, label, tenant}` | 加 **`project`** 字段（query key 必须绑项目） |
+| 3 | **token 表** | `{token, kind, label, tenant}` | 加 **`project`** 字段：**query key 必填**（数字员工用），**admin key 必须为空**（admin 是运维的，不绑项目） |
 | 4 | **生效版本指针** | `--version` 参数 | 项目表里的 `active_version`，`activate` 端点写它 |
 
 ### 4 · 兼容（**不回退已有部署**）
@@ -429,3 +442,92 @@ let snap = store.get_snapshot(v.id).await?;                      // ← 只加�
 | 匿名浏览 | **隐藏** | 只读 |
 | admin 已登录 | 显示 | 可建项目 |
 | 项目刚创建、未上传包 | 显示 + 顶部提示"尚未导入本体" | 引导上传 |
+
+
+---
+
+## 十四 · 数字员工怎么接入（**key 的消费方**）
+
+### 1 · 一把 key = 一个项目
+
+```
+ontok_q_9f3c…  ──►  cloud-resource（当前生效版本 v5）
+ontok_q_7a1b…  ──►  my-ontology（当前生效版本 v2）
+```
+
+数字员工**不需要知道项目名、也不需要知道版本号** —— 服务端从 key 反查：
+
+```
+Authorization: Bearer ontok_q_9f3c…
+        ↓ 查 token 表
+   kind=query, project=cloud-resource
+        ↓ 查项目当前生效版本
+   v5
+        ↓ 读该版本快照
+   返回结果
+```
+
+**这正是「一套部署多套本体」的落地点**：换项目 = 换 key，**不用重新部署**。
+
+### 2 · 数字员工的配置形态
+
+```json
+{
+  "base_url": "https://an-notol.mic-scfw.cloudns.org",
+  "api_key": "ontok_q_9f3c…",
+  "project": "cloud-resource"        // 仅用于人读；服务端不以它为准
+}
+```
+
+MCP 客户端同理：`Authorization: Bearer <key>`。
+
+### 3 · 它能调什么
+
+| 端点 | 用途 |
+| --- | --- |
+| `GET /api/catalog` | 有哪些类/关系（含 `semantic_label`） |
+| `GET /api/describe/:name` | 某个类的字段与关系 |
+| `POST /api/sparql` | 查询 |
+| `GET /api/ontology.ttl` | 拿本体 |
+| `GET /mcp`（SSE） | MCP 工具调用 |
+
+⛔ 上面这些以外的写端点，一律 **403**（`key.not_admin`）。
+
+### 4 · ⚠️ 一个必须现在就说清的隐患：**审计归属**
+
+v1 是「**一项目一把 key**」。如果同一个项目有 **3 个数字员工**，它们**共用这一把 key**：
+
+| 后果 | 说明 |
+| --- | --- |
+| **审计分不清是谁在查** | 审计日志里只有 `sha256:…`，三个员工的记录长得一模一样 |
+| **丢了一把 = 全员重配** | `rotate` 会把三个员工一起打断 |
+| **租户隔离靠参数** | 若靠 `tenant` 查询参数区分，那是**客户端可伪造的**，不是隔离 |
+
+**两个选项**：
+
+| 选项 | 做法 | 代价 |
+| --- | --- | --- |
+| **A（我建议）** | v1 仍**一项目一把**，但 `key_label` **必填**（写清"给谁用"），并在契约里记为**已知限制**；v2 支持「一项目多把 key，每把一把员工」 | v1 审计粒度粗 |
+| B | v1 就支持一项目多把 key（每把带 `label` + 可选 `tenant`） | token 表与 UI 稍微复杂一点，但**审计、轮换、隔离一次到位** |
+
+> 我倾向 **A**：先把链路跑通；但如果你现在就有多个数字员工要接同一个项目，那 **B 更省事**——它只是"一个项目下多行 token"，成本并不高。
+
+### 5 · 与现有 `query-tokens.json` 的关系
+
+现在是**一份文件装所有 key**：
+
+```json
+{"version": 1, "tokens": [{"token": "…", "kind": "query", "tenant": "…"}]}
+```
+
+加了 `project` 之后：
+
+```json
+{"version": 2, "tokens": [
+  {"token": "…", "kind": "query", "project": "cloud-resource", "label": "运维助手"},
+  {"token": "…", "kind": "query", "project": "my-ontology",    "label": "成本助手"},
+  {"token": "…", "kind": "admin", "label": "fde-michael"}     // ← admin 无 project
+]}
+```
+
+⇒ `version` 要**升到 2**（加字段是 schema 变化，按既有纪律：不升版本等于假装没变）。
