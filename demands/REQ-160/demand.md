@@ -99,16 +99,18 @@ ontok-builder build run \
 
 ---
 
-## 五 · agent 模式：skill 包与版本一致性
+## 五 · agent 模式：skill 包（**人分发，不做导出命令**）
 
-用户原话：「我们将提供 builder 的使用 skill 包，独立 agent 通过独立 skill 包进行抽取」。
+用户原话：「我们将提供 builder 的使用 skill 包，独立 agent 通过独立 skill 包进行抽取」，
+并在 11:50 明确：**skill 就在 `skills/` 目录里，由人来分发**（不另做 `skill export`）。
 
 | # | 要做 | 理由 |
 | --- | --- | --- |
-| 1 | **skill 包必须与二进制同源导出**：`ontok-builder skill export --out <dir>` | agent 手里的 skill 若比二进制旧，会按旧命令写调用 ⇒ 报错或静默降级。导出时把**工具版本号**写进 `SKILL.md` 头 |
-| 2 | `SKILL.md` 末尾**必须**有「收口」一节：`ontok-builder review open --project <p>` | 否则 agent 抽完就停，人到不了审核台 |
+| 1 | **`skills/ontok-extract/SKILL.md` 末尾补「收口」一节**：抽完执行 `ontok-builder review open --project <p>` | 否则 agent 抽完就停，人到不了审核台 |
+| 2 | skill 头补一行「**适用工具版本**」，并写明版本不匹配时先升级工具 | 人分发 ⇒ 版本漂移的唯一提醒点就在这行字上（⛔ 不做自动校验命令） |
 | 3 | skill 里**禁止**写「自动接受 / 批量放行」这类指令 | 人签是 ADR-005 的锚点，不能让 agent 替人签 |
-| 4 | 现成的 `skills/ontok-extract/SKILL.md` 继续有效（它是抽取契约），**不重写**，只在末尾补「收口」小节 | 已有内容经受过实测（泛动词 3.60%→0），不动它 |
+| 4 | 现成的 `skills/ontok-extract/SKILL.md` **不重写**，只补上面两处 | 已有内容经受过实测（泛动词 3.60%→0），不动它 |
+| 5 | `skills/ontok-build/SKILL.md`（含「盘点盲区」§一·五）也补同样的收口行 | 两条 skill 都会走到同一个出口 |
 
 ---
 
@@ -156,9 +158,11 @@ ontok-builder build run \
 - 跑完 `build run` 后：新版本存在但 **未冻结**、提案条目**决策为空**
 - 判据：`review show` 输出 + `ontology versions`
 
-### AC-008 · skill 包与二进制同源
-- `skill export --out d` ⇒ `d/SKILL.md` 头部带**当前二进制版本**；`d` 里的命令全部能在该二进制上跑通（抽 3 条抽查）
-- 判据：版本号逐字相等 + 命令实跑
+### AC-008 · skill 与收口一致（**人分发**，不验导出）
+- `skills/ontok-extract/SKILL.md` 与 `skills/ontok-build/SKILL.md` 末尾都有收口命令 `ontok-builder review open`
+- 两份 skill 头都写了「适用工具版本」
+- 两份 skill 里**没有**「自动接受 / 批量放行 / 跳过审核」这类指令（grep 三条）
+- 判据：grep 结果 + 人工读一遍收口段
 
 ---
 
