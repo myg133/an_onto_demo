@@ -11,10 +11,18 @@
 //! **本地测试永远抓不到这一类**，只有真打镜像会炸 —— 所以用静态对拍把它变成单测。
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+mod common;
+
+/// 仓库根。
+///
+/// ⚠️ **不许自己写 `env!("CARGO_MANIFEST_DIR")`** —— REQ-047 的 G-1 守卫
+/// （`tests/test_anchor_guard.rs`）会在词法层扫 `tests/**/*.rs`，
+/// 全仓只允许 `tests/common/source_root.rs` 里那一处（带 `ANCHOR-ALLOW` 标记）。
+/// 第一版我就在这里自己写了一份，结果全量多红 1 条（`no_bare_env_manifest_dir_outside_anchor_file`）。
+fn crate_root() -> std::path::PathBuf {
+    common::source_root::crate_root()
 }
 
 /// `src/**/*.rs` 里所有 `include_str!("../../<name>")`（仓库根文件）的名字。
