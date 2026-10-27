@@ -2,7 +2,7 @@
 
 ## 当前
 
-**待验证**（Dev 2 commits：`c6e0449` 第一轮 + `de78945` R1/R2 整改；未 push；待 QA）
+**已完成**（合并 `0c47cb4`）（Dev 2 commits：`c6e0449` 第一轮 + `de78945` R1/R2 整改；未 push；待 QA）
 
 ## 我复核过的（lion 亲跑）
 
@@ -26,3 +26,4 @@
 - [ ] QA（重点：R2 的变异是否真红、4 处既有测试改动有无放宽）
 - [ ] join 修 `contract_version=2` 与 `AM-FIELDS.md:21` 后，本地 AM 落回并复跑 `--check`
 - [ ] 合并（待用户）
+

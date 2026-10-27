@@ -550,3 +550,15 @@
 | 合并后复跑（空库 `req162_merge`） | `req162_console` **12/12** · `req125_page` **7/7** · `req159_bundles` **25/25** · `req160_review_open` **9/9** · `source_enumeration` 10 · `anchor` 3 · `req159_bundle` 38 · `req124_console` 16 · `check` 绿 |
 | 回收 | worktree + 分支已删；`cargo-162` 已删 |
 | 关键结论 | console 变「本地评审台」：`--dir` / 无口令 / 无项目 / **无库**（AC-007 真进程 + 反向实验证明） |
+
+## 2026-10-27 17:50 · REQ-166 合并与回收（lion）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **0c47cb4**（`--no-ff`）← `feature/REQ-166` **ae04442**（基线 8c4d6f5） |
+| 冲突 | **零** |
+| 改动 | 6 文件 **+578/−14**（`src/access/mod.rs` +398、`net.rs` +114、fixtures、2 个测试） |
+| 合并后复跑 | `access::` **70/70** · `req144_access` 9/9 · `req144_network` **27/27** · `req149_generic` 7+1ignored · `source_enumeration` 10 · `anchor` 3 · `req162_console` 12 · `check` 绿 |
+| QA | **0 阻断**（7 个契约变体、e2e 签名 /cvm/、max_limit 往返、真 AM 两端对照、无删弱） |
+| 回收 | worktree + 分支已删；`cargo-166` 已删 |
+| 遗留（跨边） | `access_fetch.py` 仍只认 `contract_version=1`（join REQ-168）；真 AM 的 service 落回已做 |
