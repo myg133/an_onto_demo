@@ -13,7 +13,7 @@
 //!
 //! | 位置 | 允许出现什么 |
 //! | --- | --- |
-//! | `GET /` 的响应体（本文件的 [`CONSOLE_HTML`]） | **只有**界面骨架：标题、tab 名、表单、CSS/JS |
+//! | `GET /` 的响应体（本文件的 [`CONSOLE_HTML`]） | **只有**界面骨架：标题、左导航入口、表单、CSS/JS |
 //! | 项目名 / 版本号 / 对象名 / 条目 / 声明原文 | **一律不出现**；全部靠拿到口令后的 `/api/*` |
 //!
 //! 判据（`tests/test_req125_page.rs`）：拿 `secretproj` / 第 7 版 / `绝密对象` 起服务，
@@ -104,6 +104,22 @@
 //! 评审 40 条/页、审计默认 100（服务端上限 1000，页面最多渲染 1000）、
 //! 目录按服务端分页（`page_size` ≤ 200）、查询结果最多渲染 200 行并写明
 //! 「只显示前 N 行 / 共 M 行」。⛔ 不一次渲染上万行。
+//!
+//! # 壳（REQ-161 换皮）：左导航 + 单一主区、32px 行高 / sticky 表头、key·IRI 等宽、目录右侧抽屉
+//!
+//! 换的**只有壳**，视图 / 端点 / 逻辑三不变（判据见 `mod tests` 与 `tests/test_req125_page.rs`）：
+//!
+//! | 结构 | 判据 |
+//! | --- | --- |
+//! | 左导航 `#nav` 里 8 个 `.nav-item`；顶栏 `#tabs` 不再存在 | 按钮 id 仍是 `tab-*`，`switchTab` 的口径没变 |
+//! | 单一主区 `#views` 是**唯一**滚动容器 | 视图容器 `v-*` 一个不少 |
+//! | `thead` sticky + `tbody td` 行高 32px | 表体在 `.tablewrap` 里滚动 |
+//! | key / IRI 一律等宽 `.key`（目录浏览 / 审计 / 评审三处） | CSS 有定义 + 三处确实在用 |
+//! | 目录详情在右侧抽屉 `#drawer`（默认收起；Esc / 遮罩 / ✕ 关闭） | `#k-detail` 在抽屉里，不再占页面底部 |
+//! | `已迁到 Studio` 的 ADR-013 提示条保留 | 构建包视图 |
+//!
+//! ⛔ 换皮不许改的事实：`/api/*` 路径集合与本单之前**逐字相等**
+//! （`the_api_path_set_is_frozen`），壳内仍然零数据、零外部资源。
 
 use axum::http::{HeaderName, HeaderValue};
 
@@ -259,6 +275,16 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
 .chk.ok::before{content:"✓";color:var(--ok)}
 .chk.bad::before{content:"✕";color:var(--bad)}
 .chk .why{color:var(--mut-2)}
+/* ── 右侧抽屉（目录详情；默认收起，不遮表格） ────────── */
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,92vw);display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--bg-2);box-shadow:-18px 0 50px rgba(0,0,0,.45);transform:translateX(102%);transition:transform .26s var(--ease);z-index:20}
+#drawer.is-on{transform:translateX(0)}
+#drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:19}
+.drawer-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--line);font:12.5px/1 var(--mono);color:var(--fg)}
+.drawer-head span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-head .btn-icon{margin-left:auto;width:26px;height:26px;padding:0;border-color:var(--line);background:transparent;color:var(--mut)}
+.drawer-head .btn-icon:hover{color:var(--fg);border-color:var(--line)}
+.drawer-body{flex:1;min-height:0;overflow:auto;padding:12px 13px}
+#k-detail{margin:0;border:0;padding:0;background:transparent}
 /* ── 滚动条 ───────────────────────────────────────────── */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -529,7 +555,6 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
         </div>
       </div>
     </div>
-    <div id="k-detail" class="panel" hidden></div>
   </section>
 
   <!-- ── 8 · 构建包（REQ-159）· 已按 ADR-013 迁到 Studio ── -->
@@ -651,10 +676,19 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px;word-break:break-all}
       </div>
     </div>
   </section>
-    </div>
+  </div>
   </main>
 </div>
 
+<!-- 右侧抽屉：目录详情的落点（默认收起；点表格某行滑出，Esc / 遮罩 / ✕ 关闭） -->
+<div id="drawer-mask" hidden></div>
+<aside id="drawer" aria-hidden="true" aria-label="条目详情">
+  <div class="drawer-head">
+    <span id="dr-title">条目详情</span>
+    <button id="dr-close" class="btn-icon" aria-label="关闭抽屉">✕</button>
+  </div>
+  <div class="drawer-body"><div id="k-detail" class="panel" hidden></div></div>
+</aside>
 
 <div id="modal" hidden>
   <div id="mbox" role="dialog" aria-modal="true">
@@ -910,7 +944,7 @@ function cellNode(c) {
   } else txt(td, (c === null || c === undefined) ? "—" : c);
   return td;
 }
-function makeTable(head, rows, emptyText) {
+function makeTable(head, rows, emptyText, opts) {
   if (!rows || !rows.length) return el("div", "empty", emptyText || "没有数据。");
   var t = el("table");
   var thead = el("thead"), tr = el("tr");
@@ -918,9 +952,25 @@ function makeTable(head, rows, emptyText) {
   thead.appendChild(tr);
   t.appendChild(thead);
   var tb = el("tbody");
-  rows.forEach(function (row) {
+  rows.forEach(function (row, idx) {
     var r = el("tr");
     row.forEach(function (c) { r.appendChild(cellNode(c)); });
+    // 可选：整行可点（目录浏览用它开抽屉）。点名字那个 button 由它自己的 onclick 处理，
+    // 这里跳过，避免一次点击发两条 describe 请求。
+    if (opts && opts.onRow) {
+      r.className = "can-open";
+      r.onclick = function (ev) {
+        if (ev && ev.target && ev.target.tagName === "BUTTON") return;
+        var sibs = r.parentNode ? r.parentNode.children : null;
+        if (sibs) {
+          for (var i = 0; i < sibs.length; i++) {
+            if (sibs[i].classList) sibs[i].classList.remove("is-sel");
+          }
+        }
+        if (r.classList) r.classList.add("is-sel");
+        opts.onRow(idx);
+      };
+    }
     tb.appendChild(r);
   });
   t.appendChild(tb);
@@ -1489,7 +1539,13 @@ function renderCatalog() {
     }
     return [badge(it.kind, it.kind === "class" ? "acc" : (it.kind === "relation" ? "warn" : "")), name, detail];
   });
-  box.appendChild(makeTable(["类型", "名字（点开看详情）", "概要"], rows, "这一页没有条目。"));
+  box.appendChild(makeTable(["类型", "名字（点开看详情）", "概要"], rows, "这一页没有条目。", {
+    // 点任意一行 ⇒ 右侧抽屉看这一类 / 属性 / 关系的详情（抽屉不遮表格，方便对照）。
+    onRow: function (idx) {
+      var hit = (d.items || [])[idx];
+      if (hit) describeName(hit.name);
+    }
+  }));
   if ((d.skipped_classes || []).length) {
     var p = el("div", "panel");
     p.appendChild(el("h2", null, "没有 TriplesMap 的类（不可查，但不是静默少了几张表）"));
@@ -1533,11 +1589,33 @@ function describeName(name) {
         ["说明", d.note || "—"]
       ]));
     }
+    // 详情渲染完再开抽屉：先有内容再滑出，避免「空抽屉闪一下」。
+    openDrawer("详情：" + d.name + "（" + d.kind + "）");
   }).catch(function (e) {
     var box = $("k-detail");
     box.hidden = false;
     showErr(box, e);
+    openDrawer("详情读取失败");
   });
+}
+// ── 目录详情抽屉：默认收起；点表格某行 / 点名字打开，Esc、遮罩、✕ 三条路关闭 ──
+// 复用 `#k-detail`（JS 的渲染点一行没改），只是把它的落点从页面底部搬到右侧抽屉里：
+// 看目录时要**对照**着读，弹窗会遮住表格。
+function openDrawer(title) {
+  var d = $("dr-title");
+  if (d) txt(d, title || "条目详情");
+  var box = $("drawer");
+  if (box && box.classList) box.classList.add("is-on");
+  if (box) box.setAttribute("aria-hidden", "false");
+  var mask = $("drawer-mask");
+  if (mask) mask.hidden = false;
+}
+function closeDrawer() {
+  var box = $("drawer");
+  if (box && box.classList) box.classList.remove("is-on");
+  if (box) box.setAttribute("aria-hidden", "true");
+  var mask = $("drawer-mask");
+  if (mask) mask.hidden = true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2130,6 +2208,8 @@ function switchTab(name) {
   });
   var host = $("views");
   if (host) host.scrollTop = 0;
+  // 离开目录浏览就收起抽屉：否则它会挂在新视图上，看起来像「详情属于这一页」。
+  if (name !== "catalog") closeDrawer();
   if (name === "review" && !S.review) loadReview().catch(function () {});
   if (name === "audit" && !S.audit) loadAudit().catch(function () {});
   if (name === "export" && !S.projects) loadProjects().catch(function () {});
@@ -2156,6 +2236,13 @@ $("c-kind").onchange = function () { loadConfig().catch(function () {}); };
 $("a-load").onclick = function () { loadAudit().catch(function () {}); };
 $("a-action").onchange = function () { if (S.audit) renderAudit(); };
 $("q-go").onclick = runQuery;
+// 抽屉的三条关闭路径：✕ / 遮罩 / Esc。
+$("dr-close").onclick = closeDrawer;
+$("drawer-mask").onclick = closeDrawer;
+// Esc 挂在 document 上（焦点可能停在表格里）；假 DOM 桩没有 addEventListener，所以先判存在。
+if (document.addEventListener) {
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDrawer(); });
+}
 $("k-load").onclick = function () { loadCatalog(parseInt($("k-page").value, 10) || 1).catch(function () {}); };
 $("k-prev").onclick = function () { loadCatalog(Math.max(1, S.catalogPage - 1)).catch(function () {}); };
 $("k-next").onclick = function () { if (S.catalog && S.catalog.has_more) loadCatalog(S.catalogPage + 1).catch(function () {}); };
@@ -2585,6 +2672,243 @@ mod tests {
         assert!(
             CONSOLE_HTML.contains("连字符 / 下划线"),
             "报错与说明文案必须与 pattern 同步提到下划线"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // REQ-161 · 换皮：左导航 / 密度 / 等宽 key / 抽屉 / 端点集合冻结
+    // ══════════════════════════════════════════════════════════
+
+    /// 左导航 + 单一主区（AC-001）。
+    ///
+    /// 换皮前是顶栏 8 个并列 tab（`#tabs`）；换皮后是左侧窄导航 + 单一主区。
+    /// 「8 个入口一个都不许少」在这里逐项钉死：视图容器 `v-*` 与按钮 `tab-*` 的 id
+    /// **没有改名**（只是从顶栏搬进左导航），所以 `ac004` 的数法一行都不用改。
+    #[test]
+    fn the_shell_uses_a_left_nav_with_all_eight_entries() {
+        assert!(CONSOLE_HTML.contains("id=\"nav\""), "缺左导航容器 #nav");
+        assert!(CONSOLE_HTML.contains("id=\"nav-list\""), "缺导航列表 #nav-list");
+        assert!(
+            CONSOLE_HTML.contains("id=\"views\""),
+            "缺单一主区滚动容器 #views（左导航 + 单主区是这次换皮的结构）"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("id=\"tabs\""),
+            "顶栏 #tabs 必须移除：8 个入口已经搬到左导航（AC-001）"
+        );
+        assert_eq!(
+            CONSOLE_HTML.matches("class=\"nav-item").count(),
+            8,
+            "左导航必须恰好 8 个入口（项目与版本/评审/导出/声明编辑/审计/查询台/目录浏览/构建包）"
+        );
+        for (tab, num, title) in [
+            ("projects", "01", "项目与版本"),
+            ("review", "02", "评审"),
+            ("export", "03", "导出"),
+            ("config", "04", "声明编辑"),
+            ("audit", "05", "审计"),
+            ("query", "06", "查询台"),
+            ("catalog", "07", "目录浏览"),
+            ("bundles", "08", "构建包"),
+        ] {
+            assert!(
+                CONSOLE_HTML.contains(&format!("id=\"tab-{tab}\" class=\"nav-item")),
+                "左导航缺入口 {title}"
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!("data-tab=\"{tab}\"")),
+                "{title} 缺 data-tab={tab}（导航切换靠它）"
+            );
+            assert!(
+                CONSOLE_HTML.contains(&format!(">{num}</span>{title}</button>")),
+                "{title} 的序号 / 文案与样机不一致（应为 {num} {title}）"
+            );
+        }
+    }
+
+    /// 目录详情是**右侧抽屉**，默认收起（AC-001）：看目录时要对照着读，弹窗会遮住表格。
+    #[test]
+    fn the_catalog_detail_is_a_drawer_that_starts_closed() {
+        assert!(CONSOLE_HTML.contains("id=\"drawer\""), "缺右侧抽屉 #drawer");
+        assert!(
+            CONSOLE_HTML.contains("id=\"drawer\" aria-hidden=\"true\""),
+            "抽屉默认必须是收起状态（aria-hidden=true）"
+        );
+        assert!(
+            !CONSOLE_HTML.contains("id=\"drawer\" hidden"),
+            "抽屉不是用 hidden 藏的：默认收起靠 CSS 的 translateX，滑出才是 is-on"
+        );
+        assert!(CONSOLE_HTML.contains("id=\"drawer-mask\""), "缺抽屉遮罩");
+        assert!(CONSOLE_HTML.contains("id=\"dr-close\""), "缺抽屉关闭按钮");
+        assert!(CONSOLE_HTML.contains("id=\"dr-title\""), "缺抽屉标题");
+        // 详情容器搬进抽屉（渲染点 `#k-detail` 本身一字没改）。
+        let at = CONSOLE_HTML.find("id=\"drawer\"").expect("缺 #drawer");
+        assert!(
+            CONSOLE_HTML[at..].contains("id=\"k-detail\""),
+            "目录详情容器必须在抽屉里（不再占页面底部）"
+        );
+        for fun in ["function openDrawer(", "function closeDrawer("] {
+            assert!(CONSOLE_HTML.contains(fun), "缺 {fun}");
+        }
+        // 三条关闭路径：✕ / 遮罩 / Esc。
+        assert!(
+            CONSOLE_HTML.contains("$(\"dr-close\").onclick"),
+            "✕ 必须能关抽屉"
+        );
+        assert!(
+            CONSOLE_HTML.contains("$(\"drawer-mask\").onclick"),
+            "遮罩必须能关抽屉"
+        );
+        assert!(
+            CONSOLE_HTML.contains("\"Escape\""),
+            "Esc 必须能关抽屉"
+        );
+        // 默认收起的 CSS 依据（否则「默认隐藏」只是 aria 上的一句话）。
+        assert!(
+            CONSOLE_HTML.contains("transform:translateX(102%)"),
+            "抽屉默认应滑出屏外"
+        );
+        assert!(
+            CONSOLE_HTML.contains("#drawer.is-on{transform:translateX(0)}"),
+            "is-on 才把抽屉滑进来"
+        );
+        // 点表格某一行就能开（不是只能点名字那个小按钮）。
+        assert!(
+            CONSOLE_HTML.contains("onRow: function (idx)"),
+            "目录表必须支持「点一行看详情」"
+        );
+    }
+
+    /// key / IRI 一律等宽（`.key`），**三处**必须覆盖：目录浏览 / 审计 / 评审（AC-002）。
+    #[test]
+    fn key_and_iri_are_monospace_in_catalog_audit_and_review() {
+        assert!(
+            CONSOLE_HTML.contains(".key{font-family:var(--mono)"),
+            "CSS 必须定义 .key 等宽类"
+        );
+        // 目录浏览：类名 / 属性名 / 关系名（仍是可点的 button，点名字看详情的行为不变）。
+        assert!(
+            CONSOLE_HTML.contains("el(\"button\", \"key keylink\", it.name)"),
+            "目录浏览的类名必须带 .key"
+        );
+        // 审计：token 摘要与动作（靠视觉模式识别 sha 前缀 / action）。
+        assert!(
+            CONSOLE_HTML.contains("{ text: e.token || \"—\", cls: \"key\" }"),
+            "审计的 token 摘要必须带 .key"
+        );
+        assert!(
+            CONSOLE_HTML.contains("{ text: e.action || \"—\", cls: \"key\" }"),
+            "审计的动作必须带 .key"
+        );
+        // 评审：条目 target（对象名 / 关系名 / IRI）。
+        assert!(
+            CONSOLE_HTML.contains("el(\"span\", \"target key\", it.target)"),
+            "评审的 target 必须带 .key"
+        );
+        assert!(
+            CONSOLE_HTML.contains(".keylink{"),
+            "目录里的类名是可点的（.keylink 得有自己的样式）"
+        );
+    }
+
+    /// 表格是**内部工具**的密度：表头 sticky、行高 32px（AC-002）。
+    ///
+    /// 这两条只能靠 CSS 源码断言（进程内不起浏览器）；真浏览器里是否生效由 BA 的 Playwright harness 看。
+    #[test]
+    fn tables_are_dense_with_a_sticky_header() {
+        assert!(
+            CONSOLE_HTML.contains("thead th{position:sticky;top:0"),
+            "表头必须 sticky（滚动时不丢列名）"
+        );
+        assert!(
+            CONSOLE_HTML.contains("tbody td{height:32px"),
+            "表格行高必须是 32px（一屏 20+ 行）"
+        );
+        assert!(
+            CONSOLE_HTML.contains("class=\"tablewrap"),
+            "表体得有滚动容器（sticky 才有参照物）"
+        );
+    }
+
+    /// 端点集合冻结（AC-004）：页面里出现的 `/api/…` 路径集合必须与本单之前**逐字相等**。
+    ///
+    /// 提取口径：从 `api/` 起、由小写字母 / 数字 / `_` `.` `/` `-` 组成的路径，
+    /// 去掉尾斜杠后去重（`api/projects/` 与 `api/projects` 视为同一条基路径）。
+    /// 清单是**本单开工前**从 `CONSOLE_HTML` 里跑出来的；改一个都得先回答「为什么端点变了」。
+    #[test]
+    fn the_api_path_set_is_frozen() {
+        const FROZEN: [&str; 12] = [
+            "api/apply",
+            "api/audit",
+            "api/catalog",
+            "api/config",
+            "api/decide",
+            "api/describe",
+            "api/export/ttl",
+            "api/freeze",
+            "api/projects",
+            "api/r2rml",
+            "api/review",
+            "api/sparql",
+        ];
+        let mut found: Vec<String> = Vec::new();
+        let mut rest: &str = CONSOLE_HTML;
+        while let Some(at) = rest.find("api/") {
+            let tail = &rest[at..];
+            let end = tail
+                .find(|c: char| {
+                    !(c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '_'
+                        || c == '/'
+                        || c == '.'
+                        || c == '-')
+                })
+                .unwrap_or(tail.len());
+            let path = tail[..end].trim_end_matches('/').to_string();
+            if path != "api" && !found.contains(&path) {
+                found.push(path);
+            }
+            rest = &rest[at + 4..];
+        }
+        found.sort();
+        let mut want: Vec<String> = FROZEN.iter().map(|s| (*s).to_string()).collect();
+        want.sort();
+        assert_eq!(
+            found, want,
+            "页面里的 /api/* 路径集合变了：换皮只许动壳，端点集合必须与本单之前逐字相等（AC-004）"
+        );
+    }
+
+    /// 体积预算（S6）：单文件 ≤ 300 KB；下限自证页面没被截断。
+    ///
+    /// 上界比 `tests/test_req125_page.rs::ac002`（< 200 KB）更宽，那是另一道更严的闸；
+    /// 这条按需求 S6 的数字登记，防止「换皮顺手塞了几个内联图片」这种膨胀。
+    #[test]
+    fn the_shell_stays_under_the_size_budget() {
+        let bytes = CONSOLE_HTML.len();
+        assert!(
+            bytes <= 300 * 1024,
+            "单文件必须 ≤ 300 KB（S6），实际 {bytes} 字节"
+        );
+        assert!(bytes > 80 * 1024, "页面太小，可能被截断了：{bytes} 字节");
+    }
+
+    /// ADR-013 的「已迁到 Studio」提示条**必须留着**：删掉它，客户侧会继续在 console 里找入口。
+    #[test]
+    fn the_adr013_studio_notice_is_kept() {
+        assert!(
+            CONSOLE_HTML.contains("已迁到 Studio"),
+            "构建包视图必须保留 ADR-013 的迁移提示（REQ-161 §五 / AC-003）"
+        );
+        assert!(CONSOLE_HTML.contains("/studio"), "提示里要给出口 /studio");
+        assert!(
+            CONSOLE_HTML.contains("仅为历史保留"),
+            "提示要写清「仅历史保留」，不能只说「已迁走」"
+        );
+        assert!(
+            CONSOLE_HTML.contains("id=\"v-bundles\""),
+            "构建包视图本身也要留着（ADR-013 只标已迁，不删代码）"
         );
     }
 }
