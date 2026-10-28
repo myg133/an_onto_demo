@@ -374,6 +374,44 @@ def load_am(path):
     return am
 
 
+def _pick_recipe(raw, index=0):
+    """从**四种可接受的形状**里取出「配方」（`get` 对象）。
+
+    为什么要这么宽容（2026-10-28 平台实测）：
+      沙箱里 agent 只能「读回执 → 自己写个文件 → 喂脚本」，中间任何"按字段重打一遍"
+      都会丢字段（实测丢了 `pushdown`，导致 `--param region` 被拒）。
+      ⇒ 让脚本自己认形状，agent 只要把**手上那份东西原样存盘**就行。
+
+    接受的形状（由外到内）：
+      1. 整段 SPARQL 回执：`{"@graph": [], "@pending": [ {...} ], "meta": {...}}`
+      2. 只要 `@pending` 数组：`[ {"get": {...}}, ... ]`
+      3. 单条 `@pending` 条目：`{"@type": "...", "get": {...}}`
+      4. 裸配方（就是 `get`）：`{"class": "...", "source": {...}}`
+    """
+    if isinstance(raw, dict) and isinstance(raw.get("@pending"), list):
+        pend = raw["@pending"]
+        if not pend:
+            fail("am.invalid", EXIT_INPUT, "回执里 `@pending` 是空的：这个类不需要取数（或类名/命名空间不对）",
+                 "确认查询命中的是 **API 源类**，且 IRI 拼写正确（拼错会给误导性的 503）。")
+        if index >= len(pend):
+            fail("am.invalid", EXIT_INPUT,
+                 "回执里 `@pending` 只有 %d 条，取不到第 %d 条" % (len(pend), index + 1),
+                 "用 `--recipe-index` 选另一条（从 0 开始）。")
+        entry = pend[index]
+        return entry.get("get") if isinstance(entry, dict) and isinstance(entry.get("get"), dict) else entry
+    if isinstance(raw, list):
+        if not raw:
+            fail("am.invalid", EXIT_INPUT, "传进来是空数组", "把 `@pending[0]` 或它的 `get` 整个传进来。")
+        if index >= len(raw):
+            fail("am.invalid", EXIT_INPUT, "数组只有 %d 条，取不到第 %d 条" % (len(raw), index + 1),
+                 "用 `--recipe-index` 改选。")
+        entry = raw[index]
+        return entry.get("get") if isinstance(entry, dict) and isinstance(entry.get("get"), dict) else entry
+    if isinstance(raw, dict) and isinstance(raw.get("get"), dict):
+        return raw["get"]
+    return raw
+
+
 def am_from_recipe(recipe, source_label="<recipe>"):
     """把服务端 `@pending.get` 给的那一段配方，合成一份**最小 AM**。
 
@@ -420,8 +458,10 @@ def am_from_recipe(recipe, source_label="<recipe>"):
             k: (v if isinstance(v, dict) else {"path": v})
             for k, v in (entry.get("fields") or {}).items()
         },
-        "iri_template": "ontok:%s/{id}" % cls,
+        "iri_template": entry.get("iri_template") or ("ontok:%s/{id}" % cls),
         "capability": {"pushdown": entry.get("pushdown") or []},
+        # 配方自带 identity 时原样带上（REQ-173 之后服务端会发）
+        **({"identity": entry["identity"]} if isinstance(entry.get("identity"), dict) else {}),
     }
     return {
         "contract_version": 2,
@@ -2612,6 +2652,29 @@ def _selftest_recipe(selftest):
     selftest.check("配方缺 class ⇒ am.invalid", e1 is not None and e1.code == "am.invalid",
                    str(e1 and e1.code))
 
+    # _pick_recipe：四种形状都要能取出同一个 get（2026-10-28 平台实测：agent 只会"原样存盘"）
+    _g0 = {"class": "demo_vm", "source": {"base_url": "https://x.invalid"},
+           "operation": {}, "request": {}, "iterator": "$[*]", "fields": {"a": "A"}, "pushdown": ["region"]}
+    shapes = {
+        "裸配方(get)": _g0,
+        "单条 entry": {"@type": "ontok:demo_vm", "get": _g0},
+        "@pending 数组": [{"@type": "ontok:demo_vm", "get": _g0}],
+        "整段回执": {"@graph": [], "@pending": [{"@type": "ontok:demo_vm", "get": _g0}], "meta": {}},
+    }
+    for label, raw in shapes.items():
+        got = _pick_recipe(raw)
+        selftest.check("_pick_recipe 认得「%s」" % label,
+                       isinstance(got, dict) and got.get("class") == "demo_vm", repr(got)[:60])
+
+    # 空 @pending ⇒ am.invalid 且提示"类名/IRI 可能不对"
+    try:
+        _pick_recipe({"@pending": []})
+        _e = None
+    except FetchError as exc:
+        _e = exc
+    selftest.check("空 @pending ⇒ am.invalid", _e is not None and _e.code == "am.invalid",
+                   str(_e and _e.code))
+
     # --credential-map / 平台注入名兜底（2026-10-28 平台实测：只有 SKILL_CREDENTIAL_*）
     cands = _credential_candidates("TENCENT_SECRET_ID")
     selftest.check("凭据候选里含平台的 SKILL_CREDENTIAL_SECRETID",
@@ -2732,6 +2795,8 @@ def build_parser():
     parser.add_argument("--recipe", metavar="RECIPE.json",
                         help="直接吃服务端 `@pending[].get` 的配方（用 `-` 从 stdin 读）："
                              "v2 契约下查一次本体就有，不需要 AM 文件")
+    parser.add_argument("--recipe-index", type=int, default=0, metavar="N",
+                        help="配方文件里有多条 @pending 时选第几条（从 0 开始，默认 0）")
     parser.add_argument("--credential-map", metavar="DECLARED=ENV", action="append", default=[],
                         help="凭据名映射：把 AM 里声明的变量名指到实际环境变量名"
                              "（可重复；平台注入 SKILL_CREDENTIAL_* 时用）")
@@ -2800,14 +2865,27 @@ def main(argv=None):
                 recipe = read_json_file(args.recipe, "配方文件")
             # 手抄检测：把回执里的 get **手抄**成文件时最容易丢字段（实测 2026-10-28：
             # agent 手抄后丢了 pushdown ⇒ --param region 被拒，报"这个 entity 一个可下推参数都没有"）
-            _g = recipe.get("get") if isinstance(recipe.get("get"), dict) else recipe
+            _g = _pick_recipe(recipe, getattr(args, "recipe_index", 0) or 0)
             _lost = [k for k in ("pushdown", "fields", "iterator", "operation") if not _g.get(k)]
             if _lost:
                 sys.stderr.write(
                     "[warn] 配方里缺 %s：如果你是从回执**手抄**的，请改成把 "
                     "`@pending[0].get` **原样保存**（手抄会丢字段，表现为"
                     "参数被拒 / 0 行）\n" % "、".join(_lost))
-            am = am_from_recipe(recipe)
+            am = am_from_recipe(_g)
+            _ent = am["entities"][0]
+
+            # `--entity` 可省：配方只含一条 entity ⇒ 用它（少一个会写错的参数）
+            if not args.entity:
+                args.entity = _ent.get("class") or _ent.get("id")
+
+            # 配方自带 identity / iri_template 时不需要 `--id-property`
+            # （REQ-173 之后服务端会发；现在先做前向兼容）
+            if isinstance(_g.get("identity"), dict) and _g["identity"].get("key_path"):
+                _ent["identity"] = {"key_path": _g["identity"]["key_path"]}
+            if isinstance(_g.get("iri_template"), str) and _g["iri_template"]:
+                _ent["iri_template"] = _g["iri_template"]
+
             if args.id_property:
                 props = am["entities"][0]["fields"] or {}
                 if args.id_property not in props:
@@ -2820,7 +2898,9 @@ def main(argv=None):
                 #    校验报「identity.key_path 为空」⇒ --id-property 这条线不可用）
                 _v = props[args.id_property]
                 am["entities"][0]["identity"] = {"key_path": _v["path"] if isinstance(_v, dict) else _v}
-            elif args.format == "jsonld" and not args.check:
+            elif (args.format == "jsonld" and not args.check
+                  and not (_ent.get("identity") or {}).get("key_path")):
+                # 只有「配方里也没有 identity」时才拒（REQ-173 之后服务端会发，通常走不到这里）
                 fail("recipe.no_identity", EXIT_INPUT,
                      "配方里没有 identity，jsonld 输出无法生成 @id",
                      "加 `--id-property <属性名>`，或用 `--format rows`。")

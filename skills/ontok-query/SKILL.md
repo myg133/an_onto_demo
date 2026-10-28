@@ -582,7 +582,20 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | `identity` / `iri_template`（`@id` 用） | ❌ 没有 | **两种输出格式都要给 `--id-property <fields 里的属性名>`**：jsonld 缺它直接拒（`recipe.no_identity`）；**rows 缺它不报错，但每行会被 `skipped_no_identity` 丢掉 ⇒ 你拿到 0 行还以为查询没数据**（⛔ 不猜主键） |
 | `fixture`（离线试跑用） | ❌ 没有 | `--dry-run` 在配方模式下会明确拒（`recipe.no_fixture`）；要试跑就用 `--mapping` 带 fixture 的 AM |
 
-**⛔ 配方要「原样保存」，不要手抄字段**（2026-10-28 数字员工平台实测）：
+**配方**存盘时**不用做任何手术**——脚本认这四种形状（挑最省事的那种）：
+
+| 形状 | 长什么样 | 建议 |
+| --- | --- | --- |
+| 整段 SPARQL 回执 | `{"@graph": [], "@pending": [...], "meta": {...}}` | ✅ **最省事**：回执原样存盘 |
+| 只存 `@pending` 数组 | `[{"get": {...}}]` | ✅ |
+| 单条 `@pending` 条目 | `{"@type": "...", "get": {...}}` | ✅ |
+| 裸配方（`get` 本身） | `{"class": "...", "source": {...}}` | ⚠️ 拆出来时**容易丢字段**，别拆 |
+
+`@pending` 有多条时用 `--recipe-index N` 选（从 0 开始）。
+
+**`--entity` 可以省**：配方只含一条 entity，脚本自动用它。
+
+**⛔ 不要手抄字段**（2026-10-28 数字员工平台实测）：
 
 > agent 手抄 `cvm_recipe.json` 时**丢了 `pushdown`**，于是 `--param region=ap-shanghai` 被脚本拒绝
 > （"这个 entity 一个可下推参数都没有"），而服务端原回执里明明有 `["region","zone"]`。
@@ -595,7 +608,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | 参数 | 缺了会怎样 | 怎么填 |
 | --- | --- | --- |
 | `--entity <配方里的 class>` | `am.invalid`：合成的最小 AM 只有一条 entity，但**选择仍按 id/class 匹配** | 填 `get.class`，如 `cvm_instance` |
-| `--id-property <fields 里的属性名>` | 见上表：jsonld 直接拒；**rows 静默空结果** | 填 `fields` 里的**属性名**（不是源的字段名，如 `instance_id` 而非 `InstanceId`） |
+| `--id-property <fields 里的属性名>` | 见上表：jsonld 直接拒；**rows 静默空结果** | 填 `fields` 里的**属性名**（如 `instance_id`）。⭐ 若配方自带 `identity`（新服务端会发）则**不需要**这个参数 |
 
 **若凭据由平台注入**（变量名带前缀，如 `SKILL_CREDENTIAL_SECRETID`），而配方 `auth.credential_env`
 写的是**源侧名字**（如 `TENCENT_SECRET_ID`）—— 两边对不上。三条路，**按顺序试**：
