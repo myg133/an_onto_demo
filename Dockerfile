@@ -65,32 +65,20 @@ ARG HTTP_PROXY=""
 ARG HTTPS_PROXY=""
 
 RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories \
- && apk add --no-cache ca-certificates tzdata bash curl unzip libstdc++ libgcc \
+ && apk add --no-cache ca-certificates tzdata \
  && adduser -D -u 10001 -h /data ontok
 
-# ⚠️ `libstdc++` / `libgcc` 是 **bun 的硬依赖**（alpine 默认不带 C++ 运行库）：
-#    缺了会报 `Error loading shared library libstdc++.so.6` +
-#    `_ZSt20__throw_length_errorPKc: symbol not found` 一串。
-#    这是 alpine 上跑 bun 的经典坑，别删这两行。
-
-# bun（装包用；在 build 期用代理，运行期不需要代理）
-ENV BUN_INSTALL=/usr/local
-RUN HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} sh -c 'curl -fsSL https://bun.sh/install | bash' \
- && ln -sf /usr/local/bin/bun /usr/local/bin/bunx \
- && /usr/local/bin/bun --version
-
-RUN HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY} bun add -g @earendil-works/pi-coding-agent@1.4.0 pi-acp@0.0.34 \
- && ls -l /usr/local/bin | grep -E 'pi$|pi-acp' || true
-
-# ⚠️ pi / pi-acp 的 bin 是 `#!/usr/bin/env node`，而本镜像**只装 bun 不装 node**。
-#    直接用会报 `env: can't execute 'node': No such file or directory`。
-#    实测 `bun <cli.js> --version` 能正常跑（pi 1.4.0）⇒ 把 shebang 指向 bun，省掉 node。
-#    若将来某个子命令确实依赖 node（例如 pi 去 spawn `node` 子进程），再 `apk add nodejs`。
-RUN sed -i '1s|^#!/usr/bin/env node\r\?$|#!/usr/local/bin/bun|' \
-        /usr/local/install/global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
-        /usr/local/install/global/node_modules/pi-acp/dist/index.js \
- && head -1 /usr/local/install/global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
- && pi --version
+# ⛔ 2026-10-28：**不再装 bun / pi / pi-acp**（原来这里有 bun.sh 安装 + `bun add -g pi-coding-agent pi-acp`）。
+#
+# 为什么可以删：`pi` / `pi-acp` 是 **ACP 抽取**用的（`src/extract/doc_acp.rs`，REQ-147），
+# 那是**构建面**（`ontok-builder build run --agent acp`）在 FDE 本机跑的事；
+# 本镜像里只有一个二进制 `ontok`（服务面：`query serve` / `mcp-server` / `serve`），
+# 它的可达图里没有任何 ACP 代码（守卫：`tests/test_req152_bins.rs` 的 `X-TC-Action`/可达图判据）。
+#
+# 顺带的好处：
+#   · 镜像不再依赖 `bun.sh` + npm 两个外网源（这台构建机上有一次就卡在 55% 下不来）；
+#   · 少一层 C++ 运行库依赖（原来 `libstdc++`/`libgcc` 只是给 bun 用的，一并去掉）；
+#   · 攻击面变小：客户镜像里不带 JS 运行时，也不带 npm 全局包。
 
 # ⭐ REQ-152 · **镜像里只有一个 ontok**（服务面）。
 #
@@ -104,8 +92,8 @@ USER ontok
 WORKDIR /data
 ENV TZ=Asia/Shanghai
 
-# 运行时给 pi 注入配置与凭据（⛔ 不进镜像）：
-#   -v ~/.pi:/data/.pi  -e CPA_API_KEY=...
+# ⛔ 运行时不再需要 pi 的配置/凭据（镜像里没有 pi 了）。
+#    构建面的 ACP 抽取在 FDE 本机用 `ontok-builder`，与本镜像无关。
 
 ENTRYPOINT ["ontok"]
 CMD ["--help"]
