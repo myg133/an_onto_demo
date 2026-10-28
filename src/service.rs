@@ -536,7 +536,9 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
     } = cmd;
 
     // ⭐ REQ-176 · **在装配之前**装好部署级白名单：
-    // `prepare_project` 会在这里产两视图 TTL（= 触发发布闸），所以安装必须早于它；
+    // ⭐ REQ-178 起两视图 TTL 改成**请求期**渲染（发布闸在那一刻才被触发），所以
+    // 白名单必须在服务开始接请求之前就装好 —— 这里仍在 `serve` 之前，且是**进程级一次**
+    // （⛔ 不要在请求路径上读文件 / 装表，那会变成每请求一次 IO，还可能读到半份）。
     // 读文件失败 / 某行不合法 ⇒ 直接 `?` 冒泡成启动失败（fail-closed）。
     if let Some(path) = term_allowlist.as_deref() {
         crate::term_allowlist::install_from_path(path)?;

@@ -520,11 +520,12 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("项目 {project:?} 第 {version} 版没有快照"))?;
 
-    // ── ⑦ 快照 → 服务状态（模型 / access 映射 / 两视图 TTL / R2RML）──
+    // ── ⑦ 快照 → 服务状态（模型 / access 映射 / TTL 渲染计划 / R2RML）──
     //
     // ⚠️ 这一段与多项目模式的**每一次懒加载**走的是**同一段**代码
     // （[`prepare_project`] / [`assemble`]）：两套实现会长出两份字节漂移，
     // 而 `GET /api/ontology.ttl` 的契约是「与 CLI 同参数逐字节相同」。
+    // ⭐ REQ-178 起 TTL 只在这里留**计划**（`TtlPlan`），字节等请求期才产。
     let tenancy_path = resolve_tenancy(args.policy.as_deref(), args.tenancy.as_deref());
     let dep = Deployment {
         mode,
@@ -873,7 +874,8 @@ pub(crate) struct Prepared {
     pub version: i32,
     pub model: crate::domain::model_view::ModelTrackView,
     pub access: Option<source_gate::AccessMapping>,
-    pub ttl: crate::query::ttl::OntologyTtl,
+    /// ⭐ REQ-178 · 两视图的**按需**缓存（装配期只是一份 `TtlPlan`，没有字节）。
+    pub ttl: crate::query::ttl::TtlCache,
     pub ontology_iri: String,
     pub mapping: Option<crate::domain::r2rml::R2rmlMapping>,
 }
@@ -945,37 +947,36 @@ pub(crate) async fn prepare_project(
         None => {}
     }
 
-    // ── ⑥.5 ⭐ REQ-127 · 两视图 TTL（版本冻结 ⇒ 内容不变；多项目模式按版本懒算一次）──
+    // ── ⑥.5 ⭐ REQ-178 · 两视图 TTL **不在装配期渲染**（只留渲染所需的坐标 / 选项）──
     //
-    // 读/投影走 `cli::prepare_ttl_export`（与 `ontology export` **同一段**），
-    // 渲染走 `console::ops::render_ttl_export`（同一个 `pipeline::render`）——
-    // 于是 `GET /api/ontology.ttl` 与 CLI 导出同参数时逐字节相同（AC-004）。
-    // 产不出就**拒绝启动**：这个端点的契约就是「与 CLI 一致」，产不出不能宣称能产。
+    // 改前（REQ-127 起）这里是 `OntologyTtl::prepare(...)?`：装配期就渲染，产不出就
+    // **拒绝启动**（fail-closed）。后果是「一个出口的失败拖垮整个项目」—— 客户视图只要
+    // 命中一条发布闸（往往只是**一条说明文字**），catalog / describe / sparql / Studio
+    // 全部 500 `project.load_failed`，连「重新传一个修好的包」都只能绕 API。
+    //
+    // 改后：装配期只留 [`crate::query::ttl::TtlPlan`]，**请求时**由
+    // [`crate::query::ttl::TtlCache`] 渲染一次并缓存（缓存键 = 这个 `QueryService` 的
+    // `version_id`）；失败只让 `/api/ontology.ttl` 500 `project.ttl_failed`。
+    //
+    // ⛔ 「与 CLI 逐字节相同」不受影响：读取 / 投影仍是 `cli::prepare_ttl_export`，
+    // 渲染仍是同一个 `pipeline::render`（C6 / D9），输入是同一份版本坐标 + 选项。
     //
     // ⭐ REQ-136 · 本体模式把 `schema` 传 `None`（= CLI 的 `ontology export` 不带 `--schema`）
     // ⇒ 客户视图与 `ontok ontology export --project <p> --version <v>` 逐字节相同（AC-005）。
     //
     // ⭐ REQ-145 · `api_classes` 只有在加载了映射时才是 `Some` —— 没加载 ⇒ 两视图逐字节不变（R1）。
-    let ttl = crate::query::ttl::OntologyTtl::prepare(
-        pool,
-        &crate::query::ttl::TtlSource {
-            project,
+    let ttl = crate::query::ttl::TtlCache::lazy(
+        pool.clone(),
+        crate::query::ttl::TtlPlan {
+            project: project.to_string(),
             version,
-            base: &dep.base,
+            base: dep.base.clone(),
             // 客户视图在 `prepare` 里固定用 None（结构上不含列名）；这里只影响建模视图。
-            schema: dep.schema_path.as_deref(),
-            tenancy: dep.tenancy.as_deref(),
-            api_classes: access.as_ref().map(|a| a.api_classes()),
+            schema: dep.schema_path.clone(),
+            tenancy: dep.tenancy.clone(),
+            api_classes: access.as_ref().map(|a| a.api_classes().clone()),
         },
-    )
-    .await
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "启动时无法生成 `/api/ontology.ttl` 的两视图（fail-closed）：{e}\n  \
-             这个端点的契约是「与 `ontok ontology export` 同参数逐字节相同」；\
-             产不出来就不该起服务（否则调用方会拿到一份与 CLI 不同的本体）。"
-        )
-    })?;
+    );
     match &dep.tenancy {
         Some(path) => eprintln!(
             "· TTL 租户标注：{}（只在 `?view=model` 生效；客户视图结构上不含租户信息）",
@@ -990,13 +991,11 @@ pub(crate) async fn prepare_project(
              逐字节相同，请补 `--tenancy`。"
         ),
     }
+    // ⭐ REQ-178 · 启动时**没有**字节数 / ETag 可打（还没渲染）；说清它是请求期产物，
+    // ⛔ 不再假装「启动时已经产好了」。
     eprintln!(
-        "· OWL/TTL：GET /api/ontology.ttl（客户视图，{} 字节，ETag {}）· \
-         ?view=model（建模视图，{} 字节，ETag {}）· 与 CLI 同参数逐字节相同",
-        ttl.customer().bytes(),
-        ttl.customer().etag(),
-        ttl.model().bytes(),
-        ttl.model().etag(),
+        "· OWL/TTL：GET /api/ontology.ttl（客户视图）· ?view=model（建模视图）· \
+         请求时按需渲染（同一 version 只渲染一次）· 与 CLI 同参数逐字节相同"
     );
 
     // ── ⑦ 映射（与 r2rml generate 同一个函数）────────────────

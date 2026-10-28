@@ -19,9 +19,19 @@
 //!                                   domain::ttl 的**唯一**序列化器
 //! ```
 //!
-//! 本模块只做三件事：① 启动时把两视图各渲染**一次**并缓存（版本冻结 ⇒ 内容不变）；
+//! 本模块做三件事：① **请求时**把两视图各渲染**一次**并缓存（版本冻结 ⇒ 内容不变）；
 //! ② 从正文算出 sha256 / ETag；③ 按视图取字节。⛔ 不另写序列化器、⛔ 不二次加工正文
 //! （否则「与 CLI 逐字节一致」立刻不成立）。
+//!
+//! # ⭐ REQ-178 · 为什么改成「按需」
+//!
+//! 改前：`query::serve::prepare_project` 在**装配期**渲染（fail-closed）。客户视图只要
+//! 命中一条发布闸（往往只是**一条说明文字**），整个项目就 500 `project.load_failed` ——
+//! catalog / describe / sparql / Studio 一起打不开。
+//!
+//! 改后：装配期只留 [`TtlPlan`]（版本坐标 + 选项 + api 类），**请求时**才渲染
+//! （[`TtlCache`]），按 `version_id` 缓存；失败**只**让 `/api/ontology.ttl` 500
+//! `project.ttl_failed`（[`TTL_FAILED`]），其余出口不受影响。
 //!
 //! # 客户视图 = `ontok ontology export`（不带 `--schema` / `--tenancy`）
 //!
@@ -38,12 +48,18 @@
 //!
 //! # 已知限制
 //!
-//! - 两视图在**启动时**渲染并常驻内存（客户视图 + 建模视图约 0.9 MB）：换版本 = 换进程，
-//!   与 `query serve` 的既有口径一致（token 表 / schema / 映射也都是启动时读一次）。
-//! - 渲染失败（含客户视图命中发布闸）⇒ **拒绝启动**（fail-closed），而不是先起服务、
-//!   等请求进来才 500。理由：这个端点的契约就是「与 CLI 逐字节相同」，产不出就不能宣称能产。
+//! - 两视图在**第一次请求**时渲染并常驻内存（客户视图 + 建模视图约 0.9 MB）：
+//!   同一个版本只付一次代价 —— [`TtlCache`] 的实例跟着 `QueryService` 走，而服务在两种
+//!   模式下都与 `version_id` 一一对应（多项目模式按 `version_id` 缓存服务，单项目模式
+//!   进程内只有一版）。换版本 = 换服务 = 换缓存，⛔ 不需要第二套失效机制。
+//! - ⭐ REQ-178 · 渲染失败**只影响 TTL 这一个出口**（500 [`TTL_FAILED`]），不再拒绝启动：
+//!   病根是「一个词写错不该让整个项目打不开」。
+//! - 并发首次请求可能各渲染一次（内容相同、后写入的赢）—— 与 `query::multi` 的
+//!   已知边界同一条；⛔ 不为它跨 `await` 持锁（那会把热路径串行化）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sqlx::postgres::PgPool;
 
@@ -120,7 +136,190 @@ impl TtlBody {
     }
 }
 
-/// 服务启动时算好的两视图。
+/// ⭐ REQ-178 · **这一版的 TTL 产不出来** —— 只影响 TTL 这一个出口。
+///
+/// ⛔ 不要退回 `project.load_failed`：那个码的语义是「项目装不起来」（catalog / describe /
+/// sparql 也一起挂）。TTL 是**一个出口**的产物 —— 它失败不该让整个项目下线。
+pub const TTL_FAILED: &str = "project.ttl_failed";
+
+/// ⭐ REQ-178 · 渲染失败：**原始原因 + 命中的词条**（两个都不许丢）。
+///
+/// `hits` 来自 [`crate::domain::pipeline::PipelineError::hits`]。REQ-106 的口径是
+/// 「命中词条只进 stderr」，但 REQ-178 AC-001 要求这个端点的错误正文**点名**它们：
+/// 它们本来就是**客户视图正文里**的那些词（闸门正是从正文里扫出来的），
+/// 对调用方不构成新信息。服务端 stderr 仍然照写一份（排障用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TtlFailure {
+    /// 出问题的出口（`C6` 客户视图 / `D9` 建模视图；读取阶段失败时为 `None`）。
+    pub outlet: Option<&'static str>,
+    /// 原始原因（人话；⛔ 不含命中词条 —— 那些在 [`Self::hits`]）。
+    pub message: String,
+    /// 发布闸命中的词条（非闸门失败时为空）。
+    pub hits: Vec<String>,
+}
+
+impl TtlFailure {
+    /// 读取 / 投影阶段的失败（没有出口、没有命中词条）。
+    fn read(message: String) -> Self {
+        Self {
+            outlet: None,
+            message,
+            hits: Vec::new(),
+        }
+    }
+
+    /// 渲染阶段的失败（`PipelineError` 带出口与命中词条）。
+    fn from_pipeline(e: crate::domain::pipeline::PipelineError) -> Self {
+        Self {
+            outlet: Some(e.outlet()),
+            message: e.message().to_string(),
+            hits: e.hits().to_vec(),
+        }
+    }
+}
+
+impl std::fmt::Display for TtlFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for TtlFailure {}
+
+/// ⭐ REQ-178 · 渲染两视图**需要的东西**（装配期只留这一份，⛔ 不留字节）。
+///
+/// 与 [`TtlSource`] 的区别只有一个：那份**借**字符串 / 路径（装配期调一次就丢），
+/// 这份**拥有**（要活到请求期）。⛔ 不把整个快照搬进来 —— `prepare_ttl_export` 会按
+/// `project` / `version` 从元数据库重读快照（与 CLI 同一条读取段，字节才不会漂）。
+#[derive(Debug, Clone)]
+pub struct TtlPlan {
+    pub project: String,
+    pub version: i32,
+    pub base: String,
+    /// `--schema` 的服务端路径（只影响**建模视图**；客户视图结构上不含列名）。
+    pub schema: Option<PathBuf>,
+    /// `--tenancy` 的服务端路径（只影响**建模视图**）。
+    pub tenancy: Option<PathBuf>,
+    /// `--access-mapping` 里的 api 类（`None` = 没加载映射 ⇒ 两视图不变，R1）。
+    pub api_classes: Option<crate::domain::ttl::ApiClasses>,
+}
+
+impl TtlPlan {
+    /// 借成 [`TtlSource`]（[`OntologyTtl::prepare`] 的入参）。
+    fn source(&self) -> TtlSource<'_> {
+        TtlSource {
+            project: &self.project,
+            version: self.version,
+            base: &self.base,
+            schema: self.schema.as_deref(),
+            tenancy: self.tenancy.as_deref(),
+            api_classes: self.api_classes.as_ref(),
+        }
+    }
+}
+
+/// ⭐ REQ-178 · 两视图的**按需**缓存：一个实例 = 一份服务 = 一个 `version_id`。
+///
+/// # 缓存键为什么"看起来"没有键
+///
+/// `QueryService` 在两种模式下都与版本一一对应：多项目模式按 `version_id` 缓存服务
+/// （`query::multi` 的 `CACHE_CAP`），单项目模式进程内只有启动时钉死的那一版。
+/// 于是「换版本」= 换服务 = 换缓存 —— 缓存键**就是**这个实例的归属，
+/// ⛔ 不要再存一个键（那会长出第二套失效语义，正是 REQ-174 消灭过的形态）。
+///
+/// # 失败不缓存
+///
+/// 版本冻结 ⇒ 成功结果永远不会过期；而失败可能是部署级输入（schema / tenancy 路径）
+/// 的问题，下一次请求可能就好了。所以失败**只记次数、不留结果**。
+pub struct TtlCache {
+    source: CacheSource,
+    state: Mutex<Option<Arc<OntologyTtl>>>,
+    /// 真渲染次数（失败也算一次）。判据靠它断言「第二次不重渲染」。
+    renders: AtomicUsize,
+}
+
+enum CacheSource {
+    /// 已经渲染好（判据 / 夹具；⛔ 生产路径不走它）。
+    Ready,
+    /// 生产：拿坐标在请求期渲染。
+    OnDemand { meta: PgPool, plan: TtlPlan },
+}
+
+impl TtlCache {
+    /// 装配期用：只留坐标，**不渲染**（第一次请求才付渲染代价）。
+    pub fn lazy(meta: PgPool, plan: TtlPlan) -> Self {
+        Self {
+            source: CacheSource::OnDemand { meta, plan },
+            state: Mutex::new(None),
+            renders: AtomicUsize::new(0),
+        }
+    }
+
+    /// 判据 / 夹具用：已经渲染好的一对字节。
+    pub fn preloaded(ttl: OntologyTtl) -> Self {
+        Self {
+            source: CacheSource::Ready,
+            state: Mutex::new(Some(Arc::new(ttl))),
+            renders: AtomicUsize::new(0),
+        }
+    }
+
+    /// 已经渲染好的那一对（没渲染过 / 渲染失败 ⇒ `None`）。
+    pub fn ready(&self) -> Option<Arc<OntologyTtl>> {
+        lock(&self.state).clone()
+    }
+
+    /// 真渲染次数（含失败的尝试；`preloaded` 恒 0）。
+    pub fn renders(&self) -> usize {
+        self.renders.load(Ordering::SeqCst)
+    }
+
+    /// 取两视图：命中直接返回；否则**渲染一次**并放进缓存。
+    pub async fn get(&self) -> Result<Arc<OntologyTtl>, TtlFailure> {
+        if let Some(ttl) = self.ready() {
+            return Ok(ttl);
+        }
+        let CacheSource::OnDemand { meta, plan } = &self.source else {
+            // Ready 却没有字节：只可能是内部状态坏了，⛔ 不编一份字节。
+            return Err(TtlFailure::read(
+                "两视图缓存状态不一致（标记为已完成，却没有字节）—— 这是 bug".into(),
+            ));
+        };
+        // ⚠️ `TtlSource` 借的是 `plan`（= `self.source`），必须先落到一个具名值上：
+        // 直接在闭包里 `&plan.source()` 会借到一个临时值（跨 `await` 不成立）。
+        let src = plan.source();
+        self.get_or_render_with(move || async move { OntologyTtl::prepare(meta, &src).await })
+            .await
+    }
+
+    /// **唯一**的缓存点：`render` 只在未命中时调用一次。
+    ///
+    /// 判据把渲染器换成「计数器 + 夹具」来断言「第二次不重渲染」（AC-003），
+    /// 生产路径由 [`Self::get`] 传入 [`OntologyTtl::prepare`] —— 同一段缓存逻辑。
+    async fn get_or_render_with<F, Fut>(&self, render: F) -> Result<Arc<OntologyTtl>, TtlFailure>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<OntologyTtl, TtlFailure>>,
+    {
+        if let Some(ttl) = self.ready() {
+            return Ok(ttl);
+        }
+        self.renders.fetch_add(1, Ordering::SeqCst);
+        let ttl = Arc::new(render().await?);
+        *lock(&self.state) = Some(Arc::clone(&ttl));
+        Ok(ttl)
+    }
+}
+
+/// 中毒的锁不该让整个端点停摆：缓存坏了最多是「重新渲染一次」。
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    }
+}
+
+/// 一对**已经渲染好**的两视图字节。
 #[derive(Debug)]
 pub struct OntologyTtl {
     customer: TtlBody,
@@ -172,13 +371,14 @@ impl OntologyTtl {
         &self.model
     }
 
-    /// ⭐ 启动时构造：**读/投影**走 [`crate::cli::prepare_ttl_export`]，
-    /// **渲染**走 [`crate::console::ops::render_ttl_export`] —— 与 CLI / 控制面同一条链路。
+    /// ⭐ REQ-178 · **请求时**构造（装配期不再调用它）：**读/投影**走
+    /// [`crate::cli::prepare_ttl_export`]，**渲染**走 [`crate::console::ops::render_ttl_export_raw`]
+    /// —— 与 CLI / 控制面同一条链路（同一个 `pipeline::render`）。
     ///
     /// 两次 prepare 而不是「一次读快照、手工投影两份」：多读一次快照换取
-    /// 「客户 / 建模两边的投影与声明解析都由同一个函数产出」，不会在启动路径上
+    /// 「客户 / 建模两边的投影与声明解析都由同一个函数产出」，不会在请求路径上
     /// 出现第二份投影代码（那正是字节漂移的来源）。
-    pub async fn prepare(pool: &PgPool, src: &TtlSource<'_>) -> anyhow::Result<Self> {
+    pub async fn prepare(pool: &PgPool, src: &TtlSource<'_>) -> Result<Self, TtlFailure> {
         let customer = crate::cli::prepare_ttl_export(
             pool,
             crate::cli::TtlExportParams {
@@ -192,14 +392,16 @@ impl OntologyTtl {
                 schema: None,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| TtlFailure::read(e.message))?;
         // ⭐ REQ-145 · api 源类（`--access-mapping`）在**两视图**都写 `ontok:sourceKind "api"`
         // （这是「数据不在这套本体里」的事实，不涉端点/凭据）。没加载映射 ⇒ 一个字节都不变。
         let customer = match src.api_classes {
             Some(api) => customer.with_api_classes(api.clone()),
             None => customer,
         };
-        let customer = crate::console::ops::render_ttl_export(&customer)?;
+        let customer = crate::console::ops::render_ttl_export_raw(&customer)
+            .map_err(TtlFailure::from_pipeline)?;
 
         let model = crate::cli::prepare_ttl_export(
             pool,
@@ -212,12 +414,14 @@ impl OntologyTtl {
                 schema: src.schema,
             },
         )
-        .await?;
+        .await
+        .map_err(|e| TtlFailure::read(e.message))?;
         let model = match src.api_classes {
             Some(api) => model.with_api_classes(api.clone()),
             None => model,
         };
-        let model = crate::console::ops::render_ttl_export(&model)?;
+        let model = crate::console::ops::render_ttl_export_raw(&model)
+            .map_err(TtlFailure::from_pipeline)?;
 
         Ok(Self::build(customer, model))
     }
@@ -414,5 +618,103 @@ mod tests {
         assert_eq!(TtlView::parse("model "), Some(TtlView::Model));
         assert_eq!(TtlView::parse("Model"), None);
         assert_eq!(TtlView::parse("admin"), None);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-178 · 按需渲染 + 按 version 缓存
+    // ══════════════════════════════════════════════════════════
+
+    fn lazy_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+            .expect("lazy pool")
+    }
+
+    fn plan() -> TtlPlan {
+        TtlPlan {
+            project: "demo".into(),
+            version: 2,
+            base: crate::domain::ttl::DEFAULT_BASE.into(),
+            schema: None,
+            tenancy: None,
+            api_classes: None,
+        }
+    }
+
+    /// ⭐ AC-003 · 同一份缓存只渲染一次；第二次返回**同一个对象**与同一份字节。
+    ///
+    /// 变异：去掉缓存（每次都调渲染器）⇒ `calls` = 2 ⇒ 红。
+    #[tokio::test]
+    async fn the_cache_renders_once_and_serves_the_same_bytes_afterwards() {
+        let cache = TtlCache::lazy(lazy_pool(), plan());
+        let calls = Arc::new(AtomicUsize::new(0));
+        assert!(cache.ready().is_none(), "装配期不许已经有字节");
+
+        let c = Arc::clone(&calls);
+        let a = cache
+            .get_or_render_with(move || async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(fixture())
+            })
+            .await
+            .expect("第一次渲染");
+        let c = Arc::clone(&calls);
+        let b = cache
+            .get_or_render_with(move || async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(fixture())
+            })
+            .await
+            .expect("第二次应当命中缓存");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "渲染器只许被调用一次（AC-003）"
+        );
+        assert_eq!(cache.renders(), 1, "渲染计数 = 1");
+        assert!(Arc::ptr_eq(&a, &b), "第二次必须拿到同一个缓存对象");
+        assert_eq!(a.customer().sha256(), b.customer().sha256());
+        assert_eq!(a.model().text(), b.model().text());
+    }
+
+    /// ⭐ REQ-178 · 失败**不缓存**（下一次还会试），且原始原因 / 命中词条都被保住。
+    ///
+    /// 变异：把失败也写进缓存 ⇒ 第二次拿到的是错误（或 `ready()` 非空）⇒ 红；
+    /// 把 `TtlFailure::from_pipeline` 的 `hits` 丢掉 ⇒ 最后那条断言红。
+    #[tokio::test]
+    async fn a_failed_render_is_not_cached_and_keeps_the_hits() {
+        let cache = TtlCache::lazy(lazy_pool(), plan());
+        let e = cache
+            .get_or_render_with(|| async {
+                Err::<OntologyTtl, TtlFailure>(TtlFailure::read("读不出 schema".into()))
+            })
+            .await
+            .expect_err("第一次必须失败");
+        assert!(e.outlet.is_none());
+        assert!(e.hits.is_empty());
+        assert_eq!(cache.renders(), 1);
+        assert!(cache.ready().is_none(), "失败不许留下半份字节");
+
+        let ttl = cache
+            .get_or_render_with(|| async { Ok::<_, TtlFailure>(fixture()) })
+            .await
+            .expect("修好之后下一次应当能渲染");
+        assert_eq!(cache.renders(), 2, "失败不缓存 ⇒ 第二次会重试");
+        assert!(cache.ready().is_some());
+        assert!(!ttl.customer().text().is_empty());
+
+        // 发布闸命中：`PipelineError::hits` 不许在路上丢掉（AC-001 的消息要点名词条）。
+        let text = serde_json::json!({ "key": "样例主键", "cardinality": "1:N" }).to_string();
+        let leak = crate::domain::pipeline::render(OutletId::C3, Product::Text(text))
+            .expect_err("含建模术语的客户轨产物必须被拦");
+        let f = TtlFailure::from_pipeline(leak);
+        assert_eq!(f.outlet, Some("C3"));
+        assert!(
+            f.hits.iter().any(|h| h.contains("主键")),
+            "命中的词条必须被保住：{:?}",
+            f.hits
+        );
+        assert!(!f.message.is_empty());
     }
 }

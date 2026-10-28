@@ -236,19 +236,11 @@ async fn ac002_with_the_allowlist_the_same_view_is_published_and_the_exemption_i
     let srv = Server::spawn(&dir, &project, version, Some(&allow), &tokens);
     let stderr_srv = srv.wait_ready();
     eprintln!("AC-005（query serve 启动日志）：\n{stderr_srv}");
-
+    // ⭐ REQ-178 · 两视图 TTL 改成**请求期**渲染 ⇒ 启动日志不再有豁免行，
+    // 但必须说清「按需渲染」（否则这条判据会误以为闸门没装）。
     assert!(
-        stderr_srv.contains("发布闸豁免"),
-        "serve 装配两视图 TTL 时也必须留痕豁免：\n{stderr_srv}"
-    );
-    let exemption_srv = stderr_srv
-        .lines()
-        .find(|l| l.contains("发布闸豁免"))
-        .expect("serve 的豁免行");
-    assert!(exemption_srv.contains("C6"), "serve 的豁免行要点名出口：{exemption_srv}");
-    assert!(
-        exemption_srv.contains("evidence"),
-        "serve 的豁免行要点名词条：{exemption_srv}"
+        stderr_srv.contains("请求时按需渲染"),
+        "serve 启动日志要说清 TTL 是请求期产物：\n{stderr_srv}"
     );
 
     let (status, body) = http_get(srv.port, "/api/ontology.ttl", QUERY_KEY);
@@ -258,6 +250,27 @@ async fn ac002_with_the_allowlist_the_same_view_is_published_and_the_exemption_i
         body,
         std::fs::read(&file).expect("读 CLI 产物"),
         "AC-005：`ontology export` 与 `query serve` 用同一份白名单 ⇒ 同一份产物（逐字节）"
+    );
+
+    // 豁免留痕：⭐ REQ-178 起发生在**这一次请求**（渲染在请求期），所以这里等它落盘。
+    // 判据不变：serve 用同一份白名单 ⇒ 同一处豁免、同一个出口 C6、同一个词。
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let exemption_srv = loop {
+        let text = srv.stderr_text();
+        if let Some(line) = text.lines().find(|l| l.contains("发布闸豁免")) {
+            break line.to_string();
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "serve 请求期渲染必须留痕豁免（REQ-176 AC-002 的口径不变）：\n{text}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    eprintln!("AC-005（请求期豁免留痕）：{exemption_srv}");
+    assert!(exemption_srv.contains("C6"), "serve 的豁免行要点名出口：{exemption_srv}");
+    assert!(
+        exemption_srv.contains("evidence"),
+        "serve 的豁免行要点名词条：{exemption_srv}"
     );
 
     srv.stop();

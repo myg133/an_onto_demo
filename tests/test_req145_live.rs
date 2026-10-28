@@ -229,7 +229,9 @@ async fn build_service_with(
                 .expect("审计文件可写（判据自己建的临时目录）"),
             None => ontok::query::audit::AuditSink::stdout_only(),
         },
-        ttl,
+        // ⭐ REQ-178 · 判据验的是「服务发出去的字节」⇒ 预渲染一对（渲染时机由
+        // `test_req178_ttl_on_demand` 钉）。
+        ttl: ontok::query::ttl::TtlCache::preloaded(ttl),
         access,
     })))
 }

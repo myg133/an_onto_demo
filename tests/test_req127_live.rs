@@ -259,7 +259,9 @@ async fn live_service(pool_url: &str, tag: &str) -> Option<(Arc<QueryService>, t
         max_concurrent_queries: 2,
         tokens,
         audit,
-        ttl,
+        // ⭐ REQ-178 · 判据验的是「服务发出去的字节」⇒ 仍然预渲染一对（渲染时机由
+        // `test_req178_ttl_on_demand` 钉；这里不重复测）。
+        ttl: ontok::query::ttl::TtlCache::preloaded(ttl),
         access: None,
     }));
     Some((svc, dir))
