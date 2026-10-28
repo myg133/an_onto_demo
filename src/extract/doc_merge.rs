@@ -3008,6 +3008,26 @@ mod tests {
         assert_eq!(out.stats.band_capped_strong, 1);
     }
 
+    /// ⭐ REQ-171 · 概念的 `maps_to` 现在是 `{table, column?}`：读取端**必须容忍**多出来的
+    /// `column`（`MapsTo` 只认 `table`，未知字段按 serde 缺省忽略）——
+    /// 否则新产物在旧读取端会整行读不出来，那比丢一个字段糟得多。
+    #[test]
+    fn a_concept_maps_to_with_an_extra_column_is_still_readable() {
+        let mut v: Value = serde_json::from_str(&concept_jsonl("客户", &[], "fact", true)).unwrap();
+        v["maps_to"] = serde_json::json!({"table": "customers", "column": "id"});
+        let out = merge(&v.to_string(), &proposal()).expect("合并应当成功");
+        assert_eq!(out.stats.merged, 1, "概念靠 maps_to 并进来：{:?}", out.stats);
+        assert_eq!(out.stats.doc_unmapped, 0);
+        // 证据里记的 maps_to 只留 table（`column` 是概念级的附加信息，合并器不用它）
+        let items = self::items(&out.document);
+        let item = items
+            .iter()
+            .find(|it| it["payload"]["key"] == "customers")
+            .expect("customers 这条");
+        assert_eq!(item["origin"], "both");
+        assert_eq!(item["payload"]["doc_evidence"][0]["maps_to"]["table"], "customers");
+    }
+
     /// 规则 3：没有 `maps_to` 的关系 ⇒ 未映射，**且不许按名字猜表**。
     ///
     /// 变异自证（AC-004）：让合并器对无映射的关系按名字猜一张表，

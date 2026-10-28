@@ -1,0 +1,92 @@
+{
+  "server_version": "PostgreSQL 16",
+  "transaction_read_only": "on",
+  "schema": "public",
+  "table_count": 6,
+  "column_count": 12,
+  "commented_column_count": 6,
+  "foreign_key_count": 0,
+  "introspected_at": "2026-10-27T00:00:00+00:00",
+  "tables": [
+    {
+      "name": "llm_models",
+      "comment": "模型",
+      "column_count": 3,
+      "commented_count": 2,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "bigint", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "model_name", "data_type": "text", "nullable": false, "comment": "模型名", "is_primary_key": false },
+        { "name": "price_per_1k", "data_type": "numeric", "nullable": true, "comment": "每千 Token 单价", "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "model_pricing",
+      "comment": "模型价格",
+      "column_count": 3,
+      "commented_count": 2,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "bigint", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "model_id", "data_type": "bigint", "nullable": false, "comment": "所属模型", "is_primary_key": false },
+        { "name": "unit_price", "data_type": "numeric", "nullable": true, "comment": "单价", "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "customers",
+      "comment": "客户",
+      "column_count": 2,
+      "commented_count": 1,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "bigint", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "email", "data_type": "text", "nullable": false, "comment": "客户邮箱", "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "balances",
+      "comment": "账户余额",
+      "column_count": 3,
+      "commented_count": 2,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": ["id"],
+      "columns": [
+        { "name": "id", "data_type": "bigint", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "customer_id", "data_type": "bigint", "nullable": false, "comment": "所属客户", "is_primary_key": false },
+        { "name": "amount", "data_type": "numeric", "nullable": false, "comment": "余额", "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "_volc_dts_pg_ddl_deadbeef",
+      "comment": null,
+      "column_count": 2,
+      "commented_count": 0,
+      "primary_key": "id",
+      "composite_primary_key": [],
+      "unique_columns": [],
+      "columns": [
+        { "name": "id", "data_type": "bigint", "nullable": false, "comment": null, "is_primary_key": true },
+        { "name": "ddl", "data_type": "text", "nullable": true, "comment": null, "is_primary_key": false }
+      ]
+    },
+    {
+      "name": "alembic_version",
+      "comment": null,
+      "column_count": 1,
+      "commented_count": 0,
+      "primary_key": null,
+      "composite_primary_key": [],
+      "unique_columns": [],
+      "columns": [
+        { "name": "version_num", "data_type": "text", "nullable": false, "comment": null, "is_primary_key": false }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,9 @@
 //   FAKE_ACP_MODE  valid（默认）| mixed | empty | hang | flaky | halfgarbage | garbagetwo
 //                  | maps（REQ-170：关系带 maps_to，且两端表/列在 schema 里）
 //                  | maps-bad（REQ-170：maps_to 指向不存在的列 ⇒ 程序必须丢掉并计数）
+//                  | cmap（REQ-171：概念带 maps_to，一个模式覆盖落地 + 四类反例；关系含
+//                    belongs_to / references 与一个真结构词 related_to）
+//                  | cmap-good（REQ-171：概念 maps_to 全部能落地，给 doc merge 用）
 //   FAKE_ACP_LOG   每收到一条 `session/prompt` 就往这个文件追加一行（数调用次数用）
 'use strict';
 
@@ -110,6 +113,58 @@ function answerFor(text) {
           },
         ],
       });
+    // ⭐ REQ-171：**概念带 maps_to**（概念 → 表），一个模式同时给「落地」+ 四类反例。
+    // 夹具 schema = tests/fixtures/req171/schema.json（llm_models「模型」/ model_pricing
+    // 「模型价格」/ customers「客户」/ balances「账户余额」+ 2 张垃圾表）。
+    case 'cmap':
+      return JSON.stringify({
+        concepts: [
+          // ① 落地：表名 + 列都在
+          {
+            name: '模型',
+            quote: q1,
+            modality: 'fact',
+            maps_to: { table: 'llm_models', column: 'model_name' },
+          },
+          // ② 查不到表
+          { name: '客户', quote: q1, modality: 'fact', maps_to: { table: 'no_such_table' } },
+          // ③ 对上多张：中文名「模型」同时命中「模型」与「模型价格」两张表
+          { name: '账户余额', quote: q2 || q1, modality: 'fact', maps_to: { table: '模型' } },
+          // ④ 形状不对（不是对象）
+          { name: '平台', quote: q1, modality: 'fact', maps_to: 'llm_models.model_name' },
+          // ⑤ 查不到列（表对了、列不在那张表里）
+          {
+            name: '单价',
+            quote: q1,
+            modality: 'fact',
+            maps_to: { table: 'model_pricing', column: 'no_such_col' },
+          },
+        ],
+        relations: [
+          // R3：这两个词**不再**被谓词闸丢（契约 §5.2 的合法主键）
+          { subject: '模型', predicate: 'belongs_to', object: '平台', quote: q1, modality: 'fact' },
+          { subject: '客户', predicate: 'references', object: '模型', quote: q1, modality: 'fact' },
+          // 真结构词：仍要被闸丢
+          { subject: '客户', predicate: 'related_to', object: '平台', quote: q1, modality: 'fact' },
+        ],
+      });
+    // 概念 `maps_to` 的**正常路径**（给 `doc merge` 的上游产物用）
+    case 'cmap-good':
+      return JSON.stringify({
+        concepts: [
+          { name: '模型', quote: q1, modality: 'fact', maps_to: { table: 'llm_models' } },
+          {
+            name: '客户',
+            quote: q1,
+            modality: 'fact',
+            maps_to: { table: 'customers', column: 'email' },
+          },
+        ],
+        relations: [
+          // 抽象概念之间的关系：**没有** join 列 ⇒ 不给关系上的 maps_to（REQ-171 的正例）
+          { subject: '模型', predicate: 'belongs_to', object: '客户', quote: q1, modality: 'fact' },
+        ],
+      });
     case 'valid':
     default:
       return JSON.stringify({
@@ -156,6 +211,15 @@ process.stdin.on('data', (d) => {
     } else if (m.method === 'session/prompt') {
       prompts += 1;
       if (LOG) fs.appendFileSync(LOG, `${prompts}\n`);
+      // 诊断用（REQ-171）：把**每次下发的完整 prompt** 追加到文件里。
+      // 用途：不花一个 token 就能量出「真 schema + 真语料」下摘要到底多大、里面有哪些表。
+      if (process.env.FAKE_ACP_DUMP) {
+        const body = m.params.prompt.map((p) => p.text || '').join('');
+        fs.appendFileSync(
+          process.env.FAKE_ACP_DUMP,
+          `\n===== prompt ${prompts} (${body.length} chars) =====\n${body}\n`
+        );
+      }
       if (MODE === 'hang') {
         // 永不回终响应 —— 客户端必须靠自己的超时闸失败，而不是一直等
         continue;
