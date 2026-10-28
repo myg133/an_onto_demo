@@ -174,7 +174,9 @@ async fn build_service(timeout_ms: u64, tenant_a: &str, tenant_b: &str) -> Optio
         max_concurrent_queries: 2,
         tokens,
         audit: ontok::query::audit::AuditSink::stdout_only(),
-        ttl,
+        // ⭐ REQ-178 · 判据仍然**预渲染**一对字节（它要验的是「服务发出去的字节」，
+        // 不是渲染时机；渲染时机由 `test_req178_ttl_on_demand` 钉）。
+        ttl: ontok::query::ttl::TtlCache::preloaded(ttl),
         // REQ-145：本条判据不加载 access 映射（回执字节与 REQ-123 基线对齐）。
         access: None,
     })))

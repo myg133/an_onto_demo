@@ -106,7 +106,8 @@ pub mod tokens;
 /// ⭐ REQ-159 P1c-1 · 写面（建项目 / 传包 / 解析 / 激活 / 查看 key）的进程级状态：
 /// 元数据库池 + `ONTOK_SECRET_KEY` 的加密器 + 控制面审计（缺密钥 ⇒ 启动即失败）。
 pub mod write_plane;
-// ⭐ REQ-127 · 整份 OWL（TTL）的两视图：启动时渲染一次并缓存（客户 / 建模）。
+// ⭐ REQ-127 / REQ-178 · 整份 OWL（TTL）的两视图：**请求时**按需渲染并按 version 缓存
+// （客户 / 建模）；渲染失败只影响 TTL 这一个出口。
 pub mod ttl;
 
 use std::collections::HashMap;
@@ -653,8 +654,15 @@ pub struct QueryService {
     pub max_concurrent_queries: usize,
     pub tokens: TokenTable,
     pub audit: AuditSink,
-    /// ⭐ REQ-127 · 两视图的 TTL（启动时算好；版本冻结 ⇒ 内容不变）。
-    pub ttl: crate::query::ttl::OntologyTtl,
+    /// ⭐ REQ-127 / ⭐ REQ-178 · 两视图 TTL 的**按需**缓存。
+    ///
+    /// 一个 `QueryService` 与一个 `version_id` 一一对应（多项目模式按 `version_id`
+    /// 缓存服务；单项目模式进程内只有启动时钉死的那版）⇒ **缓存键天然是 `version_id`**：
+    /// 换版本 = 换服务 = 换缓存，⛔ 不需要第二套失效机制。版本冻结 ⇒ 同一版本只渲染一次。
+    ///
+    /// ⛔ 装配期**不再**渲染（REQ-178）：渲染失败往往只是一条说明文字命中发布闸，
+    /// 不该让 catalog / describe / sparql 一起 500。
+    pub ttl: crate::query::ttl::TtlCache,
     /// ⭐ REQ-135 · `/metrics` 的注册表（进程私有；测试各自一份 ⇒ 断言不互相干扰）。
     pub metrics: crate::metrics::Metrics,
     /// 目录条目（启动时拍平一次，翻页只做切片）。
@@ -686,10 +694,41 @@ pub struct ServiceParts {
     pub max_concurrent_queries: usize,
     pub tokens: TokenTable,
     pub audit: AuditSink,
-    /// ⭐ REQ-127 · 两视图的 TTL（`query::ttl::OntologyTtl::prepare` 的产物）。
-    pub ttl: crate::query::ttl::OntologyTtl,
+    /// ⭐ REQ-127 / ⭐ REQ-178 · 两视图 TTL 的按需缓存（`TtlCache::lazy` 生产 /
+    /// `TtlCache::preloaded` 夹具）。
+    pub ttl: crate::query::ttl::TtlCache,
     /// ⭐ REQ-145 · access 映射（可选；`None` = 没加载 `--access-mapping`）。
     pub access: Option<source_gate::AccessMapping>,
+}
+
+/// ⭐ REQ-178 · `project.ttl_failed` 的**唯一**构造点（REST 与 MCP 共用同一个错误契约）。
+///
+/// 为什么不是 `project.load_failed`：那个码的语义是「项目装不起来」—— 一旦用它，
+/// 调用方/运维会把「TTL 里有一条说明文字命中发布闸」读成「服务坏了 / 项目没了」，
+/// 而真相是**其它出口都好好的**。
+///
+/// ⚠️ 消息里带**命中的词条**（AC-001 的判据）。它们本来就是客户视图正文里的那些词
+/// （闸门正是从正文里扫出来的），对拿到 query token 的调用方不构成新信息；
+/// 同一条信息也照写服务端 stderr（`ttl_views` 里那一行），排障用。
+pub fn ttl_failed(project: &str, version: i32, e: &crate::query::ttl::TtlFailure) -> ApiError {
+    let outlet = e.outlet.unwrap_or("-");
+    let mut message = format!(
+        "项目 {project:?} 第 {version} 版的 TTL 产不出来（出口 {outlet}）：{}",
+        e.message
+    );
+    if !e.hits.is_empty() {
+        message.push_str(&format!("\n发布闸命中的词条：{}", e.hits.join("、")));
+    }
+    ApiError::with_code(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        crate::query::ttl::TTL_FAILED,
+        message,
+        "只影响 `/api/ontology.ttl` 这一个出口：catalog / describe / sparql 仍然可用\
+         （它们不经过发布闸）。原因通常是这一版的**客户视图里有一句话**命中了建模术语 / \
+         词表：改掉那一处说明文字，重新导入并 `activate` 一版即可。命中的词条也写在服务端 \
+         stderr；若那是被误判的业务词，用 `--term-allowlist` 豁免。\
+         ⛔ 不要为了导出而放宽发布闸。",
+    )
 }
 
 impl QueryService {
@@ -705,11 +744,15 @@ impl QueryService {
         // 那个部署不做对账，join 数不存在，⛔ 不是「0 条 join 的映射」）。
         let metrics = crate::metrics::Metrics::for_query();
         metrics.set_mapping_joins(p.mapping.as_ref().map_or(0, |m| m.join_count()) as u64);
-        metrics.set_ttl_bytes(
-            crate::metrics::VIEW_CUSTOMER,
-            p.ttl.customer().bytes() as u64,
-        );
-        metrics.set_ttl_bytes(crate::metrics::VIEW_MODEL, p.ttl.model().bytes() as u64);
+        // ⭐ REQ-178 · 两视图改成按需渲染 ⇒ 还没渲染时两条 gauge 是 0；首次渲染成功后
+        // 由 [`Self::ttl_views`] 填上真实值（`preloaded` 的夹具在这里就能填）。
+        if let Some(ttl) = p.ttl.ready() {
+            metrics.set_ttl_bytes(
+                crate::metrics::VIEW_CUSTOMER,
+                ttl.customer().bytes() as u64,
+            );
+            metrics.set_ttl_bytes(crate::metrics::VIEW_MODEL, ttl.model().bytes() as u64);
+        }
 
         Self {
             mode: p.mode,
@@ -733,6 +776,42 @@ impl QueryService {
             catalog_items,
             access: p.access,
             limiter: Arc::new(Limiter::default()),
+        }
+    }
+
+    /// ⭐ REQ-178 · 两视图 TTL：**请求时**渲染（同一 version 只渲染一次）。
+    ///
+    /// - 成功：顺手把 `/metrics` 的两条 `ontok_ttl_bytes` 填成真实值（按需渲染 ⇒
+    ///   启动时还不知道）；
+    /// - 失败：只让**这个**出口 500 [`crate::query::ttl::TTL_FAILED`]（见 [`ttl_failed`]），
+    ///   ⛔ 不把失败伪装成「项目装不起来」。
+    pub async fn ttl_views(&self) -> Result<Arc<crate::query::ttl::OntologyTtl>, ApiError> {
+        match self.ttl.get().await {
+            Ok(ttl) => {
+                self.metrics.set_ttl_bytes(
+                    crate::metrics::VIEW_CUSTOMER,
+                    ttl.customer().bytes() as u64,
+                );
+                self.metrics
+                    .set_ttl_bytes(crate::metrics::VIEW_MODEL, ttl.model().bytes() as u64);
+                Ok(ttl)
+            }
+            Err(e) => {
+                // ⛔ 别把命中词条只留在 HTTP 正文里：运维看日志也要能定位。
+                eprintln!(
+                    "⚠ TTL 渲染失败（项目 {} 第 {} 版，出口 {}）：{} · 命中的词条：{}",
+                    self.project,
+                    self.version,
+                    e.outlet.unwrap_or("-"),
+                    e.message,
+                    if e.hits.is_empty() {
+                        "（无）".to_string()
+                    } else {
+                        e.hits.join("、")
+                    }
+                );
+                Err(ttl_failed(&self.project, self.version, &e))
+            }
         }
     }
 
@@ -2093,7 +2172,7 @@ mod tests {
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
             audit: AuditSink::stdout_only(),
-            ttl: crate::query::ttl::fixture(),
+            ttl: crate::query::ttl::TtlCache::preloaded(crate::query::ttl::fixture()),
             access: None,
         });
 
@@ -2214,7 +2293,7 @@ mod tests {
             max_concurrent_queries: 1,
             tokens: TokenTable::default(),
             audit: AuditSink::stdout_only(),
-            ttl: crate::query::ttl::fixture(),
+            ttl: crate::query::ttl::TtlCache::preloaded(crate::query::ttl::fixture()),
             access: None,
         });
 

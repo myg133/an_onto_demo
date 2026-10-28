@@ -480,6 +480,18 @@ fn pipeline_failure(e: crate::domain::pipeline::PipelineError) -> OpError {
 pub fn render_ttl_export(
     prep: &TtlPrepared,
 ) -> Result<crate::domain::pipeline::OutletRender, OpError> {
+    render_ttl_export_raw(prep).map_err(pipeline_failure)
+}
+
+/// ⭐ REQ-178 · 同 [`render_ttl_export`]，但把渲染失败**原样**交出（`PipelineError`）。
+///
+/// 为什么需要它：`OpError::leak` 把命中的词条折成一句 `Debug` 字符串塞进 `message`，
+/// 那是给运维看的；而 TTL 端点要的是「原始原因 + 结构化的 `hits`」—— 见
+/// `query::ttl::TtlFailure`。⛔ 这里**不是**第二个渲染器：调用的仍是同一个
+/// `pipeline::render`（C6 客户视图 / D9 建模视图），只是不把错误提前折成 `OpError`。
+pub fn render_ttl_export_raw(
+    prep: &TtlPrepared,
+) -> Result<crate::domain::pipeline::OutletRender, crate::domain::pipeline::PipelineError> {
     if prep.model_view {
         crate::domain::pipeline::render(
             crate::domain::pipeline::OutletId::D9,
@@ -488,7 +500,6 @@ pub fn render_ttl_export(
                 opts: prep.opts(),
             },
         )
-        .map_err(pipeline_failure)
     } else {
         crate::domain::pipeline::render(
             crate::domain::pipeline::OutletId::C6,
@@ -497,7 +508,6 @@ pub fn render_ttl_export(
                 opts: prep.opts(),
             },
         )
-        .map_err(pipeline_failure)
     }
 }
 

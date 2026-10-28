@@ -1819,7 +1819,8 @@ pub const OUTLETS: &[Outlet] = &[
         enforcement: Enforcement::InternalOnly,
         exemption_reason: "内部（REQ-127）：查询服务的 `GET /api/ontology.ttl`（客户 / 建模两视图）\
          与 MCP `resources/read` 的 Turtle 正文。字节与 C6 / D9 **同一份**\
-         （启动时 `prepare_ttl_export` + `pipeline::render` 渲染一次并缓存，AC-004 的 sha256 对拍靠它）；\
+         （⭐ REQ-178 · 请求期 `prepare_ttl_export` + `pipeline::render` 渲染一次并缓存，\
+         AC-004 的 sha256 对拍靠它）；\
          送达通道是 query token（Agent 面），所以按通道登记为内部轨 —— 与 I19 同一条口径。\
          ⛔ 不在这里做任何序列化或二次加工。",
     },

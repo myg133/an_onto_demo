@@ -1014,10 +1014,13 @@ async fn get_describe(
 ///
 /// - 默认**客户视图**；`?view=model` 才是建模视图（R1：客户 token 不该一眼拿到内部列名）；
 /// - 两种视图都**不注入租户**（本体是共享结构，不含客户数据）；
-/// - 字节是启动时用 `prepare_ttl_export` + `pipeline::render` 算好并缓存的
-///   —— 与 `ontok ontology export` 同参数时**逐字节相同**（AC-004）；
+/// - ⭐ REQ-178 · 字节在**请求时**用 `prepare_ttl_export` + `pipeline::render` 渲染
+///   （第一次请求），按 `version_id` 缓存 —— 与 `ontok ontology export` 同参数时
+///   **逐字节相同**（AC-004）；装配期**不再**渲染（一个词写错不该让整个项目打不开）；
+/// - 渲染失败 ⇒ **只这个端点** 500 `project.ttl_failed`（消息带命中词条），
+///   catalog / describe / sparql 照常；
 /// - `ETag` = 正文 sha256 前 16 位；`If-None-Match` 命中 ⇒ 304 且无体（AC-005）；
-/// - 每次请求一行审计（含 401 / 400 / 304）（AC-006）。
+/// - 每次请求一行审计（含 401 / 400 / 304 / 500）（AC-006）。
 async fn get_ontology_ttl(
     Extension(ctx): Extension<Resolved>,
     Extension(auth): Extension<Auth>,
@@ -1042,7 +1045,16 @@ async fn get_ontology_ttl(
         }
     };
 
-    let body = svc.ttl.get(view);
+    // ⭐ REQ-178 · 第一次请求才渲染（之后命中同一个 `version_id` 的缓存）。
+    let ttl = match svc.ttl_views().await {
+        Ok(t) => t,
+        Err(e) => {
+            // 失败也记一行（AC-006：每次请求一行；`code` 就是客户端收到的那个）。
+            audit_ttl(&svc, &caller, view, None, started, e.code);
+            return respond(e.status, e.body());
+        }
+    };
+    let body = ttl.get(view);
     if if_none_match(&headers, body.etag()) {
         audit_ttl(&svc, &caller, view, Some(0), started, "NOT_MODIFIED");
         // 304 **无体**：只回 ETag（AC-005 的判据是 Content-Length 为 0 或不存在）。
@@ -1707,7 +1719,8 @@ async fn dispatch(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
             id,
             json!({ "resources": resource_defs() }),
         ),
-        "resources/read" => resources_read(svc, caller, req),
+        // ⭐ REQ-178 · 按需渲染是 `async` 的（第一次请求要读库）。
+        "resources/read" => resources_read(svc, caller, req).await,
         other => p::encode_error_line(
             id,
             p::METHOD_NOT_FOUND,
@@ -1958,11 +1971,14 @@ fn resource_view(uri: &str) -> Option<TtlView> {
     }
 }
 
-/// `resources/read` —— 返回**与 HTTP 同视图完全相同的字节**（同一个 `OntologyTtl` 缓存）。
+/// `resources/read` —— 返回**与 HTTP 同视图完全相同的字节**（同一个 `TtlCache`）。
 ///
 /// 协议形状：`{"contents":[{"uri","mimeType","text"}]}`。`text` 是 Turtle 原文，
 /// 客户端解析出来之后 sha256 与 `GET /api/ontology.ttl?view=…` 的正文相等（AC-007）。
-fn resources_read(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) -> String {
+///
+/// ⭐ REQ-178 · 同样**按需**渲染（失败只影响这一个 resource，不影响 catalog / describe /
+/// 其它工具）：错误码与 HTTP 的 500 是同一个 `project.ttl_failed`。
+async fn resources_read(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) -> String {
     let started = Instant::now();
     let uri = req.params.get("uri").and_then(Value::as_str).unwrap_or("");
     let Some(view) = resource_view(uri) else {
@@ -1977,7 +1993,20 @@ fn resources_read(svc: &Arc<QueryService>, caller: &Caller, req: &p::Request) ->
             })),
         );
     };
-    let body = svc.ttl.get(view);
+    let ttl = match svc.ttl_views().await {
+        Ok(t) => t,
+        Err(e) => {
+            let (code, hint) = (e.code, e.hint.clone());
+            audit_ttl(svc, caller, view, None, started, code);
+            return p::encode_error_line(
+                &req.id,
+                p::INVALID_PARAMS,
+                &e.message,
+                Some(json!({ "code": code, "hint": hint })),
+            );
+        }
+    };
+    let body = ttl.get(view);
     audit_ttl(svc, caller, view, Some(body.bytes()), started, "OK");
     p::encode_result(
         &req.id,
@@ -2166,7 +2195,7 @@ pub(crate) mod tests {
             tokens,
             audit,
             // ⭐ REQ-127 · 夹具两视图：走同一个 `pipeline::render`（不连库）。
-            ttl: crate::query::ttl::fixture(),
+            ttl: crate::query::ttl::TtlCache::preloaded(crate::query::ttl::fixture()),
             access: None,
         }));
         svc
@@ -2222,7 +2251,7 @@ pub(crate) mod tests {
             max_concurrent_queries: 2,
             tokens,
             audit,
-            ttl: crate::query::ttl::fixture(),
+            ttl: crate::query::ttl::TtlCache::preloaded(crate::query::ttl::fixture()),
             access: None,
         }))
     }
@@ -2297,7 +2326,7 @@ pub(crate) mod tests {
             max_concurrent_queries: 2,
             tokens,
             audit,
-            ttl: crate::query::ttl::fixture(),
+            ttl: crate::query::ttl::TtlCache::preloaded(crate::query::ttl::fixture()),
             access: Some(access),
         }))
     }
@@ -3189,14 +3218,14 @@ pub(crate) mod tests {
         assert!(
             body.contains(&format!(
                 "ontok_ttl_bytes{{view=\"customer\"}} {}",
-                svc.ttl.customer().bytes()
+                svc.ttl.ready().expect("夹具两视图已渲染").customer().bytes()
             )),
             "TTL 客户视图字节数必须与缓存正文一致：\n{body}"
         );
         assert!(
             body.contains(&format!(
                 "ontok_ttl_bytes{{view=\"model\"}} {}",
-                svc.ttl.model().bytes()
+                svc.ttl.ready().expect("夹具两视图已渲染").model().bytes()
             )),
             "{body}"
         );
@@ -3416,7 +3445,7 @@ pub(crate) mod tests {
         let v: Value = serde_json::from_str(&rpc).unwrap();
         assert_eq!(
             v["result"]["contents"][0]["text"].as_str().unwrap(),
-            svc.ttl.customer().text(),
+            svc.ttl.ready().expect("夹具两视图已渲染").customer().text(),
             "resource 的正文必须与 HTTP 同视图逐字节相同"
         );
 

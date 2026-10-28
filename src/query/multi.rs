@@ -88,7 +88,11 @@ pub const NO_ACTIVE_VERSION: &str = "project.no_active_version";
 pub const SNAPSHOT_MISSING: &str = "project.snapshot_missing";
 /// token 绑的项目在库里不存在（改名 / 删除 / 抄错）—— **404**（配置错，不是服务坏了）。
 pub const PROJECT_MISSING: &str = "project.not_found";
-/// 快照取到了但装不起来（未冻结 / access 映射对不上 / TTL 产不出）—— **500**。
+/// 快照取到了但装不起来（未冻结 / access 映射对不上 / R2RML 对不上）—— **500**。
+///
+/// ⭐ REQ-178 · TTL 渲染**不在**这里判（它不在装配期发生）：客户视图命中发布闸时，
+/// 这个码**不出现**，只有 `/api/ontology.ttl` 500 `project.ttl_failed`
+/// （`query::ttl::TTL_FAILED`）。
 pub const LOAD_FAILED: &str = "project.load_failed";
 
 /// 多项目模式的运行期状态（一个进程一份；路由层按请求查它）。
@@ -305,7 +309,8 @@ impl MultiProject {
                     format!("项目 {project:?} 第 {} 版加载失败（快照在，但装不成可服务状态）。", v.seq),
                     format!(
                         "这一步与单项目模式启动时的装配**同一段代码**（access 映射对账 / \
-                         两视图 TTL / R2RML 映射），所以失败原因通常是部署级输入（`--schema` / \
+                         R2RML 映射；⭐ REQ-178 起**不含**两视图 TTL —— 那个在请求期才算，\
+                         失败只影响 `/api/ontology.ttl`），所以失败原因通常是部署级输入（`--schema` / \
                          `--policy`）或这一版自己的 AM（`version_access_mappings`）与这一版本体不一致。\
                          原始错误：{e}"
                     ),
