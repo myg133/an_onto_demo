@@ -1,0 +1,2700 @@
+{
+  "contract_version": 2,
+  "mapping_version": 1,
+  "project": "extracted",
+  "ontology_version": 3,
+  "sources": [
+    {
+      "id": "tencent-cvm",
+      "kind": "http-json",
+      "base_url": "https://cvm.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "cvm"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-vpc",
+      "kind": "http-json",
+      "base_url": "https://vpc.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "vpc"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-cbs",
+      "kind": "http-json",
+      "base_url": "https://cbs.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "cbs"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-clb",
+      "kind": "http-json",
+      "base_url": "https://clb.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "clb"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-cdb",
+      "kind": "http-json",
+      "base_url": "https://cdb.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "cdb"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-ssl",
+      "kind": "http-json",
+      "base_url": "https://ssl.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "ssl"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    },
+    {
+      "id": "tencent-monitor",
+      "kind": "http-json",
+      "base_url": "https://monitor.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "monitor"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou",
+        "module": "monitor"
+      }
+    },
+    {
+      "id": "tencent-billing",
+      "kind": "http-json",
+      "base_url": "https://billing.tencentcloudapi.com",
+      "auth": {
+        "mode": "tc3-hmac-sha256",
+        "credential_env": [
+          "TENCENT_SECRET_ID",
+          "TENCENT_SECRET_KEY"
+        ],
+        "signed_headers": [
+          "content-type",
+          "host",
+          "x-tc-action"
+        ],
+        "timestamp": {
+          "header": "X-TC-Timestamp",
+          "format": "unix-seconds"
+        },
+        "scope": [
+          "date",
+          "service",
+          "tc3_request"
+        ],
+        "service": "billing"
+      },
+      "defaults": {
+        "Region": "ap-guangzhou"
+      }
+    }
+  ],
+  "entities": [
+    {
+      "id": "CvmInstance",
+      "class": "cvm_instance",
+      "source": "tencent-cvm",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeInstances",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeInstances",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.InstanceSet[*]",
+      "identity": {
+        "key_path": "InstanceId"
+      },
+      "iri_template": "ontok:cvm_instance/{id}",
+      "fields": {
+        "placement": {
+          "path": "Placement"
+        },
+        "instance_id": {
+          "path": "InstanceId"
+        },
+        "instance_type": {
+          "path": "InstanceType"
+        },
+        "cpu": {
+          "path": "CPU"
+        },
+        "memory": {
+          "path": "Memory"
+        },
+        "restrict_state": {
+          "path": "RestrictState"
+        },
+        "instance_name": {
+          "path": "InstanceName"
+        },
+        "instance_charge_type": {
+          "path": "InstanceChargeType"
+        },
+        "system_disk": {
+          "path": "SystemDisk"
+        },
+        "data_disks": {
+          "path": "DataDisks"
+        },
+        "private_ip_addresses": {
+          "path": "PrivateIpAddresses"
+        },
+        "public_ip_addresses": {
+          "path": "PublicIpAddresses"
+        },
+        "internet_accessible": {
+          "path": "InternetAccessible"
+        },
+        "virtual_private_cloud": {
+          "path": "VirtualPrivateCloud"
+        },
+        "image_id": {
+          "path": "ImageId"
+        },
+        "renew_flag": {
+          "path": "RenewFlag"
+        },
+        "created_time": {
+          "path": "CreatedTime"
+        },
+        "expired_time": {
+          "path": "ExpiredTime"
+        },
+        "os_name": {
+          "path": "OsName"
+        },
+        "security_group_ids": {
+          "path": "SecurityGroupIds"
+        },
+        "login_settings": {
+          "path": "LoginSettings"
+        },
+        "instance_state": {
+          "path": "InstanceState"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "stop_charging_mode": {
+          "path": "StopChargingMode"
+        },
+        "uuid": {
+          "path": "Uuid"
+        },
+        "latest_operation": {
+          "path": "LatestOperation"
+        },
+        "latest_operation_state": {
+          "path": "LatestOperationState"
+        },
+        "latest_operation_request_id": {
+          "path": "LatestOperationRequestId"
+        },
+        "ipv6_addresses": {
+          "path": "IPv6Addresses"
+        },
+        "cam_role_name": {
+          "path": "CamRoleName"
+        },
+        "hpc_cluster_id": {
+          "path": "HpcClusterId"
+        },
+        "rdma_ip_addresses": {
+          "path": "RdmaIpAddresses"
+        },
+        "dedicated_cluster_id": {
+          "path": "DedicatedClusterId"
+        },
+        "isolated_source": {
+          "path": "IsolatedSource"
+        },
+        "license_type": {
+          "path": "LicenseType"
+        },
+        "disable_api_termination": {
+          "path": "DisableApiTermination"
+        },
+        "default_login_user": {
+          "path": "DefaultLoginUser"
+        },
+        "default_login_port": {
+          "path": "DefaultLoginPort"
+        },
+        "latest_operation_error_msg": {
+          "path": "LatestOperationErrorMsg"
+        },
+        "enable_jumbo_frame": {
+          "path": "EnableJumboFrame"
+        },
+        "cpu_topology": {
+          "path": "CpuTopology"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "zone",
+              "Values": [
+                "{zone}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "zone": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone"
+        ],
+        "local_only": [
+          "instance_state",
+          "cpu",
+          "memory"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/cvm-DescribeInstances.real.json"
+    },
+    {
+      "id": "Vpc",
+      "class": "vpc",
+      "source": "tencent-vpc",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeVpcs",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeVpcs",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.VpcSet[*]",
+      "identity": {
+        "key_path": "VpcId"
+      },
+      "iri_template": "ontok:vpc/{id}",
+      "fields": {
+        "vpc_name": {
+          "path": "VpcName"
+        },
+        "vpc_id": {
+          "path": "VpcId"
+        },
+        "cidr_block": {
+          "path": "CidrBlock"
+        },
+        "is_default": {
+          "path": "IsDefault"
+        },
+        "enable_multicast": {
+          "path": "EnableMulticast"
+        },
+        "created_time": {
+          "path": "CreatedTime"
+        },
+        "dns_server_set": {
+          "path": "DnsServerSet"
+        },
+        "domain_name": {
+          "path": "DomainName"
+        },
+        "dhcp_options_id": {
+          "path": "DhcpOptionsId"
+        },
+        "enable_dhcp": {
+          "path": "EnableDhcp"
+        },
+        "ipv6_cidr_block": {
+          "path": "Ipv6CidrBlock"
+        },
+        "tag_set": {
+          "path": "TagSet"
+        },
+        "assistant_cidr_set": {
+          "path": "AssistantCidrSet"
+        },
+        "enable_route_vpc_publish": {
+          "path": "EnableRouteVpcPublish"
+        },
+        "ipv6_cidr_block_set": {
+          "path": "Ipv6CidrBlockSet"
+        },
+        "enable_route_vpc_publish_ipv6": {
+          "path": "EnableRouteVpcPublishIpv6"
+        },
+        "stack_type": {
+          "path": "StackType"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "vpc-id",
+              "Values": [
+                "{vpc_id}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "vpc_id": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "string"
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "vpc_id"
+        ],
+        "local_only": [
+          "cidr_block",
+          "is_default"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-vpc-DescribeVpcs.json"
+    },
+    {
+      "id": "Subnet",
+      "class": "subnet",
+      "source": "tencent-vpc",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeSubnets",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSubnets",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.SubnetSet[*]",
+      "identity": {
+        "key_path": "SubnetId"
+      },
+      "iri_template": "ontok:subnet/{id}",
+      "fields": {
+        "vpc_id": {
+          "path": "VpcId"
+        },
+        "subnet_id": {
+          "path": "SubnetId"
+        },
+        "subnet_name": {
+          "path": "SubnetName"
+        },
+        "cidr_block": {
+          "path": "CidrBlock"
+        },
+        "is_default": {
+          "path": "IsDefault"
+        },
+        "enable_broadcast": {
+          "path": "EnableBroadcast"
+        },
+        "zone": {
+          "path": "Zone"
+        },
+        "route_table_id": {
+          "path": "RouteTableId"
+        },
+        "created_time": {
+          "path": "CreatedTime"
+        },
+        "available_ip_address_count": {
+          "path": "AvailableIpAddressCount"
+        },
+        "ipv6_cidr_block": {
+          "path": "Ipv6CidrBlock"
+        },
+        "network_acl_id": {
+          "path": "NetworkAclId"
+        },
+        "is_remote_vpc_snat": {
+          "path": "IsRemoteVpcSnat"
+        },
+        "total_ip_address_count": {
+          "path": "TotalIpAddressCount"
+        },
+        "tag_set": {
+          "path": "TagSet"
+        },
+        "cdc_id": {
+          "path": "CdcId"
+        },
+        "is_cdc_subnet": {
+          "path": "IsCdcSubnet"
+        },
+        "stack_type": {
+          "path": "StackType"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "zone",
+              "Values": [
+                "{zone}"
+              ]
+            },
+            {
+              "Name": "vpc-id",
+              "Values": [
+                "{vpc_id}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "zone": {
+            "source": "filter"
+          },
+          "vpc_id": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "string"
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone",
+          "vpc_id"
+        ],
+        "local_only": [
+          "cidr_block",
+          "is_default"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-vpc-DescribeSubnets.json"
+    },
+    {
+      "id": "SecurityGroup",
+      "class": "security_group",
+      "source": "tencent-vpc",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeSecurityGroups",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSecurityGroups",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.SecurityGroupSet[*]",
+      "identity": {
+        "key_path": "SecurityGroupId"
+      },
+      "iri_template": "ontok:security_group/{id}",
+      "fields": {
+        "security_group_id": {
+          "path": "SecurityGroupId"
+        },
+        "security_group_name": {
+          "path": "SecurityGroupName"
+        },
+        "security_group_desc": {
+          "path": "SecurityGroupDesc"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "is_default": {
+          "path": "IsDefault"
+        },
+        "created_time": {
+          "path": "CreatedTime"
+        },
+        "tag_set": {
+          "path": "TagSet"
+        },
+        "update_time": {
+          "path": "UpdateTime"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "security-group-id",
+              "Values": [
+                "{security_group_id}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "security_group_id": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100,
+          "value_type": "string"
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "security_group_id"
+        ],
+        "local_only": [
+          "project_id",
+          "is_default"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-vpc-DescribeSecurityGroups.json"
+    },
+    {
+      "id": "SecurityGroupRule",
+      "class": "security_group_rule",
+      "source": "tencent-vpc",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeSecurityGroupPolicies",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSecurityGroupPolicies",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.SecurityGroupPolicySet.Ingress[*]",
+      "identity": {
+        "key_path": "PolicyIndex"
+      },
+      "iri_template": "ontok:security_group_rule/{id}",
+      "fields": {
+        "policy_index": {
+          "path": "PolicyIndex"
+        },
+        "protocol": {
+          "path": "Protocol"
+        },
+        "port": {
+          "path": "Port"
+        },
+        "service_template": {
+          "path": "ServiceTemplate"
+        },
+        "cidr_block": {
+          "path": "CidrBlock"
+        },
+        "ipv6_cidr_block": {
+          "path": "Ipv6CidrBlock"
+        },
+        "security_group_id": {
+          "path": "SecurityGroupId"
+        },
+        "address_template": {
+          "path": "AddressTemplate"
+        },
+        "action": {
+          "path": "Action"
+        },
+        "policy_description": {
+          "path": "PolicyDescription"
+        },
+        "modify_time": {
+          "path": "ModifyTime"
+        },
+        "priority": {
+          "path": "Priority"
+        }
+      },
+      "request": {
+        "required": [
+          "region",
+          "security_group_id"
+        ],
+        "template": {
+          "SecurityGroupId": "{security_group_id}",
+          "Filters": [
+            {
+              "Name": "protocol-type",
+              "Values": [
+                "{protocol}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "security_group_id": {
+            "source": "filter"
+          },
+          "protocol": {
+            "source": "filter"
+          }
+        }
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "security_group_id",
+          "protocol"
+        ],
+        "local_only": [
+          "action",
+          "port"
+        ],
+        "max_scan_rows": 2000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；规则随安全组变更即时变化"
+      },
+      "fixture": "fixtures/synthetic-tencent-vpc-DescribeSecurityGroupPolicies.json"
+    },
+    {
+      "id": "CbsDisk",
+      "class": "cbs_disk",
+      "source": "tencent-cbs",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeDisks",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeDisks",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.DiskSet[*]",
+      "identity": {
+        "key_path": "DiskId"
+      },
+      "iri_template": "ontok:cbs_disk/{id}",
+      "fields": {
+        "delete_with_instance": {
+          "path": "DeleteWithInstance"
+        },
+        "renew_flag": {
+          "path": "RenewFlag"
+        },
+        "disk_type": {
+          "path": "DiskType"
+        },
+        "disk_state": {
+          "path": "DiskState"
+        },
+        "snapshot_count": {
+          "path": "SnapshotCount"
+        },
+        "auto_renew_flag_error": {
+          "path": "AutoRenewFlagError"
+        },
+        "rollbacking": {
+          "path": "Rollbacking"
+        },
+        "instance_id_list": {
+          "path": "InstanceIdList"
+        },
+        "encrypt": {
+          "path": "Encrypt"
+        },
+        "disk_name": {
+          "path": "DiskName"
+        },
+        "backup_disk": {
+          "path": "BackupDisk"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "instance_id": {
+          "path": "InstanceId"
+        },
+        "attach_mode": {
+          "path": "AttachMode"
+        },
+        "auto_snapshot_policy_ids": {
+          "path": "AutoSnapshotPolicyIds"
+        },
+        "throughput_performance": {
+          "path": "ThroughputPerformance"
+        },
+        "migrating": {
+          "path": "Migrating"
+        },
+        "disk_id": {
+          "path": "DiskId"
+        },
+        "snapshot_size": {
+          "path": "SnapshotSize"
+        },
+        "placement": {
+          "path": "Placement"
+        },
+        "is_returnable": {
+          "path": "IsReturnable"
+        },
+        "deadline_time": {
+          "path": "DeadlineTime"
+        },
+        "attached": {
+          "path": "Attached"
+        },
+        "disk_size": {
+          "path": "DiskSize"
+        },
+        "migrate_percent": {
+          "path": "MigratePercent"
+        },
+        "disk_usage": {
+          "path": "DiskUsage"
+        },
+        "disk_charge_type": {
+          "path": "DiskChargeType"
+        },
+        "portable": {
+          "path": "Portable"
+        },
+        "snapshot_ability": {
+          "path": "SnapshotAbility"
+        },
+        "deadline_error": {
+          "path": "DeadlineError"
+        },
+        "rollback_percent": {
+          "path": "RollbackPercent"
+        },
+        "differ_days_of_deadline": {
+          "path": "DifferDaysOfDeadline"
+        },
+        "return_fail_code": {
+          "path": "ReturnFailCode"
+        },
+        "shareable": {
+          "path": "Shareable"
+        },
+        "create_time": {
+          "path": "CreateTime"
+        },
+        "delete_snapshot": {
+          "path": "DeleteSnapshot"
+        },
+        "disk_backup_quota": {
+          "path": "DiskBackupQuota"
+        },
+        "disk_backup_count": {
+          "path": "DiskBackupCount"
+        },
+        "instance_type": {
+          "path": "InstanceType"
+        },
+        "last_attach_ins_id": {
+          "path": "LastAttachInsId"
+        },
+        "error_prompt": {
+          "path": "ErrorPrompt"
+        },
+        "burst_performance": {
+          "path": "BurstPerformance"
+        },
+        "encrypt_type": {
+          "path": "EncryptType"
+        },
+        "kms_key_id": {
+          "path": "KmsKeyId"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "zone",
+              "Values": [
+                "{zone}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "zone": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "zone"
+        ],
+        "local_only": [
+          "disk_state",
+          "disk_usage"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-cbs-DescribeDisks.json"
+    },
+    {
+      "id": "CbsSnapshot",
+      "class": "cbs_snapshot",
+      "source": "tencent-cbs",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeSnapshots",
+        "version": "2017-03-12",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeSnapshots",
+          "version": "2017-03-12"
+        }
+      },
+      "iterator": "$.Response.SnapshotSet[*]",
+      "identity": {
+        "key_path": "SnapshotId"
+      },
+      "iri_template": "ontok:cbs_snapshot/{id}",
+      "fields": {
+        "placement": {
+          "path": "Placement"
+        },
+        "copy_from_remote": {
+          "path": "CopyFromRemote"
+        },
+        "snapshot_state": {
+          "path": "SnapshotState"
+        },
+        "is_permanent": {
+          "path": "IsPermanent"
+        },
+        "snapshot_name": {
+          "path": "SnapshotName"
+        },
+        "deadline_time": {
+          "path": "DeadlineTime"
+        },
+        "percent": {
+          "path": "Percent"
+        },
+        "images": {
+          "path": "Images"
+        },
+        "share_reference": {
+          "path": "ShareReference"
+        },
+        "snapshot_type": {
+          "path": "SnapshotType"
+        },
+        "disk_size": {
+          "path": "DiskSize"
+        },
+        "disk_id": {
+          "path": "DiskId"
+        },
+        "copying_to_regions": {
+          "path": "CopyingToRegions"
+        },
+        "encrypt": {
+          "path": "Encrypt"
+        },
+        "create_time": {
+          "path": "CreateTime"
+        },
+        "image_count": {
+          "path": "ImageCount"
+        },
+        "disk_usage": {
+          "path": "DiskUsage"
+        },
+        "snapshot_id": {
+          "path": "SnapshotId"
+        },
+        "time_start_share": {
+          "path": "TimeStartShare"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "is_locked": {
+          "path": "IsLocked"
+        },
+        "latest_modify_time": {
+          "path": "LatestModifyTime"
+        },
+        "auto_snapshot_policy_id": {
+          "path": "AutoSnapshotPolicyId"
+        },
+        "snapshot_mode": {
+          "path": "SnapshotMode"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "disk-id",
+              "Values": [
+                "{disk_id}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "disk_id": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "disk_id"
+        ],
+        "local_only": [
+          "snapshot_state",
+          "is_permanent"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；进度类字段（Percent）随任务推进变化"
+      },
+      "fixture": "fixtures/synthetic-tencent-cbs-DescribeSnapshots.json"
+    },
+    {
+      "id": "ClbLoadBalancer",
+      "class": "clb_load_balancer",
+      "source": "tencent-clb",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeLoadBalancers",
+        "version": "2018-03-17",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeLoadBalancers",
+          "version": "2018-03-17"
+        }
+      },
+      "iterator": "$.Response.LoadBalancerSet[*]",
+      "identity": {
+        "key_path": "LoadBalancerId"
+      },
+      "iri_template": "ontok:clb_load_balancer/{id}",
+      "fields": {
+        "load_balancer_id": {
+          "path": "LoadBalancerId"
+        },
+        "load_balancer_name": {
+          "path": "LoadBalancerName"
+        },
+        "load_balancer_type": {
+          "path": "LoadBalancerType"
+        },
+        "forward": {
+          "path": "Forward"
+        },
+        "domain": {
+          "path": "Domain"
+        },
+        "load_balancer_vips": {
+          "path": "LoadBalancerVips"
+        },
+        "status": {
+          "path": "Status"
+        },
+        "create_time": {
+          "path": "CreateTime"
+        },
+        "status_time": {
+          "path": "StatusTime"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "vpc_id": {
+          "path": "VpcId"
+        },
+        "open_bgp": {
+          "path": "OpenBgp"
+        },
+        "snat": {
+          "path": "Snat"
+        },
+        "isolation": {
+          "path": "Isolation"
+        },
+        "subnet_id": {
+          "path": "SubnetId"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "secure_groups": {
+          "path": "SecureGroups"
+        },
+        "target_region_info": {
+          "path": "TargetRegionInfo"
+        },
+        "anycast_zone": {
+          "path": "AnycastZone"
+        },
+        "address_ip_version": {
+          "path": "AddressIPVersion"
+        },
+        "numerical_vpc_id": {
+          "path": "NumericalVpcId"
+        },
+        "vip_isp": {
+          "path": "VipIsp"
+        },
+        "master_zone": {
+          "path": "MasterZone"
+        },
+        "backup_zone_set": {
+          "path": "BackupZoneSet"
+        },
+        "isolated_time": {
+          "path": "IsolatedTime"
+        },
+        "expire_time": {
+          "path": "ExpireTime"
+        },
+        "charge_type": {
+          "path": "ChargeType"
+        },
+        "network_attributes": {
+          "path": "NetworkAttributes"
+        },
+        "prepaid_attributes": {
+          "path": "PrepaidAttributes"
+        },
+        "log_set_id": {
+          "path": "LogSetId"
+        },
+        "log_topic_id": {
+          "path": "LogTopicId"
+        },
+        "address_ipv6": {
+          "path": "AddressIPv6"
+        },
+        "extra_info": {
+          "path": "ExtraInfo"
+        },
+        "is_d_dos": {
+          "path": "IsDDos"
+        },
+        "config_id": {
+          "path": "ConfigId"
+        },
+        "load_balancer_pass_to_target": {
+          "path": "LoadBalancerPassToTarget"
+        },
+        "exclusive_cluster": {
+          "path": "ExclusiveCluster"
+        },
+        "ipv6_mode": {
+          "path": "IPv6Mode"
+        },
+        "snat_pro": {
+          "path": "SnatPro"
+        },
+        "snat_ips": {
+          "path": "SnatIps"
+        },
+        "sla_type": {
+          "path": "SlaType"
+        },
+        "is_block": {
+          "path": "IsBlock"
+        },
+        "is_block_time": {
+          "path": "IsBlockTime"
+        },
+        "local_bgp": {
+          "path": "LocalBgp"
+        },
+        "cluster_tag": {
+          "path": "ClusterTag"
+        },
+        "mix_ip_target": {
+          "path": "MixIpTarget"
+        },
+        "zones": {
+          "path": "Zones"
+        },
+        "nfv_info": {
+          "path": "NfvInfo"
+        },
+        "health_log_set_id": {
+          "path": "HealthLogSetId"
+        },
+        "health_log_topic_id": {
+          "path": "HealthLogTopicId"
+        },
+        "cluster_ids": {
+          "path": "ClusterIds"
+        },
+        "attribute_flags": {
+          "path": "AttributeFlags"
+        },
+        "load_balancer_domain": {
+          "path": "LoadBalancerDomain"
+        },
+        "egress": {
+          "path": "Egress"
+        },
+        "exclusive": {
+          "path": "Exclusive"
+        },
+        "target_count": {
+          "path": "TargetCount"
+        },
+        "associate_endpoint": {
+          "path": "AssociateEndpoint"
+        },
+        "available_zone_affinity_info": {
+          "path": "AvailableZoneAffinityInfo"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "Filters": [
+            {
+              "Name": "master-zone-id",
+              "Values": [
+                "{master_zone}"
+              ]
+            }
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "master_zone": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 100
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "master_zone"
+        ],
+        "local_only": [
+          "status",
+          "load_balancer_type"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-clb-DescribeLoadBalancers.json"
+    },
+    {
+      "id": "ClbListener",
+      "class": "clb_listener",
+      "source": "tencent-clb",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeListeners",
+        "version": "2018-03-17",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeListeners",
+          "version": "2018-03-17"
+        }
+      },
+      "iterator": "$.Response.Listeners[*]",
+      "identity": {
+        "key_path": "ListenerId"
+      },
+      "iri_template": "ontok:clb_listener/{id}",
+      "fields": {
+        "listener_id": {
+          "path": "ListenerId"
+        },
+        "protocol": {
+          "path": "Protocol"
+        },
+        "port": {
+          "path": "Port"
+        },
+        "certificate": {
+          "path": "Certificate"
+        },
+        "health_check": {
+          "path": "HealthCheck"
+        },
+        "scheduler": {
+          "path": "Scheduler"
+        },
+        "session_expire_time": {
+          "path": "SessionExpireTime"
+        },
+        "sni_switch": {
+          "path": "SniSwitch"
+        },
+        "rules": {
+          "path": "Rules"
+        },
+        "listener_name": {
+          "path": "ListenerName"
+        },
+        "create_time": {
+          "path": "CreateTime"
+        },
+        "end_port": {
+          "path": "EndPort"
+        },
+        "target_type": {
+          "path": "TargetType"
+        },
+        "target_group": {
+          "path": "TargetGroup"
+        },
+        "session_type": {
+          "path": "SessionType"
+        },
+        "keepalive_enable": {
+          "path": "KeepaliveEnable"
+        },
+        "toa": {
+          "path": "Toa"
+        },
+        "deregister_target_rst": {
+          "path": "DeregisterTargetRst"
+        },
+        "attr_flags": {
+          "path": "AttrFlags"
+        },
+        "target_group_list": {
+          "path": "TargetGroupList"
+        },
+        "max_conn": {
+          "path": "MaxConn"
+        },
+        "max_cps": {
+          "path": "MaxCps"
+        },
+        "idle_connect_timeout": {
+          "path": "IdleConnectTimeout"
+        },
+        "reschedule_interval": {
+          "path": "RescheduleInterval"
+        },
+        "data_compress_mode": {
+          "path": "DataCompressMode"
+        },
+        "reschedule_start_time": {
+          "path": "RescheduleStartTime"
+        }
+      },
+      "request": {
+        "required": [
+          "region",
+          "load_balancer_id"
+        ],
+        "template": {
+          "LoadBalancerId": "{load_balancer_id}",
+          "Protocol": "{protocol}"
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "load_balancer_id": {
+            "source": "filter"
+          },
+          "protocol": {
+            "source": "filter"
+          }
+        }
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "load_balancer_id",
+          "protocol"
+        ],
+        "local_only": [
+          "scheduler",
+          "max_conn"
+        ],
+        "max_scan_rows": 2000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-clb-DescribeListeners.json"
+    },
+    {
+      "id": "CdbInstance",
+      "class": "cdb_instance",
+      "source": "tencent-cdb",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeDBInstances",
+        "version": "2017-03-20",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeDBInstances",
+          "version": "2017-03-20"
+        }
+      },
+      "iterator": "$.Response.Items[*]",
+      "identity": {
+        "key_path": "InstanceId"
+      },
+      "iri_template": "ontok:cdb_instance/{id}",
+      "fields": {
+        "wan_status": {
+          "path": "WanStatus"
+        },
+        "zone": {
+          "path": "Zone"
+        },
+        "init_flag": {
+          "path": "InitFlag"
+        },
+        "ro_vip_info": {
+          "path": "RoVipInfo"
+        },
+        "memory": {
+          "path": "Memory"
+        },
+        "status": {
+          "path": "Status"
+        },
+        "vpc_id": {
+          "path": "VpcId"
+        },
+        "slave_info": {
+          "path": "SlaveInfo"
+        },
+        "instance_id": {
+          "path": "InstanceId"
+        },
+        "volume": {
+          "path": "Volume"
+        },
+        "auto_renew": {
+          "path": "AutoRenew"
+        },
+        "protect_mode": {
+          "path": "ProtectMode"
+        },
+        "ro_groups": {
+          "path": "RoGroups"
+        },
+        "subnet_id": {
+          "path": "SubnetId"
+        },
+        "instance_type": {
+          "path": "InstanceType"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "region": {
+          "path": "Region"
+        },
+        "deadline_time": {
+          "path": "DeadlineTime"
+        },
+        "deploy_mode": {
+          "path": "DeployMode"
+        },
+        "task_status": {
+          "path": "TaskStatus"
+        },
+        "master_info": {
+          "path": "MasterInfo"
+        },
+        "device_type": {
+          "path": "DeviceType"
+        },
+        "engine_version": {
+          "path": "EngineVersion"
+        },
+        "instance_name": {
+          "path": "InstanceName"
+        },
+        "dr_info": {
+          "path": "DrInfo"
+        },
+        "wan_domain": {
+          "path": "WanDomain"
+        },
+        "wan_port": {
+          "path": "WanPort"
+        },
+        "pay_type": {
+          "path": "PayType"
+        },
+        "create_time": {
+          "path": "CreateTime"
+        },
+        "vip": {
+          "path": "Vip"
+        },
+        "vport": {
+          "path": "Vport"
+        },
+        "cdb_error": {
+          "path": "CdbError"
+        },
+        "uniq_vpc_id": {
+          "path": "UniqVpcId"
+        },
+        "uniq_subnet_id": {
+          "path": "UniqSubnetId"
+        },
+        "physical_id": {
+          "path": "PhysicalId"
+        },
+        "cpu": {
+          "path": "Cpu"
+        },
+        "qps": {
+          "path": "Qps"
+        },
+        "zone_name": {
+          "path": "ZoneName"
+        },
+        "device_class": {
+          "path": "DeviceClass"
+        },
+        "deploy_group_id": {
+          "path": "DeployGroupId"
+        },
+        "zone_id": {
+          "path": "ZoneId"
+        },
+        "instance_nodes": {
+          "path": "InstanceNodes"
+        },
+        "tag_list": {
+          "path": "TagList"
+        },
+        "engine_type": {
+          "path": "EngineType"
+        },
+        "max_delay_time": {
+          "path": "MaxDelayTime"
+        },
+        "disk_type": {
+          "path": "DiskType"
+        },
+        "expand_cpu": {
+          "path": "ExpandCpu"
+        },
+        "cluster_info": {
+          "path": "ClusterInfo"
+        },
+        "analysis_node_infos": {
+          "path": "AnalysisNodeInfos"
+        },
+        "device_bandwidth": {
+          "path": "DeviceBandwidth"
+        },
+        "destroy_protect": {
+          "path": "DestroyProtect"
+        },
+        "disk_encryption": {
+          "path": "DiskEncryption"
+        },
+        "cpu_model": {
+          "path": "CpuModel"
+        },
+        "analysis_upgrade_version_info": {
+          "path": "AnalysisUpgradeVersionInfo"
+        }
+      },
+      "request": {
+        "required": [
+          "region"
+        ],
+        "template": {
+          "InstanceIds": [
+            "{instance_ids}"
+          ]
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "instance_ids": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 2000
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 2000,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "instance_ids"
+        ],
+        "local_only": [
+          "status",
+          "pay_type"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-cdb-DescribeDBInstances.json"
+    },
+    {
+      "id": "DbBackup",
+      "class": "db_backup",
+      "source": "tencent-cdb",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeBackups",
+        "version": "2017-03-20",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}",
+          "X-TC-Region": "{region}"
+        },
+        "vars": {
+          "action": "DescribeBackups",
+          "version": "2017-03-20"
+        }
+      },
+      "iterator": "$.Response.Items[*]",
+      "identity": {
+        "key_path": "BackupId"
+      },
+      "iri_template": "ontok:db_backup/{id}",
+      "fields": {
+        "name": {
+          "path": "Name"
+        },
+        "size": {
+          "path": "Size"
+        },
+        "date": {
+          "path": "Date"
+        },
+        "intranet_url": {
+          "path": "IntranetUrl"
+        },
+        "internet_url": {
+          "path": "InternetUrl"
+        },
+        "type": {
+          "path": "Type"
+        },
+        "backup_id": {
+          "path": "BackupId"
+        },
+        "status": {
+          "path": "Status"
+        },
+        "finish_time": {
+          "path": "FinishTime"
+        },
+        "creator": {
+          "path": "Creator"
+        },
+        "start_time": {
+          "path": "StartTime"
+        },
+        "method": {
+          "path": "Method"
+        },
+        "way": {
+          "path": "Way"
+        },
+        "manual_backup_name": {
+          "path": "ManualBackupName"
+        },
+        "save_mode": {
+          "path": "SaveMode"
+        },
+        "region": {
+          "path": "Region"
+        },
+        "remote_info": {
+          "path": "RemoteInfo"
+        },
+        "cos_storage_type": {
+          "path": "CosStorageType"
+        },
+        "instance_id": {
+          "path": "InstanceId"
+        },
+        "progress": {
+          "path": "Progress"
+        },
+        "encryption_flag": {
+          "path": "EncryptionFlag"
+        },
+        "executed_gtid_set": {
+          "path": "ExecutedGTIDSet"
+        },
+        "md5": {
+          "path": "MD5"
+        }
+      },
+      "request": {
+        "required": [
+          "region",
+          "instance_id"
+        ],
+        "template": {
+          "InstanceId": "{instance_id}",
+          "MinStartTime": "{min_start_time}"
+        },
+        "bindings": {
+          "region": {
+            "source": "default"
+          },
+          "instance_id": {
+            "source": "filter"
+          },
+          "min_start_time": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 1000
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 1000,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "region",
+          "instance_id",
+          "min_start_time"
+        ],
+        "local_only": [
+          "status",
+          "type"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口；备份进行中状态会变（RUNNING → SUCCESS/FAILED）"
+      },
+      "fixture": "fixtures/synthetic-tencent-cdb-DescribeBackups.json"
+    },
+    {
+      "id": "SslCertificate",
+      "class": "ssl_certificate",
+      "source": "tencent-ssl",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeCertificates",
+        "version": "2019-12-05",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeCertificates",
+          "version": "2019-12-05"
+        }
+      },
+      "iterator": "$.Response.Certificates[*]",
+      "identity": {
+        "key_path": "CertificateId"
+      },
+      "iri_template": "ontok:ssl_certificate/{id}",
+      "fields": {
+        "owner_uin": {
+          "path": "OwnerUin"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "from": {
+          "path": "From"
+        },
+        "package_type": {
+          "path": "PackageType"
+        },
+        "certificate_type": {
+          "path": "CertificateType"
+        },
+        "product_zh_name": {
+          "path": "ProductZhName"
+        },
+        "domain": {
+          "path": "Domain"
+        },
+        "alias": {
+          "path": "Alias"
+        },
+        "status": {
+          "path": "Status"
+        },
+        "certificate_extra": {
+          "path": "CertificateExtra"
+        },
+        "vulnerability_status": {
+          "path": "VulnerabilityStatus"
+        },
+        "status_msg": {
+          "path": "StatusMsg"
+        },
+        "verify_type": {
+          "path": "VerifyType"
+        },
+        "cert_begin_time": {
+          "path": "CertBeginTime"
+        },
+        "cert_end_time": {
+          "path": "CertEndTime"
+        },
+        "validity_period": {
+          "path": "ValidityPeriod"
+        },
+        "insert_time": {
+          "path": "InsertTime"
+        },
+        "certificate_id": {
+          "path": "CertificateId"
+        },
+        "subject_alt_name": {
+          "path": "SubjectAltName"
+        },
+        "package_type_name": {
+          "path": "PackageTypeName"
+        },
+        "status_name": {
+          "path": "StatusName"
+        },
+        "is_vip": {
+          "path": "IsVip"
+        },
+        "is_dv": {
+          "path": "IsDv"
+        },
+        "is_wildcard": {
+          "path": "IsWildcard"
+        },
+        "is_vulnerability": {
+          "path": "IsVulnerability"
+        },
+        "renew_able": {
+          "path": "RenewAble"
+        },
+        "project_info": {
+          "path": "ProjectInfo"
+        },
+        "bound_resource": {
+          "path": "BoundResource"
+        },
+        "deployable": {
+          "path": "Deployable"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "is_ignore": {
+          "path": "IsIgnore"
+        },
+        "is_sm": {
+          "path": "IsSM"
+        },
+        "encrypt_algorithm": {
+          "path": "EncryptAlgorithm"
+        },
+        "ca_encrypt_algorithms": {
+          "path": "CAEncryptAlgorithms"
+        },
+        "ca_end_times": {
+          "path": "CAEndTimes"
+        },
+        "ca_common_names": {
+          "path": "CACommonNames"
+        },
+        "pre_audit_info": {
+          "path": "PreAuditInfo"
+        },
+        "auto_renew_flag": {
+          "path": "AutoRenewFlag"
+        },
+        "hosting_status": {
+          "path": "HostingStatus"
+        },
+        "hosting_complete_time": {
+          "path": "HostingCompleteTime"
+        },
+        "hosting_renew_cert_id": {
+          "path": "HostingRenewCertId"
+        },
+        "has_renew_order": {
+          "path": "HasRenewOrder"
+        },
+        "replace_ori_cert_is_delete": {
+          "path": "ReplaceOriCertIsDelete"
+        },
+        "is_expiring": {
+          "path": "IsExpiring"
+        },
+        "dv_auth_deadline": {
+          "path": "DVAuthDeadline"
+        },
+        "validation_passed_time": {
+          "path": "ValidationPassedTime"
+        },
+        "cert_sa_ns": {
+          "path": "CertSANs"
+        },
+        "awaiting_validation_msg": {
+          "path": "AwaitingValidationMsg"
+        },
+        "allow_download": {
+          "path": "AllowDownload"
+        },
+        "is_dnspod_resolve": {
+          "path": "IsDNSPODResolve"
+        },
+        "is_package": {
+          "path": "IsPackage"
+        },
+        "key_password_custom_flag": {
+          "path": "KeyPasswordCustomFlag"
+        },
+        "support_download_type": {
+          "path": "SupportDownloadType"
+        },
+        "cert_revoked_time": {
+          "path": "CertRevokedTime"
+        },
+        "hosting_resource_types": {
+          "path": "HostingResourceTypes"
+        },
+        "hosting_config": {
+          "path": "HostingConfig"
+        },
+        "is_hosting_upload_renew_cert": {
+          "path": "IsHostingUploadRenewCert"
+        },
+        "service_id": {
+          "path": "ServiceId"
+        },
+        "service_status": {
+          "path": "ServiceStatus"
+        },
+        "cert_service_begin_time": {
+          "path": "CertServiceBeginTime"
+        },
+        "cert_service_end_time": {
+          "path": "CertServiceEndTime"
+        },
+        "cert_service_share_enabled": {
+          "path": "CertServiceShareEnabled"
+        },
+        "cert_service_valid_certificate_count": {
+          "path": "CertServiceValidCertificateCount"
+        }
+      },
+      "request": {
+        "required": [],
+        "template": {
+          "FilterSource": "{filter_source}",
+          "CertificateStatus": [
+            "{status}"
+          ]
+        },
+        "bindings": {
+          "filter_source": {
+            "source": "filter"
+          },
+          "status": {
+            "source": "filter",
+            "value_type": "integer",
+            "shape": "array"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 1000
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 1000,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "filter_source",
+          "status"
+        ],
+        "local_only": [
+          "cert_end_time"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；证书状态随到期 / 吊销变化"
+      },
+      "fixture": "fixtures/synthetic-tencent-ssl-DescribeCertificates.json"
+    },
+    {
+      "id": "AlarmPolicy",
+      "class": "alarm_policy",
+      "source": "tencent-monitor",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeAlarmPolicies",
+        "version": "2018-07-24",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeAlarmPolicies",
+          "version": "2018-07-24"
+        }
+      },
+      "iterator": "$.Response.Policies[*]",
+      "identity": {
+        "key_path": "PolicyId"
+      },
+      "iri_template": "ontok:alarm_policy/{id}",
+      "fields": {
+        "policy_name": {
+          "path": "PolicyName"
+        },
+        "monitor_type": {
+          "path": "MonitorType"
+        },
+        "namespace": {
+          "path": "Namespace"
+        },
+        "remark": {
+          "path": "Remark"
+        },
+        "enable": {
+          "path": "Enable"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "condition_template_id": {
+          "path": "ConditionTemplateId"
+        },
+        "condition": {
+          "path": "Condition"
+        },
+        "event_condition": {
+          "path": "EventCondition"
+        },
+        "filter": {
+          "path": "Filter"
+        },
+        "is_bind_all": {
+          "path": "IsBindAll"
+        },
+        "log_alarm_req_info": {
+          "path": "LogAlarmReqInfo"
+        },
+        "migrate_flag": {
+          "path": "MigrateFlag"
+        },
+        "eb_subject": {
+          "path": "EbSubject"
+        },
+        "additional_alarm_content": {
+          "path": "AdditionalAlarmContent"
+        }
+      },
+      "request": {
+        "required": [
+          "module"
+        ],
+        "template": {
+          "Module": "{module}",
+          "PolicyName": "{policy_name}"
+        },
+        "bindings": {
+          "module": {
+            "source": "default"
+          },
+          "policy_name": {
+            "source": "filter"
+          }
+        },
+        "paging": {
+          "limit": "PageSize",
+          "max_limit": 100,
+          "page": "PageNumber",
+          "offset_base": 1
+        }
+      },
+      "paging": {
+        "offset_param": "PageNumber",
+        "limit_param": "PageSize",
+        "max_limit": 100,
+        "total_path": "$.Response.TotalCount"
+      },
+      "capability": {
+        "pushdown": [
+          "module",
+          "policy_name"
+        ],
+        "local_only": [
+          "monitor_type",
+          "enable"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "查询类接口，无缓存声明；读到的是服务端当次结果"
+      },
+      "fixture": "fixtures/synthetic-tencent-monitor-DescribeAlarmPolicies.json"
+    },
+    {
+      "id": "CostDetailBill",
+      "class": "cost_detail_bill",
+      "source": "tencent-billing",
+      "reviewed_by": "michael@2026-10-26",
+      "operation": {
+        "action": "DescribeBillDetail",
+        "version": "2018-07-09",
+        "method": "POST",
+        "content_type": "application/json",
+        "path": "/",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "X-TC-Action": "{action}",
+          "X-TC-Version": "{version}",
+          "X-TC-Timestamp": "{timestamp}"
+        },
+        "vars": {
+          "action": "DescribeBillDetail",
+          "version": "2018-07-09"
+        }
+      },
+      "iterator": "$.Response.DetailSet[*]",
+      "identity": {
+        "key_path": "Id"
+      },
+      "iri_template": "ontok:cost_detail_bill/{id}",
+      "fields": {
+        "business_code_name": {
+          "path": "BusinessCodeName"
+        },
+        "product_code_name": {
+          "path": "ProductCodeName"
+        },
+        "pay_mode_name": {
+          "path": "PayModeName"
+        },
+        "project_name": {
+          "path": "ProjectName"
+        },
+        "region_name": {
+          "path": "RegionName"
+        },
+        "zone_name": {
+          "path": "ZoneName"
+        },
+        "resource_id": {
+          "path": "ResourceId"
+        },
+        "resource_name": {
+          "path": "ResourceName"
+        },
+        "action_type_name": {
+          "path": "ActionTypeName"
+        },
+        "order_id": {
+          "path": "OrderId"
+        },
+        "bill_id": {
+          "path": "BillId"
+        },
+        "pay_time": {
+          "path": "PayTime"
+        },
+        "fee_begin_time": {
+          "path": "FeeBeginTime"
+        },
+        "fee_end_time": {
+          "path": "FeeEndTime"
+        },
+        "component_set": {
+          "path": "ComponentSet"
+        },
+        "payer_uin": {
+          "path": "PayerUin"
+        },
+        "owner_uin": {
+          "path": "OwnerUin"
+        },
+        "operate_uin": {
+          "path": "OperateUin"
+        },
+        "tags": {
+          "path": "Tags"
+        },
+        "business_code": {
+          "path": "BusinessCode"
+        },
+        "product_code": {
+          "path": "ProductCode"
+        },
+        "action_type": {
+          "path": "ActionType"
+        },
+        "region_id": {
+          "path": "RegionId"
+        },
+        "project_id": {
+          "path": "ProjectId"
+        },
+        "price_info": {
+          "path": "PriceInfo"
+        },
+        "associated_order": {
+          "path": "AssociatedOrder"
+        },
+        "formula": {
+          "path": "Formula"
+        },
+        "formula_url": {
+          "path": "FormulaUrl"
+        },
+        "bill_day": {
+          "path": "BillDay"
+        },
+        "bill_month": {
+          "path": "BillMonth"
+        },
+        "id": {
+          "path": "Id"
+        },
+        "region_type": {
+          "path": "RegionType"
+        },
+        "region_type_name": {
+          "path": "RegionTypeName"
+        },
+        "reserve_detail": {
+          "path": "ReserveDetail"
+        },
+        "discount_object": {
+          "path": "DiscountObject"
+        },
+        "discount_type": {
+          "path": "DiscountType"
+        },
+        "discount_content": {
+          "path": "DiscountContent"
+        },
+        "extend_field": {
+          "path": "ExtendField"
+        }
+      },
+      "request": {
+        "required": [
+          "month",
+          "offset",
+          "limit"
+        ],
+        "template": {
+          "Month": "{month}"
+        },
+        "bindings": {
+          "month": {
+            "source": "filter"
+          },
+          "offset": {
+            "from": "offset",
+            "source": "paging"
+          },
+          "limit": {
+            "from": "limit",
+            "source": "paging"
+          }
+        },
+        "paging": {
+          "offset": "Offset",
+          "limit": "Limit",
+          "max_limit": 300
+        }
+      },
+      "paging": {
+        "offset_param": "Offset",
+        "limit_param": "Limit",
+        "max_limit": 300,
+        "total_path": "$.Response.Total"
+      },
+      "capability": {
+        "pushdown": [
+          "month"
+        ],
+        "local_only": [
+          "business_code",
+          "pay_mode_name"
+        ],
+        "max_scan_rows": 5000,
+        "cost_hint": "free"
+      },
+      "freshness": {
+        "mode": "realtime",
+        "note": "账单为出账后数据；Response.Total 是 24 小时缓存值（语料原文），不能当精确总数"
+      },
+      "fixture": "fixtures/synthetic-tencent-billing-DescribeBillDetail.json"
+    }
+  ],
+  "relations": []
+}

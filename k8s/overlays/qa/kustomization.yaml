@@ -1,0 +1,125 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# QA 环境（与 UAT **同集群、独立命名空间、独立数据库**）
+#
+# 与 uat-ops360 的差别：
+#   ① **多项目模式**（不给 `--project/--version`）⇒ key → project → active_version
+#   ② **没有 cloudflared 边车**（那条隧道只给数字员工平台用，UAT 独占）
+#   ③ 不装 console（QA 只要本体接口 + Studio，Studio 在 query 进程里）
+#   ④ 域名 an-onto-qa.local.anspire.cn（复用 *.local.anspire.cn 泛域名证书）
+#
+# 库：postgres 同实例、不同库 `ontok_qa`（Secret ontok-db 里指定）
+namespace: anspire-ontok-qa
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+images:
+  - name: ontok
+    newName: aigccontainer.azurecr.cn/an_onto/ontok
+    newTag: 0.3.1
+
+replicas:
+  - { name: ontok-query, count: 1 }
+
+patches:
+  # ① 删掉 console（QA 只留 query；Studio 在 query 进程里）
+  - target: { kind: Deployment, name: ontok-console }
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: ontok-console }
+  - target: { kind: Service, name: ontok-console }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: ontok-console }
+
+  # ② 启动参数：多项目 + 本体模式
+  #    ⛔ 不给 --project / --version（给了就是单项目，项目被参数钉死）
+  #    ⛔ 不给 --schema / --policy（本体模式下与 --ontology-only 互斥）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - query
+          - serve
+          - --bind=0.0.0.0:8800
+          - --allow-public
+          - --tokens=/etc/ontok/secrets/query-tokens.json
+          - --access-mapping=/etc/ontok/am/am-tencent.json
+          - --ontology-only
+
+  # ③ env 整体替换（不是逐个删，避免索引漂移）
+  #    · 去掉 ONTOK_PROJECT / ONTOK_VERSION（多项目模式下没有意义）
+  #    · 去掉 ONTOK_SOURCE_DATABASE_URL（本体模式不连源库）
+  #    · 保留 ONTOK_DATABASE_URL（元数据库 = ontok_qa）
+  #    · 加 ONTOK_SECRET_KEY（写面加密 DSN 与 query key；缺了拒绝启动）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: ONTOK_DATABASE_URL
+            valueFrom: { secretKeyRef: { name: ontok-db, key: metadata-url } }
+          - name: ONTOK_SECRET_KEY
+            valueFrom: { secretKeyRef: { name: ontok-write, key: secret-key } }
+
+  # ④ 从 ACR 拉镜像需要凭据（命名空间里的 postgres17-wal-registry 已复制过来）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: postgres17-wal-registry
+
+  # ⑤ 同 tag 重建必须重拉（tag 可变 ⇒ Always）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+
+  # ⑥ AM 挂载：ConfigMap → /etc/ontok/am（readOnly）
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: am
+          configMap:
+            name: ontok-access-mapping
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: am
+          mountPath: /etc/ontok/am
+          readOnly: true
+
+  # ⑦ Secret 由部署流程单独 provision（含真凭据），⛔ 不能交给 base 的空占位版本。
+  #    ConfigMap `ontok-config`（schema/policy/tenancy）**保留**：base 的 volume 还挂着它，
+  #    删了 pod 会因为找不到 CM 起不来（本体模式下这些文件用不到，但挂载要在）。
+  - target: { kind: Secret, name: ontok-secrets }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata: { name: ontok-secrets }
+  - target: { kind: Secret, name: ontok-db }
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata: { name: ontok-db }
+
+# AM：从**构建包**里提取的那份（`cloud-resource-v5-am.ontokbundle` 的 `am/access-mapping.json`，
+# 逐字节相同）。⛔ 不要手改这里——要换 AM 就重新从包提取，`Deploy/tools/check_am.py` 会验它。
+configMapGenerator:
+  - name: ontok-access-mapping
+    files:
+      - am-tencent.json

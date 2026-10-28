@@ -108,7 +108,7 @@ ontok query serve \
 
 | # | 动作 | key | 端点 |
 | --- | --- | --- | --- |
-| 1 | 建项目 | **admin** | `POST /api/projects {name,label,key_label}` ⇒ 返回**项目 key**（给数字员工，只读） |
+| 1 | 建项目 | **admin** | `POST /api/projects {project,label,key_label}` ⇒ 返回**项目 key**（给数字员工，只读） |
 | 2 | 上传包 | **admin** | `POST /api/projects/:p/bundles`，`Content-Type: application/octet-stream`，body = `.ontokbundle` 原始字节 |
 | 3 | 配 DSN（仅 `requires_dsn`） | **admin** | `PUT /api/projects/:p/database {dsn}` + `POST …/database/test`（**失败也 200**，看 `ok` 字段） |
 | 4 | 解析 | **admin** | `POST …/bundles/:id/import` ⇒ `version=vN`（`already_imported:true` 也当成功） |

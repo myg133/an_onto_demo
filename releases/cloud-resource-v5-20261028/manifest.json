@@ -1,0 +1,27 @@
+{
+  "builder": {
+    "host": "MICHAEL-WORKSTA",
+    "name": "ontok-builder",
+    "version": "0.1.0"
+  },
+  "built_at": "2026-10-27T03:16:34Z",
+  "bundle_version": "1.0",
+  "components": {
+    "ontology": {
+      "entity_types": 30,
+      "link_types": 34,
+      "path": "ontology/snapshot.json",
+      "properties": 752,
+      "sha256": "49e7bbfe3d3b2237bcdce66456aa97bc84e28822545aa17270546fbef3ab2b1b"
+    }
+  },
+  "files": [
+    {
+      "bytes": 183705,
+      "path": "ontology/snapshot.json",
+      "sha256": "49e7bbfe3d3b2237bcdce66456aa97bc84e28822545aa17270546fbef3ab2b1b"
+    }
+  ],
+  "ontology_seq": 5,
+  "project": "cloud-resource"
+}

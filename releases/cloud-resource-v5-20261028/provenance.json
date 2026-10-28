@@ -1,0 +1,54 @@
+{
+  "artifact": "cloud-resource-v5.ontokbundle",
+  "sha256": "8ec983f3fad2145c6561f794b8cfc366934424c39feb4fbd98aba58f178f92bd",
+  "bytes": 184592,
+  "bundle_version": "1.0",
+  "project": "cloud-resource",
+  "ontology_seq": 5,
+  "counts": {
+    "entity_types": 30,
+    "link_types": 34,
+    "properties": 752,
+    "action_types": 0,
+    "functions": 0,
+    "concept_groups": 0
+  },
+  "built_at": "2026-10-27T03:16:34Z",
+  "source": {
+    "environment": "UAT",
+    "namespace": "anspire-ontok-uat",
+    "deployment": "ontok-query",
+    "image": "aigccontainer.azurecr.cn/an_onto/ontok:0.3.1",
+    "mode": "ontology-only",
+    "project": "cloud-resource",
+    "active_version": 5,
+    "active_version_id": "271723f8-28b7-4eaa-b61a-9627dae0992f"
+  },
+  "extraction": {
+    "method": "read-only SELECT from the metadata Postgres (project_bundle_payloads.data)",
+    "bundle_row_id": "4ba82691-a10c-40ad-9bdf-b9afe51d1f7d",
+    "bundle_state": "imported",
+    "uploaded_at": "2026-10-27T03:20:50Z",
+    "imported_at": "2026-10-27T03:21:01Z",
+    "imported_version_seq": 6,
+    "payload_sha256_matches_row": true
+  },
+  "equivalence_proof": {
+    "claim": "包内快照与 UAT 当前生效版本 v5 的内容逐行相同",
+    "checks": [
+      "快照自述 version_id = 271723f8-28b7-4eaa-b61a-9627dae0992f、seq = 5（即 UAT 的 active_version）",
+      "该包导入产生的 v6 与 v5 在 object_types / link_types 上除 id 外逐列相同（30 / 34 行）",
+      "包内计数 30 / 34 / 752 与 UAT /api/catalog 的 counts 一致",
+      "整包 sha256 与 UAT 元数据库 project_bundles.bundle_sha256 一致"
+    ]
+  },
+  "references": {
+    "uat_served_ttl": "ontology/uat-served-customer-view.ttl",
+    "uat_served_ttl_sha256": "01dd090f76e64439300206ad571a32845648aa44e6d50504549613ca1b32fdc0",
+    "uat_served_ttl_bytes": 210610
+  },
+  "package_boundary": {
+    "contains": ["manifest.json", "ontology/snapshot.json"],
+    "does_not_contain": ["access mapping (AM)", "declarations (policy/tenancy/exclusions/recipe)", "source DB schema", "DSN", "tokens", "keys"]
+  }
+}

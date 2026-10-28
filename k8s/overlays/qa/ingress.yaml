@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontok
+  namespace: anspire-ontok-qa
+  annotations:
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: an-onto-qa.local.anspire.cn
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ontok-query
+                port:
+                  number: 8800
+  tls:
+    - hosts:
+        - an-onto-qa.local.anspire.cn
+      # 复用 UAT 那张泛域名证书（CN=*.local.anspire.cn，覆盖 an-onto-qa）
+      secretName: wildcard-local-anspire-cn

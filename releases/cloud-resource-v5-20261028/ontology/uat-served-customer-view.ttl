@@ -1,0 +1,6020 @@
+@prefix : <https://ontok.local/cloud_resource#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix ontok: <https://ontok.local/schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ── 有损声明：本文件是 OWL 本体的降级表达，逐项如下 ──
+# · ActionType：未导出（0 个）—— OWL / SHACL / SWRL 均无干净对应（规格 §5.5）
+# · semantic：降级为 rdfs:comment（语义只能作注释，不可推理）
+# · cardinality：只映射 Functional / InverseFunctional（1:1 / 1:N / N:1；多对多无对应）
+# · 不含实例数据（ABox）；不含 SHACL 形状（nullable / 必填不导出）
+# · xsd 类型来源：**启发式**（未读真实列类型；--schema <schema.json> 可消除）—— schema 0 / heuristic 737
+
+<https://ontok.local/cloud_resource> a owl:Ontology ;
+    rdfs:label "cloud-resource 本体（v5）"@zh ;
+    rdfs:comment "本导出为 OWL 本体，只描述世界由什么构成，不描述能对它做什么。动作层未导出，见文件头有损声明。"@zh ;
+    ontok:sourceProject "cloud-resource" ;
+    ontok:version 5 ;
+    ontok:rangeSourceSchema 0 ;
+    ontok:rangeSourceHeuristic 737 .
+
+:NAT_网关 a owl:Class ;
+    rdfs:label "NAT 网关"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "NAT"@zh ;
+    skos:altLabel "NatGateway"@zh .
+
+:Redis_备份 a owl:Class ;
+    rdfs:label "Redis 备份"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "Redis 实例备份"@zh ;
+    skos:altLabel "RedisBackupSet"@zh .
+
+:Redis_实例 a owl:Class ;
+    rdfs:label "Redis 实例"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "InstanceSet"@zh ;
+    skos:altLabel "Redis"@zh ;
+    skos:altLabel "云数据库 Redis 实例"@zh .
+
+:云数据库_MySQL_实例 a owl:Class ;
+    rdfs:label "云数据库 MySQL 实例"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "CDB 实例"@zh ;
+    skos:altLabel "InstanceInfo"@zh ;
+    skos:altLabel "云数据库"@zh .
+
+:云服务器实例 a owl:Class ;
+    rdfs:label "云服务器实例"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "CVM 实例"@zh ;
+    skos:altLabel "Instance"@zh ;
+    skos:altLabel "云服务器"@zh .
+
+:云硬盘 a owl:Class ;
+    rdfs:label "云硬盘"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "CBS 云硬盘"@zh ;
+    skos:altLabel "Disk"@zh ;
+    skos:altLabel "云盘"@zh .
+
+:云硬盘快照 a owl:Class ;
+    rdfs:label "云硬盘快照"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "Snapshot"@zh ;
+    skos:altLabel "快照"@zh .
+
+:后端服务 a owl:Class ;
+    rdfs:label "后端服务"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "Backend"@zh ;
+    skos:altLabel "CLB 后端"@zh ;
+    skos:altLabel "后端服务器"@zh .
+
+:告警策略 a owl:Class ;
+    rdfs:label "告警策略"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "AlarmPolicy"@zh ;
+    skos:altLabel "监控告警策略"@zh .
+
+:告警通知模板 a owl:Class ;
+    rdfs:label "告警通知模板"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "AlarmNotice"@zh ;
+    skos:altLabel "通知模板"@zh .
+
+:子网 a owl:Class ;
+    rdfs:label "子网"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "Subnet"@zh ;
+    skos:altLabel "子网对象"@zh .
+
+:存储桶 a owl:Class ;
+    rdfs:label "存储桶"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "Bucket"@zh ;
+    skos:altLabel "COS 存储桶"@zh .
+
+:安全组 a owl:Class ;
+    rdfs:label "安全组"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "SG"@zh ;
+    skos:altLabel "SecurityGroup"@zh .
+
+:安全组规则 a owl:Class ;
+    rdfs:label "安全组规则"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "SecurityGroupPolicy"@zh ;
+    skos:altLabel "安全组规则对象"@zh .
+
+:定期快照策略 a owl:Class ;
+    rdfs:label "定期快照策略"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "AutoSnapshotPolicy"@zh ;
+    skos:altLabel "定期快照策略"@zh .
+
+:对象 a owl:Class ;
+    rdfs:label "对象"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "COS 对象"@zh ;
+    skos:altLabel "Contents"@zh ;
+    skos:altLabel "对象条目"@zh .
+
+:弹性公网IP a owl:Class ;
+    rdfs:label "弹性公网IP"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "Address"@zh ;
+    skos:altLabel "EIP"@zh ;
+    skos:altLabel "弹性 IP"@zh .
+
+:弹性网卡 a owl:Class ;
+    rdfs:label "弹性网卡"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "ENI"@zh ;
+    skos:altLabel "NetworkInterface"@zh .
+
+:数字证书 a owl:Class ;
+    rdfs:label "数字证书"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "Certificate"@zh ;
+    skos:altLabel "Certificates"@zh ;
+    skos:altLabel "SSL 证书"@zh ;
+    skos:altLabel "证书"@zh .
+
+:数据库备份 a owl:Class ;
+    rdfs:label "数据库备份"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "BackupInfo"@zh ;
+    skos:altLabel "CDB 备份"@zh .
+
+:数据库账号 a owl:Class ;
+    rdfs:label "数据库账号"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "Account"@zh ;
+    skos:altLabel "AccountInfo"@zh ;
+    skos:altLabel "CDB 账号"@zh .
+
+:目标组 a owl:Class ;
+    rdfs:label "目标组"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "TargetGroup"@zh ;
+    skos:altLabel "TargetGroupInfo"@zh ;
+    skos:altLabel "目标组信息"@zh .
+
+:私有网络 a owl:Class ;
+    rdfs:label "私有网络"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "VPC"@zh ;
+    skos:altLabel "Vpc"@zh ;
+    skos:altLabel "私有网络(VPC)"@zh .
+
+:网络_ACL a owl:Class ;
+    rdfs:label "网络 ACL"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "ACL"@zh ;
+    skos:altLabel "NetworkAcl"@zh .
+
+:负载均衡实例 a owl:Class ;
+    rdfs:label "负载均衡实例"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "CLB"@zh ;
+    skos:altLabel "LoadBalancer"@zh ;
+    skos:altLabel "负载均衡"@zh .
+
+:负载均衡监听器 a owl:Class ;
+    rdfs:label "负载均衡监听器"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "CLB 监听器"@zh ;
+    skos:altLabel "Listener"@zh ;
+    skos:altLabel "监听器"@zh .
+
+:账单明细 a owl:Class ;
+    rdfs:label "账单明细"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    ontok:sourceKind "api" ;
+    skos:altLabel "BillDetail"@zh ;
+    skos:altLabel "账单"@zh ;
+    skos:altLabel "费用明细"@zh .
+
+:路由表 a owl:Class ;
+    rdfs:label "路由表"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "RouteTable"@zh .
+
+:转发规则 a owl:Class ;
+    rdfs:label "转发规则"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "HTTP/HTTPS 转发规则"@zh ;
+    skos:altLabel "Rule"@zh ;
+    skos:altLabel "RuleOutput"@zh .
+
+:镜像 a owl:Class ;
+    rdfs:label "镜像"@zh ;
+    ontok:instanceIri "https://ontok.local/cloud_resource#{class}/{id}" ;
+    skos:altLabel "CVM 镜像"@zh ;
+    skos:altLabel "Image"@zh .
+
+:NAT_网关__NAT实例归属的专属集群id a owl:DatatypeProperty ;
+    rdfs:label "NAT实例归属的专属集群id"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT实例是否开启删除保护 a owl:DatatypeProperty ;
+    rdfs:label "NAT实例是否开启删除保护"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT实例连接超时时间 a owl:DatatypeProperty ;
+    rdfs:label "NAT实例连接超时时间"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关创建的时间 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关创建的时间"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关所在的可用区 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关所在的可用区"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:NAT_网关__NAT网关是否被封禁 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关是否被封禁"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关的ID a owl:DatatypeProperty ;
+    rdfs:label "NAT网关的ID"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关的SNAT转发规则 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关的SNAT转发规则"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关的名称 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关的名称"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关的状态 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关的状态"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关的端口转发规则 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关的端口转发规则"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关类型 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关类型"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关绑定的安全组列表 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关绑定的安全组列表"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__NAT网关网络状态 a owl:DatatypeProperty ;
+    rdfs:label "NAT网关网络状态"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__true代表仅允许匹配SNAT规则的内网IP的流量进行转发 a owl:DatatypeProperty ;
+    rdfs:label "true代表仅允许匹配SNAT规则的内网IP的流量进行转发"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__同一个内网地址通过NAT网关访问同一个目的IP时 a owl:DatatypeProperty ;
+    rdfs:label "同一个内网地址通过NAT网关访问同一个目的IP时"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__所属子网ID a owl:DatatypeProperty ;
+    rdfs:label "所属子网ID"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__是否代答公网发给NAT网关上弹性公网IP的ICMP_echo请求报文 a owl:DatatypeProperty ;
+    rdfs:label "是否代答公网发给NAT网关上弹性公网IP的ICMP echo请求报文"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__是否启用根据目的网段选择SNAT使用的EIP功能 a owl:DatatypeProperty ;
+    rdfs:label "是否启用根据目的网段选择SNAT使用的EIP功能"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__是否独享型NAT a owl:DatatypeProperty ;
+    rdfs:label "是否独享型NAT"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__标准型NAT网关自动扩容 a owl:DatatypeProperty ;
+    rdfs:label "标准型NAT网关自动扩容"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:NAT_网关__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__独享型NAT所在的网关集群的带宽 a owl:DatatypeProperty ;
+    rdfs:label "独享型NAT所在的网关集群的带宽"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:NAT_网关__独享实例规格 a owl:DatatypeProperty ;
+    rdfs:label "独享实例规格"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:NAT_网关__绑定NAT网关的公网IP对象数组 a owl:DatatypeProperty ;
+    rdfs:label "绑定NAT网关的公网IP对象数组"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__绑定的专线网关ID a owl:DatatypeProperty ;
+    rdfs:label "绑定的专线网关ID"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__网关并发连接上限 a owl:DatatypeProperty ;
+    rdfs:label "网关并发连接上限"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__网关最大外网出带宽 a owl:DatatypeProperty ;
+    rdfs:label "网关最大外网出带宽"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_备份__内部字段 a owl:DatatypeProperty ;
+    rdfs:label "内部字段"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_备份__备份任务ID a owl:DatatypeProperty ;
+    rdfs:label "备份任务ID"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份开始时间 a owl:DatatypeProperty ;
+    rdfs:label "备份开始时间"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份文件是否加密 a owl:DatatypeProperty ;
+    rdfs:label "备份文件是否加密"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份文件类型 a owl:DatatypeProperty ;
+    rdfs:label "备份文件类型"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份文件过期时间 a owl:DatatypeProperty ;
+    rdfs:label "备份文件过期时间"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份是否被锁定 a owl:DatatypeProperty ;
+    rdfs:label "备份是否被锁定"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份状态 a owl:DatatypeProperty ;
+    rdfs:label "备份状态"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份的备注信息 a owl:DatatypeProperty ;
+    rdfs:label "备份的备注信息"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份类型 a owl:DatatypeProperty ;
+    rdfs:label "备份类型"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__备份结束时间 a owl:DatatypeProperty ;
+    rdfs:label "备份结束时间"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__实例_ID a owl:DatatypeProperty ;
+    rdfs:label "实例 ID"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__实例名称 a owl:DatatypeProperty ;
+    rdfs:label "实例名称"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_备份__本地备份所在地域 a owl:DatatypeProperty ;
+    rdfs:label "本地备份所在地域"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_实例__CDC_Redis集群ID a owl:DatatypeProperty ;
+    rdfs:label "CDC Redis集群ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__CDC_集群ID a owl:DatatypeProperty ;
+    rdfs:label "CDC 集群ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__DTS状态 a owl:DatatypeProperty ;
+    rdfs:label "DTS状态"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__Redis实例请忽略该参数 a owl:DatatypeProperty ;
+    rdfs:label "Redis实例请忽略该参数"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__vpc网络_ID a owl:DatatypeProperty ;
+    rdfs:label "vpc网络 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__vpc网络id a owl:DatatypeProperty ;
+    rdfs:label "vpc网络id"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__vpc网络下子网ID a owl:DatatypeProperty ;
+    rdfs:label "vpc网络下子网ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__vpc网络下子网id a owl:DatatypeProperty ;
+    rdfs:label "vpc网络下子网id"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__产品版本 a owl:DatatypeProperty ;
+    rdfs:label "产品版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__产品类型 a owl:DatatypeProperty ;
+    rdfs:label "产品类型"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__从节点读取权重 a owl:DatatypeProperty ;
+    rdfs:label "从节点读取权重"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__免密实例标识 a owl:DatatypeProperty ;
+    rdfs:label "免密实例标识"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__内部参数 a owl:DatatypeProperty ;
+    rdfs:label "内部参数"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__分片大小 a owl:DatatypeProperty ;
+    rdfs:label "分片大小"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_实例__分片带宽上限 a owl:DatatypeProperty ;
+    rdfs:label "分片带宽上限"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__分片数量 a owl:DatatypeProperty ;
+    rdfs:label "分片数量"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__副本数量 a owl:DatatypeProperty ;
+    rdfs:label "副本数量"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__包年包月计费实例到期的时间 a owl:DatatypeProperty ;
+    rdfs:label "包年包月计费实例到期的时间"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__北极星服务地址 a owl:DatatypeProperty ;
+    rdfs:label "北极星服务地址"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__区域_ID a owl:DatatypeProperty ;
+    rdfs:label "区域 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__反亲和性标签 a owl:DatatypeProperty ;
+    rdfs:label "反亲和性标签"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__地域_ID a owl:DatatypeProperty ;
+    rdfs:label "地域 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__备份模式 a owl:DatatypeProperty ;
+    rdfs:label "备份模式"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__外网地址 a owl:DatatypeProperty ;
+    rdfs:label "外网地址"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例_ID a owl:DatatypeProperty ;
+    rdfs:label "实例 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例_VIP a owl:DatatypeProperty ;
+    rdfs:label "实例 VIP"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例关联的标签信息 a owl:DatatypeProperty ;
+    rdfs:label "实例关联的标签信息"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例内存容量大小 a owl:DatatypeProperty ;
+    rdfs:label "实例内存容量大小"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_实例__实例创建时间 a owl:DatatypeProperty ;
+    rdfs:label "实例创建时间"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例只读标识 a owl:DatatypeProperty ;
+    rdfs:label "实例只读标识"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例可升级Cache小版本 a owl:DatatypeProperty ;
+    rdfs:label "实例可升级Cache小版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例可升级Proxy版本 a owl:DatatypeProperty ;
+    rdfs:label "实例可升级Proxy版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例名称 a owl:DatatypeProperty ;
+    rdfs:label "实例名称"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例当前Cache小版本 a owl:DatatypeProperty ;
+    rdfs:label "实例当前Cache小版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例当前Proxy版本 a owl:DatatypeProperty ;
+    rdfs:label "实例当前Proxy版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例当前状态 a owl:DatatypeProperty ;
+    rdfs:label "实例当前状态"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例所在的地域信息 a owl:DatatypeProperty ;
+    rdfs:label "实例所在的地域信息"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例是否设置自动续费标识 a owl:DatatypeProperty ;
+    rdfs:label "实例是否设置自动续费标识"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例的节点详细信息 a owl:DatatypeProperty ;
+    rdfs:label "实例的节点详细信息"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例端口号 a owl:DatatypeProperty ;
+    rdfs:label "实例端口号"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_实例__实例类型 a owl:DatatypeProperty ;
+    rdfs:label "实例类型"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例节点信息 a owl:DatatypeProperty ;
+    rdfs:label "实例节点信息"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例运行状态描述_如_实例运行中_ a owl:DatatypeProperty ;
+    rdfs:label "实例运行状态描述：如”实例运行中“"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例销毁保护开关 a owl:DatatypeProperty ;
+    rdfs:label "实例销毁保护开关"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__实例隔离开始的时间 a owl:DatatypeProperty ;
+    rdfs:label "实例隔离开始的时间"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__客户端最大连接数可设置的最大值 a owl:DatatypeProperty ;
+    rdfs:label "客户端最大连接数可设置的最大值"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__客户端最大连接数可设置的最小值 a owl:DatatypeProperty ;
+    rdfs:label "客户端最大连接数可设置的最小值"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__客户端连接数 a owl:DatatypeProperty ;
+    rdfs:label "客户端连接数"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__已隔离实例默认下线时间 a owl:DatatypeProperty ;
+    rdfs:label "已隔离实例默认下线时间"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__引擎_社区版Redis_腾讯云CKV a owl:DatatypeProperty ;
+    rdfs:label "引擎：社区版Redis、腾讯云CKV"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:Redis_实例__是否为免密实例 a owl:DatatypeProperty ;
+    rdfs:label "是否为免密实例"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__流程中的实例返回的子状态 a owl:DatatypeProperty ;
+    rdfs:label "流程中的实例返回的子状态"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__用户AppId a owl:DatatypeProperty ;
+    rdfs:label "用户AppId"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__监控版本 a owl:DatatypeProperty ;
+    rdfs:label "监控版本"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__计费_ID a owl:DatatypeProperty ;
+    rdfs:label "计费 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__计费模式 a owl:DatatypeProperty ;
+    rdfs:label "计费模式"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__该参数存在命名不规范问题 a owl:DatatypeProperty ;
+    rdfs:label "该参数存在命名不规范问题"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__项目_ID a owl:DatatypeProperty ;
+    rdfs:label "项目 ID"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:Redis_实例__项目名称 a owl:DatatypeProperty ;
+    rdfs:label "项目名称"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__TDSQL引擎参数 a owl:DatatypeProperty ;
+    rdfs:label "TDSQL引擎参数"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__主实例详细信息 a owl:DatatypeProperty ;
+    rdfs:label "主实例详细信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__云盘版实例才使用该值 a owl:DatatypeProperty ;
+    rdfs:label "云盘版实例才使用该值"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__云盘版实例节点信息 a owl:DatatypeProperty ;
+    rdfs:label "云盘版实例节点信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__付费类型 a owl:DatatypeProperty ;
+    rdfs:label "付费类型"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__内存容量 a owl:DatatypeProperty ;
+    rdfs:label "内存容量"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__内核版本 a owl:DatatypeProperty ;
+    rdfs:label "内核版本"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__分析引擎实例版本升级信息 a owl:DatatypeProperty ;
+    rdfs:label "分析引擎实例版本升级信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__分析引擎节点列表 a owl:DatatypeProperty ;
+    rdfs:label "分析引擎节点列表"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__初始化标志 a owl:DatatypeProperty ;
+    rdfs:label "初始化标志"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__只读vip信息 a owl:DatatypeProperty ;
+    rdfs:label "只读vip信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__只读组详细信息 a owl:DatatypeProperty ;
+    rdfs:label "只读组详细信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__可用区_ID a owl:DatatypeProperty ;
+    rdfs:label "可用区 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__可用区中文名称 a owl:DatatypeProperty ;
+    rdfs:label "可用区中文名称"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__可用区信息 a owl:DatatypeProperty ;
+    rdfs:label "可用区信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__可用区部署方式 a owl:DatatypeProperty ;
+    rdfs:label "可用区部署方式"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__地域信息 a owl:DatatypeProperty ;
+    rdfs:label "地域信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__备机信息 a owl:DatatypeProperty ;
+    rdfs:label "备机信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__外网域名 a owl:DatatypeProperty ;
+    rdfs:label "外网域名"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__外网状态 a owl:DatatypeProperty ;
+    rdfs:label "外网状态"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__外网端口号 a owl:DatatypeProperty ;
+    rdfs:label "外网端口号"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__子网_ID a owl:DatatypeProperty ;
+    rdfs:label "子网 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__子网描述符 a owl:DatatypeProperty ;
+    rdfs:label "子网描述符"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例_ID a owl:DatatypeProperty ;
+    rdfs:label "实例 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例_IP a owl:DatatypeProperty ;
+    rdfs:label "实例 IP"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例任务状态 a owl:DatatypeProperty ;
+    rdfs:label "实例任务状态"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例创建时间 a owl:DatatypeProperty ;
+    rdfs:label "实例创建时间"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例到期时间 a owl:DatatypeProperty ;
+    rdfs:label "实例到期时间"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例名称 a owl:DatatypeProperty ;
+    rdfs:label "实例名称"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例状态 a owl:DatatypeProperty ;
+    rdfs:label "实例状态"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例磁盘类型 a owl:DatatypeProperty ;
+    rdfs:label "实例磁盘类型"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例类型 a owl:DatatypeProperty ;
+    rdfs:label "实例类型"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__实例销毁保护状态 a owl:DatatypeProperty ;
+    rdfs:label "实例销毁保护状态"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__引擎类型 a owl:DatatypeProperty ;
+    rdfs:label "引擎类型"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__当前扩容的CPU核心数 a owl:DatatypeProperty ;
+    rdfs:label "当前扩容的CPU核心数"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__数据复制方式 a owl:DatatypeProperty ;
+    rdfs:label "数据复制方式"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__最大延迟阈值 a owl:DatatypeProperty ;
+    rdfs:label "最大延迟阈值"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__标签列表 a owl:DatatypeProperty ;
+    rdfs:label "标签列表"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__核心数 a owl:DatatypeProperty ;
+    rdfs:label "核心数"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__每秒查询数量 a owl:DatatypeProperty ;
+    rdfs:label "每秒查询数量"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__灾备实例详细信息 a owl:DatatypeProperty ;
+    rdfs:label "灾备实例详细信息"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__物理_ID a owl:DatatypeProperty ;
+    rdfs:label "物理 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__物理机型 a owl:DatatypeProperty ;
+    rdfs:label "物理机型"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__硬盘容量 a owl:DatatypeProperty ;
+    rdfs:label "硬盘容量"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__磁盘写入是否被锁定 a owl:DatatypeProperty ;
+    rdfs:label "磁盘写入是否被锁定"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__私有网络_ID a owl:DatatypeProperty ;
+    rdfs:label "私有网络 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__私有网络描述符 a owl:DatatypeProperty ;
+    rdfs:label "私有网络描述符"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__端口号 a owl:DatatypeProperty ;
+    rdfs:label "端口号"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__置放群组_ID a owl:DatatypeProperty ;
+    rdfs:label "置放群组 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__自动续费标志 a owl:DatatypeProperty ;
+    rdfs:label "自动续费标志"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__节点数 a owl:DatatypeProperty ;
+    rdfs:label "节点数"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云数据库_MySQL_实例__设备带宽 a owl:DatatypeProperty ;
+    rdfs:label "设备带宽"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云数据库_MySQL_实例__项目_ID a owl:DatatypeProperty ;
+    rdfs:label "项目 ID"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__CAM角色名 a owl:DatatypeProperty ;
+    rdfs:label "CAM角色名"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__GPU信息 a owl:DatatypeProperty ;
+    rdfs:label "GPU信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__分区置放群组的分区号 a owl:DatatypeProperty ;
+    rdfs:label "分区置放群组的分区号"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__到期时间 a owl:DatatypeProperty ;
+    rdfs:label "到期时间"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例ID a owl:DatatypeProperty ;
+    rdfs:label "实例ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例业务状态 a owl:DatatypeProperty ;
+    rdfs:label "实例业务状态"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例主机名 a owl:DatatypeProperty ;
+    rdfs:label "实例主机名"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例主网卡的公网IP列表 a owl:DatatypeProperty ;
+    rdfs:label "实例主网卡的公网IP列表"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例主网卡的内网IP列表 a owl:DatatypeProperty ;
+    rdfs:label "实例主网卡的内网IP列表"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例全局唯一ID a owl:DatatypeProperty ;
+    rdfs:label "实例全局唯一ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例关联的标签列表 a owl:DatatypeProperty ;
+    rdfs:label "实例关联的标签列表"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例内存容量 a owl:DatatypeProperty ;
+    rdfs:label "实例内存容量"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例名称 a owl:DatatypeProperty ;
+    rdfs:label "实例名称"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例带宽信息 a owl:DatatypeProperty ;
+    rdfs:label "实例带宽信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例所在的专用集群ID a owl:DatatypeProperty ;
+    rdfs:label "实例所在的专用集群ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例所在的位置 a owl:DatatypeProperty ;
+    rdfs:label "实例所在的位置"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例所属安全组 a owl:DatatypeProperty ;
+    rdfs:label "实例所属安全组"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例所属虚拟私有网络信息 a owl:DatatypeProperty ;
+    rdfs:label "实例所属虚拟私有网络信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例数据盘信息 a owl:DatatypeProperty ;
+    rdfs:label "实例数据盘信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例是否开启巨型帧 a owl:DatatypeProperty ;
+    rdfs:label "实例是否开启巨型帧"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例最新操作的唯一请求_ID a owl:DatatypeProperty ;
+    rdfs:label "实例最新操作的唯一请求 ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例机型 a owl:DatatypeProperty ;
+    rdfs:label "实例机型"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例状态 a owl:DatatypeProperty ;
+    rdfs:label "实例状态"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例登录设置 a owl:DatatypeProperty ;
+    rdfs:label "实例登录设置"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例的CPU核数 a owl:DatatypeProperty ;
+    rdfs:label "实例的CPU核数"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例的IPv6地址 a owl:DatatypeProperty ;
+    rdfs:label "实例的IPv6地址"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例的关机计费模式 a owl:DatatypeProperty ;
+    rdfs:label "实例的关机计费模式"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例的操作系统许可类型 a owl:DatatypeProperty ;
+    rdfs:label "实例的操作系统许可类型"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例的最新操作 a owl:DatatypeProperty ;
+    rdfs:label "实例的最新操作"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例的最新操作状态 a owl:DatatypeProperty ;
+    rdfs:label "实例的最新操作状态"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例的最新操作错误信息 a owl:DatatypeProperty ;
+    rdfs:label "实例的最新操作错误信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例系统盘信息 a owl:DatatypeProperty ;
+    rdfs:label "实例系统盘信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例绑定的公网IPv6地址 a owl:DatatypeProperty ;
+    rdfs:label "实例绑定的公网IPv6地址"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例计费类型 a owl:DatatypeProperty ;
+    rdfs:label "实例计费类型"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__实例销毁保护标志 a owl:DatatypeProperty ;
+    rdfs:label "实例销毁保护标志"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__实例隔离类型 a owl:DatatypeProperty ;
+    rdfs:label "实例隔离类型"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__描述了实例CPU拓扑结构的相关信息 a owl:DatatypeProperty ;
+    rdfs:label "描述了实例CPU拓扑结构的相关信息"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__操作系统名称 a owl:DatatypeProperty ;
+    rdfs:label "操作系统名称"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__生产实例所使用的镜像ID a owl:DatatypeProperty ;
+    rdfs:label "生产实例所使用的镜像ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__置放群组列表 a owl:DatatypeProperty ;
+    rdfs:label "置放群组列表"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__自动续费标识 a owl:DatatypeProperty ;
+    rdfs:label "自动续费标识"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__自定义metadata a owl:DatatypeProperty ;
+    rdfs:label "自定义metadata"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云服务器实例__高性能计算集群ID a owl:DatatypeProperty ;
+    rdfs:label "高性能计算集群ID"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__高性能计算集群IP列表 a owl:DatatypeProperty ;
+    rdfs:label "高性能计算集群IP列表"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__默认登录用户 a owl:DatatypeProperty ;
+    rdfs:label "默认登录用户"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云服务器实例__默认登录端口 a owl:DatatypeProperty ;
+    rdfs:label "默认登录端口"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__与云盘绑定的标签 a owl:DatatypeProperty ;
+    rdfs:label "与云盘绑定的标签"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘关联的定期快照ID a owl:DatatypeProperty ;
+    rdfs:label "云盘关联的定期快照ID"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘已挂载到子机 a owl:DatatypeProperty ;
+    rdfs:label "云盘已挂载到子机"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__云盘快照回滚的进度 a owl:DatatypeProperty ;
+    rdfs:label "云盘快照回滚的进度"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘拥有的快照总容量 a owl:DatatypeProperty ;
+    rdfs:label "云盘拥有的快照总容量"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘拥有的快照总数 a owl:DatatypeProperty ;
+    rdfs:label "云盘拥有的快照总数"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否与挂载的实例一起销毁 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否与挂载的实例一起销毁"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否为共享型云盘 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否为共享型云盘"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否为加密盘 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否为加密盘"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否具备创建快照的能力 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否具备创建快照的能力"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否处于快照回滚状态 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否处于快照回滚状态"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否处于类型变更中 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否处于类型变更中"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否开启性能突发 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否开启性能突发"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘是否挂载到云主机上 a owl:DatatypeProperty ;
+    rdfs:label "云盘是否挂载到云主机上"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘状态 a owl:DatatypeProperty ;
+    rdfs:label "云盘状态"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘的挂载类型 a owl:DatatypeProperty ;
+    rdfs:label "云盘的挂载类型"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云盘类型变更的迁移进度 a owl:DatatypeProperty ;
+    rdfs:label "云盘类型变更的迁移进度"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘ID a owl:DatatypeProperty ;
+    rdfs:label "云硬盘ID"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘加密类型 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘加密类型"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘名称 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘名称"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘因欠费销毁或者到期销毁时 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘因欠费销毁或者到期销毁时"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘备份点已使用的数量 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘备份点已使用的数量"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘备份点配额 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘备份点配额"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__云硬盘大小 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘大小"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__云硬盘所在的位置 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘所在的位置"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__云硬盘挂载实例的类型 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘挂载实例的类型"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘挂载的云主机ID a owl:DatatypeProperty ;
+    rdfs:label "云硬盘挂载的云主机ID"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘最后一次挂载的实例ID a owl:DatatypeProperty ;
+    rdfs:label "云硬盘最后一次挂载的实例ID"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘最后一次操作错误提示 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘最后一次操作错误提示"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__云硬盘的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘的创建时间"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘的到期时间 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘的到期时间"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘类型 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘类型"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__云硬盘额外性能值 a owl:DatatypeProperty ;
+    rdfs:label "云硬盘额外性能值"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__付费模式 a owl:DatatypeProperty ;
+    rdfs:label "付费模式"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__判断预付费的云盘是否支持主动退还 a owl:DatatypeProperty ;
+    rdfs:label "判断预付费的云盘是否支持主动退还"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__加密盘密钥ID a owl:DatatypeProperty ;
+    rdfs:label "加密盘密钥ID"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__在云盘已挂载到实例 a owl:DatatypeProperty ;
+    rdfs:label "在云盘已挂载到实例"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__对于非共享型云盘 a owl:DatatypeProperty ;
+    rdfs:label "对于非共享型云盘"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘__当前时间距离云硬盘到期的天数 a owl:DatatypeProperty ;
+    rdfs:label "当前时间距离云硬盘到期的天数"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__是否为弹性云盘 a owl:DatatypeProperty ;
+    rdfs:label "是否为弹性云盘"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__硬盘介质类型 a owl:DatatypeProperty ;
+    rdfs:label "硬盘介质类型"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__自动续费标识 a owl:DatatypeProperty ;
+    rdfs:label "自动续费标识"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__销毁云盘时删除关联的非永久保留快照 a owl:DatatypeProperty ;
+    rdfs:label "销毁云盘时删除关联的非永久保留快照"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘__预付费云盘在不支持主动退还的情况下 a owl:DatatypeProperty ;
+    rdfs:label "预付费云盘在不支持主动退还的情况下"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:云硬盘快照__创建此快照的云硬盘ID a owl:DatatypeProperty ;
+    rdfs:label "创建此快照的云硬盘ID"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__创建此快照的云硬盘大小 a owl:DatatypeProperty ;
+    rdfs:label "创建此快照的云硬盘大小"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__创建此快照的云硬盘类型 a owl:DatatypeProperty ;
+    rdfs:label "创建此快照的云硬盘类型"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照ID a owl:DatatypeProperty ;
+    rdfs:label "快照ID"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照关联的镜像个数 a owl:DatatypeProperty ;
+    rdfs:label "快照关联的镜像个数"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照关联的镜像列表 a owl:DatatypeProperty ;
+    rdfs:label "快照关联的镜像列表"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照创建进度百分比 a owl:DatatypeProperty ;
+    rdfs:label "快照创建进度百分比"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照到期时间 a owl:DatatypeProperty ;
+    rdfs:label "快照到期时间"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照名称 a owl:DatatypeProperty ;
+    rdfs:label "快照名称"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照开始共享的时间 a owl:DatatypeProperty ;
+    rdfs:label "快照开始共享的时间"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照当前被共享数 a owl:DatatypeProperty ;
+    rdfs:label "快照当前被共享数"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照所在的位置 a owl:DatatypeProperty ;
+    rdfs:label "快照所在的位置"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照是否锁定 a owl:DatatypeProperty ;
+    rdfs:label "快照是否锁定"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照模式 a owl:DatatypeProperty ;
+    rdfs:label "快照模式"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照正在跨地域复制的目的地域 a owl:DatatypeProperty ;
+    rdfs:label "快照正在跨地域复制的目的地域"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "快照的创建时间"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照的状态 a owl:DatatypeProperty ;
+    rdfs:label "快照的状态"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照类型 a owl:DatatypeProperty ;
+    rdfs:label "快照类型"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照绑定的标签列表 a owl:DatatypeProperty ;
+    rdfs:label "快照绑定的标签列表"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__快照记录的最新修改时间 a owl:DatatypeProperty ;
+    rdfs:label "快照记录的最新修改时间"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__是否为加密盘创建的快照 a owl:DatatypeProperty ;
+    rdfs:label "是否为加密盘创建的快照"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__是否为永久快照 a owl:DatatypeProperty ;
+    rdfs:label "是否为永久快照"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__是否为跨地域复制的快照 a owl:DatatypeProperty ;
+    rdfs:label "是否为跨地域复制的快照"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:云硬盘快照__自动快照策略ID a owl:DatatypeProperty ;
+    rdfs:label "自动快照策略ID"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务所在的可用区 a owl:DatatypeProperty ;
+    rdfs:label "后端服务所在的可用区"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:后端服务__后端服务的内网_IP a owl:DatatypeProperty ;
+    rdfs:label "后端服务的内网 IP"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务的唯一_ID a owl:DatatypeProperty ;
+    rdfs:label "后端服务的唯一 ID"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务的外网_IP a owl:DatatypeProperty ;
+    rdfs:label "后端服务的外网 IP"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务的实例名称 a owl:DatatypeProperty ;
+    rdfs:label "后端服务的实例名称"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务的监听端口 a owl:DatatypeProperty ;
+    rdfs:label "后端服务的监听端口"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:后端服务__后端服务的类型 a owl:DatatypeProperty ;
+    rdfs:label "后端服务的类型"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务的转发权重 a owl:DatatypeProperty ;
+    rdfs:label "后端服务的转发权重"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__后端服务被绑定的时间 a owl:DatatypeProperty ;
+    rdfs:label "后端服务被绑定的时间"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__弹性网卡唯一ID a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡唯一ID"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:后端服务__标签 a owl:DatatypeProperty ;
+    rdfs:label "标签"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__事件触发条件 a owl:DatatypeProperty ;
+    rdfs:label "事件触发条件"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警策略__事件配置的告警 a owl:DatatypeProperty ;
+    rdfs:label "事件配置的告警"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__全局过滤条件 a owl:DatatypeProperty ;
+    rdfs:label "全局过滤条件"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警策略__告警分级通知规则配置 a owl:DatatypeProperty ;
+    rdfs:label "告警分级通知规则配置"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__告警策略类型 a owl:DatatypeProperty ;
+    rdfs:label "告警策略类型"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:告警策略__备注 a owl:DatatypeProperty ;
+    rdfs:label "备注"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__指标触发条件 a owl:DatatypeProperty ;
+    rdfs:label "指标触发条件"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警策略__日志告警信息 a owl:DatatypeProperty ;
+    rdfs:label "日志告警信息"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__是否启用_0_停用_1_启用 a owl:DatatypeProperty ;
+    rdfs:label "是否启用 0=停用 1=启用"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__是否绑定全部对象 a owl:DatatypeProperty ;
+    rdfs:label "是否绑定全部对象"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__模板绑定的标签 a owl:DatatypeProperty ;
+    rdfs:label "模板绑定的标签"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__策略名称 a owl:DatatypeProperty ;
+    rdfs:label "策略名称"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:告警策略__聚合维度列表 a owl:DatatypeProperty ;
+    rdfs:label "聚合维度列表"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__触发任务列表 a owl:DatatypeProperty ;
+    rdfs:label "触发任务列表"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__触发条件模板_Id a owl:DatatypeProperty ;
+    rdfs:label "触发条件模板 Id"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警策略__迁移策略专用字段 a owl:DatatypeProperty ;
+    rdfs:label "迁移策略专用字段"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警策略__通知模板绑定信息 a owl:DatatypeProperty ;
+    rdfs:label "通知模板绑定信息"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__通知规则_Id_列表 a owl:DatatypeProperty ;
+    rdfs:label "通知规则 Id 列表"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__附加告警内容 a owl:DatatypeProperty ;
+    rdfs:label "附加告警内容"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警策略__项目_Id a owl:DatatypeProperty ;
+    rdfs:label "项目 Id"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警通知模板__IANA_时区名 a owl:DatatypeProperty ;
+    rdfs:label "IANA 时区名"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警通知模板__回调通知_最多6个 a owl:DatatypeProperty ;
+    rdfs:label "回调通知 最多6个"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警通知模板__推送CLS日志服务的操作_最多1个 a owl:DatatypeProperty ;
+    rdfs:label "推送CLS日志服务的操作 最多1个"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:告警通知模板__是否免登录 a owl:DatatypeProperty ;
+    rdfs:label "是否免登录"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警通知模板__模板绑定的标签 a owl:DatatypeProperty ;
+    rdfs:label "模板绑定的标签"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警通知模板__用户通知_最多5个 a owl:DatatypeProperty ;
+    rdfs:label "用户通知 最多5个"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:告警通知模板__通知模板名称_60字符以内 a owl:DatatypeProperty ;
+    rdfs:label "通知模板名称 60字符以内"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:告警通知模板__通知类型_ALARM_未恢复通知_OK_已恢复通知_ALL_都通知 a owl:DatatypeProperty ;
+    rdfs:label "通知类型 ALARM=未恢复通知 OK=已恢复通知 ALL=都通知"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:告警通知模板__通知语言_zh-CN_中文_en-US_英文 a owl:DatatypeProperty ;
+    rdfs:label "通知语言 zh-CN=中文 en-US=英文"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false ;
+    ontok:rangeUnmapped true .
+
+:子网__CDC实例ID a owl:DatatypeProperty ;
+    rdfs:label "CDC实例ID"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__关联ACLID a owl:DatatypeProperty ;
+    rdfs:label "关联ACLID"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__协议栈类型 a owl:DatatypeProperty ;
+    rdfs:label "协议栈类型"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__可用IPv4数 a owl:DatatypeProperty ;
+    rdfs:label "可用IPv4数"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__可用区 a owl:DatatypeProperty ;
+    rdfs:label "可用区"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:子网__子网IPv4总数 a owl:DatatypeProperty ;
+    rdfs:label "子网IPv4总数"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__子网名称 a owl:DatatypeProperty ;
+    rdfs:label "子网名称"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__子网实例ID a owl:DatatypeProperty ;
+    rdfs:label "子网实例ID"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__子网的_IPv4_CIDR a owl:DatatypeProperty ;
+    rdfs:label "子网的 IPv4 CIDR"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__子网的_IPv6_CIDR a owl:DatatypeProperty ;
+    rdfs:label "子网的 IPv6 CIDR"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__是否为_SNAT_地址池子网 a owl:DatatypeProperty ;
+    rdfs:label "是否为 SNAT 地址池子网"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__是否开启广播 a owl:DatatypeProperty ;
+    rdfs:label "是否开启广播"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__是否是CDC所属子网 a owl:DatatypeProperty ;
+    rdfs:label "是否是CDC所属子网"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__是否默认子网 a owl:DatatypeProperty ;
+    rdfs:label "是否默认子网"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:子网__路由表实例ID a owl:DatatypeProperty ;
+    rdfs:label "路由表实例ID"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:存储桶__存储桶的名称 a owl:DatatypeProperty ;
+    rdfs:label "存储桶的名称"@zh ;
+    rdfs:domain :存储桶 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组__安全组创建时间 a owl:DatatypeProperty ;
+    rdfs:label "安全组创建时间"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组__安全组名称 a owl:DatatypeProperty ;
+    rdfs:label "安全组名称"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:安全组__安全组备注 a owl:DatatypeProperty ;
+    rdfs:label "安全组备注"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:安全组__安全组实例ID a owl:DatatypeProperty ;
+    rdfs:label "安全组实例ID"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable false .
+
+:安全组__安全组更新时间 a owl:DatatypeProperty ;
+    rdfs:label "安全组更新时间"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组__是否是默认安全组 a owl:DatatypeProperty ;
+    rdfs:label "是否是默认安全组"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组__项目id a owl:DatatypeProperty ;
+    rdfs:label "项目id"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__ACCEPT_或_DROP a owl:DatatypeProperty ;
+    rdfs:label "ACCEPT 或 DROP"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:安全组规则__IP地址ID或者IP地址组ID a owl:DatatypeProperty ;
+    rdfs:label "IP地址ID或者IP地址组ID"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__协议 a owl:DatatypeProperty ;
+    rdfs:label "协议"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:安全组规则__协议端口ID或者协议端口组ID a owl:DatatypeProperty ;
+    rdfs:label "协议端口ID或者协议端口组ID"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__安全组实例ID a owl:DatatypeProperty ;
+    rdfs:label "安全组实例ID"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__安全组最近修改时间 a owl:DatatypeProperty ;
+    rdfs:label "安全组最近修改时间"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__安全组规则优先级 a owl:DatatypeProperty ;
+    rdfs:label "安全组规则优先级"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__安全组规则描述 a owl:DatatypeProperty ;
+    rdfs:label "安全组规则描述"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__安全组规则索引号 a owl:DatatypeProperty ;
+    rdfs:label "安全组规则索引号"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__端口 a owl:DatatypeProperty ;
+    rdfs:label "端口"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:安全组规则__网段或IP a owl:DatatypeProperty ;
+    rdfs:label "网段或IP"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:安全组规则__网段或IPv6 a owl:DatatypeProperty ;
+    rdfs:label "网段或IPv6"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__使用该定期快照策略创建出来的快照保留天数 a owl:DatatypeProperty ;
+    rdfs:label "使用该定期快照策略创建出来的快照保留天数"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__使用该定期快照策略创建出来的快照是否永久保留 a owl:DatatypeProperty ;
+    rdfs:label "使用该定期快照策略创建出来的快照是否永久保留"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__复制的目标账户ID a owl:DatatypeProperty ;
+    rdfs:label "复制的目标账户ID"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照下次触发的时间 a owl:DatatypeProperty ;
+    rdfs:label "定期快照下次触发的时间"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照的执行策略 a owl:DatatypeProperty ;
+    rdfs:label "定期快照的执行策略"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照策略ID a owl:DatatypeProperty ;
+    rdfs:label "定期快照策略ID"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照策略名称 a owl:DatatypeProperty ;
+    rdfs:label "定期快照策略名称"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照策略是否激活 a owl:DatatypeProperty ;
+    rdfs:label "定期快照策略是否激活"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照策略的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "定期快照策略的创建时间"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照策略的状态 a owl:DatatypeProperty ;
+    rdfs:label "定期快照策略的状态"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__定期快照高级保留策略 a owl:DatatypeProperty ;
+    rdfs:label "定期快照高级保留策略"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__已绑定当前定期快照策略的云盘ID列表 a owl:DatatypeProperty ;
+    rdfs:label "已绑定当前定期快照策略的云盘ID列表"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__已绑定当前定期快照策略的实例ID列表 a owl:DatatypeProperty ;
+    rdfs:label "已绑定当前定期快照策略的实例ID列表"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__是否是跨账号复制快照 a owl:DatatypeProperty ;
+    rdfs:label "是否是跨账号复制快照"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__标签 a owl:DatatypeProperty ;
+    rdfs:label "标签"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__该复制快照策略的源端账户ID a owl:DatatypeProperty ;
+    rdfs:label "该复制快照策略的源端账户ID"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__该定期快照创建的快照可以保留的月数 a owl:DatatypeProperty ;
+    rdfs:label "该定期快照创建的快照可以保留的月数"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:定期快照策略__该定期快照创建的快照最大保留数量 a owl:DatatypeProperty ;
+    rdfs:label "该定期快照创建的快照最大保留数量"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__对象大小 a owl:DatatypeProperty ;
+    rdfs:label "对象大小"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:对象__对象存储类型 a owl:DatatypeProperty ;
+    rdfs:label "对象存储类型"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__对象持有者信息 a owl:DatatypeProperty ;
+    rdfs:label "对象持有者信息"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__对象最后修改时间 a owl:DatatypeProperty ;
+    rdfs:label "对象最后修改时间"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__对象的实体标签 a owl:DatatypeProperty ;
+    rdfs:label "对象的实体标签"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__对象键 a owl:DatatypeProperty ;
+    rdfs:label "对象键"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:对象__当对象存储类型为归档存储或深度归档存储时 a owl:DatatypeProperty ;
+    rdfs:label "当对象存储类型为归档存储或深度归档存储时"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:对象__当对象存储类型为智能分层存储时 a owl:DatatypeProperty ;
+    rdfs:label "当对象存储类型为智能分层存储时"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__CDC唯一ID a owl:DatatypeProperty ;
+    rdfs:label "CDC唯一ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__EIP名称 a owl:DatatypeProperty ;
+    rdfs:label "EIP名称"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__EIP状态 a owl:DatatypeProperty ;
+    rdfs:label "EIP状态"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__EIP的ID a owl:DatatypeProperty ;
+    rdfs:label "EIP的ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__EIP绑定的实例类型 a owl:DatatypeProperty ;
+    rdfs:label "EIP绑定的实例类型"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__eip是否在网卡上可见 a owl:DatatypeProperty ;
+    rdfs:label "eip是否在网卡上可见"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__eip是否在解绑后自动释放 a owl:DatatypeProperty ;
+    rdfs:label "eip是否在解绑后自动释放"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__eip是否支持直通模式 a owl:DatatypeProperty ;
+    rdfs:label "eip是否支持直通模式"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__传统弹性公网IPv6所属vpc唯一ID a owl:DatatypeProperty ;
+    rdfs:label "传统弹性公网IPv6所属vpc唯一ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__外网IP地址 a owl:DatatypeProperty ;
+    rdfs:label "外网IP地址"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__弹性公网IP关联的标签列表 a owl:DatatypeProperty ;
+    rdfs:label "弹性公网IP关联的标签列表"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__弹性公网IP的带宽值 a owl:DatatypeProperty ;
+    rdfs:label "弹性公网IP的带宽值"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__弹性公网IP的网络计费模式 a owl:DatatypeProperty ;
+    rdfs:label "弹性公网IP的网络计费模式"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__弹性公网IP的运营商信息 a owl:DatatypeProperty ;
+    rdfs:label "弹性公网IP的运营商信息"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__当前EIP是否自动续费 a owl:DatatypeProperty ;
+    rdfs:label "当前EIP是否自动续费"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__当前公网IP所关联的带宽包ID a owl:DatatypeProperty ;
+    rdfs:label "当前公网IP所关联的带宽包ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__是否本地带宽EIP a owl:DatatypeProperty ;
+    rdfs:label "是否本地带宽EIP"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__绑定的弹性网卡ID a owl:DatatypeProperty ;
+    rdfs:label "绑定的弹性网卡ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__绑定的资源内网ip a owl:DatatypeProperty ;
+    rdfs:label "绑定的资源内网ip"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__绑定的资源实例ID a owl:DatatypeProperty ;
+    rdfs:label "绑定的资源实例ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__资源封堵状态 a owl:DatatypeProperty ;
+    rdfs:label "资源封堵状态"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__资源隔离状态 a owl:DatatypeProperty ;
+    rdfs:label "资源隔离状态"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__静态单线IP网络出口 a owl:DatatypeProperty ;
+    rdfs:label "静态单线IP网络出口"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__预付费包月带宽IP到期时间 a owl:DatatypeProperty ;
+    rdfs:label "预付费包月带宽IP到期时间"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性公网IP__高防包ID a owl:DatatypeProperty ;
+    rdfs:label "高防包ID"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__IPv6地址列表 a owl:DatatypeProperty ;
+    rdfs:label "IPv6地址列表"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__MAC地址 a owl:DatatypeProperty ;
+    rdfs:label "MAC地址"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__内网IP信息 a owl:DatatypeProperty ;
+    rdfs:label "内网IP信息"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__可用区 a owl:DatatypeProperty ;
+    rdfs:label "可用区"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:弹性网卡__子网实例ID a owl:DatatypeProperty ;
+    rdfs:label "子网实例ID"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__弹性网卡名称 a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡名称"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__弹性网卡实例ID a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡实例ID"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__弹性网卡描述 a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡描述"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__弹性网卡状态 a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡状态"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__弹性网卡类型_0_标准型_1_扩展型 a owl:DatatypeProperty ;
+    rdfs:label "弹性网卡类型：0:标准型/1:扩展型"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__指定的IPv6地址列表 a owl:DatatypeProperty ;
+    rdfs:label "指定的IPv6地址列表"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__是否是主网卡 a owl:DatatypeProperty ;
+    rdfs:label "是否是主网卡"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__服务质量级别 a owl:DatatypeProperty ;
+    rdfs:label "服务质量级别"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:弹性网卡__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__用于保留网卡主IP的资源ID用于保留网卡主IP的资源ID a owl:DatatypeProperty ;
+    rdfs:label "用于保留网卡主IP的资源ID用于保留网卡主IP的资源ID"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__绑定的云服务器对象 a owl:DatatypeProperty ;
+    rdfs:label "绑定的云服务器对象"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:弹性网卡__绑定的安全组 a owl:DatatypeProperty ;
+    rdfs:label "绑定的安全组"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:弹性网卡__网卡所关联的CDC实例ID a owl:DatatypeProperty ;
+    rdfs:label "网卡所关联的CDC实例ID"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__网卡类型 a owl:DatatypeProperty ;
+    rdfs:label "网卡类型"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__网卡绑定的子机类型_cvm a owl:DatatypeProperty ;
+    rdfs:label "网卡绑定的子机类型：cvm"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:弹性网卡__自动分配IPv6地址个数 a owl:DatatypeProperty ;
+    rdfs:label "自动分配IPv6地址个数"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__DV证书添加验证截止时间 a owl:DatatypeProperty ;
+    rdfs:label "DV证书添加验证截止时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__上传CA证书的加密算法 a owl:DatatypeProperty ;
+    rdfs:label "上传CA证书的加密算法"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__上传CA证书的过期时间 a owl:DatatypeProperty ;
+    rdfs:label "上传CA证书的过期时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__上传CA证书的通用名称 a owl:DatatypeProperty ;
+    rdfs:label "上传CA证书的通用名称"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__主域名 a owl:DatatypeProperty ;
+    rdfs:label "主域名"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__关联的云资源 a owl:DatatypeProperty ;
+    rdfs:label "关联的云资源"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__域名验证通过时间 a owl:DatatypeProperty ;
+    rdfs:label "域名验证通过时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__域名验证驳回信息 a owl:DatatypeProperty ;
+    rdfs:label "域名验证驳回信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__备注名称 a owl:DatatypeProperty ;
+    rdfs:label "备注名称"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__存在的续费证书ID a owl:DatatypeProperty ;
+    rdfs:label "存在的续费证书ID"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__当前订阅服务下已经签发未过期的证书数量 a owl:DatatypeProperty ;
+    rdfs:label "当前订阅服务下已经签发未过期的证书数量"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__托管完成时间 a owl:DatatypeProperty ;
+    rdfs:label "托管完成时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__托管新证书ID a owl:DatatypeProperty ;
+    rdfs:label "托管新证书ID"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__托管状态 a owl:DatatypeProperty ;
+    rdfs:label "托管状态"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__托管资源类型列表 a owl:DatatypeProperty ;
+    rdfs:label "托管资源类型列表"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__托管配置信息 a owl:DatatypeProperty ;
+    rdfs:label "托管配置信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__支持下载的WEB服务器类型__nginx_apache_iis_tomcat_jks_root_other a owl:DatatypeProperty ;
+    rdfs:label "支持下载的WEB服务器类型： nginx、apache、iis、tomcat、jks、root、other"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否为_DV_版证书 a owl:DatatypeProperty ;
+    rdfs:label "是否为 DV 版证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否为_VIP_客户 a owl:DatatypeProperty ;
+    rdfs:label "是否为 VIP 客户"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否为泛域名证书 a owl:DatatypeProperty ;
+    rdfs:label "是否为泛域名证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否允许下载 a owl:DatatypeProperty ;
+    rdfs:label "是否允许下载"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否即将过期 a owl:DatatypeProperty ;
+    rdfs:label "是否即将过期"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否可续费 a owl:DatatypeProperty ;
+    rdfs:label "是否可续费"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否可部署 a owl:DatatypeProperty ;
+    rdfs:label "是否可部署"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否启用了漏洞扫描功能 a owl:DatatypeProperty ;
+    rdfs:label "是否启用了漏洞扫描功能"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否国密证书 a owl:DatatypeProperty ;
+    rdfs:label "是否国密证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否存在私钥密码 a owl:DatatypeProperty ;
+    rdfs:label "是否存在私钥密码"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否已忽略到期通知 a owl:DatatypeProperty ;
+    rdfs:label "是否已忽略到期通知"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否开启订阅服务共享 a owl:DatatypeProperty ;
+    rdfs:label "是否开启订阅服务共享"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否是上传托管续费证书 a owl:DatatypeProperty ;
+    rdfs:label "是否是上传托管续费证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否是权益点购买的证书 a owl:DatatypeProperty ;
+    rdfs:label "是否是权益点购买的证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__是否自动续费 a owl:DatatypeProperty ;
+    rdfs:label "是否自动续费"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__标签列表 a owl:DatatypeProperty ;
+    rdfs:label "标签列表"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__漏洞扫描状态_INACTIVE___未开启 a owl:DatatypeProperty ;
+    rdfs:label "漏洞扫描状态：INACTIVE = 未开启"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__状态信息 a owl:DatatypeProperty ;
+    rdfs:label "状态信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__状态名称 a owl:DatatypeProperty ;
+    rdfs:label "状态名称"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__用户_UIN a owl:DatatypeProperty ;
+    rdfs:label "用户 UIN"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__订阅服务ID a owl:DatatypeProperty ;
+    rdfs:label "订阅服务ID"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__订阅服务开始时间 a owl:DatatypeProperty ;
+    rdfs:label "订阅服务开始时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__订阅服务状态 a owl:DatatypeProperty ;
+    rdfs:label "订阅服务状态"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__订阅服务结束时间 a owl:DatatypeProperty ;
+    rdfs:label "订阅服务结束时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书_ID a owl:DatatypeProperty ;
+    rdfs:label "证书 ID"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书产品名称 a owl:DatatypeProperty ;
+    rdfs:label "证书产品名称"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书关联的多域名 a owl:DatatypeProperty ;
+    rdfs:label "证书关联的多域名"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__证书包含的多个域名 a owl:DatatypeProperty ;
+    rdfs:label "证书包含的多个域名"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__证书吊销完成时间 a owl:DatatypeProperty ;
+    rdfs:label "证书吊销完成时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书域名是否全部在DNSPOD托管解析 a owl:DatatypeProperty ;
+    rdfs:label "证书域名是否全部在DNSPOD托管解析"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书套餐类型 a owl:DatatypeProperty ;
+    rdfs:label "证书套餐类型"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书扩展信息 a owl:DatatypeProperty ;
+    rdfs:label "证书扩展信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书指纹 a owl:DatatypeProperty ;
+    rdfs:label "证书指纹"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书有效期 a owl:DatatypeProperty ;
+    rdfs:label "证书有效期"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书有效期开始时间 a owl:DatatypeProperty ;
+    rdfs:label "证书有效期开始时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书有效期结束时间 a owl:DatatypeProperty ;
+    rdfs:label "证书有效期结束时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书来源 a owl:DatatypeProperty ;
+    rdfs:label "证书来源"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书状态_0___审核中 a owl:DatatypeProperty ;
+    rdfs:label "证书状态：0 = 审核中"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书生效时间 a owl:DatatypeProperty ;
+    rdfs:label "证书生效时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书算法 a owl:DatatypeProperty ;
+    rdfs:label "证书算法"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__证书类型名称 a owl:DatatypeProperty ;
+    rdfs:label "证书类型名称"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书类型_CA___客户端证书 a owl:DatatypeProperty ;
+    rdfs:label "证书类型：CA = 客户端证书"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书过期时间 a owl:DatatypeProperty ;
+    rdfs:label "证书过期时间"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__证书预审核信息 a owl:DatatypeProperty ;
+    rdfs:label "证书预审核信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__重颁发证书原证书是否删除 a owl:DatatypeProperty ;
+    rdfs:label "重颁发证书原证书是否删除"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__项目_ID a owl:DatatypeProperty ;
+    rdfs:label "项目 ID"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__项目信息 a owl:DatatypeProperty ;
+    rdfs:label "项目信息"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数字证书__颁发给 a owl:DatatypeProperty ;
+    rdfs:label "颁发给"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数字证书__颁发者 a owl:DatatypeProperty ;
+    rdfs:label "颁发者"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__Creator a owl:DatatypeProperty ;
+    rdfs:label "Creator"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__下载地址 a owl:DatatypeProperty ;
+    rdfs:label "下载地址"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份GTID点位 a owl:DatatypeProperty ;
+    rdfs:label "备份GTID点位"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份任务状态 a owl:DatatypeProperty ;
+    rdfs:label "备份任务状态"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份任务的完成时间 a owl:DatatypeProperty ;
+    rdfs:label "备份任务的完成时间"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份任务的开始时间 a owl:DatatypeProperty ;
+    rdfs:label "备份任务的开始时间"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份保留类型 a owl:DatatypeProperty ;
+    rdfs:label "备份保留类型"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份子任务的ID a owl:DatatypeProperty ;
+    rdfs:label "备份子任务的ID"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份完成进度 a owl:DatatypeProperty ;
+    rdfs:label "备份完成进度"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__备份快照时间 a owl:DatatypeProperty ;
+    rdfs:label "备份快照时间"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份文件MD5值 a owl:DatatypeProperty ;
+    rdfs:label "备份文件MD5值"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份文件名 a owl:DatatypeProperty ;
+    rdfs:label "备份文件名"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__备份文件大小 a owl:DatatypeProperty ;
+    rdfs:label "备份文件大小"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__备份文件是否加密 a owl:DatatypeProperty ;
+    rdfs:label "备份文件是否加密"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__备份方式 a owl:DatatypeProperty ;
+    rdfs:label "备份方式"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__备份方法 a owl:DatatypeProperty ;
+    rdfs:label "备份方法"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__存储方式 a owl:DatatypeProperty ;
+    rdfs:label "存储方式"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__实例_ID a owl:DatatypeProperty ;
+    rdfs:label "实例 ID"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__异地备份详细信息 a owl:DatatypeProperty ;
+    rdfs:label "异地备份详细信息"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__手动备份别名 a owl:DatatypeProperty ;
+    rdfs:label "手动备份别名"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库备份__日志具体类型 a owl:DatatypeProperty ;
+    rdfs:label "日志具体类型"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库备份__本地备份所在地域 a owl:DatatypeProperty ;
+    rdfs:label "本地备份所在地域"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:数据库账号__修改密码的时间 a owl:DatatypeProperty ;
+    rdfs:label "修改密码的时间"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__用户最大可用实例连接数 a owl:DatatypeProperty ;
+    rdfs:label "用户最大可用实例连接数"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__用户账号是否开启了密码轮转 a owl:DatatypeProperty ;
+    rdfs:label "用户账号是否开启了密码轮转"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__账号信息修改时间 a owl:DatatypeProperty ;
+    rdfs:label "账号信息修改时间"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__账号备注信息 a owl:DatatypeProperty ;
+    rdfs:label "账号备注信息"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__账号的名称 a owl:DatatypeProperty ;
+    rdfs:label "账号的名称"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:数据库账号__账号的域名 a owl:DatatypeProperty ;
+    rdfs:label "账号的域名"@zh ;
+    rdfs:domain :数据库账号 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__IP版本 a owl:DatatypeProperty ;
+    rdfs:label "IP版本"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__会话保持时间 a owl:DatatypeProperty ;
+    rdfs:label "会话保持时间"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__健康检查详情 a owl:DatatypeProperty ;
+    rdfs:label "健康检查详情"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__关联到的规则数组 a owl:DatatypeProperty ;
+    rdfs:label "关联到的规则数组"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__是否全监听目标组 a owl:DatatypeProperty ;
+    rdfs:label "是否全监听目标组"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__是否开启SNAT a owl:DatatypeProperty ;
+    rdfs:label "是否开启SNAT"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__是否开启长连接 a owl:DatatypeProperty ;
+    rdfs:label "是否开启长连接"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__标签 a owl:DatatypeProperty ;
+    rdfs:label "标签"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组ID a owl:DatatypeProperty ;
+    rdfs:label "目标组ID"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组内的实例数量 a owl:DatatypeProperty ;
+    rdfs:label "目标组内的实例数量"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组后端转发协议 a owl:DatatypeProperty ;
+    rdfs:label "目标组后端转发协议"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:目标组__目标组已关联的规则数 a owl:DatatypeProperty ;
+    rdfs:label "目标组已关联的规则数"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组的vpcid a owl:DatatypeProperty ;
+    rdfs:label "目标组的vpcid"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组的修改时间 a owl:DatatypeProperty ;
+    rdfs:label "目标组的修改时间"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "目标组的创建时间"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__目标组的名字 a owl:DatatypeProperty ;
+    rdfs:label "目标组的名字"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:目标组__目标组的默认端口 a owl:DatatypeProperty ;
+    rdfs:label "目标组的默认端口"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:目标组__目标组类型 a owl:DatatypeProperty ;
+    rdfs:label "目标组类型"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:目标组__调度算法 a owl:DatatypeProperty ;
+    rdfs:label "调度算法"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:目标组__默认权重 a owl:DatatypeProperty ;
+    rdfs:label "默认权重"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__DHCP域名选项值 a owl:DatatypeProperty ;
+    rdfs:label "DHCP域名选项值"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__DHCP选项集ID a owl:DatatypeProperty ;
+    rdfs:label "DHCP选项集ID"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__DNS列表 a owl:DatatypeProperty ;
+    rdfs:label "DNS列表"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__VPC名称 a owl:DatatypeProperty ;
+    rdfs:label "VPC名称"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__VPC的IPv4_CIDR a owl:DatatypeProperty ;
+    rdfs:label "VPC的IPv4 CIDR"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__VPC的IPv6_CIDR a owl:DatatypeProperty ;
+    rdfs:label "VPC的IPv6 CIDR"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__vpc关联云联网时IPv6类型路由发布策略 a owl:DatatypeProperty ;
+    rdfs:label "vpc关联云联网时IPv6类型路由发布策略"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__vpc关联云联网时路由发布策略 a owl:DatatypeProperty ;
+    rdfs:label "vpc关联云联网时路由发布策略"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:私有网络__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__协议栈类型 a owl:DatatypeProperty ;
+    rdfs:label "协议栈类型"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__是否开启DHCP a owl:DatatypeProperty ;
+    rdfs:label "是否开启DHCP"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__是否开启组播 a owl:DatatypeProperty ;
+    rdfs:label "是否开启组播"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__是否默认VPC a owl:DatatypeProperty ;
+    rdfs:label "是否默认VPC"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__辅助CIDR a owl:DatatypeProperty ;
+    rdfs:label "辅助CIDR"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:私有网络__返回多运营商IPv6_Cidr_Block a owl:DatatypeProperty ;
+    rdfs:label "返回多运营商IPv6 Cidr Block"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__网络ACL关联的子网数组 a owl:DatatypeProperty ;
+    rdfs:label "网络ACL关联的子网数组"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:网络_ACL__网络ACL名称 a owl:DatatypeProperty ;
+    rdfs:label "网络ACL名称"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__网络ACL实例ID a owl:DatatypeProperty ;
+    rdfs:label "网络ACL实例ID"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__网络ACL类型 a owl:DatatypeProperty ;
+    rdfs:label "网络ACL类型"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:网络_ACL__该参数仅对三元组ACL有效 a owl:DatatypeProperty ;
+    rdfs:label "该参数仅对三元组ACL有效"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例___7层独占标签 a owl:DatatypeProperty ;
+    rdfs:label "7层独占标签"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__CLB是否为NFV a owl:DatatypeProperty ;
+    rdfs:label "CLB是否为NFV"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__IP地址版本为ipv6时此字段有意义 a owl:DatatypeProperty ;
+    rdfs:label "IP地址版本为ipv6时此字段有意义"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__IP版本 a owl:DatatypeProperty ;
+    rdfs:label "IP版本"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__IP类型是否是本地BGP a owl:DatatypeProperty ;
+    rdfs:label "IP类型是否是本地BGP"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__anycast负载均衡的发布域 a owl:DatatypeProperty ;
+    rdfs:label "anycast负载均衡的发布域"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__vip是否被封堵 a owl:DatatypeProperty ;
+    rdfs:label "vip是否被封堵"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__主可用区 a owl:DatatypeProperty ;
+    rdfs:label "主可用区"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__内网独占集群 a owl:DatatypeProperty ;
+    rdfs:label "内网独占集群"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__可用区转发亲和信息 a owl:DatatypeProperty ;
+    rdfs:label "可用区转发亲和信息"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__后端服务是否放通来自LB的流量 a owl:DatatypeProperty ;
+    rdfs:label "后端服务是否放通来自LB的流量"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__备可用区 a owl:DatatypeProperty ;
+    rdfs:label "备可用区"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__实例类型是否为独占型 a owl:DatatypeProperty ;
+    rdfs:label "实例类型是否为独占型"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__封堵或解封时间 a owl:DatatypeProperty ;
+    rdfs:label "封堵或解封时间"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__已绑定的后端服务数量 a owl:DatatypeProperty ;
+    rdfs:label "已绑定的后端服务数量"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__开启IPv6FullChain负载均衡7层监听器支持混绑IPv4_IPv6目标功能 a owl:DatatypeProperty ;
+    rdfs:label "开启IPv6FullChain负载均衡7层监听器支持混绑IPv4/IPv6目标功能"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__开启SnatPro负载均衡后 a owl:DatatypeProperty ;
+    rdfs:label "开启SnatPro负载均衡后"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__性能容量型规格 a owl:DatatypeProperty ;
+    rdfs:label "性能容量型规格"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__数值形式的私有网络_ID a owl:DatatypeProperty ;
+    rdfs:label "数值形式的私有网络 ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__是否可绑定高防包 a owl:DatatypeProperty ;
+    rdfs:label "是否可绑定高防包"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__是否开启_SNAT a owl:DatatypeProperty ;
+    rdfs:label "是否开启 SNAT"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__是否开启SnatPro a owl:DatatypeProperty ;
+    rdfs:label "是否开启SnatPro"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__是否被隔离 a owl:DatatypeProperty ;
+    rdfs:label "是否被隔离"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__暂做保留 a owl:DatatypeProperty ;
+    rdfs:label "暂做保留"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__私有网络内网负载均衡 a owl:DatatypeProperty ;
+    rdfs:label "私有网络内网负载均衡"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__私有网络的_ID a owl:DatatypeProperty ;
+    rdfs:label "私有网络的 ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__网络出口 a owl:DatatypeProperty ;
+    rdfs:label "网络出口"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__负载均衡IP地址所属的运营商 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡IP地址所属的运营商"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例_ID a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例 ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例关联的Endpoint_id a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例关联的Endpoint id"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例所在的子网 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例所在的子网"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__负载均衡实例所属的项目_ID a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例所属的项目 ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的_VIP_列表 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的 VIP 列表"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的IPv6地址 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的IPv6地址"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的上次状态转换时间 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的上次状态转换时间"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的创建时间"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的名称 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的名称"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的域名 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的域名"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__负载均衡实例的安全组 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的安全组"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__负载均衡实例的标签信息 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的标签信息"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的状态 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的状态"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的网络属性 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的网络属性"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的网络类型 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的网络类型"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的计费类型 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的计费类型"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的过期时间 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的过期时间"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例的预付费相关属性 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例的预付费相关属性"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例绑定的后端设备的基本信息 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例绑定的后端设备的基本信息"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡实例被隔离的时间 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡实例被隔离的时间"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡日志服务 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡日志服务"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡实例__负载均衡的属性 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡的属性"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡类型标识 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡类型标识"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__负载均衡维度的个性化配置ID a owl:DatatypeProperty ;
+    rdfs:label "负载均衡维度的个性化配置ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__集群ID a owl:DatatypeProperty ;
+    rdfs:label "集群ID"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡实例__高防_LB_的标识 a owl:DatatypeProperty ;
+    rdfs:label "高防 LB 的标识"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__仅支持Nat64_CLB_TCP监听器 a owl:DatatypeProperty ;
+    rdfs:label "仅支持Nat64 CLB TCP监听器"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__会话保持时间 a owl:DatatypeProperty ;
+    rdfs:label "会话保持时间"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__会话保持类型 a owl:DatatypeProperty ;
+    rdfs:label "会话保持类型"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__后端服务器类型 a owl:DatatypeProperty ;
+    rdfs:label "后端服务器类型"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__数据压缩模式 a owl:DatatypeProperty ;
+    rdfs:label "数据压缩模式"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__是否开启SNI特性 a owl:DatatypeProperty ;
+    rdfs:label "是否开启SNI特性"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__是否开启长连接 a owl:DatatypeProperty ;
+    rdfs:label "是否开启长连接"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器下的全部转发规则 a owl:DatatypeProperty ;
+    rdfs:label "监听器下的全部转发规则"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器协议 a owl:DatatypeProperty ;
+    rdfs:label "监听器协议"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__监听器最大新增连接数 a owl:DatatypeProperty ;
+    rdfs:label "监听器最大新增连接数"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__监听器最大连接数 a owl:DatatypeProperty ;
+    rdfs:label "监听器最大连接数"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__监听器的健康检查信息 a owl:DatatypeProperty ;
+    rdfs:label "监听器的健康检查信息"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "监听器的创建时间"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器的名称 a owl:DatatypeProperty ;
+    rdfs:label "监听器的名称"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器的属性 a owl:DatatypeProperty ;
+    rdfs:label "监听器的属性"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__监听器端口 a owl:DatatypeProperty ;
+    rdfs:label "监听器端口"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__监听器绑定的证书信息 a owl:DatatypeProperty ;
+    rdfs:label "监听器绑定的证书信息"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__空闲连接超时时间 a owl:DatatypeProperty ;
+    rdfs:label "空闲连接超时时间"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__端口段结束端口 a owl:DatatypeProperty ;
+    rdfs:label "端口段结束端口"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__绑定的目标组列表 a owl:DatatypeProperty ;
+    rdfs:label "绑定的目标组列表"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__绑定的目标组基本信息 a owl:DatatypeProperty ;
+    rdfs:label "绑定的目标组基本信息"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__请求的调度方式 a owl:DatatypeProperty ;
+    rdfs:label "请求的调度方式"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__负载均衡监听器_ID a owl:DatatypeProperty ;
+    rdfs:label "负载均衡监听器 ID"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__重新调度功能 a owl:DatatypeProperty ;
+    rdfs:label "重新调度功能"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:负载均衡监听器__重新调度启动时间 a owl:DatatypeProperty ;
+    rdfs:label "重新调度启动时间"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:负载均衡监听器__重新调度触发持续时间 a owl:DatatypeProperty ;
+    rdfs:label "重新调度触发持续时间"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__交易ID_结算扣费单号 a owl:DatatypeProperty ;
+    rdfs:label "交易ID：结算扣费单号"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__交易类型 a owl:DatatypeProperty ;
+    rdfs:label "交易类型"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__交易类型编码 a owl:DatatypeProperty ;
+    rdfs:label "交易类型编码"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__产品名称_用户所采购的各类云产品 a owl:DatatypeProperty ;
+    rdfs:label "产品名称：用户所采购的各类云产品"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__产品编码 a owl:DatatypeProperty ;
+    rdfs:label "产品编码"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__价格属性_该组件除单价_时长外的其他影响折扣定价的属性信息 a owl:DatatypeProperty ;
+    rdfs:label "价格属性：该组件除单价、时长外的其他影响折扣定价的属性信息"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:decimal ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__优惠内容 a owl:DatatypeProperty ;
+    rdfs:label "优惠内容"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__优惠对象 a owl:DatatypeProperty ;
+    rdfs:label "优惠对象"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:账单明细__优惠类型 a owl:DatatypeProperty ;
+    rdfs:label "优惠类型"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__使用者UIN_实际使用资源的账号_ID a owl:DatatypeProperty ;
+    rdfs:label "使用者UIN：实际使用资源的账号 ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__关联交易单据ID_和本笔交易关联单据_ID a owl:DatatypeProperty ;
+    rdfs:label "关联交易单据ID：和本笔交易关联单据 ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__可用区_资源所属可用区 a owl:DatatypeProperty ;
+    rdfs:label "可用区：资源所属可用区"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__国内国际编码 a owl:DatatypeProperty ;
+    rdfs:label "国内国际编码"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__国内国际_资源所属区域类型 a owl:DatatypeProperty ;
+    rdfs:label "国内国际：资源所属区域类型"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__地域ID a owl:DatatypeProperty ;
+    rdfs:label "地域ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__地域_资源所属地域 a owl:DatatypeProperty ;
+    rdfs:label "地域：资源所属地域"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__备注属性 a owl:DatatypeProperty ;
+    rdfs:label "备注属性"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__子产品名称_用户采购的具体产品细分类型 a owl:DatatypeProperty ;
+    rdfs:label "子产品名称：用户采购的具体产品细分类型"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__子产品编码 a owl:DatatypeProperty ;
+    rdfs:label "子产品编码"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__开始使用时间_产品服务开始使用时间 a owl:DatatypeProperty ;
+    rdfs:label "开始使用时间：产品服务开始使用时间"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__扣费时间_结算扣费时间 a owl:DatatypeProperty ;
+    rdfs:label "扣费时间：结算扣费时间"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__操作者UIN_操作者账号_ID a owl:DatatypeProperty ;
+    rdfs:label "操作者UIN：操作者账号 ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__支付者UIN_支付者的账号_ID a owl:DatatypeProperty ;
+    rdfs:label "支付者UIN：支付者的账号 ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__标签信息 a owl:DatatypeProperty ;
+    rdfs:label "标签信息"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__组件列表 a owl:DatatypeProperty ;
+    rdfs:label "组件列表"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__结束使用时间_产品服务结束使用时间 a owl:DatatypeProperty ;
+    rdfs:label "结束使用时间：产品服务结束使用时间"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__计算说明_特殊交易类型计费结算的详细计算说明 a owl:DatatypeProperty ;
+    rdfs:label "计算说明：特殊交易类型计费结算的详细计算说明"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__计费模式_资源的计费模式 a owl:DatatypeProperty ;
+    rdfs:label "计费模式：资源的计费模式"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__计费规则_各产品详细的计费规则官网说明链接 a owl:DatatypeProperty ;
+    rdfs:label "计费规则：各产品详细的计费规则官网说明链接"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__订单ID_包年包月计费模式下对应子订单号 a owl:DatatypeProperty ;
+    rdfs:label "订单ID：包年包月计费模式下对应子订单号"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__账单归属日 a owl:DatatypeProperty ;
+    rdfs:label "账单归属日"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:账单明细__账单归属月 a owl:DatatypeProperty ;
+    rdfs:label "账单归属月"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:账单明细__账单记录ID a owl:DatatypeProperty ;
+    rdfs:label "账单记录ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__资源_ID_账单中出账对象_ID a owl:DatatypeProperty ;
+    rdfs:label "资源 ID：账单中出账对象 ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__资源别名_用户在控制台为资源设置的名称 a owl:DatatypeProperty ;
+    rdfs:label "资源别名：用户在控制台为资源设置的名称"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__资源扩展信息_体现资源维度的扩展信息 a owl:DatatypeProperty ;
+    rdfs:label "资源扩展信息：体现资源维度的扩展信息"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__项目ID a owl:DatatypeProperty ;
+    rdfs:label "项目ID"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:账单明细__项目名称_资源归属的项目 a owl:DatatypeProperty ;
+    rdfs:label "项目名称：资源归属的项目"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__IPv4路由策略集合 a owl:DatatypeProperty ;
+    rdfs:label "IPv4路由策略集合"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__VPC实例ID a owl:DatatypeProperty ;
+    rdfs:label "VPC实例ID"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__local路由是否发布云联网 a owl:DatatypeProperty ;
+    rdfs:label "local路由是否发布云联网"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__创建时间 a owl:DatatypeProperty ;
+    rdfs:label "创建时间"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__是否默认路由表 a owl:DatatypeProperty ;
+    rdfs:label "是否默认路由表"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__标签键值对 a owl:DatatypeProperty ;
+    rdfs:label "标签键值对"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__路由表关联关系 a owl:DatatypeProperty ;
+    rdfs:label "路由表关联关系"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:路由表__路由表名称 a owl:DatatypeProperty ;
+    rdfs:label "路由表名称"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:路由表__路由表实例ID a owl:DatatypeProperty ;
+    rdfs:label "路由表实例ID"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__OAuth配置状态信息 a owl:DatatypeProperty ;
+    rdfs:label "OAuth配置状态信息"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__QUIC状态 a owl:DatatypeProperty ;
+    rdfs:label "QUIC状态"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__TRPC被调服务器路由 a owl:DatatypeProperty ;
+    rdfs:label "TRPC被调服务器路由"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:转发规则__TRPC调用服务接口 a owl:DatatypeProperty ;
+    rdfs:label "TRPC调用服务接口"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:转发规则__WAF实例ID a owl:DatatypeProperty ;
+    rdfs:label "WAF实例ID"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__会话保持时间 a owl:DatatypeProperty ;
+    rdfs:label "会话保持时间"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__健康检查信息 a owl:DatatypeProperty ;
+    rdfs:label "健康检查信息"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__后端服务器类型 a owl:DatatypeProperty ;
+    rdfs:label "后端服务器类型"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__是否作为默认域名 a owl:DatatypeProperty ;
+    rdfs:label "是否作为默认域名"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__是否开启Http2 a owl:DatatypeProperty ;
+    rdfs:label "是否开启Http2"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__是否开启gzip a owl:DatatypeProperty ;
+    rdfs:label "是否开启gzip"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__绑定的目标组列表 a owl:DatatypeProperty ;
+    rdfs:label "绑定的目标组列表"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__绑定的目标组基本信息 a owl:DatatypeProperty ;
+    rdfs:label "绑定的目标组基本信息"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__自定义cookie名 a owl:DatatypeProperty ;
+    rdfs:label "自定义cookie名"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:转发规则__规则的请求转发方式 a owl:DatatypeProperty ;
+    rdfs:label "规则的请求转发方式"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__证书信息 a owl:DatatypeProperty ;
+    rdfs:label "证书信息"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__负载均衡与后端服务之间的转发协议 a owl:DatatypeProperty ;
+    rdfs:label "负载均衡与后端服务之间的转发协议"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:转发规则__转发规则所属的监听器_ID a owl:DatatypeProperty ;
+    rdfs:label "转发规则所属的监听器 ID"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则是否为自动创建 a owl:DatatypeProperty ;
+    rdfs:label "转发规则是否为自动创建"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的_ID a owl:DatatypeProperty ;
+    rdfs:label "转发规则的 ID"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的创建时间 a owl:DatatypeProperty ;
+    rdfs:label "转发规则的创建时间"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的域名 a owl:DatatypeProperty ;
+    rdfs:label "转发规则的域名"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的域名列表 a owl:DatatypeProperty ;
+    rdfs:label "转发规则的域名列表"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的路径 a owl:DatatypeProperty ;
+    rdfs:label "转发规则的路径"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:转发规则__转发规则的重定向目标信息 a owl:DatatypeProperty ;
+    rdfs:label "转发规则的重定向目标信息"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__CDC镜像缓存状态 a owl:DatatypeProperty ;
+    rdfs:label "CDC镜像缓存状态"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__同步百分比 a owl:DatatypeProperty ;
+    rdfs:label "同步百分比"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:integer ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像ID a owl:DatatypeProperty ;
+    rdfs:label "镜像ID"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像关联的快照信息 a owl:DatatypeProperty ;
+    rdfs:label "镜像关联的快照信息"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像关联的标签列表 a owl:DatatypeProperty ;
+    rdfs:label "镜像关联的标签列表"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像创建时间 a owl:DatatypeProperty ;
+    rdfs:label "镜像创建时间"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:dateTime ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像创建者 a owl:DatatypeProperty ;
+    rdfs:label "镜像创建者"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像名称 a owl:DatatypeProperty ;
+    rdfs:label "镜像名称"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像大小 a owl:DatatypeProperty ;
+    rdfs:label "镜像大小"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:镜像__镜像描述 a owl:DatatypeProperty ;
+    rdfs:label "镜像描述"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像操作系统 a owl:DatatypeProperty ;
+    rdfs:label "镜像操作系统"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:镜像__镜像族 a owl:DatatypeProperty ;
+    rdfs:label "镜像族"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像是否废弃 a owl:DatatypeProperty ;
+    rdfs:label "镜像是否废弃"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像是否支持cloud-init a owl:DatatypeProperty ;
+    rdfs:label "镜像是否支持cloud-init"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:boolean ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像来源 a owl:DatatypeProperty ;
+    rdfs:label "镜像来源"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像来源平台 a owl:DatatypeProperty ;
+    rdfs:label "镜像来源平台"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像架构 a owl:DatatypeProperty ;
+    rdfs:label "镜像架构"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true ;
+    ontok:rangeUnmapped true .
+
+:镜像__镜像状态 a owl:DatatypeProperty ;
+    rdfs:label "镜像状态"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像类型 a owl:DatatypeProperty ;
+    rdfs:label "镜像类型"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:镜像__镜像许可类型 a owl:DatatypeProperty ;
+    rdfs:label "镜像许可类型"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range xsd:string ;
+    ontok:rangeSource "heuristic" ;
+    ontok:nullable true .
+
+:NAT_网关__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "NAT 网关 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__NAT_网关 .
+
+:NAT_网关__私有网络 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "NAT 网关 → 私有网络"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :NAT_网关 ;
+    rdfs:range :私有网络 ;
+    owl:inverseOf :私有网络__NAT_网关 .
+
+:Redis_备份__Redis_实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "Redis 备份 → Redis 实例"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :Redis_备份 ;
+    rdfs:range :Redis_实例 ;
+    owl:inverseOf :Redis_实例__Redis_备份 .
+
+:Redis_实例__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "Redis 实例 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__Redis_实例 .
+
+:云数据库_MySQL_实例__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云数据库 MySQL 实例 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__云数据库_MySQL_实例 .
+
+:云服务器实例__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__云服务器实例 .
+
+:云服务器实例__安全组 a owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 安全组"@zh ;
+    rdfs:comment "语义：关联到（多对多）"@zh ;
+    skos:altLabel "关联到"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :安全组 ;
+    owl:inverseOf :安全组__云服务器实例 .
+
+:云服务器实例__镜像 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 镜像"@zh ;
+    rdfs:comment "语义：基于（多对一）"@zh ;
+    skos:altLabel "基于"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :镜像 ;
+    owl:inverseOf :镜像__云服务器实例 .
+
+:云硬盘__云服务器实例 a owl:ObjectProperty ;
+    rdfs:label "云硬盘 → 云服务器实例"@zh ;
+    rdfs:comment "语义：挂载于（多对多）"@zh ;
+    skos:altLabel "挂载于"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range :云服务器实例 ;
+    owl:inverseOf :云服务器实例__云硬盘 .
+
+:云硬盘快照__云硬盘 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云硬盘快照 → 云硬盘"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :云硬盘快照 ;
+    rdfs:range :云硬盘 ;
+    owl:inverseOf :云硬盘__云硬盘快照 .
+
+:后端服务__云服务器实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "后端服务 → 云服务器实例"@zh ;
+    rdfs:comment "语义：指向（多对一）"@zh ;
+    skos:altLabel "指向"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range :云服务器实例 ;
+    owl:inverseOf :云服务器实例__后端服务 .
+
+:告警策略__告警通知模板 a owl:ObjectProperty ;
+    rdfs:label "告警策略 → 告警通知模板"@zh ;
+    rdfs:comment "语义：通知到（多对多）"@zh ;
+    skos:altLabel "通知到"@zh ;
+    rdfs:domain :告警策略 ;
+    rdfs:range :告警通知模板 ;
+    owl:inverseOf :告警通知模板__告警策略 .
+
+:子网__私有网络 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 私有网络"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :私有网络 ;
+    owl:inverseOf :私有网络__子网 .
+
+:子网__网络_ACL a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 网络 ACL"@zh ;
+    rdfs:comment "语义：关联到（多对一）"@zh ;
+    skos:altLabel "关联到"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :网络_ACL ;
+    owl:inverseOf :网络_ACL__子网 .
+
+:子网__路由表 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 路由表"@zh ;
+    rdfs:comment "语义：关联到（多对一）"@zh ;
+    skos:altLabel "关联到"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :路由表 ;
+    owl:inverseOf :路由表__子网 .
+
+:安全组规则__安全组 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "安全组规则 → 安全组"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :安全组规则 ;
+    rdfs:range :安全组 ;
+    owl:inverseOf :安全组__安全组规则 .
+
+:定期快照策略__云硬盘 a owl:ObjectProperty ;
+    rdfs:label "定期快照策略 → 云硬盘"@zh ;
+    rdfs:comment "语义：适用于（多对多）"@zh ;
+    skos:altLabel "适用于"@zh ;
+    rdfs:domain :定期快照策略 ;
+    rdfs:range :云硬盘 ;
+    owl:inverseOf :云硬盘__定期快照策略 .
+
+:对象__存储桶 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "对象 → 存储桶"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :对象 ;
+    rdfs:range :存储桶 ;
+    owl:inverseOf :存储桶__对象 .
+
+:弹性公网IP__云服务器实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "弹性公网IP → 云服务器实例"@zh ;
+    rdfs:comment "语义：绑定到（多对一）"@zh ;
+    skos:altLabel "绑定到"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range :云服务器实例 ;
+    owl:inverseOf :云服务器实例__弹性公网IP .
+
+:弹性公网IP__弹性网卡 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "弹性公网IP → 弹性网卡"@zh ;
+    rdfs:comment "语义：绑定到（多对一）"@zh ;
+    skos:altLabel "绑定到"@zh ;
+    rdfs:domain :弹性公网IP ;
+    rdfs:range :弹性网卡 ;
+    owl:inverseOf :弹性网卡__弹性公网IP .
+
+:弹性网卡__云服务器实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "弹性网卡 → 云服务器实例"@zh ;
+    rdfs:comment "语义：挂载于（多对一）"@zh ;
+    skos:altLabel "挂载于"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range :云服务器实例 ;
+    owl:inverseOf :云服务器实例__弹性网卡 .
+
+:弹性网卡__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "弹性网卡 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__弹性网卡 .
+
+:弹性网卡__安全组 a owl:ObjectProperty ;
+    rdfs:label "弹性网卡 → 安全组"@zh ;
+    rdfs:comment "语义：关联到（多对多）"@zh ;
+    skos:altLabel "关联到"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range :安全组 ;
+    owl:inverseOf :安全组__弹性网卡 .
+
+:数字证书__负载均衡实例 a owl:ObjectProperty ;
+    rdfs:label "数字证书 → 负载均衡实例"@zh ;
+    rdfs:comment "语义：部署于（多对多）"@zh ;
+    skos:altLabel "部署于"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range :负载均衡实例 ;
+    owl:inverseOf :负载均衡实例__数字证书 .
+
+:数据库备份__云数据库_MySQL_实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "数据库备份 → 云数据库 MySQL 实例"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :数据库备份 ;
+    rdfs:range :云数据库_MySQL_实例 ;
+    owl:inverseOf :云数据库_MySQL_实例__数据库备份 .
+
+:目标组__后端服务 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "目标组 → 后端服务"@zh ;
+    rdfs:comment "语义：绑定到（一对多）"@zh ;
+    skos:altLabel "绑定到"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range :后端服务 ;
+    owl:inverseOf :后端服务__目标组 .
+
+:目标组__转发规则 a owl:ObjectProperty ;
+    rdfs:label "目标组 → 转发规则"@zh ;
+    rdfs:comment "语义：关联到（多对多）"@zh ;
+    skos:altLabel "关联到"@zh ;
+    rdfs:domain :目标组 ;
+    rdfs:range :转发规则 ;
+    owl:inverseOf :转发规则__目标组 .
+
+:负载均衡实例__子网 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "负载均衡实例 → 子网"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range :子网 ;
+    owl:inverseOf :子网__负载均衡实例 .
+
+:负载均衡监听器__后端服务 a owl:ObjectProperty ;
+    rdfs:label "负载均衡监听器 → 后端服务"@zh ;
+    rdfs:comment "语义：绑定到（多对多）"@zh ;
+    skos:altLabel "绑定到"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range :后端服务 ;
+    owl:inverseOf :后端服务__负载均衡监听器 .
+
+:负载均衡监听器__数字证书 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "负载均衡监听器 → 数字证书"@zh ;
+    rdfs:comment "语义：绑定到（多对一）"@zh ;
+    skos:altLabel "绑定到"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range :数字证书 ;
+    owl:inverseOf :数字证书__负载均衡监听器 .
+
+:负载均衡监听器__负载均衡实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "负载均衡监听器 → 负载均衡实例"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range :负载均衡实例 ;
+    owl:inverseOf :负载均衡实例__负载均衡监听器 .
+
+:账单明细__云服务器实例 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "账单明细 → 云服务器实例"@zh ;
+    rdfs:comment "语义：计费到（多对一）"@zh ;
+    skos:altLabel "计费到"@zh ;
+    rdfs:domain :账单明细 ;
+    rdfs:range :云服务器实例 ;
+    owl:inverseOf :云服务器实例__账单明细 .
+
+:路由表__私有网络 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "路由表 → 私有网络"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range :私有网络 ;
+    owl:inverseOf :私有网络__路由表 .
+
+:转发规则__负载均衡监听器 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "转发规则 → 负载均衡监听器"@zh ;
+    rdfs:comment "语义：归属于（多对一）"@zh ;
+    skos:altLabel "归属于"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range :负载均衡监听器 ;
+    owl:inverseOf :负载均衡监听器__转发规则 .
+
+:Redis_实例__Redis_备份 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "Redis 实例 → Redis 备份（反向）"@zh ;
+    rdfs:domain :Redis_实例 ;
+    rdfs:range :Redis_备份 ;
+    rdfs:comment "反向属性：前向为「Redis 备份 → Redis 实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :Redis_备份__Redis_实例 .
+
+:云数据库_MySQL_实例__数据库备份 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云数据库 MySQL 实例 → 数据库备份（反向）"@zh ;
+    rdfs:domain :云数据库_MySQL_实例 ;
+    rdfs:range :数据库备份 ;
+    rdfs:comment "反向属性：前向为「数据库备份 → 云数据库 MySQL 实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :数据库备份__云数据库_MySQL_实例 .
+
+:云服务器实例__云硬盘 a owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 云硬盘（反向）"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :云硬盘 ;
+    rdfs:comment "反向属性：前向为「云硬盘 → 云服务器实例」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :云硬盘__云服务器实例 .
+
+:云服务器实例__后端服务 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 后端服务（反向）"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :后端服务 ;
+    rdfs:comment "反向属性：前向为「后端服务 → 云服务器实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :后端服务__云服务器实例 .
+
+:云服务器实例__弹性公网IP a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 弹性公网IP（反向）"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :弹性公网IP ;
+    rdfs:comment "反向属性：前向为「弹性公网IP → 云服务器实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :弹性公网IP__云服务器实例 .
+
+:云服务器实例__弹性网卡 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 弹性网卡（反向）"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :弹性网卡 ;
+    rdfs:comment "反向属性：前向为「弹性网卡 → 云服务器实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :弹性网卡__云服务器实例 .
+
+:云服务器实例__账单明细 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云服务器实例 → 账单明细（反向）"@zh ;
+    rdfs:domain :云服务器实例 ;
+    rdfs:range :账单明细 ;
+    rdfs:comment "反向属性：前向为「账单明细 → 云服务器实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :账单明细__云服务器实例 .
+
+:云硬盘__云硬盘快照 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "云硬盘 → 云硬盘快照（反向）"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range :云硬盘快照 ;
+    rdfs:comment "反向属性：前向为「云硬盘快照 → 云硬盘」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :云硬盘快照__云硬盘 .
+
+:云硬盘__定期快照策略 a owl:ObjectProperty ;
+    rdfs:label "云硬盘 → 定期快照策略（反向）"@zh ;
+    rdfs:domain :云硬盘 ;
+    rdfs:range :定期快照策略 ;
+    rdfs:comment "反向属性：前向为「定期快照策略 → 云硬盘」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :定期快照策略__云硬盘 .
+
+:后端服务__目标组 a owl:FunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "后端服务 → 目标组（反向）"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range :目标组 ;
+    rdfs:comment "反向属性：前向为「目标组 → 后端服务」（一对多 → 多对一）"@zh ;
+    owl:inverseOf :目标组__后端服务 .
+
+:后端服务__负载均衡监听器 a owl:ObjectProperty ;
+    rdfs:label "后端服务 → 负载均衡监听器（反向）"@zh ;
+    rdfs:domain :后端服务 ;
+    rdfs:range :负载均衡监听器 ;
+    rdfs:comment "反向属性：前向为「负载均衡监听器 → 后端服务」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :负载均衡监听器__后端服务 .
+
+:告警通知模板__告警策略 a owl:ObjectProperty ;
+    rdfs:label "告警通知模板 → 告警策略（反向）"@zh ;
+    rdfs:domain :告警通知模板 ;
+    rdfs:range :告警策略 ;
+    rdfs:comment "反向属性：前向为「告警策略 → 告警通知模板」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :告警策略__告警通知模板 .
+
+:子网__NAT_网关 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → NAT 网关（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :NAT_网关 ;
+    rdfs:comment "反向属性：前向为「NAT 网关 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :NAT_网关__子网 .
+
+:子网__Redis_实例 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → Redis 实例（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :Redis_实例 ;
+    rdfs:comment "反向属性：前向为「Redis 实例 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :Redis_实例__子网 .
+
+:子网__云数据库_MySQL_实例 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 云数据库 MySQL 实例（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :云数据库_MySQL_实例 ;
+    rdfs:comment "反向属性：前向为「云数据库 MySQL 实例 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :云数据库_MySQL_实例__子网 .
+
+:子网__云服务器实例 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 云服务器实例（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :云服务器实例 ;
+    rdfs:comment "反向属性：前向为「云服务器实例 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :云服务器实例__子网 .
+
+:子网__弹性网卡 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 弹性网卡（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :弹性网卡 ;
+    rdfs:comment "反向属性：前向为「弹性网卡 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :弹性网卡__子网 .
+
+:子网__负载均衡实例 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "子网 → 负载均衡实例（反向）"@zh ;
+    rdfs:domain :子网 ;
+    rdfs:range :负载均衡实例 ;
+    rdfs:comment "反向属性：前向为「负载均衡实例 → 子网」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :负载均衡实例__子网 .
+
+:存储桶__对象 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "存储桶 → 对象（反向）"@zh ;
+    rdfs:domain :存储桶 ;
+    rdfs:range :对象 ;
+    rdfs:comment "反向属性：前向为「对象 → 存储桶」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :对象__存储桶 .
+
+:安全组__云服务器实例 a owl:ObjectProperty ;
+    rdfs:label "安全组 → 云服务器实例（反向）"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range :云服务器实例 ;
+    rdfs:comment "反向属性：前向为「云服务器实例 → 安全组」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :云服务器实例__安全组 .
+
+:安全组__安全组规则 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "安全组 → 安全组规则（反向）"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range :安全组规则 ;
+    rdfs:comment "反向属性：前向为「安全组规则 → 安全组」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :安全组规则__安全组 .
+
+:安全组__弹性网卡 a owl:ObjectProperty ;
+    rdfs:label "安全组 → 弹性网卡（反向）"@zh ;
+    rdfs:domain :安全组 ;
+    rdfs:range :弹性网卡 ;
+    rdfs:comment "反向属性：前向为「弹性网卡 → 安全组」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :弹性网卡__安全组 .
+
+:弹性网卡__弹性公网IP a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "弹性网卡 → 弹性公网IP（反向）"@zh ;
+    rdfs:domain :弹性网卡 ;
+    rdfs:range :弹性公网IP ;
+    rdfs:comment "反向属性：前向为「弹性公网IP → 弹性网卡」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :弹性公网IP__弹性网卡 .
+
+:数字证书__负载均衡监听器 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "数字证书 → 负载均衡监听器（反向）"@zh ;
+    rdfs:domain :数字证书 ;
+    rdfs:range :负载均衡监听器 ;
+    rdfs:comment "反向属性：前向为「负载均衡监听器 → 数字证书」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :负载均衡监听器__数字证书 .
+
+:私有网络__NAT_网关 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "私有网络 → NAT 网关（反向）"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range :NAT_网关 ;
+    rdfs:comment "反向属性：前向为「NAT 网关 → 私有网络」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :NAT_网关__私有网络 .
+
+:私有网络__子网 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "私有网络 → 子网（反向）"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range :子网 ;
+    rdfs:comment "反向属性：前向为「子网 → 私有网络」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :子网__私有网络 .
+
+:私有网络__路由表 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "私有网络 → 路由表（反向）"@zh ;
+    rdfs:domain :私有网络 ;
+    rdfs:range :路由表 ;
+    rdfs:comment "反向属性：前向为「路由表 → 私有网络」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :路由表__私有网络 .
+
+:网络_ACL__子网 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "网络 ACL → 子网（反向）"@zh ;
+    rdfs:domain :网络_ACL ;
+    rdfs:range :子网 ;
+    rdfs:comment "反向属性：前向为「子网 → 网络 ACL」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :子网__网络_ACL .
+
+:负载均衡实例__数字证书 a owl:ObjectProperty ;
+    rdfs:label "负载均衡实例 → 数字证书（反向）"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range :数字证书 ;
+    rdfs:comment "反向属性：前向为「数字证书 → 负载均衡实例」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :数字证书__负载均衡实例 .
+
+:负载均衡实例__负载均衡监听器 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "负载均衡实例 → 负载均衡监听器（反向）"@zh ;
+    rdfs:domain :负载均衡实例 ;
+    rdfs:range :负载均衡监听器 ;
+    rdfs:comment "反向属性：前向为「负载均衡监听器 → 负载均衡实例」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :负载均衡监听器__负载均衡实例 .
+
+:负载均衡监听器__转发规则 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "负载均衡监听器 → 转发规则（反向）"@zh ;
+    rdfs:domain :负载均衡监听器 ;
+    rdfs:range :转发规则 ;
+    rdfs:comment "反向属性：前向为「转发规则 → 负载均衡监听器」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :转发规则__负载均衡监听器 .
+
+:路由表__子网 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "路由表 → 子网（反向）"@zh ;
+    rdfs:domain :路由表 ;
+    rdfs:range :子网 ;
+    rdfs:comment "反向属性：前向为「子网 → 路由表」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :子网__路由表 .
+
+:转发规则__目标组 a owl:ObjectProperty ;
+    rdfs:label "转发规则 → 目标组（反向）"@zh ;
+    rdfs:domain :转发规则 ;
+    rdfs:range :目标组 ;
+    rdfs:comment "反向属性：前向为「目标组 → 转发规则」（多对多 → 多对多）"@zh ;
+    owl:inverseOf :目标组__转发规则 .
+
+:镜像__云服务器实例 a owl:InverseFunctionalProperty, owl:ObjectProperty ;
+    rdfs:label "镜像 → 云服务器实例（反向）"@zh ;
+    rdfs:domain :镜像 ;
+    rdfs:range :云服务器实例 ;
+    rdfs:comment "反向属性：前向为「云服务器实例 → 镜像」（多对一 → 一对多）"@zh ;
+    owl:inverseOf :云服务器实例__镜像 .
