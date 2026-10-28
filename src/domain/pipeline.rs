@@ -94,7 +94,7 @@
 //! ⚠️ REQ-107 收口时是 33 条；REQ-110 新增 **6** 条（TTL 导出：C6 / C7 / H4 / H5 / D9 / D10），
 //! REQ-111 又新增 **5** 条（本地审核界面：R1–R5，**全部内部轨**），
 //! 所以口径变成 44（客户 17 / 建模 10 / 内部 14 / 静态 2 / 错误路径 1）；REQ-116 再新增 I10
-//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**；⭐ REQ-155 再新增 **1** 条 Studio 页面壳出口（I32 HTML/CSS/JS 三份常量，**内部轨、零数据**）⇒ **65（客户 17 / 建模 10 / 内部 35 / 静态 2 / 错误路径 1）**。
+//! （文档摄取的产物写出点，**内部轨**）⇒ 45（17/10/15/2/1）；REQ-121 再新增 **2** 条 R2RML 映射出口（I11 stdout / I12 `--out`，**内部轨**）⇒ 47（17/10/17/2/1）；REQ-122 再新增 **1** 条 SPARQL 查询回执出口（I13 stdout，**内部轨**）⇒ 48（客户 17 / 建模 10 / 内部 18 / 静态 2 / 错误路径 1）；REQ-123 再新增 **4** 条查询服务出口（I14 REST JSON / I15 MCP JSON-RPC / I16 SSE / I17 审计，**全部内部轨**）⇒ **52（客户 17 / 建模 10 / 内部 22 / 静态 2 / 错误路径 1）**；REQ-124 再新增 **4** 条控制面出口（I18 JSON / I19 TTL / I20 R2RML / I21 声明落盘，**全部内部轨**）⇒ **56（客户 17 / 建模 10 / 内部 26 / 静态 2 / 错误路径 1）**；REQ-125 再新增 **1** 条工作台页面壳出口（I22 HTML，**内部轨、零数据**）⇒ 57（客户 17 / 建模 10 / 内部 27 / 静态 2 / 错误路径 1）；REQ-126 再新增 **2** 条客户门户出口（I23 页面壳 HTML / I24 API JSON，**全部内部轨**）⇒ **59（客户 17 / 建模 10 / 内部 29 / 静态 2 / 错误路径 1）**；REQ-127 再新增 **1** 条查询服务整份 OWL TTL 响应出口（I25，**内部轨**）⇒ **60（内部 30）**；REQ-129 再新增 **2** 条（I26 合并提案 / I27 签字产物，**内部轨**）⇒ **62（客户 17 / 建模 10 / 内部 32 / 静态 2 / 错误路径 1）**；REQ-135 再新增 **1** 条 `/metrics` 指标响应出口（I28，**内部轨**）⇒ **63（客户 17 / 建模 10 / 内部 33 / 静态 2 / 错误路径 1）**；⭐ REQ-155 再新增 **1** 条 Studio 页面壳出口（I32 HTML/CSS/JS 三份常量，**内部轨、零数据**）⇒ **65（客户 17 / 建模 10 / 内部 35 / 静态 2 / 错误路径 1）**；⭐ REQ-172 再新增 **16** 条表间关系探索的屏幕回执/落盘点（I33–I48：probe 6 条 + judge 8 条 + 2 个原子落盘，**全部内部轨、只有计数与分类**）⇒ **81（客户 17 / 建模 10 / 内部 51 / 静态 2 / 错误路径 1）**。
 //! 条数变了不是「放宽」—— 每一条新出口都带自己的写点与证据（T1/T3/T8 逐个对账）。
 //!
 //! ⚠️ REQ-155 删除客户门户：REQ-126 当时新增的 I23/I24 两条出口随之移除（-2）；
@@ -402,6 +402,45 @@ pub enum OutletId {
     /// 「不登记 = 没人管」正是 REQ-107 收口的那个洞。
     /// 数据面一个字节都不经过这里：页面的每个字段都来自 `/api/*`（同源、要口令）。
     I32,
+    // ── ⭐ REQ-172 · 表间关系探索的 16 条屏幕回执 / 落盘点（全部内部轨）──
+    //
+    // 为什么仍然登记：`relation probe` / `relation judge` 是新命令，它们的
+    // stdout 回执**就是客户/实施看到的结果**（验了多少 / 确认几条 / 丢了什么），
+    // 两个落盘点写的是候选文件与判定缓存。「不登记 = 没人管」正是 REQ-107 收口的洞。
+    // 为什么是内部轨：正文只有**计数与分类**（零数据行、零客户视图字段），
+    // 与 I11（R2RML）/ I13（查询回执）/ I29（access 体检）同一条口径。
+    /// `relation probe` 的抬头：只读值域验证的规模（表/列/样本窗口）。
+    I33,
+    /// `relation probe` 的「待判列」行（`*_id` 列数 / 提名 / 保留 / 截断）。
+    I34,
+    /// `relation probe` 的「值域验证」行（测了 / 确认 / 否定 / 失败）。
+    I35,
+    /// `relation probe` 的「其它证据」行（samelenum / comment / 未解析列）。
+    I36,
+    /// `relation probe` 的「产物」行（候选文件路径）。
+    I37,
+    /// `relation probe` 的「未解析」分类行（no_candidate 等）。
+    I38,
+    /// `relation judge` 的抬头：A/B 批数与模型身份。
+    I39,
+    /// `relation judge` 的「调用」行（次数 / 缓存 / 失败 / 预热）。
+    I40,
+    /// `relation judge` 的「token」行（A / B / 合计）。
+    I41,
+    /// `relation judge` 的「候选/产出」行（条数 + 来源分布）。
+    I42,
+    /// `relation judge` 的「补漏轮」行（条数 / 表数 / 样本失败表）。
+    I43,
+    /// `relation judge` 的「丢弃」分类行（谓词 / 列 / 键 / 依据 / 超限 / 类型）。
+    I44,
+    /// `relation judge` 的「产物」行（`relations.json` 路径）。
+    I45,
+    /// `relation judge` 的「缓存」行（指纹缓存路径；重跑 0 token 的凭据）。
+    I46,
+    /// `cli::write_artifact` 的原子落盘（候选 / 判定 / 提案的 `.tmp` → 正式文件）。
+    I47,
+    /// `relation_judge` 的判定缓存原子落盘（回答原文；重跑 0 token 的凭据）。
+    I48,
 }
 
 impl OutletId {
@@ -452,6 +491,22 @@ impl OutletId {
             OutletId::I30 => "I30",
             OutletId::I31 => "I31",
             OutletId::I32 => "I32",
+            OutletId::I33 => "I33",
+            OutletId::I34 => "I34",
+            OutletId::I35 => "I35",
+            OutletId::I36 => "I36",
+            OutletId::I37 => "I37",
+            OutletId::I38 => "I38",
+            OutletId::I39 => "I39",
+            OutletId::I40 => "I40",
+            OutletId::I41 => "I41",
+            OutletId::I42 => "I42",
+            OutletId::I43 => "I43",
+            OutletId::I44 => "I44",
+            OutletId::I45 => "I45",
+            OutletId::I46 => "I46",
+            OutletId::I47 => "I47",
+            OutletId::I48 => "I48",
         }
     }
 }
@@ -571,6 +626,24 @@ const fn spec_of(id: OutletId) -> OutletSpec {
         OutletId::I31 => OutletSpec::of("I31", Track::Internal, Format::Json, Granularity::Whole),
         // ⭐ REQ-155 · Studio 页面壳：**HTML**（三份静态资源共用这一个构造点）。
         OutletId::I32 => OutletSpec::of("I32", Track::Internal, Format::Html, Granularity::Whole),
+        // ⭐ REQ-172 · 关系探索的屏幕回执 / 落盘点：**内部轨**（只有计数与分类，
+        // 零数据行、零客户视图字段；与 I11/I13/I29 同一条口径）。
+        OutletId::I33 => OutletSpec::of("I33", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I34 => OutletSpec::of("I34", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I35 => OutletSpec::of("I35", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I36 => OutletSpec::of("I36", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I37 => OutletSpec::of("I37", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I38 => OutletSpec::of("I38", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I39 => OutletSpec::of("I39", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I40 => OutletSpec::of("I40", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I41 => OutletSpec::of("I41", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I42 => OutletSpec::of("I42", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I43 => OutletSpec::of("I43", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I44 => OutletSpec::of("I44", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I45 => OutletSpec::of("I45", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I46 => OutletSpec::of("I46", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I47 => OutletSpec::of("I47", Track::Internal, Format::Text, Granularity::Whole),
+        OutletId::I48 => OutletSpec::of("I48", Track::Internal, Format::Text, Granularity::Whole),
     }
 }
 
@@ -1841,6 +1914,160 @@ pub const OUTLETS: &[Outlet] = &[
          浏览器导航打得开（ADR-010-A S2）；页面拿到的每个字段都来自 `/api/*`（同源 + Bearer）——\
          ⛔ 不为前端新开端点（零新增接口，ADR-010-A）。",
     },
+    // ── ⭐ REQ-172 · 表间关系探索的 16 条屏幕回执 / 落盘点（内部轨）──
+    //
+    // 这些 `println!` / `fs::write` 是 `relation probe` / `relation judge` 的**结果面**：
+    // 客户与实施看到的就是「验了多少 / 确认几条 / 丢了什么 / 文件落在哪」。
+    // 正文只有计数与分类，零数据行、零 DSN 口令 —— 与 I11/I13/I29 同一条口径：
+    // 登记为内部轨（不过客户词汇闸），但**必须登记**，否则就是没人管的新出口。
+    Outlet {
+        id: "I33",
+        path: "src/cli.rs",
+        call_site: "关系值域验证完成（只读",
+        spec: spec_of(OutletId::I33),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的抬头回执 —— 本次只读值域验证的\
+         规模（源表数 / 列数 / 每个 `*_id` 列的样本窗口大小）+ 产物落点。客户看到的是\
+         「这次到底验了多少」，⛔ 没有数据行、⛔ 不回显 DSN 口令",
+    },
+    Outlet {
+        id: "I34",
+        path: "src/cli.rs",
+        call_site: "待判列    :",
+        spec: spec_of(OutletId::I34),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的「待判列」行 —— `*_id` 列数 / \
+         提名条数 / 保留条数 / 被 `--max-pairs` 截掉的条数。客户看到「有多少线索、最后留了多少」",
+    },
+    Outlet {
+        id: "I35",
+        path: "src/cli.rs",
+        call_site: "值域验证  :",
+        spec: spec_of(OutletId::I35),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的「值域验证」行 —— 测了几个候选、\
+         值域确认几个、否定几个、查询失败几个。客户看到「哪些线索被数据证实/推翻」",
+    },
+    Outlet {
+        id: "I36",
+        path: "src/cli.rs",
+        call_site: "其它证据  :",
+        spec: spec_of(OutletId::I36),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的「其它证据」行 —— 同名列 / 注释\
+         证据的条数与未解析列数。客户看到「除命名外还靠什么、有多少列没提出来」",
+    },
+    Outlet {
+        id: "I37",
+        path: "src/cli.rs",
+        call_site: "产物      : {}",
+        spec: spec_of(OutletId::I37),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的「产物」行 —— 候选文件路径。\
+         客户/实施据此打开 `relation-candidates.json` 复核（文件本身是候选产物，不是客户视图）",
+    },
+    Outlet {
+        id: "I38",
+        path: "src/cli.rs",
+        call_site: "未解析    :",
+        spec: spec_of(OutletId::I38),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation probe` 的「未解析」分类行 —— \
+         `no_candidate` 等原因各多少列。客户看到「哪些列连候选都没有」，⛔ 不静默跳过",
+    },
+    Outlet {
+        id: "I39",
+        path: "src/cli.rs",
+        call_site: "关系判定完成（A 轮",
+        spec: spec_of(OutletId::I39),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的抬头回执 —— A/B 批数与模型身份。\
+         客户看到「这一轮判了多少批、用的哪个模型」",
+    },
+    Outlet {
+        id: "I40",
+        path: "src/cli.rs",
+        call_site: "调用      : A",
+        spec: spec_of(OutletId::I40),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「调用」行 —— A/B 各调用几次、\
+         缓存命中几次、失败几批、预热发没发。客户看到「花了多少次调用、有没有失败」",
+    },
+    Outlet {
+        id: "I41",
+        path: "src/cli.rs",
+        call_site: "token     : A",
+        spec: spec_of(OutletId::I41),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「token」行 —— A / B / 合计用量。\
+         客户看到「这一轮花了多少 token」，与预算对账",
+    },
+    Outlet {
+        id: "I42",
+        path: "src/cli.rs",
+        call_site: "候选/产出 :",
+        spec: spec_of(OutletId::I42),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「候选/产出」行 —— 候选数 ⇒ 关系数\
+         + 来源分布（domain / naming / ai）。客户看到「多少候选真的成了关系」",
+    },
+    Outlet {
+        id: "I43",
+        path: "src/cli.rs",
+        call_site: "补漏轮    :",
+        spec: spec_of(OutletId::I43),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「补漏轮」行 —— B 轮新增几条、\
+         涉及几张表、几张表取不到样本。客户看到「孤立表补出了多少」",
+    },
+    Outlet {
+        id: "I44",
+        path: "src/cli.rs",
+        call_site: "丢弃      :",
+        spec: spec_of(OutletId::I44),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「丢弃」分类行 —— 谓词不在词表 / \
+         列不存在 / 目标非键 / 类型不可比 / 无依据 / 超限 各丢了几条。\
+         客户看到「为什么少了这些关系」，⛔ 不静默丢",
+    },
+    Outlet {
+        id: "I45",
+        path: "src/cli.rs",
+        call_site: "产物      : {}",
+        spec: spec_of(OutletId::I45),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「产物」行 —— `relations.json` 路径。\
+         客户/实施据此复核判定明细（文件本身是候选判定，未签不进快照）",
+    },
+    Outlet {
+        id: "I46",
+        path: "src/cli.rs",
+        call_site: "缓存      :",
+        spec: spec_of(OutletId::I46),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的「缓存」行 —— 指纹缓存文件路径。\
+         客户看到「重跑为什么 0 token」的凭据（缓存里只有回答原文，不含凭据）",
+    },
+    Outlet {
+        id: "I47",
+        path: "src/cli.rs",
+        call_site: "std::fs::write(&tmp, text)",
+        spec: spec_of(OutletId::I47),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`cli::write_artifact` 的**原子落盘** —— \
+         候选 / 判定 / 关系提案先写 `.tmp` 再改名。写的是本机工作目录里的产物文件，\
+         不是响应体、不是客户视图；客户看到的是落盘后的回执（I37/I45）",
+    },
+    Outlet {
+        id: "I48",
+        path: "src/extract/relation_judge.rs",
+        call_site: "std::fs::write(&tmp, format!",
+        spec: spec_of(OutletId::I48),
+        enforcement: Enforcement::InternalOnly,
+        exemption_reason: "内部（REQ-172）：`relation judge` 的**判定缓存**原子落盘 —— \
+         缓存里是模型回答原文（用来重跑 0 token）+ 指纹头。写的是本机文件，\
+         不是响应体、不是客户视图；⛔ 缓存不落任何 DSN 口令或样本值",
+    },
     Outlet {
         id: "Z1",
         path: "src/server/http.rs",
@@ -1921,13 +2148,15 @@ mod tests {
     /// ⇒ **61（内部 31）**；⭐ REQ-144 再加 I29–I31（access mapping 的三条写点：
     /// `validate` 报告 / `fetch` JSON-LD / `publish` 发布物，**全部内部轨**）
     /// ⇒ **64（内部 34）**；⭐ REQ-155 再加 I32（Studio 页面壳的**三份静态常量**，
-    /// 内部轨、零数据）⇒ **65（内部 35）**。
+    /// 内部轨、零数据）⇒ **65（内部 35）**；⭐ REQ-172 再加 I33–I48
+    /// （`relation probe` / `relation judge` 的 14 条屏幕回执 + 2 个原子落盘点，
+    /// **全部内部轨**：只有计数与分类，零数据行）⇒ **81（内部 51）**。
     /// 这条断言**仍然逐项精确相等**：多一条少一条、换一条轨道都会红。
     #[test]
     fn registry_is_the_declared_baseline() {
         assert_eq!(
             OUTLETS.len(),
-            65,
+            81,
             "口径 = 33（REQ-107）+ 6（REQ-110 的 TTL 出口）+ 5（REQ-111 的审核界面出口）\
              + 1（REQ-116 的文档摄取产物）+ 2（REQ-121 的 R2RML 出口）\
              + 1（REQ-122 的 SPARQL 回执）+ 4（REQ-123 的查询服务出口）\
@@ -1937,17 +2166,18 @@ mod tests {
              + 1（REQ-135 的 /metrics 指标响应）\
              + 3（REQ-144 的 access validate / fetch / publish）\
              + 1（REQ-155 的 Studio 页面壳）\
+             + 16（REQ-172 的 relation probe/judge 回执与落盘：I33–I48）\
              - 2（REQ-155 删除客户门户：I23/I24）"
         );
         assert_eq!(outlet_count(Track::Customer), 17);
         assert_eq!(outlet_count(Track::Modeling), 10);
         assert_eq!(
             outlet_count(Track::Internal),
-            35,
+            51,
             "内部 9 + REQ-111 的 R1–R5 + REQ-116 的 I10 + REQ-121 的 I11/I12 + REQ-122 的 I13 \
              + REQ-123 的 I14–I17 + REQ-124 的 I18–I21 + REQ-125 的 I22 \
              + REQ-127 的 I25 + REQ-129 的 I26/I27 + REQ-135 的 I28 + REQ-144 的 I29–I31 \
-             + REQ-155 的 I32（Studio 页面壳）\
+             + REQ-155 的 I32（Studio 页面壳）+ REQ-172 的 I33–I48（关系探索回执/落盘）\
              （REQ-155 删除了 REQ-126 的 I23/I24）"
         );
         assert_eq!(outlet_count(Track::Static), 2, "Z2/Z3；Z4 不是出口（A1）");

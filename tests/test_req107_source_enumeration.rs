@@ -2054,6 +2054,34 @@ const OUTLET_FNS: &[(&str, &str, &str)] = &[
         "read_declarations",
         "运维辅助（REQ-159：`--declarations <dir>` 的读取段；不递归、不跟符号链接 —— 零写出）",
     ),
+    // ⭐ REQ-172 · 表间关系探索（`relation probe` / `relation judge`）：
+    // 这 5 个函数都在出口文件 `src/cli.rs` 里，T5 要求逐个登记用途
+    //（含 2 个入参闸与 1 个原子落盘 —— 不是「调试输出」，是真的结果面/写盘面）。
+    (
+        "src/cli.rs",
+        "relation_probe_cmd",
+        "子命令 handler（REQ-172 `relation probe`：只读值域验证 → 候选文件；屏幕回执 I33–I38）",
+    ),
+    (
+        "src/cli.rs",
+        "relation_judge_cmd",
+        "子命令 handler（REQ-172 `relation judge`：ACP 两轮 + 两端样本 → 判定文件；回执 I39–I46）",
+    ),
+    (
+        "src/cli.rs",
+        "write_artifact",
+        "共用实现（REQ-172：产物原子落盘 `.tmp` → 正式文件；写出口 I47）",
+    ),
+    (
+        "src/cli.rs",
+        "parse_positive_u32",
+        "入参闸（REQ-172：`--sample-rows` ≥1；0 = 不采样 ⇒ clap 层 exit 2）",
+    ),
+    (
+        "src/cli.rs",
+        "parse_positive_usize",
+        "入参闸（REQ-172：`--max-pairs` / judge 的 `--sample-rows` ≥1 ⇒ clap 层 exit 2）",
+    ),
 ];
 
 /// ⭐ **纯函数**：一段源码里**重名**的函数定义（第 4 轮 B5）。
@@ -2292,6 +2320,12 @@ const MODULES: &[(&str, &str)] = &[
     // 写盘仍经 `cli::write_local` / `console::local::write_atomic`。
     // 本表只登记模块（T6：新增模块即红）。
     ("src/extract/mod.rs", "schema_digest"),
+    // ⭐ REQ-172 · 表间关系探索第一段（三源提名 / 只读值域验证 / 候选产物）。
+    // 写出口 I33–I38 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/extract/mod.rs", "relation"),
+    // ⭐ REQ-172 · 第二段（AI 两轮 / 代码校验 / prompt_sha 指纹缓存）。
+    // 写出口 I39–I46 与落盘点 I48 登记在 `OUTLETS`；本表只登记模块（T6：新增模块即红）。
+    ("src/extract/mod.rs", "relation_judge"),
     ("src/mcp/mod.rs", "protocol"),
     ("src/mcp/mod.rs", "serve"),
     ("src/mcp/mod.rs", "tools"),
