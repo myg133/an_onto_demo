@@ -20,6 +20,9 @@
 //! LLM 兜底是偏差列表 **RN-5，未做**。
 //! 详见 `src/agent/mod.rs` 的模块头（同一处承诺，两边不许说法漂移）。
 
+// ⭐ REQ-174 · 版本级 access mapping（`version_access_mappings` 一张表）。
+// 本层只做读写；解析 / 绑定在 `console::provision`（导入前）与 `query::serve`（加载时）。
+pub mod access_store;
 pub mod agent_registry;
 // REQ-109 · AI 语义判断的指纹缓存（`ai_cache` 表）。
 // 它是**存储层**：编排（`extract::ai_semantic`）是同步的，库读写在它前后各一次。
@@ -36,6 +39,7 @@ pub mod project;
 pub mod proposal;
 pub mod snapshot_store;
 
+pub use access_store::PgAccessStore;
 pub use agent_registry::PgAgentRegistry;
 pub use ai_cache::PgAiCache;
 pub use bundle_store::PgBundleStore;

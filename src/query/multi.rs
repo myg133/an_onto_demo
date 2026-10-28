@@ -13,8 +13,13 @@
 //!    ↓ 一次小 SELECT（约 1 ms）
 //! active_version_id = projects.active_version_id
 //!    ↓ 按 version_id 查内存缓存
-//! 命中 ⇒ 用缓存；未命中 ⇒ get_snapshot(version_id) 加载并放入缓存
+//! 命中 ⇒ 用缓存；未命中 ⇒ **同一批**加载 `get_snapshot(version_id)` + 该版本的 AM
+//! （`version_access_mappings`，REQ-174）并放入缓存
 //! ```
+//!
+//! ⭐ REQ-174 · **AM 跟着版本走**：AM 与快照用**同一个缓存键**（`version_id`），
+//! 且在同一次冷加载里取出 ⇒ 换版本自然换 AM，不需要第二套失效机制，
+//! ⛔ 也不是每请求查一次 AM。
 //!
 //! # 缓存键为什么是 `version_id` 而不是 `project`
 //!
@@ -257,7 +262,14 @@ impl MultiProject {
         let Some(snap) = snap else {
             return Err(self.snapshot_missing(project, version_id, "`ontology_versions` 里有这一版，但快照表里没有内容"));
         };
-        let prepared = serve::prepare_project(&self.pool, &self.deploy, project, v.seq, &snap)
+        // ⭐ REQ-174 · AM 与快照**同批加载**（冷路径，缓存未命中才走这里）：
+        // DB(该 `active_version_id`) > `--access-mapping 文件` > 无。
+        // 缓存键仍是 `version_id` ⇒ 激活新版本后的**下一个请求**自然用新 AM（AC-004），
+        // ⛔ 不是每请求查一次 AM。
+        let access = serve::resolve_multi_access(&self.pool, &self.deploy, version_id, v.seq)
+            .await
+            .map_err(|e| db_error("读取版本 access 映射", e))?;
+        let prepared = serve::prepare_project(&self.pool, &self.deploy, project, v.seq, &snap, access)
             .await
             .map_err(|e| {
                 ApiError::with_code(

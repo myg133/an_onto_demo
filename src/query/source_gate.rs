@@ -164,6 +164,13 @@ pub struct AccessMapping {
     mapping_version: u64,
     /// ⭐ REQ-152 · 契约版本（缺省按 1）：`>= 2` 才允许下发完整配方（AC-103）。
     contract_version: u64,
+    /// ⭐ REQ-174 · `sources[]` 的**声明条数**（原样数数组，写
+    /// `version_access_mappings.sources` 用）。
+    ///
+    /// 与 `pack.rs` 写进 manifest 的 `components.am.sources` 同一条口径：
+    /// 都是数**文件里的数组长度**，不是数「带 id 的源」（后者是解析后的过滤结果，
+    /// 拿它当 manifest 的计数会让两处对不上）。
+    sources: usize,
     /// 单个类最多声明一次（重复 ⇒ 加载期报错）；按类 key 升序。
     entities: Vec<Entity>,
     /// 类 key → `entities` 下标（唯一索引）。
@@ -583,6 +590,29 @@ impl AccessMapping {
         if contract_version == 0 {
             return Err("`contract_version` 是 0。契约版本从 1 起。".to_string());
         }
+        // ⭐ REQ-174 · AC-006 / AC-007 · **只认 1 和 2**（与 `access::CONTRACT_VERSION` /
+        // `CONTRACT_VERSION_V2` 同一条口径）。
+        //
+        // 为什么必须在这里拦：导入时「包内 AM 不合法 ⇒ 整笔失败、版本都不建」，
+        // 而 `contract_version: 3` 的字段语义是**未来**才定的 —— 按 `>= 2` 硬当 v2
+        // 处理，等于用一个今天的解析器去猜未来的契约，猜错了不会有任何症状（配方静默错）。
+        // 因此在**写库之前**就拒掉，错误码由调用方翻成 `am.invalid`。
+        //
+        // ⚠️ 这不是把 v1 拉回红：v1（或没写）仍然走「只有 4 键」的老路（AC-007）。
+        // 上界直接取 `access` 模块的常量（`CONTRACT_VERSION` / `CONTRACT_VERSION_V2`），
+        // 于是「哪几个版本被支持」全仓仍然是**一份**定义。
+        let max_supported = crate::access::CONTRACT_VERSION_V2 as u64;
+        if contract_version > max_supported {
+            return Err(format!(
+                "`contract_version` 是 {contract_version}：本实现只认 {} / {max_supported}\
+                 （{} 起才下发完整配方）。⛔ 不按「>= {max_supported} 就当 {max_supported}」处理 —— \
+                 未来版本的字段语义可能整套都变了，猜出来的配方比没有配方更难查。",
+                crate::access::CONTRACT_VERSION,
+                crate::access::CONTRACT_VERSION_V2
+            ));
+        }
+        // ⭐ REQ-174 · 声明条数（原样数数组；见字段注释）。
+        let source_count = doc.sources.len();
         if doc.entities.is_empty() {
             // 「加载了映射但一条 api 类都没有」是一个可用的状态（全是库源），但要说出来 ——
             // 否则运维会以为映射生效了。这里不当作错误，只由调用方打一行提示。
@@ -689,6 +719,7 @@ impl AccessMapping {
         Ok(Self {
             mapping_version,
             contract_version,
+            sources: source_count,
             entities,
             by_class,
             recipes,
@@ -798,6 +829,11 @@ impl AccessMapping {
     /// ⭐ REQ-152 · 契约版本（`>= 2` 才允许下发完整配方）。
     pub fn contract_version(&self) -> u64 {
         self.contract_version
+    }
+
+    /// ⭐ REQ-174 · `sources[]` 的声明条数（与 manifest 的 `components.am.sources` 同口径）。
+    pub fn source_count(&self) -> usize {
+        self.sources
     }
 
     /// ⭐ REQ-152 · 某个类的取数配方（v1 映射 ⇒ 恒 `None`）。
