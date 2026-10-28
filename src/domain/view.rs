@@ -804,12 +804,17 @@ pub fn semantic_label(s: &str) -> Option<String> {
 /// 也就是说「漏翻 = 拒绝出图」，而不是「漏翻 = 悄悄给客户看错的东西」。
 /// 这条不变量由 `tests/test_view.rs::test_view_no_cardinality_notation_passes_silently` 守着。
 fn cardinality_cn(c: &str) -> String {
-    match c {
-        "1:1" => "唯一对应".to_string(),
-        "1:N" => "一对多".to_string(),
-        "N:M" => "多对多".to_string(),
+    // ⚠️ 基数的**等价写法**必须一起翻（2026-10-28 客户实测）：抽取端产出的是 `N:N`，
+    //    而这里原来只认 `N:M` ⇒ 落到 `_ =>` 原样透出 ⇒ 被发布闸按「未翻译的基数记号」拒掉，
+    //    整个项目 500 打不开。中文记号（`多对多`）与大小写变体也一并收。
+    match c.trim() {
+        "1:1" | "1：1" => "唯一对应".to_string(),
+        "1:N" | "1：N" | "1:n" => "一对多".to_string(),
+        "N:M" | "N:N" | "M:N" | "M:M" | "N：M" | "n:m" | "n:n" | "多对多" => "多对多".to_string(),
         // 真实库的主力形态：多个从属行指向同一个父行（`活动关键词 → 活动`）
-        "N:1" => "多对一".to_string(),
+        "N:1" | "N：1" | "n:1" | "多对一" => "多对一".to_string(),
+        "唯一对应" => "唯一对应".to_string(),
+        "一对多" => "一对多".to_string(),
         _ => c.to_string(),
     }
 }
@@ -1770,5 +1775,34 @@ mod tests {
                 "形态后缀认得出、词根认不出的 {bad} 必须丢弃"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cardinality_tests {
+    use super::*;
+
+    /// 2026-10-28 客户实测：抽取端产出 `N:N`，而映射表只认 `N:M`
+    /// ⇒ 原样透出 ⇒ 发布闸按「未翻译的基数记号」拒掉 ⇒ 项目 500。
+    /// 等价写法必须一起翻，且翻完不能再被判据抓住。
+    #[test]
+    fn cardinality_equivalent_spellings_are_translated() {
+        for raw in ["N:N", "M:N", "M:M", "N:M", "n:n", "N：M", "多对多"] {
+            let cn = cardinality_cn(raw);
+            assert_eq!(cn, "多对多", "{raw} 必须翻成「多对多」");
+            assert!(
+                cardinality_notation_hit(&cn).is_none(),
+                "{raw} 翻完不该再被判据抓：{cn}"
+            );
+        }
+        for raw in ["1:N", "1:n", "1：N"] {
+            assert_eq!(cardinality_cn(raw), "一对多", "{raw}");
+        }
+        for raw in ["N:1", "n:1", "N：1"] {
+            assert_eq!(cardinality_cn(raw), "多对一", "{raw}");
+        }
+        assert_eq!(cardinality_cn("1:1"), "唯一对应");
+        // 未知形态仍然原样透出（宁可见红，不许悄悄错）
+        assert_eq!(cardinality_cn("0..*"), "0..*");
     }
 }
