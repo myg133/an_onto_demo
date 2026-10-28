@@ -785,6 +785,68 @@ def resolve_fixture_path(fixture, am_path):
 # 凭据（只从环境变量读）
 # --------------------------------------------------------------------------- #
 
+#: `--credential-map` 指定的「声明名 → 环境变量名」；由 main() 填。
+CREDENTIAL_MAP = {}
+
+
+def _credential_candidates(declared):
+    """声明名 → 可能实际存在的环境变量名（**只换名字，不猜值**）。
+
+    为什么需要（2026-10-28 数字员工平台实测）：
+      平台把凭据注入成 `SKILL_CREDENTIAL_<字段名>`（如 `SKILL_CREDENTIAL_SECRETID`），
+      而 AM 写的是**源侧名字**（`TENCENT_SECRET_ID`）。
+      沙箱里的 `run_skill_script` **没有 shell**，所以 skill 里教的
+      `VAR=… python …` 桥接在平台上**根本执行不了** ⇒ 只能由脚本自己按名字找。
+
+    候选顺序（先精确、后推断）：
+      1. `--credential-map` 显式指定（最高优先级，用户说了就照做）
+      2. 声明名本身
+      3. 去掉厂商前缀后的 `SKILL_CREDENTIAL_<去分隔符大写>`（平台约定）
+      4. 同 3 但保留下划线（另一种平台写法）
+      5. 换厂商前缀：`TENCENT_` ↔ `TENCENTCLOUD_`
+    ⛔ 只返回**名字**，值永远只从 os.environ 取；找错了也只会报 credential.missing。
+    """
+    out = []
+    mapped = CREDENTIAL_MAP.get(declared)
+    if mapped:
+        out.append(mapped)
+    out.append(declared)
+
+    # 去掉常见厂商前缀，得到「字段名」
+    field = declared
+    for pre in ("TENCENTCLOUD_", "TENCENT_", "ALIBABA_", "ALIYUN_", "AWS_", "HUAWEI_"):
+        if field.upper().startswith(pre):
+            field = field[len(pre):]
+            break
+    compact = "".join(ch for ch in field.upper() if ch.isalnum())
+    withus = field.upper()
+    out.append("SKILL_CREDENTIAL_" + compact)
+    if withus != compact:
+        out.append("SKILL_CREDENTIAL_" + withus)
+
+    # 换厂商前缀的等价名（老部署用过 TENCENTCLOUD_*）
+    if declared.upper().startswith("TENCENT_"):
+        out.append("TENCENTCLOUD_" + declared[len("TENCENT_"):])
+    elif declared.upper().startswith("TENCENTCLOUD_"):
+        out.append("TENCENT_" + declared[len("TENCENTCLOUD_"):])
+
+    seen, uniq = set(), []
+    for name in out:
+        if name and name not in seen:
+            seen.add(name)
+            uniq.append(name)
+    return uniq
+
+
+def _resolve_env(declared):
+    """按候选顺序找到第一个**有值**的环境变量，返回 (名字, 值)；全没有返回 (None, None)。"""
+    for name in _credential_candidates(declared):
+        value = os.environ.get(name)
+        if value:
+            return name, value
+    return None, None
+
+
 def load_credentials(source):
     """从 `auth.credential_env` **命名**的环境变量读 SecretId / SecretKey。
 
@@ -799,16 +861,22 @@ def load_credentials(source):
              "source `%s` 的 auth.credential_env 少于两个变量名" % source.get("id"),
              "写成 [\"<SecretId 的变量名>\", \"<SecretKey 的变量名>\"]。")
     sid_env, key_env = envs[0], envs[1]
-    missing = [name for name in (sid_env, key_env) if not os.environ.get(name)]
-    if missing:
+    sid_name, sid = _resolve_env(sid_env)
+    key_name, key = _resolve_env(key_env)
+    if not sid or not key:
+        missing = [n for n, v in ((sid_env, sid), (key_env, key)) if not v]
         fail("credential.missing", EXIT_CREDENTIAL,
              "环境变量没设：%s（source `%s` 的 auth.credential_env 要求它们）"
              % ("、".join(missing), source.get("id")),
-             "在当前 shell 里 export 一次即可（只用变量名，⛔ 不要把值写进命令行/"
-             "脚本/AM）：`export %s=... %s=...`；之后 ⛔ 不要 `echo` 它们。"
-             % (sid_env, key_env))
-    sid = os.environ.get(sid_env, "")
-    key = os.environ.get(key_env, "")
+             "两种办法（⛔ 值不要写进命令行/脚本/AM，也不要 echo）：\n"
+             "  · 平台注入的是别的名字 ⇒ 用 `--credential-map %s=<实际变量名>` 显式指路；\n"
+             "  · 自己 export ⇒ `export %s=... %s=...`。\n"
+             "  脚本也会自动尝试 `SKILL_CREDENTIAL_*`（平台约定）与 TENCENT_/TENCENTCLOUD_ 等价名。"
+             % (missing[0] if missing else sid_env, sid_env, key_env))
+    if sid_name != sid_env or key_name != key_env:
+        # 只报**名字**（不报值），让调用方知道脚本走的是兜底而不是精确名
+        sys.stderr.write("[note] 凭据按别名取到：%s ← %s, %s ← %s\n"
+                         % (sid_env, sid_name, key_env, key_name))
     # 记下来供 redact() 用：万一某条异常消息里带了值，也会被抹掉。
     for value in (sid, key):
         if value and value not in _SECRET_VALUES:
@@ -2544,6 +2612,20 @@ def _selftest_recipe(selftest):
     selftest.check("配方缺 class ⇒ am.invalid", e1 is not None and e1.code == "am.invalid",
                    str(e1 and e1.code))
 
+    # --credential-map / 平台注入名兜底（2026-10-28 平台实测：只有 SKILL_CREDENTIAL_*）
+    cands = _credential_candidates("TENCENT_SECRET_ID")
+    selftest.check("凭据候选里含平台的 SKILL_CREDENTIAL_SECRETID",
+                   "SKILL_CREDENTIAL_SECRETID" in cands, str(cands))
+    selftest.check("凭据候选里含声明名本身（优先精确）",
+                   cands[0] == "TENCENT_SECRET_ID", str(cands[:3]))
+    selftest.check("凭据候选里含 TENCENTCLOUD_ 等价名",
+                   "TENCENTCLOUD_SECRET_ID" in cands, str(cands))
+    CREDENTIAL_MAP["TENCENT_SECRET_ID"] = "MY_SID"
+    selftest.check("--credential-map 显式映射优先",
+                   _credential_candidates("TENCENT_SECRET_ID")[0] == "MY_SID",
+                   str(_credential_candidates("TENCENT_SECRET_ID")[:2]))
+    CREDENTIAL_MAP.pop("TENCENT_SECRET_ID", None)
+
     # --id-property：key_path 必须是**字符串**（不是 fields 里的 {path:...} 字典）
     # —— agent 实测抓到的 bug：`--id-property instance_id` 报「identity.key_path 为空」
     _v = (ent.get("fields") or {}).get("vm_id")
@@ -2650,6 +2732,9 @@ def build_parser():
     parser.add_argument("--recipe", metavar="RECIPE.json",
                         help="直接吃服务端 `@pending[].get` 的配方（用 `-` 从 stdin 读）："
                              "v2 契约下查一次本体就有，不需要 AM 文件")
+    parser.add_argument("--credential-map", metavar="DECLARED=ENV", action="append", default=[],
+                        help="凭据名映射：把 AM 里声明的变量名指到实际环境变量名"
+                             "（可重复；平台注入 SKILL_CREDENTIAL_* 时用）")
     parser.add_argument("--id-property", metavar="PROP",
                         help="配方里没有 identity：用哪个属性当主键（jsonld 输出必填）")
     parser.add_argument("--entity", metavar="ID|CLASS", help="entity id 或本体 class")
@@ -2689,6 +2774,13 @@ def main(argv=None):
     if args.selftest:
         return cmd_selftest()
 
+    for pair in getattr(args, "credential_map", None) or []:
+        if "=" not in pair:
+            parser.error("--credential-map 要写成 DECLARED=ENV，例如 "
+                         "TENCENT_SECRET_ID=SKILL_CREDENTIAL_SECRETID")
+        src_name, env_name = pair.split("=", 1)
+        CREDENTIAL_MAP[src_name.strip()] = env_name.strip()
+
     if args.list_signers:
         # 一行一个 mode，方便 `--list-signers | grep` 这类用法
         for mode in supported_modes():
@@ -2706,6 +2798,15 @@ def main(argv=None):
                          "把 `@pending[0]` 或它的 `get` 整段传进来。")
             else:
                 recipe = read_json_file(args.recipe, "配方文件")
+            # 手抄检测：把回执里的 get **手抄**成文件时最容易丢字段（实测 2026-10-28：
+            # agent 手抄后丢了 pushdown ⇒ --param region 被拒，报"这个 entity 一个可下推参数都没有"）
+            _g = recipe.get("get") if isinstance(recipe.get("get"), dict) else recipe
+            _lost = [k for k in ("pushdown", "fields", "iterator", "operation") if not _g.get(k)]
+            if _lost:
+                sys.stderr.write(
+                    "[warn] 配方里缺 %s：如果你是从回执**手抄**的，请改成把 "
+                    "`@pending[0].get` **原样保存**（手抄会丢字段，表现为"
+                    "参数被拒 / 0 行）\n" % "、".join(_lost))
             am = am_from_recipe(recipe)
             if args.id_property:
                 props = am["entities"][0]["fields"] or {}

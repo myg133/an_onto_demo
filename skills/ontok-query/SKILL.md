@@ -66,6 +66,17 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 | 有 `source` / `operation` / `request` / `iterator` / `fields` / `auth` | **v2 契约：配方已经给了** | ✅ 直接用 `scripts/access_fetch.py --recipe -`（见 §4.5②·五）——**不需要 AM 文件** |
 | 只有 `class` / `filter` / `pushdown` / `ref` | **v1 契约：只给指针，不给配方** | 带上 `ref` **问调用方要 AM 文件**（「我需要包含 `access#<条目>@v<版本>` 的那份 AM」） |
 
+**脚本报错后的处置顺序**（⛔ 不要一次失败就换工具）：
+
+| 错误码 | 先做什么 | 仍失败才 |
+| --- | --- | --- |
+| `credential.missing` | 加 `--credential-map`（或先跑 `scripts/env_probe.py` 看注入了哪些名字） | 换别的凭据来源 |
+| `param.not_pushdown` | 检查配方是不是**手抄丢了 `pushdown`** ⇒ 重新原样保存 `@pending[0].get` | 不用该参数，拉回来本地筛（并说明） |
+| `auth.rejected` | 核对 AM 的 `auth.service` / 时钟 / 凭据对应关系 | 判定凭据无效，报给调用方 |
+
+**只有在脚本明确不可用（凭据拿不到、平台不给 shell 等）时**才降级到云 CLI 直采；
+降级时**必须在结论里写明"降级自采"**，否则读者会以为是按本体配方取的。
+
 | ⛔ 永远别做 |
 | --- |
 | 去文件系统里找"看起来像数据"的东西；拿历史报表 / 导出 JSON / 别人的巡检结果顶替 |
@@ -574,6 +585,14 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | `identity` / `iri_template`（`@id` 用） | ❌ 没有 | **两种输出格式都要给 `--id-property <fields 里的属性名>`**：jsonld 缺它直接拒（`recipe.no_identity`）；**rows 缺它不报错，但每行会被 `skipped_no_identity` 丢掉 ⇒ 你拿到 0 行还以为查询没数据**（⛔ 不猜主键） |
 | `fixture`（离线试跑用） | ❌ 没有 | `--dry-run` 在配方模式下会明确拒（`recipe.no_fixture`）；要试跑就用 `--mapping` 带 fixture 的 AM |
 
+**⛔ 配方要「原样保存」，不要手抄字段**（2026-10-28 数字员工平台实测）：
+
+> agent 手抄 `cvm_recipe.json` 时**丢了 `pushdown`**，于是 `--param region=ap-shanghai` 被脚本拒绝
+> （"这个 entity 一个可下推参数都没有"），而服务端原回执里明明有 `["region","zone"]`。
+
+正确做法：把 `@pending[0].get` **整段原样**落盘（`json.dumps(entry["get"])`），⛔ 不要按字段名重打一遍。
+脚本也会兜底：配方缺 `pushdown` / `fields` / `iterator` 时会打 `[warn]`，提示疑似手抄。
+
 **配方模式下两个必给参数**（缺一不可，都是实测踩过的）：
 
 | 参数 | 缺了会怎样 | 怎么填 |
@@ -582,15 +601,23 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | `--id-property <fields 里的属性名>` | 见上表：jsonld 直接拒；**rows 静默空结果** | 填 `fields` 里的**属性名**（不是源的字段名，如 `instance_id` 而非 `InstanceId`） |
 
 **若凭据由平台注入**（变量名带前缀，如 `SKILL_CREDENTIAL_SECRETID`），而配方 `auth.credential_env`
-写的是**源侧名字**（如 `TENCENT_SECRET_ID`）—— 两边对不上，脚本会报 `credential.missing`（退出 3）。
-**在同一条命令里桥接**（每条 shell 都是新进程，桥接必须与取数同行；⛔ 值不落盘、不回显）：
+写的是**源侧名字**（如 `TENCENT_SECRET_ID`）—— 两边对不上。三条路，**按顺序试**：
+
+| # | 做法 | 适用 |
+| --- | --- | --- |
+| 1 | **什么都不做**：脚本自己找 | ✅ **首选**。脚本会依次尝试 `声明名` → `SKILL_CREDENTIAL_<去厂商前缀、去分隔符大写>` → `SKILL_CREDENTIAL_<保留下划线>` → `TENCENTCLOUD_/TENCENT_` 等价名。命中会在 stderr 打 `[note] 凭据按别名取到：TENCENT_SECRET_ID ← SKILL_CREDENTIAL_SECRETID` |
+| 2 | `--credential-map TENCENT_SECRET_ID=<实际变量名>` | 平台注入名不在上面的候选里（可重复传多条） |
+| 3 | shell 桥接 `VAR=… python …` | ⚠️ **只有能起 shell 的环境**才行。**沙箱里的 `run_skill_script` 直接执行脚本、没有 shell** ⇒ 平台上这条路**用不了** |
 
 ```bash
-TENCENT_SECRET_ID="$SKILL_CREDENTIAL_SECRETID" \
-TENCENT_SECRET_KEY="$SKILL_CREDENTIAL_SECRETKEY" \
+# 路 2 的写法（平台沙箱里可用）
 python scripts/access_fetch.py --recipe recipe.json --entity <class> \
-    --id-property <fields 里的属性名> --format rows --out ./rows.json
+    --id-property <fields 里的属性名> --format rows --out ./rows.json \
+    --credential-map TENCENT_SECRET_ID=SKILL_CREDENTIAL_SECRETID \
+    --credential-map TENCENT_SECRET_KEY=SKILL_CREDENTIAL_SECRETKEY
 ```
+
+⛔ 值不落盘、不回显；只传**变量名**。
 
 | ⛔ 不要 | ✅ 要 |
 | --- | --- |
