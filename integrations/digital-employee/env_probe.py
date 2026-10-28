@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""凭据环境探针（调试用）：列出沙箱中已注入的 SKILL_CREDENTIAL_* 环境变量。
+"""凭据环境探针（**本平台专用**）：列出沙箱中已注入的 `SKILL_CREDENTIAL_*` 环境变量。
+
+⚠️ 这个文件属于**集成层**（`Deploy/integrations/digital-employee/`），**不是**产品 skill 的一部分：
+   `SKILL_CREDENTIAL_*` 是**本平台的注入约定**，产品 skill 只认 AM 里声明的变量名。
 
 用法（Agent 在沙箱中执行）：
     python3 scripts/env_probe.py

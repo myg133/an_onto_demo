@@ -830,52 +830,19 @@ CREDENTIAL_MAP = {}
 
 
 def _credential_candidates(declared):
-    """声明名 → 可能实际存在的环境变量名（**只换名字，不猜值**）。
+    """声明名 → 实际环境变量名：**只认「显式映射」与「声明名本身」**。
 
-    为什么需要（2026-10-28 数字员工平台实测）：
-      平台把凭据注入成 `SKILL_CREDENTIAL_<字段名>`（如 `SKILL_CREDENTIAL_SECRETID`），
-      而 AM 写的是**源侧名字**（`TENCENT_SECRET_ID`）。
-      沙箱里的 `run_skill_script` **没有 shell**，所以 skill 里教的
-      `VAR=… python …` 桥接在平台上**根本执行不了** ⇒ 只能由脚本自己按名字找。
+    ⛔ 这里**不做任何前缀推断**。
+       注入名带前缀、旧名换前缀这类**部署方约定**，属于集成层（见
+       `Deploy/integrations/<平台>/`），不属于产品。
+       产品只保证一件事：**AM 里写什么变量名，就读什么变量名**；
+       名字对不上时由调用方用 `--credential-map DECLARED=ACTUAL` **显式**指路。
 
-    候选顺序（先精确、后推断）：
-      1. `--credential-map` 显式指定（最高优先级，用户说了就照做）
-      2. 声明名本身
-      3. 去掉厂商前缀后的 `SKILL_CREDENTIAL_<去分隔符大写>`（平台约定）
-      4. 同 3 但保留下划线（另一种平台写法）
-      5. 换厂商前缀：`TENCENT_` ↔ `TENCENTCLOUD_`
-    ⛔ 只返回**名字**，值永远只从 os.environ 取；找错了也只会报 credential.missing。
+    为什么这么做（2026-10-28）：把一个平台的注入约定写进产品脚本 = 下一个人以为
+    "产品认识那个平台"。通用与专用混在一起，迟早互相骗。
     """
-    out = []
     mapped = CREDENTIAL_MAP.get(declared)
-    if mapped:
-        out.append(mapped)
-    out.append(declared)
-
-    # 去掉常见厂商前缀，得到「字段名」
-    field = declared
-    for pre in ("TENCENTCLOUD_", "TENCENT_", "ALIBABA_", "ALIYUN_", "AWS_", "HUAWEI_"):
-        if field.upper().startswith(pre):
-            field = field[len(pre):]
-            break
-    compact = "".join(ch for ch in field.upper() if ch.isalnum())
-    withus = field.upper()
-    out.append("SKILL_CREDENTIAL_" + compact)
-    if withus != compact:
-        out.append("SKILL_CREDENTIAL_" + withus)
-
-    # 换厂商前缀的等价名（老部署用过 TENCENTCLOUD_*）
-    if declared.upper().startswith("TENCENT_"):
-        out.append("TENCENTCLOUD_" + declared[len("TENCENT_"):])
-    elif declared.upper().startswith("TENCENTCLOUD_"):
-        out.append("TENCENT_" + declared[len("TENCENTCLOUD_"):])
-
-    seen, uniq = set(), []
-    for name in out:
-        if name and name not in seen:
-            seen.add(name)
-            uniq.append(name)
-    return uniq
+    return [mapped, declared] if mapped else [declared]
 
 
 def _resolve_env(declared):
@@ -911,7 +878,7 @@ def load_credentials(source):
              "两种办法（⛔ 值不要写进命令行/脚本/AM，也不要 echo）：\n"
              "  · 平台注入的是别的名字 ⇒ 用 `--credential-map %s=<实际变量名>` 显式指路；\n"
              "  · 自己 export ⇒ `export %s=... %s=...`。\n"
-             "  脚本也会自动尝试 `SKILL_CREDENTIAL_*`（平台约定）与 TENCENT_/TENCENTCLOUD_ 等价名。"
+             "  本脚本**不猜任何前缀**：名字对不上就用 `--credential-map` 显式给。"
              % (missing[0] if missing else sid_env, sid_env, key_env))
     if sid_name != sid_env or key_name != key_env:
         # 只报**名字**（不报值），让调用方知道脚本走的是兜底而不是精确名
@@ -2088,7 +2055,7 @@ def run_fetch(am, am_path, args):
     # ⚠️ **两种输出格式都需要 identity**：`--format rows` 不是"原始记录"，而是
     # `rows → graph`（用 identity 拼 @id）之后再摊平 ⇒ 没有 identity 时每一行都会被
     # `skipped_no_identity` 丢掉，最后拿到 **0 行且不报错**（静默空结果，最坏的一种）。
-    # 实测来源：数字员工平台的适配版 `ontok-query-fix` 就记着这个坑；agent 也确实踩过。
+    # 实测来源：一次真实对接里 agent 漏传 `--id-property`，rows 全被丢掉且不报错。
     if not (entity.get("identity") or {}).get("key_path"):
         fail("am.invalid", EXIT_INPUT,
              "entity `%s` 没有 identity.key_path，无法把一行变成 `@id`" % entity.get("id"),
@@ -2675,19 +2642,16 @@ def _selftest_recipe(selftest):
     selftest.check("空 @pending ⇒ am.invalid", _e is not None and _e.code == "am.invalid",
                    str(_e and _e.code))
 
-    # --credential-map / 平台注入名兜底（2026-10-28 平台实测：只有 SKILL_CREDENTIAL_*）
-    cands = _credential_candidates("TENCENT_SECRET_ID")
-    selftest.check("凭据候选里含平台的 SKILL_CREDENTIAL_SECRETID",
-                   "SKILL_CREDENTIAL_SECRETID" in cands, str(cands))
-    selftest.check("凭据候选里含声明名本身（优先精确）",
-                   cands[0] == "TENCENT_SECRET_ID", str(cands[:3]))
-    selftest.check("凭据候选里含 TENCENTCLOUD_ 等价名",
-                   "TENCENTCLOUD_SECRET_ID" in cands, str(cands))
-    CREDENTIAL_MAP["TENCENT_SECRET_ID"] = "MY_SID"
-    selftest.check("--credential-map 显式映射优先",
-                   _credential_candidates("TENCENT_SECRET_ID")[0] == "MY_SID",
-                   str(_credential_candidates("TENCENT_SECRET_ID")[:2]))
-    CREDENTIAL_MAP.pop("TENCENT_SECRET_ID", None)
+    # --credential-map：产品只认显式映射与声明名，⛔ 不做前缀推断
+    # 产品只认「显式映射」与「声明名本身」——⛔ 不做任何平台前缀推断
+    cands = _credential_candidates("DEMO_SECRET_ID")
+    selftest.equal("无映射时候选 = 声明名本身", cands, ["DEMO_SECRET_ID"])
+    selftest.check("⛔ 不推断任何前缀（候选里只有声明名）",
+                   cands == ["DEMO_SECRET_ID"], str(cands))
+    CREDENTIAL_MAP["DEMO_SECRET_ID"] = "PLATFORM_SID"
+    selftest.equal("--credential-map 显式映射优先",
+                   _credential_candidates("DEMO_SECRET_ID"), ["PLATFORM_SID", "DEMO_SECRET_ID"])
+    CREDENTIAL_MAP.pop("DEMO_SECRET_ID", None)
 
     # --id-property：key_path 必须是**字符串**（不是 fields 里的 {path:...} 字典）
     # —— agent 实测抓到的 bug：`--id-property instance_id` 报「identity.key_path 为空」
@@ -2799,7 +2763,7 @@ def build_parser():
                         help="配方文件里有多条 @pending 时选第几条（从 0 开始，默认 0）")
     parser.add_argument("--credential-map", metavar="DECLARED=ENV", action="append", default=[],
                         help="凭据名映射：把 AM 里声明的变量名指到实际环境变量名"
-                             "（可重复；平台注入 SKILL_CREDENTIAL_* 时用）")
+                             "（可重复；部署方注入名与 AM 声明名不一致时用）")
     parser.add_argument("--id-property", metavar="PROP",
                         help="配方里没有 identity：用哪个属性当主键（jsonld 输出必填）")
     parser.add_argument("--entity", metavar="ID|CLASS", help="entity id 或本体 class")
@@ -2842,7 +2806,7 @@ def main(argv=None):
     for pair in getattr(args, "credential_map", None) or []:
         if "=" not in pair:
             parser.error("--credential-map 要写成 DECLARED=ENV，例如 "
-                         "TENCENT_SECRET_ID=SKILL_CREDENTIAL_SECRETID")
+                         "<AM 里的变量名>=<实际的变量名>")
         src_name, env_name = pair.split("=", 1)
         CREDENTIAL_MAP[src_name.strip()] = env_name.strip()
 

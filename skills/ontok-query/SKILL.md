@@ -70,7 +70,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" \
 
 | 错误码 | 先做什么 | 仍失败才 |
 | --- | --- | --- |
-| `credential.missing` | 加 `--credential-map`（或先跑 `scripts/env_probe.py` 看注入了哪些名字） | 换别的凭据来源 |
+| `credential.missing` | 加 `--credential-map` 把声明名指到实际变量名（先确认注入的是哪些**名字**） | 换别的凭据来源 |
 | `param.not_pushdown` | 检查配方是不是**手抄丢了 `pushdown`** ⇒ 重新原样保存 `@pending[0].get` | 不用该参数，拉回来本地筛（并说明） |
 | `auth.rejected` | 核对 AM 的 `auth.service` / 时钟 / 凭据对应关系 | 判定凭据无效，报给调用方 |
 
@@ -595,7 +595,7 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 
 **`--entity` 可以省**：配方只含一条 entity，脚本自动用它。
 
-**⛔ 不要手抄字段**（2026-10-28 数字员工平台实测）：
+**⛔ 不要手抄字段**（2026-10-28 真实对接实测）：
 
 > agent 手抄 `cvm_recipe.json` 时**丢了 `pushdown`**，于是 `--param region=ap-shanghai` 被脚本拒绝
 > （"这个 entity 一个可下推参数都没有"），而服务端原回执里明明有 `["region","zone"]`。
@@ -610,42 +610,25 @@ curl -sS -X POST "$ONTOK_BASE_URL/api/sparql" -H "Authorization: Bearer $ONTOK_T
 | `--entity <配方里的 class>` | `am.invalid`：合成的最小 AM 只有一条 entity，但**选择仍按 id/class 匹配** | 填 `get.class`，如 `cvm_instance` |
 | `--id-property <fields 里的属性名>` | 见上表：jsonld 直接拒；**rows 静默空结果** | 填 `fields` 里的**属性名**（如 `instance_id`）。⭐ 若配方自带 `identity`（新服务端会发）则**不需要**这个参数 |
 
-**若凭据由平台注入**（变量名带前缀，如 `SKILL_CREDENTIAL_SECRETID`），而配方 `auth.credential_env`
-写的是**源侧名字**（如 `TENCENT_SECRET_ID`）—— 两边对不上。三条路，**按顺序试**：
+**凭据从哪读**：只从 AM 的 `auth.credential_env` **声明的变量名**读（`第 1 个 = SecretId，第 2 个 = SecretKey`）。
 
-| # | 做法 | 适用 |
-| --- | --- | --- |
-| 1 | **什么都不做**：脚本自己找 | ✅ **首选**。脚本会依次尝试 `声明名` → `SKILL_CREDENTIAL_<去厂商前缀、去分隔符大写>` → `SKILL_CREDENTIAL_<保留下划线>` → `TENCENTCLOUD_/TENCENT_` 等价名。命中会在 stderr 打 `[note] 凭据按别名取到：TENCENT_SECRET_ID ← SKILL_CREDENTIAL_SECRETID` |
-| 2 | `--credential-map TENCENT_SECRET_ID=<实际变量名>` | 平台注入名不在上面的候选里（可重复传多条） |
-| 3 | shell 桥接 `VAR=… python …` | ⚠️ **只有能起 shell 的环境**才行。**沙箱里的 `run_skill_script` 直接执行脚本、没有 shell** ⇒ 平台上这条路**用不了** |
+**名字对不上时**（部署方注入的变量名与 AM 声明的不一致）⇒ 用 `--credential-map` **显式**指路，
+⛔ 不要指望脚本猜：
 
 ```bash
-# 路 2 的写法（平台沙箱里可用）
-python scripts/access_fetch.py --recipe recipe.json --entity <class> \
-    --id-property <fields 里的属性名> --format rows --out ./rows.json \
-    --credential-map TENCENT_SECRET_ID=SKILL_CREDENTIAL_SECRETID \
-    --credential-map TENCENT_SECRET_KEY=SKILL_CREDENTIAL_SECRETKEY
+python scripts/access_fetch.py --recipe recipe.json --format rows --out ./rows.json \
+    --credential-map TENCENT_SECRET_ID=<实际的变量名> \
+    --credential-map TENCENT_SECRET_KEY=<实际的变量名>
 ```
 
 ⛔ 值不落盘、不回显；只传**变量名**。
+⛔ 本 skill **不做任何前缀/别名推断** —— 具体平台怎么注入，见 `Deploy/integrations/<平台>/`。
 
 | ⛔ 不要 | ✅ 要 |
 | --- | --- |
-| 问用户要 SecretId/SecretKey 明文 | 平台注入的 `SKILL_CREDENTIAL_*` 里**已经有了** |
-| `env` 全量打印找变量 | `env \| grep '^SKILL_CREDENTIAL_' \| sed 's/=.*//'`（只看名字，⛔ 不看值） |
+| 问用户要 SecretId/SecretKey 明文 | 部署方注入的凭据**已经有了**（名字见集成层） |
+| `env` 全量打印找变量 | 只看**变量名**（`env | cut -d= -f1 | sort`），⛔ 不看值 |
 | 对应关系靠猜 | 配方约定：`credential_env` **第 1 个 = SecretId、第 2 个 = SecretKey** |
-
-**在数字员工平台上部署本 skill 时**（平台侧三件事，都不是 skill 内容本身）：
-
-| # | 平台侧 | 说明 |
-| --- | --- | --- |
-| 1 | **`credentials` 声明** | skill 元数据里声明凭据字段（`id` 由平台分配，如 `key-4764`），平台据此注入 |
-| 2 | **注入名带前缀** | 平台注入为 `SKILL_CREDENTIAL_*`（如 `SKILL_CREDENTIAL_SECRETID`），**不是**源侧名字 ⇒ 见上面的桥接 |
-| 3 | **先跑 `scripts/env_probe.py`** | 只打印变量名与值长度（⛔ 不打印值）；输出 `NO_SKILL_CREDENTIAL_ENV` ⇒ 声明/绑定/凭据状态三处之一没生效 |
-
-```bash
-python scripts/env_probe.py      # 沙箱里执行；退出码恒 0（只观测，不阻断）
-```
 
 
 > **v1 契约**：`@pending.get` 只有 4 键 ⇒ `--recipe` 会拒（`am.invalid` 并说明"该部署可能是 v1"）
