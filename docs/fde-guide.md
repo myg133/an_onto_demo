@@ -4,15 +4,16 @@
 >
 > | 目录 | 放什么 | 谁读 |
 > | --- | --- | --- |
-> | `Deploy/skills/` | agent 加载的 skill（有 `name`/`description` frontmatter） | **agent** |
-> | `Deploy/docs/`（本文件） | 给人看的流程/运维文档 | **人** |
+> | `INSTALL.md` | **先看它**：怎么装 `ontok-builder`、怎么把 skill 交给 agent | **人 + agent** |
+> | `skills/` | agent 加载的 skill（有 `name`/`description` frontmatter） | **agent** |
+> | `docs/`（本文件） | 给人看的流程文档 | **人** |
 >
 > 抽取 agent 要的是 [`../skills/ontok-extract/SKILL.md`](../skills/ontok-extract/SKILL.md)；
 > 数字员工要的是 [`../skills/ontok-query/SKILL.md`](../skills/ontok-query/SKILL.md)。
 > 本文里出现的命令都是**你**在终端跑，⛔ 不是给 agent 的指令。
 
 > **适用工具版本**：`ontok-builder` **≥ v0.2.9**（本文件 2026-10-27 更新）。
-> ⚠️ **构建类命令在 REQ-152 之后从 `ontok` 挪到了 `ontok-builder`** —— 旧材料里的 `ontok doc ingest` / `ontok ontology export` 等写法已失效。
+> ⚠️ **构建类命令已从 `ontok` 挪到 `ontok-builder`** —— 旧材料里的 `ontok doc ingest` / `ontok ontology export` 等写法已失效。
 > 命令对不上时**先升级工具**，别照着旧材料猜参数。
 
 > 你是 FDE。这份**指南**的目标是：**让一套本体从"客户给的资料"变成"数字员工能用的 TTL + 接口"**。
@@ -247,7 +248,7 @@ ontok-builder bundle verify --file <工作目录>/.ontok/bundles/<目录名>-v<N
 
 ```bash
 ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
-  --agent acp --agent-command "pi-acp" --agent-skill Deploy/skills/ontok-extract/SKILL.md
+  --agent acp --agent-command "pi-acp" --agent-skill skills/ontok-extract/SKILL.md
 ```
 
 > ⚠️ 这条 `--agent …` 就是 **ACP 模式**：工具主动驱动外部 agent，`--agent-skill` 把 `ontok-extract` 的**路径**交给对端。
@@ -264,9 +265,9 @@ ontok-builder doc ingest --input docs/ --out a.jsonl --stats s.json \
 | 4 | ⚠️ **单次运行（n=1）**，没测方差 |
 | 5 | ⛔ **旧材料里「泛动词降 93%、端点闭合 26%→96%」那组不得引用**——它混了模型变量（ACP 侧 MiniMax / 内置侧 deepseek），跨实验还换了语料，不可比 |
 
-> 要重新测：`BA/demands/REQ-147/evidence-same-model.md` 有完整复现命令与判读。
+> 复现方法：**同一模型、同一语料**，内置通道 vs ACP 各跑一遍，比泛动词占比与关系端点闭合率。⛔ 别引用跨模型的那组旧数字。
 
-### ⭐ 定版前必须跑：关系动词校验（REQ-157）
+### ⭐ 定版前必须跑：关系动词校验
 
 ```bash
 ontok-builder relation verbs check --project <项目> --version <版本>
@@ -355,11 +356,11 @@ ontok-builder console serve --dir <工作目录> [--bind 127.0.0.1:8899] [--no-b
 
 | 旧命令 | 是什么 | 现状 |
 | --- | --- | --- |
-| `review open --project <项目>` | **旧：DB 版审核台**（REQ-160；一次性 admin token + 连元数据库 + 建项目/版本） | **已被 console v2 取代**，别再当主路径 |
+| `review open --project <项目>` | **旧：DB 版审核台**（一次性 admin token + 连元数据库 + 建项目/版本） | **已被 console v2 取代**，别再当主路径 |
 | `review decide --accept-all …` | **旧：DB 版批量放行** | **已被取代**：v2 里没有这个概念，逐条签就是逐条签 |
 | `console serve` + 口令表 / 项目作用域 / 声明校验 | **旧：带口令 / 项目 / 声明的管理台** | **已被取代**：那些参数已删，写了直接报错 |
 
-> ✅ REQ-163 起，`build run` 的尾步**就是** console v2（同一份启动实现），**不再**落到旧 `review open`。
+> ✅ 现在的 `build run` 尾步**就是** console v2（同一份启动实现），**不再**落到旧 `review open`。
 
 ### 8 · 定版之后：出包 →（**人工**）传 Studio
 
