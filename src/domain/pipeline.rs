@@ -1119,13 +1119,15 @@ fn pairing_ok(spec: OutletSpec, product: &Product<'_>) -> bool {
 
 /// 结构化轨的唯一入口（HTTP `/api/graph` `/api/node`、MCP 全部响应、首页不由它走）。
 ///
-/// 命中 ⇒ `Err`，消息**逐字**取自 `mcp::tools::guard` —— 所以 500 正文与
+/// 命中 ⇒ `Err`，消息**逐字**取自 `mcp::tools::guard`（REQ-176 起走同一份实现的
+/// [`mcp::tools::guard_named`]，只多一个出口编号参数）—— 所以 500 正文与
 /// `isError: true` 的文案在收口前后**一个字节都不变**。
 pub fn publish_value(id: OutletId, value: Value) -> Result<GuardedValue, PipelineError> {
     let spec = spec_of(id);
     if spec.track.gated() {
         // ⛔ 判据只复用，不复制：`guard` 的内部实现一行没改。
-        match crate::mcp::tools::guard(&value) {
+        // ⭐ REQ-176 · 传出口编号，只为让豁免日志能点名它（判定仍是同一份）。
+        match crate::mcp::tools::guard_named(spec.id, &value) {
             Ok(text) => Ok(GuardedValue::build(text, value)),
             Err(message) => Err(PipelineError::leaked_with_message(spec, message)),
         }
@@ -1154,7 +1156,10 @@ fn gate_text(spec: OutletSpec, text: &str) -> Result<(), PipelineError> {
     if !spec.track.gated() {
         return Ok(());
     }
-    let hits = scan_modeling_terms(text);
+    // ⭐ REQ-176 · `hits - allowlist`（部署级业务词白名单）。
+    // 判据仍然只有 `scan_modeling_terms` 一份；这里只做减法，并把豁免逐次留痕。
+    // 没给 `--term-allowlist` ⇒ `filter_hits` 原样返回，行为与今天逐字节一致。
+    let hits = crate::term_allowlist::filter_hits(spec.id, scan_modeling_terms(text));
     if hits.is_empty() {
         Ok(())
     } else {
@@ -1188,6 +1193,8 @@ fn gate_both(spec: OutletSpec, json_text: &str, text: &str) -> Result<(), Pipeli
             hits.push(h);
         }
     }
+    // ⭐ REQ-176 · 与 [`gate_text`] 同一个过滤点（豁免日志点名同一条出口）。
+    let hits = crate::term_allowlist::filter_hits(spec.id, hits);
     if hits.is_empty() {
         Ok(())
     } else {
