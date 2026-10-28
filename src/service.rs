@@ -414,6 +414,22 @@ pub enum QueryCmd {
         /// `NOT_DB_SOURCE`（jsonld 是 `@pending`）。给那个类补一个人读名即可消除。
         #[arg(long)]
         access_mapping: Option<PathBuf>,
+        /// ⭐ REQ-176 · **部署级业务词白名单**（每行一个词，`#` 开头为注释）。
+        ///
+        /// 闸门（`domain::pipeline` 的发布闸 + MCP 守门器）做 `hits - allowlist`：
+        /// 剩下的为空才放行。**每次豁免都会在 stderr 打一行**（出口 + 词条）——
+        /// 这是「看得见的放宽」，不是关掉闸门。
+        ///
+        /// ⛔ 判据本身不变（`scan_modeling_terms` 一份实现、一字不改）；
+        /// ⛔ 不给本参数 ⇒ 行为与今天**逐字节一致**。
+        ///
+        /// 文件不存在 / 读不出 / 某行不合法（含空白、超长）⇒ **拒绝启动**（fail-closed）；
+        /// 词表外的词只**警告**「这行没意义」，不失败（防手滑）。
+        ///
+        /// ⚠️ 与 `ontok-builder ontology export --term-allowlist` 是**同一份文件格式**
+        /// 与同一个判定 ⇒ 同一份产物、两处判定一致。
+        #[arg(long)]
+        term_allowlist: Option<PathBuf>,
     },
 }
 
@@ -485,7 +501,15 @@ async fn query_cmd(pool: &PgPool, cmd: QueryCmd) -> anyhow::Result<()> {
         base,
         include_inherit,
         access_mapping,
+        term_allowlist,
     } = cmd;
+
+    // ⭐ REQ-176 · **在装配之前**装好部署级白名单：
+    // `prepare_project` 会在这里产两视图 TTL（= 触发发布闸），所以安装必须早于它；
+    // 读文件失败 / 某行不合法 ⇒ 直接 `?` 冒泡成启动失败（fail-closed）。
+    if let Some(path) = term_allowlist.as_deref() {
+        crate::term_allowlist::install_from_path(path)?;
+    }
 
     let args = crate::query::serve::ServeArgs {
         bind,

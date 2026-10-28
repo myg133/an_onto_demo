@@ -1675,6 +1675,16 @@ pub enum OntologyCmd {
         /// 文件头与 stderr 会**明说**类型来源。给了本参数后建模视图应当 0 条启发式。
         #[arg(long)]
         schema: Option<PathBuf>,
+        /// ⭐ REQ-176 · **部署级业务词白名单**（每行一个词，`#` 开头为注释）。
+        ///
+        /// 与 `ontok query serve --term-allowlist <同一份文件>` **同一份格式、同一个判定**：
+        /// 闸门层做 `hits - allowlist`，剩下的为空才放行；每次豁免在 stderr 打一行
+        /// （出口 + 词条）。⛔ 判据本身不变；⛔ 不给本参数 ⇒ 行为与今天逐字节一致。
+        ///
+        /// 文件不存在 / 读不出 / 某行不合法（含空白、超长）⇒ 导出前就失败（fail-closed）；
+        /// 词表外的词只**警告**「这行没意义」，不失败。
+        #[arg(long)]
+        term_allowlist: Option<PathBuf>,
     },
     /// 比较两个版本
     Diff {
@@ -7209,12 +7219,17 @@ async fn ontology_cmd(pool: &PgPool, cmd: OntologyCmd) -> anyhow::Result<()> {
         // 序列化、前处理、发布闸**全在管线里**，本函数体里没有第二份 TTL 生成逻辑。
         // HTTP 的 `/api/ontology.ttl` 走的是**同一个** `Product::CustomerTurtle`，
         // 所以「页面下载的」与「CLI 导出的」是同一批字节（AC-007）。
-        OntologyCmd::Export { project, version, model_view, out, base, format, tenancy, schema } => {
+        OntologyCmd::Export { project, version, model_view, out, base, format, tenancy, schema, term_allowlist } => {
             // 格式是**显式**参数：认不出就报错，不静默回退成 ttl（fail-closed）。
             if format != "ttl" {
                 anyhow::bail!(
                     "只支持 --format ttl（Turtle）。收到 {format:?} —— 本轮不做 RDF 导入，也没有别的导出格式。"
                 );
+            }
+            // ⭐ REQ-176 · 白名单必须在**渲染之前**装好（发布闸在 `publish_customer` 里）。
+            // 读不出 / 某行不合法 ⇒ 这里直接失败（fail-closed），⛔ 不当作空表继续导。
+            if let Some(path) = term_allowlist.as_deref() {
+                crate::term_allowlist::install_from_path(path)?;
             }
             // ⭐ REQ-124 · **读取/投影**在 [`prepare_ttl_export`]（`GET /api/export/ttl`
             // 调**同一个**函数）⇒ 两份出口拿到的是同一份投影 + 同一个 `TtlOptions`。

@@ -691,9 +691,21 @@ pub fn call(ctx: &OntologyContext, name: &str, arguments: &Value) -> Result<Valu
 /// 闸门挡住了正文，却从错误信息里漏了后门。所以响应里只说
 /// 「命中 N 项」，具体是哪些词打到 stderr（运维看得见，客户看不见）。
 pub fn guard(value: &Value) -> Result<String, String> {
+    guard_named("M1-M5", value)
+}
+
+/// ⭐ REQ-176 · 带**出口编号**的守门器（`publish_value` 用）。
+///
+/// 与 [`guard`] 是**同一份实现**（`guard` 只是给 MCP 五工具一个默认出口号）：
+/// 判据仍只有 `scan_modeling_terms` 一份；本函数只在**闸门层**做
+/// `hits - allowlist`（部署级 `--term-allowlist`），豁免日志因此能点名出口。
+/// 没装白名单 ⇒ 行为与 [`guard`] 逐字节相同（消息、stderr 全部不变）。
+pub fn guard_named(outlet: &'static str, value: &Value) -> Result<String, String> {
     let text = serde_json::to_string_pretty(value)
         .map_err(|e| format!("返回值序列化失败（这本身就是个 bug）：{e}"))?;
-    let leaked = crate::domain::view::scan_modeling_terms(&text);
+    // ⭐ REQ-176 · `hits - allowlist`：剩下的为空才放行；每次豁免打一行（出口 + 词条）。
+    let leaked =
+        crate::term_allowlist::filter_hits(outlet, crate::domain::view::scan_modeling_terms(&text));
     if leaked.is_empty() {
         Ok(text)
     } else {

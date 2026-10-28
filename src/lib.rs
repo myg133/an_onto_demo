@@ -77,6 +77,12 @@ pub mod provision;
 // （CSP 的 `connect-src 'self'` 要的就是这个）。⛔ 不新增任何 `/api/*` 端点。
 pub mod studio;
 
+// ⭐ REQ-176 · **部署级业务词白名单**（`--term-allowlist <file>`）。
+// **不放 domain/**：它要读文件、还要装成进程级配置（domain 的 AC-002 判据是「零 I/O」）。
+// 判据仍在 `domain::view::scan_modeling_terms`（一份实现，一字不改）；
+// 本模块只在**闸门层**做 `hits - allowlist`，并把每次豁免留痕。
+pub mod term_allowlist;
+
 // ⭐ REQ-135 · **生产可观测性**（`GET /metrics` 的 Prometheus 文本格式）。
 // 为什么是独立模块而不是塞进各自的 http.rs：指标登记表 / 渲染 / 校验只有一个写点，
 // 两个服务共用同一份口径；而且它是纯计算（无 I/O、无业务数据），

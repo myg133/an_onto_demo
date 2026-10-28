@@ -2223,6 +2223,9 @@ const MODULES: &[(&str, &str)] = &[
     // ⭐ REQ-135 · 生产可观测性（`/metrics` 的指标登记表 / 渲染 / 格式校验）。
     // 出口 I28 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "metrics"),
+    // ⭐ REQ-176 · 部署级业务词白名单（`--term-allowlist`）。
+    // ⛔ 不新增出口：它只在闸门层做 `hits - allowlist`，产物仍走既有 C6 / M1–M5。
+    ("src/lib.rs", "term_allowlist"),
     // ⭐ REQ-144 · access mapping（API 源的映射契约）。
     // 出口 I29/I30/I31 登记在 OUTLETS；本表只登记模块（T6：新增模块即红）。
     ("src/lib.rs", "access"),
