@@ -599,3 +599,13 @@
 | 合并后复跑 | `req172_relation_probe` 3/3 · `req171_concept_maps` 6/6 · `extract::` **293** · `req170` 8/8 · `req163` 8/8 · `req147` 13/13 · `req159_bundle` 38/38 · `req152_bins` 5/5 |
 | 🔴 红的 | **`test_req107_source_enumeration` 7/10**：16 处客户可见写点 + 5 个出口函数 + 2 个新模块未登记 —— **根因是我的简报漏了这条验收**（171 的简报有、172 的没有）；已退回 Dev 在 `feature-REQ-172b` 上补 |
 | 未合并状态 | 两个 worktree 暂不回收（等 172b 落地后再一起清） |
+
+## 2026-10-28 08:20 · REQ-172 写点登记补齐（eature/REQ-172b → develop）
+
+| 项 | 值 |
+| --- | --- |
+| 合并 | `develop` **3abef0a** ← `feature/REQ-172b` **7ea292b** |
+| 改动 | 3 文件 +284/−8（`domain/pipeline.rs` 新增 I33–I48 共 16 条出口；两条守卫的计数 65→81、内部 35→51 同步） |
+| 复跑 | `req107_source_enumeration` **10/10**（3 红转绿）· `req107_outlet_pipeline` **12/12** · `req107_static_texts` 3 · `anchor_guard` 3 · `req152_bins` 5 · `extract::` 293 · req171 6 · req172 3 · req170 8 · req163 8 · req147 13 · req159_bundle 38 · req162_console 12 · req125_page 7 |
+| 回收 | 3 个 worktree + 分支已删；`cargo-171` / `cargo-172` 已删 |
+| 教训 | REQ-172 简报漏了 `test_req107_source_enumeration` 这条验收 ⇒ Dev 不知道要登记、QA 照简报抄也没跑；**是合并时的全量复跑把 3 条红的抓住的** |
