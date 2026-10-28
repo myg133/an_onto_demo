@@ -1645,3 +1645,4 @@ BA 曾称「纪律 O 的 `846` 与其分项 `62+704+142+1=847` **矛盾**，需�
 | REQ-173 | **配方自足**：`@pending.get` 带 `identity` + `iri_template`（AM 里已有、服务端没发）⇒ 取数不再需要猜 `--id-property`；rows 漏传不再静默 0 行 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
 | REQ-174 | **多项目各带各的 AM**：AM 随版本入库（`version_access_mappings`）、导入时验+存、`QueryService` 按版本加载 ⇒ 多项目不再共用一份 `--access-mapping` | **已完成**（`46c9a47`） | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
 | REQ-175 | **[DONE 2f22016]** **DB 发的 key 要能鉴权**：静态表没命中时按 `token_sha256` 查 `project_keys`（命中即按该 key 绑的项目解析，kind 恒 query）+ 60s 缓存；未命中/吊销仍 401 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
+| REQ-176 | **发布闸业务词白名单**（`--term-allowlist <file>`，部署级）：业务词恰好等于建模术语时不再误杀；默认不放松、豁免留痕、文件坏了启动失败 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
