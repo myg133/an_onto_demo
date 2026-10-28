@@ -56,6 +56,7 @@ mod gate_preflight;
 #[derive(Parser)]
 #[command(
     name = "ontok-builder",
+    version,
     about = "FDE 本体论平台 · 构建面（勘查 / 提案 / 审核 / 导入导出 / access 验收）"
 )]
 struct Cli {

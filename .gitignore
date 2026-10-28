@@ -19,3 +19,6 @@ out/
 # 它是**每个工作目录各自的**运行态，不是源码：一句 git add -A 不该把它带进仓。
 # （草稿本身仍在 out/proposal.json，那是 agent 的产物，照旧由各仓自己决定要不要跟踪。）
 /.ontok/
+
+# npm 打包产物（由 node npm/prepare.mjs 生成，不入库）
+/npm/out/
