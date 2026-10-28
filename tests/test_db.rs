@@ -3,6 +3,9 @@
 //! 验证：能连上、连接串只能来自环境变量。
 
 mod common;
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use common::test_pool;
 use ontok::db::pool::DbError;
 use sqlx::postgres::PgPool;
@@ -120,7 +123,7 @@ async fn test_db_migrate_is_idempotent() {
 #[tokio::test]
 async fn test_migrate_on_empty_schema_survives_concurrent_first_run() {
     let url = ontok::config::test_database_url().expect(
-        "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+        NEED_TEST_DB,
     );
     const ROUNDS: usize = 4;
     const FANOUT: usize = 6;
@@ -365,7 +368,7 @@ async fn temp_schema_pool(url: &str) -> PgPool {
 #[tokio::test]
 async fn test_migrate_on_empty_schema_builds_every_table_and_column() {
     let url = ontok::config::test_database_url().expect(
-        "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+        NEED_TEST_DB,
     );
     let pool = temp_schema_pool(&url).await;
 
@@ -432,7 +435,7 @@ async fn test_migrate_on_empty_schema_builds_every_table_and_column() {
 #[tokio::test]
 async fn test_migrate_still_alters_when_table_exists_but_column_does_not() {
     let url = ontok::config::test_database_url().expect(
-        "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+        NEED_TEST_DB,
     );
     let pool = temp_schema_pool(&url).await;
 
@@ -561,7 +564,7 @@ async fn test_migrate_still_alters_when_table_exists_but_column_does_not() {
 async fn test_migrate_takes_no_access_exclusive_lock_on_settled_schema() {
     const LOCK_TIMEOUT: &str = "20s";
     let url = ontok::config::test_database_url().expect(
-        "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+        NEED_TEST_DB,
     );
 
     // 先把共享库推到「已建齐」—— 本条要判的正是**稳态**下的锁行为

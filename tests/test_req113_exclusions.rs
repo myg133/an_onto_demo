@@ -21,6 +21,9 @@
 
 mod common;
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use std::path::{Path, PathBuf};
 
 use axum::body::Body;
@@ -418,7 +421,7 @@ async fn test_single_file_import_persists_the_audit_block() {
 
     // 提案里的 `project` 是 `ontok-propose --project req113`（本文件统一用它）：
     // 这里确保它存在且有 v1，再由 CLI 走**只读一个 --file** 的导入路径。
-    let url = ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL");
+    let url = ontok::config::test_database_url().expect(NEED_TEST_DB);
     let pool = common::test_pool().await;
     common::migrate(&pool).await;
     let projects = PgProjectStore::new(pool.clone());

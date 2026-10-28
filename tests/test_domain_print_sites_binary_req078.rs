@@ -24,6 +24,9 @@
 
 mod common;
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -56,7 +59,7 @@ struct Sandbox {
 impl Sandbox {
     async fn new(tag: &str) -> Sandbox {
         let base = ontok::config::test_database_url().expect(
-            "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+            NEED_TEST_DB,
         );
         let schema = common::unique_project(&format!("req078_{tag}"));
         let project = common::unique_project(&format!("req078p_{tag}"));

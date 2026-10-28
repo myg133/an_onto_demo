@@ -39,6 +39,9 @@
 
 mod common;
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use ontok::domain::pipeline::{render, OutletId, Product};
 use ontok::domain::ttl::{serialize_customer, TtlOptions, DEFAULT_BASE};
 use ontok::domain::view::{scan_modeling_terms, CustomerView, EntityView, PropertyView, RelationView};
@@ -343,7 +346,7 @@ fn run_export(project: &str, version: i32, out: &std::path::Path) -> std::proces
     cmd.args(["--out", out.to_str().expect("临时路径必须是 UTF-8")]);
     cmd.env(
         "ONTOK_DATABASE_URL",
-        ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL"),
+        ontok::config::test_database_url().expect(NEED_TEST_DB),
     );
     cmd.output().expect("跑 ontok ontology export 失败")
 }

@@ -32,13 +32,61 @@ pub fn require_env(key: &'static str) -> Result<String, ConfigError> {
 
 /// 测试库连接串。**测试专用** —— 缺失时测试应直接失败。
 pub fn test_database_url() -> Result<String, ConfigError> {
-    require_env(TEST_DATABASE_URL_ENV)
+    let url = require_env(TEST_DATABASE_URL_ENV)?;
+    // ── 防污染闸 ──────────────────────────────────────────────────────────
+    // 为什么需要（2026-10-27 / 10-28 两次事故）：本机能连到的库只有 UAT 那台，
+    // 于是 `ONTOK_TEST_DATABASE_URL` 常年指着 **UAT 元数据库**。测试每跑一次就往里
+    // 塞十几个 `t_req…` 项目（实测把 UAT 塞到 15 个项目、Studio 里全是打不开的）。
+    // 测试库必须是**专用库**，⛔ 不许指向业务库。
+    if !test_db_looks_dedicated(&url) && !allow_shared_test_db() {
+        return Err(ConfigError::SharedDatabaseRefused {
+            env: TEST_DATABASE_URL_ENV,
+            db: database_name(&url).unwrap_or_else(|| "<解析不出库名>".into()),
+        });
+    }
+    Ok(url)
+}
+
+/// 库名是否**看起来是专用测试库**：`test` / `scratch` / `tmp` / `ci` / `dev` 之一。
+///
+/// 判据刻意宽松（宁可误放行 `*_dev`，也不许写进业务库），但**必须**能识别 UAT 的 `ontok`。
+fn test_db_looks_dedicated(url: &str) -> bool {
+    let name = match database_name(url) {
+        Some(n) => n.to_ascii_lowercase(),
+        None => return false,
+    };
+    ["test", "scratch", "tmp", "ci", "dev"]
+        .iter()
+        .any(|k| name.contains(k))
+}
+
+/// 从连接串里取库名（`scheme://user:pass@host:port/db?…` 的最后一段，去 query）。
+fn database_name(url: &str) -> Option<String> {
+    let after_scheme = url.split("://").nth(1)?;
+    let host_and_db = after_scheme.split('@').last()?;      // 去凭据
+    let db_part = host_and_db.split('/').nth(1)?;           // 第一个 '/' 之后是库名
+    let name = db_part.split(['?', '#']).next()?.trim();
+    if name.is_empty() { None } else { Some(name.to_string()) }
+}
+
+/// 逃生阀：某些环境确实没有专用库时，显式设 `ONTOK_TEST_DB_ALLOW_SHARED=1`。
+/// ⚠️ 只在**明知会污染**且**接受**时用（例如一次性 CI 容器）。
+fn allow_shared_test_db() -> bool {
+    matches!(
+        std::env::var("ONTOK_TEST_DB_ALLOW_SHARED").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("缺少环境变量 {0}（口令不得写入代码或文档，只走环境变量）")]
     MissingEnv(&'static str),
+
+    #[error(
+        "⛔ {env} 指向的库 `{db}` 看起来不是专用测试库 —— 测试会往里塞满 `t_req…` 项目。\n         修：换成专用库（库名含 test/scratch/tmp/ci/dev），例如 \n         \x20   ONTOK_TEST_DATABASE_URL=postgresql://…:30432/ontok_test_scratch\n         确实要用共享库（明知污染）时：ONTOK_TEST_DB_ALLOW_SHARED=1"
+    )]
+    SharedDatabaseRefused { env: &'static str, db: String },
 }
 
 #[cfg(test)]

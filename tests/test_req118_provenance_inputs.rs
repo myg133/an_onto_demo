@@ -21,6 +21,9 @@
 
 mod common;
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -191,7 +194,7 @@ async fn newest_proposal_inputs(
 
 #[tokio::test]
 async fn names_provenance_is_persisted_with_matching_sha256() {
-    let url = ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL");
+    let url = ontok::config::test_database_url().expect(NEED_TEST_DB);
     let pool = common::test_pool().await;
     common::migrate(&pool).await;
     let projects = PgProjectStore::new(pool.clone());
@@ -230,7 +233,7 @@ async fn names_provenance_is_persisted_with_matching_sha256() {
 
 #[tokio::test]
 async fn names_and_exclusions_both_survive_import() {
-    let url = ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL");
+    let url = ontok::config::test_database_url().expect(NEED_TEST_DB);
     let pool = common::test_pool().await;
     common::migrate(&pool).await;
     let projects = PgProjectStore::new(pool.clone());
@@ -263,7 +266,7 @@ async fn names_and_exclusions_both_survive_import() {
 
 #[tokio::test]
 async fn concept_declaration_provenance_is_persisted_with_matching_sha256() {
-    let url = ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL");
+    let url = ontok::config::test_database_url().expect(NEED_TEST_DB);
     let pool = common::test_pool().await;
     common::migrate(&pool).await;
     let projects = PgProjectStore::new(pool.clone());

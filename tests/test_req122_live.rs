@@ -49,6 +49,9 @@
 //!   不证明客户库里的历史脏数据也守得住（那是 ① 的事）；
 //! - 都不证明没有别的泄漏路径（例如将来的 HTTP 端点，见 REQ-123）。
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use std::collections::BTreeSet;
 
 use sqlx::postgres::PgPool;
@@ -634,7 +637,7 @@ impl Harness<'_> {
 #[tokio::test]
 async fn ac005_testdb_a_tenant_never_sees_another_tenants_rows() {
     let Some(base) = env_nonempty("ONTOK_TEST_DATABASE_URL") else {
-        skip("缺 ONTOK_TEST_DATABASE_URL —— 库内泄漏判据（AC-005）未执行");
+        skip(NEED_TEST_DB);
         return;
     };
 

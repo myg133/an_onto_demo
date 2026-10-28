@@ -176,6 +176,9 @@ pub fn strip_comments(src: &str) -> String {
     out
 }
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use ontok::db::pool;
 use ontok::db::project::{NewProject, PgProjectStore, ProjectError, ProjectRow};
 use sqlx::postgres::PgPool;
@@ -231,7 +234,7 @@ pub async fn test_pool() -> PgPool {
 ///   8 个 task 登记同一个 `(agent, version)`，竞争窗口在数据库侧。
 pub async fn test_pool_with(max_connections: u32) -> PgPool {
     let url = ontok::config::test_database_url().expect(
-        "缺 ONTOK_TEST_DATABASE_URL —— 口令不得入库，请导出环境变量（见 .env.example）",
+        NEED_TEST_DB,
     );
     // ══ REQ-041：重试**只**包住下面这一个 await —— 建连接本身 ══
     //

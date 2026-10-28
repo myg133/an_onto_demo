@@ -15,6 +15,9 @@
 
 mod common;
 
+/// 测试库不可用时的统一说明：**可能是没设，也可能是指向了非专用库**（防污染闸会拒）。
+const NEED_TEST_DB: &str = "ONTOK_TEST_DATABASE_URL 不可用：没设，或指向了非专用测试库（库名需含 test/scratch/tmp/ci/dev）";
+
 use common::{crate_root, migrate};
 use common::test_pool;
 use ontok::agent::group::{
@@ -1239,7 +1242,7 @@ async fn test_cli_registry_path_is_byte_identical_when_registry_says_the_same() 
         // 子进程要能自己连库（registry 路径）
         .env(
             "ONTOK_DATABASE_URL",
-            ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL"),
+            ontok::config::test_database_url().expect(NEED_TEST_DB),
         );
         let o = cmd.output().expect("跑 ontok-propose 失败");
         assert!(
@@ -1374,7 +1377,7 @@ fn test_cli_unknown_registry_agent_fails_closed_without_writing_output() {
         ])
         .env(
             "ONTOK_DATABASE_URL",
-            ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL"),
+            ontok::config::test_database_url().expect(NEED_TEST_DB),
         )
         .output()
         .expect("跑 ontok-propose 失败");
@@ -1418,7 +1421,7 @@ fn test_cli_rejects_registry_plus_explicit_agent() {
         ])
         .env(
             "ONTOK_DATABASE_URL",
-            ontok::config::test_database_url().expect("缺 ONTOK_TEST_DATABASE_URL"),
+            ontok::config::test_database_url().expect(NEED_TEST_DB),
         )
         .output()
         .expect("跑 ontok-propose 失败");
