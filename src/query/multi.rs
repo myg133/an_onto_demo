@@ -288,7 +288,9 @@ impl MultiProject {
             return Err(self.snapshot_missing(project, version_id, "`ontology_versions` 里有这一版，但快照表里没有内容"));
         };
         // ⭐ REQ-174 · AM 与快照**同批加载**（冷路径，缓存未命中才走这里）：
-        // DB(该 `active_version_id`) > `--access-mapping 文件` > 无。
+        // DB(该 `active_version_id`) > 无。
+        // ⛔ ⭐ REQ-177 · 多项目模式已**不允许** `--access-mapping`（`serve::preflight`
+        // 在连库之前就拒），所以部署级文件在这一模式里恒不存在。
         // 缓存键仍是 `version_id` ⇒ 激活新版本后的**下一个请求**自然用新 AM（AC-004），
         // ⛔ 不是每请求查一次 AM。
         let access = serve::resolve_multi_access(&self.pool, &self.deploy, version_id, v.seq)
@@ -303,8 +305,9 @@ impl MultiProject {
                     format!("项目 {project:?} 第 {} 版加载失败（快照在，但装不成可服务状态）。", v.seq),
                     format!(
                         "这一步与单项目模式启动时的装配**同一段代码**（access 映射对账 / \
-                         两视图 TTL / R2RML 映射），所以失败原因通常在部署级输入（`--schema` / \
-                         `--access-mapping` / `--policy`）与这一版本体不一致。原始错误：{e}"
+                         两视图 TTL / R2RML 映射），所以失败原因通常是部署级输入（`--schema` / \
+                         `--policy`）或这一版自己的 AM（`version_access_mappings`）与这一版本体不一致。\
+                         原始错误：{e}"
                     ),
                 )
             })?;
