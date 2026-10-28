@@ -52,8 +52,11 @@ patches:
           - --bind=0.0.0.0:8800
           - --allow-public
           - --tokens=/etc/ontok/secrets/query-tokens.json
-          - --access-mapping=/etc/ontok/am/am-tencent.json
           - --ontology-only
+          # ⛔ 多项目模式**不要** --access-mapping：那是"一个进程一份 AM"的单项目概念。
+          #    每套本体的 AM 随构建包入库（REQ-174），按 active version 各自加载。
+          #    实测事故（2026-10-28）：客户体的项目没有 DB AM ⇒ 回落到这份腾讯云 AM ⇒
+          #    `bind` 对不上（14 个类不存在）⇒ 整个项目 500 project.load_failed。
 
   # ③ env 整体替换（不是逐个删，避免索引漂移）
   #    · 去掉 ONTOK_PROJECT / ONTOK_VERSION（多项目模式下没有意义）
@@ -85,21 +88,8 @@ patches:
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
 
-  # ⑥ AM 挂载：ConfigMap → /etc/ontok/am（readOnly）
-  - target: { kind: Deployment, name: ontok-query }
-    patch: |-
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: am
-          configMap:
-            name: ontok-access-mapping
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts/-
-        value:
-          name: am
-          mountPath: /etc/ontok/am
-          readOnly: true
+  # ⑥ ⛔ 多项目模式**不挂 AM**（AM 随版本入库、按 active version 加载）。
+  #    挂了只会让「没有 DB AM 的项目」回落到这份共用的 AM，然后 bind 失败把项目弄挂。
 
   # ⑦ Secret 由部署流程单独 provision（含真凭据），⛔ 不能交给 base 的空占位版本。
   #    ConfigMap `ontok-config`（schema/policy/tenancy）**保留**：base 的 volume 还挂着它，
@@ -119,7 +109,5 @@ patches:
 
 # AM：从**构建包**里提取的那份（`cloud-resource-v5-am.ontokbundle` 的 `am/access-mapping.json`，
 # 逐字节相同）。⛔ 不要手改这里——要换 AM 就重新从包提取，`Deploy/tools/check_am.py` 会验它。
-configMapGenerator:
-  - name: ontok-access-mapping
-    files:
-      - am-tencent.json
+# ⛔ 不再生成 AM 的 ConfigMap：多项目模式下没有任何消费者。
+#    要换某套本体的 AM，改**那个构建包**并重新导入，不要改这里。

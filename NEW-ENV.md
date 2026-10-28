@@ -192,3 +192,40 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --selftest   # 98 passe
 - 未命中 / 已吊销 ⇒ **401**；单项目模式下跨项目 ⇒ **403 `key.project_mismatch`**
 - 吊销在 **≤60s** 内可见（进程内缓存 TTL）
 - token 表里把 `project` 写错 ⇒ **404 `project.not_found`**（0.3.2 及以前是 500，容易误判成服务挂了）
+
+## 五·七 · 多项目模式：**不要**给 `--access-mapping`
+
+AM 的归属是**版本**（随构建包入库，`version_access_mappings`，REQ-174 起按 `active_version_id` 加载）。
+`--access-mapping` 是**进程级一份**，那是单项目模式的概念。
+
+| 情况 | 正确做法 |
+| --- | --- |
+| 单项目（`--project` + `--version`） | 可以给 `--access-mapping`（文件优先，旧部署不变） |
+| **多项目**（两个都不给） | ⛔ **不要给**。每套本体用自己的 AM；包没带 AM ⇒ 该类按库源处理（不报错） |
+
+**实测事故（2026-10-28）**：多项目部署里带着 `--access-mapping`，客户体的项目**没有自己的 AM**
+⇒ 回落到那份（腾讯云）映射 ⇒ `bind` 对不上（14 个类不存在）⇒ **整个项目 500 打不开**。
+
+> 0.3.4 起：多项目 + `--access-mapping` ⇒ **启动即拒**（exit 2，连库之前），不再静默兜底。
+
+## 五·八 · 业务词恰好等于建模术语时：`--term-allowlist`
+
+发布闸（客户视图不得含建模术语：`外键/基数/主键/证据` + `pk/key/evidence/cardinality/…`）会**误杀**业务词。
+例：审计域的实体叫 `evidence`。
+
+```bash
+cat > /etc/ontok/term-allowlist.txt <<'EOF'
+# 每行一个词；# 开头为注释
+evidence
+EOF
+ontok query serve ... --term-allowlist /etc/ontok/term-allowlist.txt
+```
+
+| 保证 | 说明 |
+| --- | --- |
+| 默认不放松 | 不给这个 flag ⇒ 行为与以前**逐字节一致** |
+| 豁免**留痕** | 启动打一行"加载了哪些词"；**每次豁免**打一行（出口 + 词条） |
+| fail-closed | 文件不存在 / 行非法 ⇒ **启动失败**并点出行号 |
+| 判据仍唯一 | 白名单只在闸门层做减法；`scan_modeling_terms` 一字未改 |
+
+⚠️ 中文术语是**子串**匹配 ⇒ 「证据材料」照样命中，改名时要避开连续的两字。
