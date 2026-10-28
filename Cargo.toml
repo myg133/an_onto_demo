@@ -1,6 +1,6 @@
 [package]
 name = "ontok"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 # MSRV —— 让 cargo 自动挑选兼容本机工具链的依赖版本，避免解析到要更高 rustc 的包
 #
