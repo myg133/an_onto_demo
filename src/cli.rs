@@ -273,7 +273,95 @@ pub enum Cmd {
 #[derive(Subcommand)]
 pub enum RelationCmd {
     /// 关系动词（`semantic`）与字典的关系
-    Verbs { #[command(subcommand)] cmd: RelationVerbsCmd },
+    Verbs {
+        #[command(subcommand)]
+        cmd: RelationVerbsCmd,
+    },
+    /// ⭐ REQ-172 · **值域验证**：候选提名 + 只读采样 ⇒ `candidates.json`（零 token）
+    ///
+    /// 候选来自三处（都由代码算，不问模型）：
+    /// ① 命名（`extract::fk` 的词干/复数/尾缀/注释提名）
+    /// ② 同名列 / 共享键列（`samelenum`）
+    /// ③ 列注释「XX 编号」vs 表注释「XX」（`comment`）
+    ///
+    /// 对 `*_id` 列抽 `SELECT DISTINCT <col> LIMIT N`，样本值**全部落在**目标表
+    /// 主键/唯一列的取值里 ⇒ 该候选的 `evidence[]` 多一条 `domain`、`score` 升到 0.90+。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder relation probe --schema .ontok-build/schema.json \
+    ///   --dsn "postgresql://user:pass@host:5432/db" --out .ontok-build/relation-candidates.json
+    ///
+    /// ⚠️ **只读**：连接串强制 `default_transaction_read_only=on`，连上后再读回校验；
+    ///    写入必被拒。⚠️ **抽样不落盘**：产物里只有 `matched/sampled` 计数，没有样本值。
+    /// ⚠️ 连不上 / 全部值域查询失败 ⇒ **非 0 并点名**（⛔ 不退化成「只做命名」）。
+    #[command(verbatim_doc_comment)]
+    Probe {
+        /// `ontok-builder introspect` 的产物（必须带 primary_key / unique_columns）
+        #[arg(long)]
+        schema: PathBuf,
+        /// 源库连接串（只读强制；口令只在本进程内用，不进产物）
+        #[arg(long)]
+        dsn: String,
+        /// 候选输出（JSON；`relation judge` 的输入）
+        #[arg(long)]
+        out: PathBuf,
+        /// 每个 `*_id` 列取多少个不同值去撞目标键（≥1）
+        #[arg(long, default_value_t = 50, value_parser = parse_positive_u32)]
+        sample_rows: u32,
+        /// 候选总数上限（按分数截断；≥1）
+        #[arg(long, default_value_t = 400, value_parser = parse_positive_usize)]
+        max_pairs: usize,
+    },
+    /// ⭐ REQ-172 · **AI 两轮**：判定（A）+ 补漏（B）⇒ `relations.json`（需模型）
+    ///
+    /// A 轮：每批 ≤10 条候选 + 两端名片 + 2~3 行脱敏样本 ⇒ 成立 / 不成立 / 证据不足。
+    /// B 轮：每批 ≤12 张表（1 张完整名片 + 其余一句话索引）⇒ 每表 ≤3 条新边
+    /// —— 这是**完全没有 `*_id` 线索**的表唯一的入口。
+    ///
+    /// 判定规范来自 `--relate-skill`（默认没有内置路径，必须显式给）：
+    /// `Deploy/skills/ontok-relate/SKILL.md`。
+    ///
+    /// 【可以照抄的一整条】
+    ///
+    /// ontok-builder relation judge --candidates .ontok-build/relation-candidates.json \
+    ///   --dsn "postgresql://user:pass@host:5432/db" --agent acp --agent-command pi-acp \
+    ///   --relate-skill Deploy/skills/ontok-relate/SKILL.md \
+    ///   --out .ontok-build/relations.json
+    ///
+    /// ⚠️ **缓存**：`prompt_sha`（skill + 协议）进指纹 ⇒ 同一输入第二次 **0 token**；
+    ///    换 skill / 换 agent 命令 / 换协议 ⇒ 整体失效。
+    /// ⚠️ 模型连不上 / 每一次调用都失败 / 一条关系都没留下 ⇒ **非 0**（⛔ 不静默回落「只做规则」）。
+    #[command(verbatim_doc_comment)]
+    Judge {
+        /// `relation probe` 的产物
+        #[arg(long)]
+        candidates: PathBuf,
+        /// 源库连接串（只读；给名片取 2~3 行脱敏样本）
+        #[arg(long)]
+        dsn: String,
+        /// 判定实现。**只认 `acp`**
+        #[arg(long, default_value = "acp")]
+        agent: String,
+        /// ACP 子进程命令行（如 `pi-acp`）。⛔ 没有默认值
+        #[arg(long)]
+        agent_command: String,
+        /// 判定契约（`ontok-relate` 的 SKILL.md 或装着它的目录）
+        #[arg(long)]
+        relate_skill: PathBuf,
+        /// 判定输出（JSON；`reviewed_by: null` / `band: low`）
+        #[arg(long)]
+        out: PathBuf,
+        /// 指纹缓存落点（默认 `<out>.cache.json`；命中即 0 token）
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// 每张表取几行样本进 prompt
+        #[arg(long, default_value_t = 2, value_parser = parse_positive_usize)]
+        sample_rows: usize,
+        /// ACP 单轮往返截止（秒）。省略 = 180
+        #[arg(long)]
+        agent_timeout_secs: Option<u64>,
+    },
 }
 
 /// ⭐ REQ-157 · `relation verbs check` 的参数。
@@ -1475,6 +1563,23 @@ pub enum BuildCmd {
         /// 这个库**只被读**（连接串强制 `default_transaction_read_only=on`）。
         #[arg(long)]
         dsn: Option<String>,
+        /// ⭐ REQ-172 · **propose 打底**：把库结构变成实体/属性/命名关系（96 张全覆盖）。
+        ///
+        /// **默认：给了 `--dsn` 就开**。理由：库驱动打底的意义就是全覆盖 ——
+        /// 不开的话 R2RML 仍然只有文档命中的那几类（真 UAT 库：7/96）。
+        /// 只给 `--schema` 时默认**不开**（保持 REQ-170 的产物形状不变）。
+        #[arg(long, conflicts_with = "without_propose")]
+        with_propose: bool,
+        /// ⭐ REQ-172 · 显式**关掉** propose 打底（调试用；会给警告：R2RML 只映射文档命中的表）
+        #[arg(long, conflicts_with = "with_propose")]
+        without_propose: bool,
+        /// ⭐ REQ-172 · 关系判定契约（`Deploy/skills/ontok-relate/SKILL.md`，或装着它的目录）。
+        ///
+        /// 给了才跑 **AI 两轮**（A 判定 + B 补漏，约 10 万 token/96 表，有指纹缓存）；
+        /// 省略 ⇒ 只做「规则 + 值域」候选（零 token），并在屏幕上说明「AI 两轮未启用」。
+        /// ⛔ 路径不写死：判定规范是 BA 维护的文档，也是缓存指纹的一部分。
+        #[arg(long)]
+        relate_skill: Option<PathBuf>,
         /// 评审台的监听地址。默认 `127.0.0.1:0`（端口 `0` = 内核分配）。
         /// **只许回环**：非回环地址在入参闸就拒（exit 2，⛔ 不会先烧一遍 ACP token）；
         /// 本命令**没有** `--allow-public` 这样的放行开关
@@ -4006,11 +4111,358 @@ fn confidence_line(values: &[f64]) -> String {
 async fn relation_cmd(cmd: RelationCmd) -> anyhow::Result<()> {
     match cmd {
         RelationCmd::Verbs { cmd } => match cmd {
-            RelationVerbsCmd::Check { project, version, snapshot, verbs } => {
-                relation_verbs_check(project, version, snapshot, verbs).await
-            }
+            RelationVerbsCmd::Check {
+                project,
+                version,
+                snapshot,
+                verbs,
+            } => relation_verbs_check(project, version, snapshot, verbs).await,
         },
+        RelationCmd::Probe {
+            schema,
+            dsn,
+            out,
+            sample_rows,
+            max_pairs,
+        } => relation_probe_cmd(schema, dsn, out, sample_rows, max_pairs).await,
+        RelationCmd::Judge {
+            candidates,
+            dsn,
+            agent,
+            agent_command,
+            relate_skill,
+            out,
+            cache,
+            sample_rows,
+            agent_timeout_secs,
+        } => {
+            relation_judge_cmd(
+                candidates,
+                dsn,
+                agent,
+                agent_command,
+                relate_skill,
+                out,
+                cache,
+                sample_rows,
+                agent_timeout_secs,
+            )
+            .await
+        }
     }
+}
+
+/// ⭐ REQ-172 · `relation probe` 的装配点（只接库、只发 SELECT）。
+async fn relation_probe_cmd(
+    schema: PathBuf,
+    dsn: String,
+    out: PathBuf,
+    sample_rows: u32,
+    max_pairs: usize,
+) -> anyhow::Result<()> {
+    use crate::extract::relation::{self, ProbeOptions};
+
+    if dsn.trim().is_empty() {
+        anyhow::bail!(
+            "`--dsn` 是空的：值域验证只能从库里读样本，⛔ 不能拿 schema 猜。\n\
+             给一条只读连接串（如 postgresql://user:pass@host:5432/db）。"
+        );
+    }
+    let file = relation::load_schema(&schema).map_err(|e| {
+        anyhow::anyhow!(
+            "{e:#}\n  改法：先跑 `ontok-builder introspect --dsn <url> --out {}` 重出一份带键的 schema。",
+            schema.display()
+        )
+    })?;
+    let pool = crate::extract::sample::sample_pool(&dsn)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "连不上源库（relation probe 的值域验证需要只读采样）：{e:#}\n\
+                 ⛔ 没有退化成「只做命名」——那会让「值域没验」看起来像「值域验过但没命中」。"
+            )
+        })?;
+    let opts = ProbeOptions {
+        sample_rows,
+        max_pairs,
+        max_targets_per_column: relation::MAX_TARGETS_PER_COLUMN,
+        schema_file: schema.display().to_string(),
+        schema_sha256: file.sha256.clone(),
+        dsn: dsn.clone(),
+    };
+    let report = relation::probe(&pool, &file, &opts).await?;
+    pool.close().await;
+    let text = report.render()?;
+    write_artifact(&out, &text)?;
+
+    let st = &report.stats;
+    println!(
+        "关系值域验证完成（只读 · {} 张表 / {} 列 · 样本窗口 {} 个不同值）",
+        report.source.tables, report.source.columns, report.source.sample_rows
+    );
+    println!(
+        "  待判列    : {} 个 *_id（提名 {} 条 · 保留 {} 条{}）",
+        st.columns_considered,
+        st.candidates_generated,
+        st.candidates_kept,
+        if st.truncated_pairs > 0 {
+            format!(" · 被 --max-pairs 截掉 {}", st.truncated_pairs)
+        } else {
+            String::new()
+        }
+    );
+    println!(
+        "  值域验证  : 测 {} · 确认 {} · 否定 {} · 失败 {}",
+        st.domain_tested, st.domain_confirmed, st.domain_rejected, st.domain_failed
+    );
+    println!(
+        "  其它证据  : samelenum {} · comment {} · 未解析列 {}",
+        st.samelenum,
+        st.comment,
+        report.unresolved.len()
+    );
+    println!("  产物      : {}", out.display());
+    if !report.unresolved.is_empty() {
+        let mut by: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for u in &report.unresolved {
+            *by.entry(u.code.as_str()).or_insert(0) += 1;
+        }
+        let line: Vec<String> = by.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        println!("  未解析    : {}", line.join(" · "));
+    }
+    Ok(())
+}
+
+/// ⭐ REQ-172 · `relation judge` 的装配点（ACP + 只读样本 + 两轮）。
+#[allow(clippy::too_many_arguments)]
+async fn relation_judge_cmd(
+    candidates: PathBuf,
+    dsn: String,
+    agent: String,
+    agent_command: String,
+    relate_skill: PathBuf,
+    out: PathBuf,
+    cache: Option<PathBuf>,
+    sample_rows: usize,
+    agent_timeout_secs: Option<u64>,
+) -> anyhow::Result<()> {
+    use crate::extract::relation::{ProbeReport, CANDIDATES_KIND};
+    use crate::extract::relation_judge::{self, JudgeOptions};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let raw = std::fs::read_to_string(&candidates)
+        .with_context(|| format!("读不到候选文件：{}", candidates.display()))?;
+    let probe: ProbeReport = serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "候选文件不是 `relation probe` 的产物：{}（先跑 relation probe）",
+            candidates.display()
+        )
+    })?;
+    if probe.kind != CANDIDATES_KIND {
+        anyhow::bail!(
+            "候选文件的 kind = {:?}，不是 {:?} —— 这不是 `relation probe` 的产物。",
+            probe.kind,
+            CANDIDATES_KIND
+        );
+    }
+    if probe.candidates.is_empty() {
+        anyhow::bail!(
+            "候选文件里**一条候选都没有** —— ⛔ 不空跑一次模型（白烧 token 且什么都判不出）。\n\
+             先看 `relation probe` 的未解析清单：那一列为什么没有候选。"
+        );
+    }
+    if agent.trim() != crate::extract::doc_acp::AGENT_ACP {
+        anyhow::bail!(
+            "--agent 只认 `acp`（收到 {agent:?}）—— ⛔ 不静默回落到内置 LLM：\
+             那会让「这份 relations.json 是谁判的」变成一句没人能核的话。"
+        );
+    }
+    if agent_command.trim().is_empty() {
+        anyhow::bail!("--agent-command 是空的：要写成 `pi-acp`（或绝对路径）。⛔ 没有默认值。");
+    }
+
+    // 最便宜的失败先报：skill 读不到 / 程序找不到 都不该先连库。
+    let skill = crate::extract::doc_acp::load_skill(&relate_skill)?;
+    let skill_sha = crate::extract::sample::sha256_hex(skill.as_bytes());
+    let timeout = crate::extract::doc_acp::resolve_timeout(agent_timeout_secs)?;
+    let (program, args) = crate::extract::doc_acp::resolve_command(&agent_command)?;
+    let cfg = crate::agent::acp::AcpConfig {
+        program: program.clone(),
+        args: args.clone(),
+        cwd: crate::extract::doc_acp::session_cwd()?,
+        timeout,
+    };
+    let mut session = crate::extract::doc_acp::connect(cfg)?;
+    eprintln!(
+        "· 判定实现：acp（{}）—— 握手身份 {} v{}",
+        agent_command, session.agent, session.version
+    );
+
+    let pool = crate::extract::sample::sample_pool(&dsn)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "连不上源库（relation judge 要取名片样本）：{e:#}\n\
+                 ⛔ 没有降级成「只喂 schema 不带样本」——那会让判定看着有依据却没有数据。"
+            )
+        })?;
+
+    // 样本列：关系两端的列优先（其余补主键 + 前几列，总列数 ≤8）。
+    let mut extra: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for c in &probe.candidates {
+        extra
+            .entry(c.child_table.clone())
+            .or_default()
+            .insert(c.child_column.clone());
+        extra
+            .entry(c.parent_table.clone())
+            .or_default()
+            .insert(c.parent_column.clone());
+    }
+    let (samples, failures) = relation_judge::fetch_samples(
+        &pool,
+        &probe.source.schema,
+        &probe.tables,
+        &extra,
+        sample_rows,
+    )
+    .await;
+    if !probe.tables.is_empty() && failures == probe.tables.len() {
+        anyhow::bail!(
+            "名片样本**一张表都取不到**（{failures}/{}）—— ⛔ 不空跑模型。\n\
+             排查：只读账号的 SELECT 权限 / schema 名（{:?}）。",
+            probe.tables.len(),
+            probe.source.schema
+        );
+    }
+    pool.close().await;
+
+    let model =
+        crate::extract::doc_acp::model_id(&program, &args, &session.agent, &session.version);
+    let cache_path = cache.unwrap_or_else(|| {
+        let name = out
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "relations.json".to_string());
+        out.with_file_name(format!("{name}.cache.json"))
+    });
+    let meta = JudgeOptions {
+        sample_rows,
+        cache: cache_path.clone(),
+        out: out.clone(),
+        candidates_file: candidates.display().to_string(),
+        candidates_sha256: crate::extract::sample::sha256_hex(raw.as_bytes()),
+        skill_file: relate_skill.display().to_string(),
+        skill_sha256: skill_sha,
+    };
+    let mut report = relation_judge::run(
+        &probe,
+        &skill,
+        &model,
+        &meta,
+        samples,
+        failures,
+        &mut session.transport,
+    )?;
+    report.source.agent = session.agent.clone();
+    report.source.agent_version = session.version.clone();
+    let text = report.render()?;
+    write_artifact(&out, &text)?;
+    let warm = session.warmup.load(std::sync::atomic::Ordering::SeqCst);
+
+    let st = &report.stats;
+    println!(
+        "关系判定完成（A 轮 {} 批 / B 轮 {} 批 · 模型 {}）",
+        report.round_a.batches, report.round_b.batches, model
+    );
+    println!(
+        "  调用      : A {} 次（缓存 {} · 失败 {}）· B {} 次（缓存 {} · 失败 {}）· 预热 {}",
+        report.round_a.calls,
+        report.round_a.cache_hits,
+        report.round_a.failed_batches,
+        report.round_b.calls,
+        report.round_b.cache_hits,
+        report.round_b.failed_batches,
+        if warm { "发过" } else { "未发" }
+    );
+    println!(
+        "  token     : A {} · B {} · 合计 {}",
+        report.round_a.tokens,
+        report.round_b.tokens,
+        report.round_a.tokens + report.round_b.tokens
+    );
+    println!(
+        "  候选/产出 : {} 条候选 ⇒ {} 条关系（{}）",
+        st.candidates,
+        st.relations,
+        st.by_source
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    );
+    println!(
+        "  补漏轮    : {} 条（涉及 {} 张表）· 样本失败表 {}",
+        st.round_b_relations, st.round_b_tables, st.sample_failures
+    );
+    if !report.drops.is_empty() {
+        let line: Vec<String> = report
+            .drops
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        println!("  丢弃      : {}", line.join(" · "));
+    }
+    println!("  产物      : {}", out.display());
+    println!("  缓存      : {}", cache_path.display());
+    if report.round_a.failed_batches + report.round_b.failed_batches > 0 {
+        eprintln!(
+            "⚠ 有 {} 批失败（已记进 stats，产物照出）—— 相关候选没有判定，别把缺当成「不成立」。",
+            report.round_a.failed_batches + report.round_b.failed_batches
+        );
+    }
+    Ok(())
+}
+
+/// 落盘（建父目录；先写 `.tmp` 再改名 —— 半份 JSON 会让下游把它当全量吃）。
+fn write_artifact(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("建不出目录：{}", parent.display()))?;
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).with_context(|| format!("写不出临时文件：{}", tmp.display()))?;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("改名失败（{} → {}）", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+/// `--sample-rows` / `--max-pairs` 的入参闸：0 等于「不验」，必须显式给 ≥1。
+fn parse_positive_u32(s: &str) -> std::result::Result<u32, String> {
+    let n: u32 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("要一个正整数（收到 {s:?}）"))?;
+    if n == 0 {
+        return Err("0 等于不采样，那与「不做值域验证」是同一件事；要给 ≥1".to_string());
+    }
+    Ok(n)
+}
+
+fn parse_positive_usize(s: &str) -> std::result::Result<usize, String> {
+    let n: usize = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("要一个正整数（收到 {s:?}）"))?;
+    if n == 0 {
+        return Err("要 ≥1（0 会让这一轮什么都拿不到）".to_string());
+    }
+    Ok(n)
 }
 
 /// 加载字典：**默认用编进二进制的那份**，`--verbs` 只是试新字典的覆盖项。
@@ -7410,6 +7862,9 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         base_version,
         schema,
         dsn,
+        with_propose,
+        without_propose,
+        relate_skill,
         bind,
         no_browser,
     } = cmd;
@@ -7427,6 +7882,14 @@ fn build_options(cmd: &BuildCmd) -> crate::review_open::build_run::Options {
         proposal: proposal.clone(),
         allow_doc_only: *allow_doc_only,
         base_version: *base_version,
+        propose: if *without_propose {
+            Some(false)
+        } else if *with_propose {
+            Some(true)
+        } else {
+            None
+        },
+        relate_skill: relate_skill.clone(),
         bind: bind.clone(),
         no_browser: *no_browser,
     }
