@@ -9,6 +9,7 @@
 | `skills/` | ⭐ **agent skill**（`ontok-extract` / `ontok-query` / `mcp.example.json`）—— **只放 agent 加载的东西**（有 `name`/`description` frontmatter） |
 | `docs/` | **给人读的文档**（`fde-guide.md` = FDE 构建指南）。⛔ 不是 skill，别装进 agent 目录 |
 | `.local/` | 本地临时（不跟踪） |
+| `tools/` | **发版/交付前的守卫**（都要能跑红）：`check_am.py`（AM 结构）· `check_skill_paths.py`（skill 里不许有本机路径）· `check_verbs.py`（两份 skill 的谓词表 ↔ `relation-verbs.json`） |
 
 > ⭐ **2026-10-27：skill 统一回本分支维护**（用户口径，`Deploy` 分支唯一维护处）。
 > 历史：2026-10-26 曾从本分支迁到**仓库根 `skills/`**；现在搬回。
