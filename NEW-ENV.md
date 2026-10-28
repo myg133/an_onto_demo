@@ -180,3 +180,15 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --selftest   # 98 passe
 | **`ONTOK_SECRET_KEY`** | **必须与数据库一起备份**。只有库没有 key ⇒ 密文不可解（v1 不做密钥轮换） |
 | token 表 | 丢了 ⇒ 数字员工全部 401；admin 丢了 ⇒ 写面进不去 |
 | 轮换 | 当前**不支持**轮换明文密钥（换 key 会让历史密文失效）⇒ 密钥只生成一次、长期保存 |
+
+## 五·六 · 0.3.3 起：`POST /api/projects` 发的 key **直接可用**
+
+| 版本 | 建项目返回的 `ontok_q_…` |
+| --- | --- |
+| ≤ 0.3.2 | **401**（运行时只认静态 token 表）⇒ 只能手工往 Secret 抄一条 |
+| **≥ 0.3.3** | ✅ 直接能用（静态表未命中时按 `sha256` 查 `project_keys`，命中即按该 key 绑的项目解析） |
+
+- DB 发的 key **恒为 query**（表里没有 kind 列）⇒ 拿不到写权限
+- 未命中 / 已吊销 ⇒ **401**；单项目模式下跨项目 ⇒ **403 `key.project_mismatch`**
+- 吊销在 **≤60s** 内可见（进程内缓存 TTL）
+- token 表里把 `project` 写错 ⇒ **404 `project.not_found`**（0.3.2 及以前是 500，容易误判成服务挂了）
