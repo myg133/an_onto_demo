@@ -61,7 +61,7 @@ STEPS = [
                             "    --ontology-only  [--project <p> --version vN]",
                             "# 环境：ONTOK_DATABASE_URL + ONTOK_SECRET_KEY(64hex)"]),
   ("① 建项目 + 发 key（admin）", ["POST /api/projects",
-                            "  {\"name\":\"<p>\",\"label\":\"…\",\"key_label\":\"…\"}",
+                            "  {\"project\":\"<p>\",\"label\":\"…\",\"key_label\":\"…\"}",
                             "⇒ 201 一次性 key（kind=query，一 key 一项目）"]),
   ("② 上传构建包", ["POST /api/projects/<p>/bundles",
               "  Content-Type: application/octet-stream",

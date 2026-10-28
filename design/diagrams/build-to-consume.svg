@@ -55,7 +55,7 @@
 <rect x="472" y="230" width="376" height="75" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
 <text x="483" y="249" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">① 建项目 + 发 key（admin）</text>
 <text x="483" y="263" font-family="Consolas,monospace" font-size="11.2" fill="#123">POST /api/projects</text>
-<text x="483" y="278" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  {&quot;name&quot;:&quot;&lt;p&gt;&quot;,&quot;label&quot;:&quot;…&quot;,&quot;key_label&quot;:&quot;…&quot;}</text>
+<text x="483" y="278" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">  {&quot;project&quot;:&quot;&lt;p&gt;&quot;,&quot;label&quot;:&quot;…&quot;,&quot;key_label&quot;:&quot;…&quot;}</text>
 <text x="483" y="293" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="11.6" fill="#123">⇒ 201 一次性 key（kind=query，一 key 一项目）</text>
 <rect x="472" y="321" width="376" height="90" rx="9" fill="#fff" stroke="#2f7d4f" stroke-width="1.4"/>
 <text x="483" y="340" font-family="Microsoft YaHei,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#2f7d4f">② 上传构建包</text>
