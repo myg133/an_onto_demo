@@ -1647,3 +1647,4 @@ BA 曾称「纪律 O 的 `846` 与其分项 `62+704+142+1=847` **矛盾**，需�
 | REQ-175 | **[DONE 2f22016]** **DB 发的 key 要能鉴权**：静态表没命中时按 `token_sha256` 查 `project_keys`（命中即按该 key 绑的项目解析，kind 恒 query）+ 60s 缓存；未命中/吊销仍 401 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
 | REQ-176 | **[DONE 692f510]** **发布闸业务词白名单**（`--term-allowlist <file>`，部署级）：业务词恰好等于建模术语时不再误杀；默认不放松、豁免留痕、文件坏了启动失败 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
 | REQ-177 | **多项目 + `--access-mapping` ⇒ 启动即拒**（exit 2，连库之前）：AM 归属是版本（REQ-174），进程级一份会让没 AM 的项目回落到别人的映射并 bind 失败（客户实测 500） | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-28 |
+| REQ-178 | **TTL 按需生成**：装配期不渲染两视图，`/api/ontology.ttl` 请求时渲染（按 version_id 缓存），失败只挡它自己（新码 `project.ttl_failed`）⇒ 一个词写错不再让整个项目 500、也不再挡住重新传包 | **已就绪** | ba-join-michael-workstation-1340-20261027-093836 | 2026-10-29 |
