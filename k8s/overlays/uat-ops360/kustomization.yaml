@@ -49,10 +49,11 @@ patches:
           - --bind=0.0.0.0:8800
           - --allow-public
           - --tokens=/etc/ontok/secrets/query-tokens.json
-          - --project=$(ONTOK_PROJECT)
-          - --version=$(ONTOK_VERSION)
-          - --access-mapping=/etc/ontok/am/am-tencent.json
+          - --term-allowlist=/etc/ontok/allowlist/term-allowlist.txt
           - --ontology-only
+          # ⛔ 2026-10-28 起 UAT 改**多项目模式**：不给 --project/--version（项目随 key 解析），
+          #    也**不给 --access-mapping**（REQ-177：多项目 + 文件 AM ⇒ 启动即拒）。
+          #    每套本体的 AM 随构建包入库（`version_access_mappings`，cloud-resource 第 7 版已有）。
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
         value: "cloud-resource"
@@ -112,21 +113,26 @@ patches:
               name: ontok-write
               key: secret-key
 
-  # ④' AM 挂载：ConfigMap → /etc/ontok/am（readOnly）
+  # ④'' 业务词白名单（REQ-176）：把「客户域里是业务词」的建模术语列出来，闸门层做减法。
+  #      ⚠️ 现在是**全 14 个词**（沿用 QA 那份）⇒ 词表层等于关闸，只剩形态判据。
+  #      想收窄就删行，不用改代码；改文件后 apply 会换 CM 名字 ⇒ 自动滚动重启。
   - target: { kind: Deployment, name: ontok-query }
     patch: |-
       - op: add
         path: /spec/template/spec/volumes/-
         value:
-          name: am
+          name: term-allowlist
           configMap:
-            name: ontok-access-mapping
+            name: ontok-term-allowlist
       - op: add
         path: /spec/template/spec/containers/0/volumeMounts/-
         value:
-          name: am
-          mountPath: /etc/ontok/am
+          name: term-allowlist
+          mountPath: /etc/ontok/allowlist
           readOnly: true
+
+  # ④' ⛔ 多项目模式**不挂 AM**：AM 已随版本 7 入库（`version_access_mappings`，67170 B）。
+  #    挂了会与 REQ-177 冲突（多项目 + 文件 AM ⇒ 启动即拒）。
 
   # ⑤ CF Tunnel sidecar（**token 模式**，已启用）
   #    链路：公网 → Cloudflare → cloudflared(本 Pod) → 127.0.0.1:8800
@@ -140,7 +146,11 @@ patches:
 # AM（access mapping）：14 个类的取数契约（contract_version 2，含 operation.headers 与
 # request.defaults）。**不含凭据**（只有环境变量名）。
 # 改它之后要重新 apply；`query serve --access-mapping` 会 bind 到本体，class 不在本体里就拒绝启动。
+# ⛔ 不再生成 AM 的 ConfigMap（多项目模式下 AM 来自 `version_access_mappings`）。
+#    ⚠️ `am-tencent.json` 仍留在目录里作为**出厂记录**；`Deploy/tools/check_am.py` 仍会校验它。
+
+# 业务词白名单（REQ-176）。改文件后 apply 生效。
 configMapGenerator:
-  - name: ontok-access-mapping
+  - name: ontok-term-allowlist
     files:
-      - am-tencent.json
+      - term-allowlist.txt
