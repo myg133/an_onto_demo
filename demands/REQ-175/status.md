@@ -1,6 +1,6 @@
 # 状态：REQ-175 · DB 发的 key 要能鉴权
 
-**已就绪**（2026-10-28 · 生产实测 401 触发）
+**已合入 develop `2f22016`**（2026-10-28）· BA 亲验 test_req175_db_keys 5/5 + 回归 lib 1011
 
 ## 一句话
 `POST /api/projects` 发的 `ontok_q_…` 只写进 `project_keys`，运行时只认静态 token 表 ⇒ 401。
