@@ -1268,11 +1268,73 @@ fn altlabel_values(text: &str) -> Vec<String> {
 /// **同一条**（值里出现任何 ASCII 字母就抓），只换取数形状；**但取数前多一道
 /// 「机器动词形态」的形状门**，理由见 [`looks_like_machine_verb`]。
 fn untranslated_semantic_altlabel_hit(text: &str) -> Option<String> {
-    altlabel_values(text)
+    property_altlabel_values(text)
         .into_iter()
         .filter(|v| looks_like_machine_verb(v))
         .find(|v| v.chars().any(|c| c.is_ascii_alphabetic()))
         .map(|v| format!("语义值含未翻译的英文（skos:altLabel）：{v}"))
+}
+
+/// 只取**属性块**里的 `skos:altLabel` 值（`owl:ObjectProperty` / `owl:DatatypeProperty`）。
+///
+/// # 为什么必须按块作用域（2026-10-29 客户实测）
+///
+/// TTL 里 `skos:altLabel` 有两个来源，**形状判据分不开它们**：
+///
+/// ```text
+/// :试验方案 a owl:Class ;        ← 实体别名（业务词，`protocol` 是"试验方案"的英文名）
+///     skos:altLabel "protocol"@zh .
+///
+/// :某个关系 a owl:ObjectProperty ;   ← 关系语义（漏翻就是漏翻）
+///     skos:altLabel "belongs_to"@zh .
+/// ```
+///
+/// 旧判据只看值形状（全小写 ASCII），于是 `protocol` 被当成"未翻译的关系语义"
+/// ⇒ `yiyao` 整份客户视图拒绝发布（10 天前 `NAT` 也是同一个坑，当时靠"只认全小写"
+/// 躲过去，`protocol` 又漏了）。
+/// **按块作用域判**之后，实体别名（`owl:Class`）根本不进这一档 —— 判据更准，覆盖面不变
+/// （属性块里的 `aggregates` 照样抓）。
+fn property_altlabel_values(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_property_block = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // 块起始：`a owl:ObjectProperty` / `a owl:DatatypeProperty` / `a owl:Class`
+        if trimmed.contains("a owl:ObjectProperty") || trimmed.contains("a owl:DatatypeProperty") {
+            in_property_block = true;
+        } else if trimmed.contains("a owl:Class") {
+            in_property_block = false;
+        }
+        if !in_property_block {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("skos:altLabel ") {
+            if let Some(v) = quoted_value(rest) {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+/// 从 `"值"@zh` 这种片段里取出 `值`（去转义）。
+fn quoted_value(s: &str) -> Option<String> {
+    let body = s.trim_start().strip_prefix('"')?;
+    let mut val = String::new();
+    let mut escaped = false;
+    for ch in body.chars() {
+        if escaped {
+            val.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(val);
+        } else {
+            val.push(ch);
+        }
+    }
+    None
 }
 
 /// ⭐ REQ-157 · **机器动词形态**：全小写 ASCII 字母 / 数字 / 下划线（`belongs_to`、

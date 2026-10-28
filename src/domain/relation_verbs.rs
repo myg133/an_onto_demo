@@ -461,6 +461,19 @@ impl VerbDict {
     }
 }
 
+/// 这个词是不是**受控词典里的写法**（主键 / 别名 / 禁词）。
+///
+/// ⭐ REQ-157 的「机器动词形状门」用它，取代原来那条「全小写就算机器动词」的规则：
+/// 后者会把**实体别名**（`protocol`）误判成漏翻的关系语义（2026-10-29 客户实测
+/// `yiyao` 因此打不开；同一个坑 2026-10-27 也踩过：`NAT`）。
+pub fn is_relation_verb_token(s: &str) -> bool {
+    match embedded() {
+        Ok(d) => !matches!(d.classify(s), Classified::Unknown),
+        // 字典坏了：退回"含下划线才算"的保守判据（宁少报，不误杀整份视图）
+        Err(_) => s.contains('_'),
+    }
+}
+
 /// 服务面用的**唯一**入口：字典命中就给中文标签，否则 `None`。
 ///
 /// ⛔ 字典坏了/缺字段时**不 panic**：退回 `semantic_cn` 的内置 match
