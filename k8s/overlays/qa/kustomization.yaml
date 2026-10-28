@@ -19,7 +19,7 @@ resources:
 images:
   - name: ontok
     newName: aigccontainer.azurecr.cn/an_onto/ontok
-    newTag: 0.3.3
+    newTag: 0.3.5
 
 replicas:
   - { name: ontok-query, count: 1 }
@@ -52,6 +52,7 @@ patches:
           - --bind=0.0.0.0:8800
           - --allow-public
           - --tokens=/etc/ontok/secrets/query-tokens.json
+          - --term-allowlist=/etc/ontok/allowlist/term-allowlist.txt
           - --ontology-only
           # ⛔ 多项目模式**不要** --access-mapping：那是"一个进程一份 AM"的单项目概念。
           #    每套本体的 AM 随构建包入库（REQ-174），按 active version 各自加载。
@@ -91,6 +92,24 @@ patches:
   # ⑥ ⛔ 多项目模式**不挂 AM**（AM 随版本入库、按 active version 加载）。
   #    挂了只会让「没有 DB AM 的项目」回落到这份共用的 AM，然后 bind 失败把项目弄挂。
 
+  # ⑥' 业务词白名单（REQ-176）：把「客户域里是业务词」的建模术语列出来，闸门层做减法。
+  #     ⚠️ 本文件现在是**全 14 个词**（用户 2026-10-28「先都加进去」）⇒ 词表层等于关闸，
+  #        只剩形态判据（未翻译的基数/语义）仍在。想收窄就删行，不用改代码。
+  - target: { kind: Deployment, name: ontok-query }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: term-allowlist
+          configMap:
+            name: ontok-term-allowlist
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: term-allowlist
+          mountPath: /etc/ontok/allowlist
+          readOnly: true
+
   # ⑦ Secret 由部署流程单独 provision（含真凭据），⛔ 不能交给 base 的空占位版本。
   #    ConfigMap `ontok-config`（schema/policy/tenancy）**保留**：base 的 volume 还挂着它，
   #    删了 pod 会因为找不到 CM 起不来（本体模式下这些文件用不到，但挂载要在）。
@@ -111,3 +130,9 @@ patches:
 # 逐字节相同）。⛔ 不要手改这里——要换 AM 就重新从包提取，`Deploy/tools/check_am.py` 会验它。
 # ⛔ 不再生成 AM 的 ConfigMap：多项目模式下没有任何消费者。
 #    要换某套本体的 AM，改**那个构建包**并重新导入，不要改这里。
+
+# 业务词白名单（REQ-176）。改这个文件后 apply 即可生效（会换 configMap 名字 ⇒ 滚动重启）。
+configMapGenerator:
+  - name: ontok-term-allowlist
+    files:
+      - term-allowlist.txt
