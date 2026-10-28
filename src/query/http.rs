@@ -18,6 +18,12 @@
 //! 于是 `QueryService` 不再是 axum 的 `State`：它是**请求级**的解析结果。
 //! 单项目模式的响应字节一个都没有变（R6）—— 只是把同一个 `Arc` 从 `State` 挪进了扩展。
 //!
+//! ⭐ REQ-175 · **静态表只是第一种来源**：`TokenTable::find` 没命中时，身份门按
+//! `sha256(token)` 查 `project_keys`（`POST /api/projects` 发的那把 key；60s 缓存，
+//! 见 [`super::db_keys`]）。未命中 / 已吊销仍然 **401**；单项目模式下 DB key 绑的项目
+//! ≠ `--project` ⇒ **403 `key.project_mismatch`**。多项目模式的项目仍然只来自 key
+//! （②–④ 与静态 key 同一段代码）。
+//!
 //! `/api/health` **在门之外**（AC-001：免 token）。它只给「这个部署是什么」：
 //! `service` / `version`（**产品**版本）/ `project` / `ontology_version`（**本体**版本，
 //! ⭐ REQ-139）/ `syntax` / `protocols` / `transports`（本体模式另带 `mode`）——
@@ -73,6 +79,7 @@ use serde_json::{json, Value};
 
 use crate::mcp::protocol as p;
 
+use super::db_keys::{DbKeyAuth, KEY_PROJECT_MISMATCH};
 use super::error::ApiError;
 use super::tokens::TokenEntry;
 use super::ttl::TtlView;
@@ -175,7 +182,7 @@ impl Resolved {
 /// - **未注册的 `/api/*` 也走身份门**（无 token ⇒ 401，不泄露「这个接口存不存在」）；
 ///   已授权的人问路 ⇒ 404 + 可用端点清单。
 pub fn build_router(svc: Arc<QueryService>) -> Router {
-    single_router(svc, None, None)
+    single_router(svc, None, None, None)
 }
 
 /// ⭐ REQ-159 P1c-1 · **带写面**的单项目路由（`ontok query serve --project …` 的生产路径）。
@@ -192,13 +199,29 @@ pub fn build_router_with_write(
     write: Arc<WritePlane>,
     overrides: Option<Arc<ProjectOverride>>,
 ) -> Router {
-    single_router(svc, Some(write), overrides)
+    single_router(svc, Some(write), overrides, None)
+}
+
+/// ⭐ REQ-175 · **带写面 + DB key 鉴权**的单项目路由（`ontok query serve --project …`
+/// 的生产路径）。
+///
+/// 与 [`build_router_with_write`] 只差最后一个参数：静态表未命中时用 [`DbKeyAuth`]
+/// 按摘要查 `project_keys`。`None`（= 旧的 `build_router*`）时**一个字节都不变** ——
+/// 未命中仍然直接 401，⛔ 不查库（那 100+ 个单元判据跑起来也不需要库）。
+pub fn build_router_with_write_and_db_keys(
+    svc: Arc<QueryService>,
+    write: Arc<WritePlane>,
+    overrides: Option<Arc<ProjectOverride>>,
+    db_keys: Arc<DbKeyAuth>,
+) -> Router {
+    single_router(svc, Some(write), overrides, Some(db_keys))
 }
 
 fn single_router(
     svc: Arc<QueryService>,
     write: Option<Arc<WritePlane>>,
     overrides: Option<Arc<ProjectOverride>>,
+    db_keys: Option<Arc<DbKeyAuth>>,
 ) -> Router {
     // ⭐ REQ-135 · 指标层挂在**最外层**：连 401 / 404 都计数（失败也是事实）。
     let metrics = svc.metrics.clone();
@@ -209,7 +232,9 @@ fn single_router(
         router = router.layer(middleware::from_fn_with_state(ov, apply_project_override));
     }
     let router = router
-        .layer(middleware::from_fn(require_token))
+        // ⭐ REQ-175 · 身份门是**带状态**的：静态表未命中时要有一份 [`DbKeyAuth`]
+        // 去查 `project_keys`（`None` = 这个部署没有写面 / 判据没给库）。
+        .layer(middleware::from_fn_with_state(db_keys, require_token))
         // ⭐ REQ-159 P1b · 把「这个请求的那一个服务」放进扩展（在身份门**之前**：
         // 身份门要读它的 token 表）。单项目模式没有任何按请求的分叉。
         .layer(middleware::from_fn_with_state(
@@ -407,7 +432,24 @@ async fn inject_single_service(
 }
 
 /// 身份门。**没有开关能绕过它** —— 只有它认识的那张表说了算。
-async fn require_token(mut req: Request, next: Next) -> Response {
+///
+/// ⭐ REQ-175 · 顺序**不能换**：
+///
+/// ```text
+/// ① 静态表（TokenTable::find，定长比对）           … 命中 ⇒ 与 REQ-123/159 逐字节相同
+/// ② 没命中 ⇒ sha256(token) 查 project_keys（60s 缓存）… 命中 ⇒ 视作 kind=query 的 key
+/// ③ 还没命中 / 已吊销                              … 401（⛔ 不是 403）
+/// ④ DB key 绑的项目 ≠ 本进程 --project             … 403 key.project_mismatch
+/// ⑤ 写路径 + 非 admin                              … 403 key.not_admin
+/// ```
+///
+/// `db_keys = None`（单元判据 / 没有写面的路由）时第 ② 步不存在：未命中直接 401，
+/// 与 REQ-175 之前**一个字节都不变**。
+async fn require_token(
+    State(db_keys): State<Option<Arc<DbKeyAuth>>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let started = Instant::now();
     if !needs_auth(req.uri().path()) {
         return next.run(req).await;
@@ -422,39 +464,85 @@ async fn require_token(mut req: Request, next: Next) -> Response {
         return internal_no_service("身份门");
     };
     let presented = bearer(req.headers());
-    match svc.tokens.find(presented) {
+    // ① ⭐ 静态表**优先**（REQ-175 的硬前提：静态表里有的一律走原路径，行为逐字节不变）。
+    if let Some(entry) = svc.tokens.find(presented) {
         // ⭐ REQ-159 P1c-1 · 写面只认 admin（ADR-013 §三）。403 的码是契约指定的
         // `key.not_admin`（⛔ 不是 401：这张 key 是真的，只是不是写面的钥匙）。
-        Some(entry) if is_write_path(req.uri().path()) && !entry.kind.is_admin() => {
+        if is_write_path(req.uri().path()) && !entry.kind.is_admin() {
             super::audit_token_sink(&svc.audit, "auth", proto, entry, "key.not_admin", started);
-            deny_not_admin(entry)
+            return deny_not_admin(entry);
         }
-        Some(entry) => {
-            req.extensions_mut().insert(Auth(entry.clone()));
-            next.run(req).await
-        }
-        None => {
-            let e = ApiError::unauthorized();
-            // 审计：这一次**没有身份**可用（不写「哪个 token 错了」——那等于泄漏）。
-            // ⭐ REQ-127：TTL 端点即使 401 也记下「要的是哪个视图」（AC-006 的四个字段之一）。
-            let view = ttl_view_hint(req.uri().path(), req.uri().query());
-            audit_anonymous(&svc, "auth", proto, view, e.code, started);
-            respond(e.status, e.body())
+        req.extensions_mut().insert(Auth(entry.clone()));
+        return next.run(req).await;
+    }
+    // ② ⭐ REQ-175 · 静态表没命中 ⇒ 按摘要查 `project_keys`（`POST /api/projects` 发的 key）。
+    // 未命中 / 已吊销 ⇒ 继续走到 ③ 的 401；⛔ 不因为「前缀像」就放行。
+    if let Some(db_keys) = db_keys.as_ref() {
+        match db_keys.resolve(presented).await {
+            Ok(Some(entry)) => {
+                // ④ 单项目模式：DB key 绑的项目必须就是 `--project`（⛔ 不许串包）。
+                // 多项目模式不走这条门（那里的项目**来自** key，见 `resolve_multi`）。
+                if entry.project.as_deref() != Some(svc.project.as_str()) {
+                    super::audit_token_sink(
+                        &svc.audit,
+                        "auth",
+                        proto,
+                        &entry,
+                        KEY_PROJECT_MISMATCH,
+                        started,
+                    );
+                    return deny_project_mismatch(&entry, &svc.project);
+                }
+                // ⑤ 写路径 + 查询 key ⇒ 403 `key.not_admin`（与静态 query key 同一条门）。
+                if is_write_path(req.uri().path()) && !entry.kind.is_admin() {
+                    super::audit_token_sink(
+                        &svc.audit,
+                        "auth",
+                        proto,
+                        &entry,
+                        "key.not_admin",
+                        started,
+                    );
+                    return deny_not_admin(&entry);
+                }
+                req.extensions_mut().insert(Auth(entry));
+                return next.run(req).await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // 库坏了**不是**「你的 key 错了」：500 + 一行匿名审计（此刻没有可信身份）。
+                let view = ttl_view_hint(req.uri().path(), req.uri().query());
+                audit_anonymous(&svc, "auth", proto, view, e.code, started);
+                return respond(e.status, e.body());
+            }
         }
     }
+    // ③ 都没有 ⇒ 401。
+    let e = ApiError::unauthorized();
+    // 审计：这一次**没有身份**可用（不写「哪个 token 错了」——那等于泄漏）。
+    // ⭐ REQ-127：TTL 端点即使 401 也记下「要的是哪个视图」（AC-006 的四个字段之一）。
+    let view = ttl_view_hint(req.uri().path(), req.uri().query());
+    audit_anonymous(&svc, "auth", proto, view, e.code, started);
+    respond(e.status, e.body())
 }
 
 /// ⭐ REQ-159 P1b · 多项目模式的**身份门 + 项目解析**（同一次中间件，顺序不能换）。
 ///
 /// ```text
-/// ① Authorization: Bearer …  → token 表（定长比对）   … 不中 ⇒ 401（与单项目模式逐字节相同）
-/// ② project = token.project  → SELECT projects        … 项目不在 ⇒ 500 project.not_found
+/// ① Authorization: Bearer …  → token 表（定长比对）   … 不中 ⇒ ⭐ 按摘要查 project_keys
+///                                                       … 都没有 / 已吊销 ⇒ 401（与单项目模式逐字节相同）
+/// ② project = token.project  → SELECT projects        … 项目不在 ⇒ 404 project.not_found
 /// ③ active_version_id                                 … NULL   ⇒ 503 project.no_active_version
 /// ④ 按 version_id 查缓存 / 懒加载                     … 取不到快照 ⇒ 500 project.snapshot_missing
 /// ⑤ 放进扩展（handler 只拿得到解析结果）
 /// ```
 ///
 /// ⛔ 不在启动时预加载、⛔ 不按 project 做缓存键（见 `super::multi` 模块头）。
+///
+/// ⭐ REQ-175 · 第 ① 步的下半段是这次加的：静态表**先查**（优先级不变），没命中才
+/// 按 `sha256(token)` 查 `project_keys`（60s 缓存，见 [`super::db_keys`]）。命中之后的
+/// ②–④ 与静态 query key **同一段代码** —— 所以「按 key 绑的项目解析
+/// `active_version_id`」不是第二套路径。
 async fn resolve_multi(
     State(multi): State<Arc<super::multi::MultiProject>>,
     mut req: Request,
@@ -471,12 +559,25 @@ async fn resolve_multi(
     }
     let proto = proto_of(req.uri().path());
     let presented = bearer(req.headers());
-    let Some(entry) = multi.tokens.find(presented).cloned() else {
-        let e = ApiError::unauthorized();
-        let view = ttl_view_hint(req.uri().path(), req.uri().query());
-        // 401 那一刻**还没有项目** ⇒ 只能落到表自己的 sink 上（同一条记录格式）。
-        super::audit_anonymous_sink(&multi.audit, "auth", proto, view, e.code, started);
-        return respond(e.status, e.body());
+    // ① 静态表**优先**；没命中才查 DB（REQ-175）。
+    let entry = match multi.tokens.find(presented) {
+        Some(entry) => entry.clone(),
+        None => match multi.db_keys().resolve(presented).await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                let e = ApiError::unauthorized();
+                let view = ttl_view_hint(req.uri().path(), req.uri().query());
+                // 401 那一刻**还没有项目** ⇒ 只能落到表自己的 sink 上（同一条记录格式）。
+                super::audit_anonymous_sink(&multi.audit, "auth", proto, view, e.code, started);
+                return respond(e.status, e.body());
+            }
+            Err(e) => {
+                // 元数据库读失败 ⇒ 500（⛔ 不伪装成 401：那会把「库坏了」说成「key 错了」）。
+                let view = ttl_view_hint(req.uri().path(), req.uri().query());
+                super::audit_anonymous_sink(&multi.audit, "auth", proto, view, e.code, started);
+                return respond(e.status, e.body());
+            }
+        },
     };
     // ⭐ REQ-159 P1c-1 · **写面**（`/api/projects*`）：只认 admin，且**不解析项目**
     // —— admin 不绑项目，它要操作的是路径里那个 `:p`，不是 key 的项目。
@@ -1319,6 +1420,30 @@ fn deny_not_admin(entry: &TokenEntry) -> Response {
          ⛔ 拿自己的查询 key 去问「我的 key 是什么」（`GET /api/projects/:p/key`）永远 403 \
          —— 那本来就没有意义：你手上那段就是它。\n\
          需要写权限请让运维在 token 表里加一条 `\"kind\": \"admin\"`（admin **不绑项目**）。",
+    );
+    respond(e.status, e.body())
+}
+
+/// ⭐ REQ-175 · 单项目模式下 **DB key 绑的项目 ≠ `--project`** ⇒ **403
+/// `key.project_mismatch`**（新码，见 [`super::db_keys::KEY_PROJECT_MISMATCH`]）。
+///
+/// 为什么不是 401：这张 key 是**真的**（库里有一行、没吊销），只是绑在别的项目上；
+/// 401 会让调用方去查「是不是抄错了 key」。为什么不是 404：数据不是「不存在」，
+/// 而是**这个部署不服务它**。
+fn deny_project_mismatch(entry: &TokenEntry, expected: &str) -> Response {
+    let bound = entry.project.as_deref().unwrap_or("-");
+    let e = ApiError::with_code(
+        StatusCode::FORBIDDEN,
+        KEY_PROJECT_MISMATCH,
+        format!("这张 key 绑定的是项目 {bound:?}，而本服务只服务项目 {expected:?}。"),
+        format!(
+            "单项目模式（`--project <名> --version <第几版>`）里，进程只服务启动时钉死的那一个项目；\
+             一张绑在别的项目上的 key 在这里没有可读的数据。\n\
+             ✅ 要读 {bound} 的数据：用服务那个项目的进程 / 部署（或改用多项目模式启动）。\n\
+             ✅ 要读 {expected} 的数据：换一张绑定 {expected} 的 key\
+             （`POST /api/projects` 建项目时发的那把）。\n\
+             ⛔ 服务端不会「按 key 切项目」—— 那会让同一个端口在两张 key 下指向两套本体（串包）。"
+        ),
     );
     respond(e.status, e.body())
 }

@@ -92,6 +92,9 @@ pub mod audit;
 // ⭐ REQ-145 · access 映射（`--access-mapping`）：哪些类来自 API、跨源边在哪、查询落到哪一类。
 pub mod source_gate;
 pub mod catalog;
+/// ⭐ REQ-175 · **建项目发的 key 必须能鉴权**：静态表未命中时按 `sha256(token)` 查
+/// `project_keys`（60s 缓存；未命中 / 已吊销 ⇒ 401）。
+pub mod db_keys;
 pub mod error;
 pub mod http;
 // ⭐ REQ-140 · SPARQL 结果 → JSON-LD 上下文子图（纯函数；零 I/O、零依赖）。

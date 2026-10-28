@@ -199,6 +199,31 @@ impl PgBundleStore {
         }))
     }
 
+    /// ⭐ REQ-175 · 按**摘要**找一把**未吊销**的 key 绑定的项目名（运行期鉴权用）。
+    ///
+    /// `token_sha256` 上有 `UNIQUE` ⇒ 最多一行。`revoked_at IS NOT NULL` 的行**查不到**
+    /// —— 与 [`Self::active_key`] 同一个「有效」口径（只是查的方向相反：那边按项目，
+    /// 这边按摘要）。
+    ///
+    /// ⛔ 本方法**不返回**密文 / 明文 / 摘要本身：调用方（`query::db_keys`）手上已经有
+    /// 摘要，它只需要「这把 key 绑的是哪个项目」。项目行不存在（被删 / 改名）⇒ `None`
+    /// —— 那种 key 从鉴权角度就是「无效」，不是 500。
+    pub async fn project_for_active_key(
+        &self,
+        token_sha256: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT p.name
+               FROM project_keys k
+               JOIN projects p ON p.id = k.project_id
+              WHERE k.token_sha256 = $1 AND k.revoked_at IS NULL",
+        )
+        .bind(token_sha256)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     // ══════════════════════════════════════════════════════════
     // project_bundles（+ payload）
     // ══════════════════════════════════════════════════════════

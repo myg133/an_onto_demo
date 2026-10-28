@@ -2249,6 +2249,10 @@ const MODULES: &[(&str, &str)] = &[
     ("src/agent/llm/mod.rs", "protocol"),
     ("src/agent/llm/mod.rs", "transport"),
     ("src/db/mod.rs", "agent_registry"),
+    // ⭐ REQ-174 · 版本级 access mapping（`version_access_mappings` 一张表）。
+    // 只做读写，⛔ 不新增响应写点（JSON 出口仍只有 I18）。
+    // ⚠️ 这一行是 REQ-175 补的：REQ-174 加了模块却漏了登记，T6 在基线上就是红的。
+    ("src/db/mod.rs", "access_store"),
     // REQ-109 · AI 语义判断的指纹缓存（`ai_cache` 表）
     ("src/db/mod.rs", "ai_cache"),
     ("src/db/mod.rs", "apply"),
@@ -2371,6 +2375,10 @@ const MODULES: &[(&str, &str)] = &[
     // `active_version_id` → 按 version_id 缓存快照。⛔ **不新增出口**：它只把一个请求
     // 解析成一份 `QueryService`，响应仍走 I14 / I25 与 MCP 的既有写点。
     ("src/query/mod.rs", "multi"),
+    // ⭐ REQ-175 · **建项目发的 key 必须能鉴权**：静态表未命中时按 `sha256(token)` 查
+    // `project_keys`（60s 缓存）。⛔ **不新增出口**：它只把「一把 DB key」解析成
+    // `TokenEntry`，响应仍走既有写点（I14 / I25 / MCP）。
+    ("src/query/mod.rs", "db_keys"),
     // ⭐ REQ-145 · access 映射（`--access-mapping`）：只做**判定**（哪些类来自 API、
     // 查询落到哪一类），⛔ 不写任何出口 —— 它的产物经既有 I14/I25 与 TTL 两视图送出。
     ("src/query/mod.rs", "source_gate"),

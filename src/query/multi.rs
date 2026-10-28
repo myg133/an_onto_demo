@@ -73,6 +73,7 @@ use crate::db::project::PgProjectStore;
 use crate::db::snapshot_store::PgStore;
 
 use super::audit::AuditSink;
+use super::db_keys::DbKeyAuth;
 use super::error::ApiError;
 use super::serve::{self, Deployment, ServeArgs};
 use super::tokens::{ProjectBinding, TokenEntry, TokenTable};
@@ -85,7 +86,7 @@ pub const CACHE_CAP: usize = 8;
 pub const NO_ACTIVE_VERSION: &str = "project.no_active_version";
 /// `active_version_id` 指向的快照取不到 —— **500**（数据不一致，⛔ 不静默 404）。
 pub const SNAPSHOT_MISSING: &str = "project.snapshot_missing";
-/// token 绑的项目在库里不存在（改名 / 删除 / 抄错）—— **500**。
+/// token 绑的项目在库里不存在（改名 / 删除 / 抄错）—— **404**（配置错，不是服务坏了）。
 pub const PROJECT_MISSING: &str = "project.not_found";
 /// 快照取到了但装不起来（未冻结 / access 映射对不上 / TTL 产不出）—— **500**。
 pub const LOAD_FAILED: &str = "project.load_failed";
@@ -98,6 +99,8 @@ pub struct MultiProject {
     store: PgStore,
     /// 身份门用的 token 表（**逐条**绑了项目 —— 启动闸门保证）。
     pub tokens: TokenTable,
+    /// ⭐ REQ-175 · 静态表未命中时按摘要查 `project_keys`（60s 缓存）。
+    db_keys: Arc<DbKeyAuth>,
     /// 部署级输入（声明 / schema / 源库池 / 各种超时）。⛔ 不含 token、不含 DSN。
     pub(crate) deploy: Deployment,
     /// 审计落点（401 那一刻还没有项目，也要能落一行）。
@@ -141,22 +144,45 @@ impl MultiProject {
     ///
     /// ⛔ 这里**不加载任何快照**：构造函数只收「部署级输入 + 身份表 + 审计落点」，
     /// 快照等第一次请求（见 [`Self::service_for`]）。
+    ///
+    /// ⭐ REQ-175 · 顺带建一份 [`DbKeyAuth`]（`project_keys` 的摘要查库 + 60s 缓存）。
     pub fn new(
         pool: PgPool,
         tokens: TokenTable,
         deploy: Deployment,
         audit: AuditSink,
     ) -> Self {
+        let db_keys = Arc::new(DbKeyAuth::new(pool.clone()));
+        Self::with_db_keys(pool, tokens, deploy, audit, db_keys)
+    }
+
+    /// ⭐ REQ-175 · 显式注入 [`DbKeyAuth`] 的构造器（判据用它把 TTL 缩到毫秒级）。
+    ///
+    /// 生产路径用 [`Self::new`]（TTL = 60s）；**⛔ 不要**在生产里换短 TTL —— 那等于
+    /// 每几十毫秒查一次 `project_keys`，正是 demand §二-6 要避免的形态。
+    pub fn with_db_keys(
+        pool: PgPool,
+        tokens: TokenTable,
+        deploy: Deployment,
+        audit: AuditSink,
+        db_keys: Arc<DbKeyAuth>,
+    ) -> Self {
         Self {
             projects: PgProjectStore::new(pool.clone()),
             store: PgStore::new(pool.clone()),
             pool,
             tokens,
+            db_keys,
             deploy,
             audit,
             metrics: crate::metrics::Metrics::for_query(),
             cache: RwLock::new(Cache::default()),
         }
+    }
+
+    /// ⭐ REQ-175 · 静态表未命中时的 DB key 解析器（身份门与判据读它）。
+    pub fn db_keys(&self) -> &Arc<DbKeyAuth> {
+        &self.db_keys
     }
 
     /// ⭐ 请求期解析：token → 项目 → `active_version_id` → 内存缓存 / 懒加载。
@@ -167,7 +193,7 @@ impl MultiProject {
     /// | --- | --- |
     /// | token 有效但项目没有 `active_version_id` | 503 `project.no_active_version` |
     /// | `active_version_id` 指向的快照不存在 | 500 `project.snapshot_missing` |
-    /// | token 绑的项目不在库里 | 500 `project.not_found`（不是 404：404 会被读成「这个 key 没权限」） |
+    /// | token 绑的项目不在库里 | **404** `project.not_found`（这是**配置错**：token 表里的名字写错了 / 项目被删了，不是服务内部坏了） |
     /// | 快照在但装不起来 | 500 `project.load_failed`（数据不可信，⛔ 不吞） |
     pub async fn service_for(&self, entry: &TokenEntry) -> Result<Arc<QueryService>, ApiError> {
         // 启动闸门（`TokenTable::parse_multi`）保证每一条都有 project；走到这里的 `None`
@@ -201,13 +227,12 @@ impl MultiProject {
             .await
             .map_err(|e| db_error("读取项目的生效版本", e))?;
         let Some((row, active)) = found else {
-            return Err(ApiError::with_code(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                PROJECT_MISSING,
-                format!("这张 token 绑定的项目 {project:?} 不在元数据库里。"),
-                "项目可能被改名或删除；请用 `GET /api/projects` 核对项目名，\
-                 并让运维把 token 表里的 `project` 改成现存的（改完要重启服务 —— 表不热加载）。",
-            ));
+            // ⭐ 2026-10-28（生产实测）· **404**，不是 500：token 表里的项目名写错了
+            // （或项目被改名 / 删除）是**配置错**，不是「服务内部坏了」。500 会让运维
+            // 以为进程挂了，而真正要改的是 token 表那一行。
+            // ⛔ 不要顺手把 `snapshot_missing` / `load_failed` 也改成 404：那两个确实
+            // 是「库不自洽 / 装不起来」的服务端问题，500 才是实话。
+            return Err(project_missing(project));
         };
         let Some(version_id) = active else {
             // ⛔ 503 而不是 404/200：这不是「路径不对」，也不是「查了没有」——
@@ -357,6 +382,21 @@ impl MultiProject {
     }
 }
 
+/// ⭐ 2026-10-28 · token 绑的项目不在库里 —— **404**（配置错，不是一个坏掉的服务）。
+///
+/// 单独一个函数是为了让「状态码 / 文案 / hint」只有一个构造点，判据可以直接钉它
+/// （不必起库、起进程）：见 `tests::project_not_found_is_a_404_and_names_the_project`。
+/// 文案（message / hint）是生产实测后确认「写得很好」的那一版 —— ⛔ 改状态码时别动它。
+fn project_missing(project: &str) -> ApiError {
+    ApiError::with_code(
+        StatusCode::NOT_FOUND,
+        PROJECT_MISSING,
+        format!("这张 token 绑定的项目 {project:?} 不在元数据库里。"),
+        "项目可能被改名或删除；请用 `GET /api/projects` 核对项目名，\
+         并让运维把 token 表里的 `project` 改成现存的（改完要重启服务 —— 表不热加载）。",
+    )
+}
+
 fn db_error(what: &str, e: impl std::fmt::Display) -> ApiError {
     ApiError::with_code(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -433,7 +473,8 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
             Ok(Some(_)) => {}
             Ok(None) => eprintln!(
                 "⚠ token 表里有 key 绑定到项目 {name:?}，但元数据库里还没有这个项目 —— \
-                 拿到那些 key 的调用方现在会得到 500 `{PROJECT_MISSING}`。\
+                 拿到那些 key 的调用方现在会得到 404 `{PROJECT_MISSING}`（配置错：\
+                 项目名写错了，或项目还没建）。\
                  项目建好并 activate 之后**下一次请求**即可用（本服务不用重启）。"
             ),
             Err(e) => eprintln!("⚠ 核对项目 {name:?} 是否存在时失败（{e}）；启动继续。"),
@@ -556,6 +597,7 @@ mod tests {
             projects: PgProjectStore::new(pool.clone()),
             store: PgStore::new(pool.clone()),
             tokens: TokenTable::default(),
+            db_keys: Arc::new(DbKeyAuth::new(pool.clone())),
             deploy: Deployment {
                 mode: super::super::ServiceMode::OntologyOnly,
                 schema: crate::domain::ttl::SchemaTypes::default(),
@@ -659,6 +701,48 @@ mod tests {
         assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(e.code, LOAD_FAILED);
         assert!(!e.hint.is_empty());
+    }
+
+    /// ⭐ 2026-10-28（生产实测追加）· token 绑了**不存在的项目** ⇒ **404**，不是 500。
+    ///
+    /// 判据直接钉 [`project_missing`]（`service_for_project` 的唯一构造点）：
+    /// 状态码 / code / 文案三样都在，不必起库。
+    ///
+    /// 变异：把 `StatusCode::NOT_FOUND` 改回 `INTERNAL_SERVER_ERROR` ⇒ 本用例红
+    /// （生产上那一次 500 就是这个形状）。
+    #[test]
+    fn project_not_found_is_a_404_and_names_the_project() {
+        let e = project_missing("gan-prod");
+        assert_eq!(
+            e.status,
+            StatusCode::NOT_FOUND,
+            "token 绑错项目是配置错 ⇒ 404（≤ 499），⛔ 不是 500"
+        );
+        assert_eq!(e.code, PROJECT_MISSING);
+        assert_eq!(e.code, "project.not_found");
+        assert!(
+            e.message.contains("gan-prod"),
+            "消息要点名那个项目名：{}",
+            e.message
+        );
+        assert!(
+            e.hint.contains("token 表") && e.hint.contains("重启"),
+            "hint 要说清改哪里 + 为什么要重启：{}",
+            e.hint
+        );
+        // ⛔ 同批的另外两个错误码**不许**被顺手改成 404（这里只钉常量，状态由
+        // `snapshot_missing_is_a_500_not_a_404` 与 `load` 的构造点各自守住）。
+        assert_eq!(SNAPSHOT_MISSING, "project.snapshot_missing");
+        assert_eq!(LOAD_FAILED, "project.load_failed");
+    }
+
+    /// ⭐ REQ-175 · 注册表里那份 DB key 解析器用的是生产 TTL（60s），
+    /// 且**默认不缓存任何东西**（启动时一条 SELECT 都不为鉴权发）。
+    #[tokio::test]
+    async fn the_registry_carries_a_db_key_resolver_with_the_default_ttl() {
+        let multi = empty_multi();
+        assert_eq!(multi.db_keys().ttl(), crate::query::db_keys::KEY_CACHE_TTL);
+        assert_eq!(multi.db_keys().cached_len(), 0);
     }
 
     /// ⭐ AC-b6 的**结构前提**：`active_version_id` 必须在**每次请求**上重读

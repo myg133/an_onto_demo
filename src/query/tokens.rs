@@ -302,6 +302,35 @@ impl TokenEntry {
     pub fn audit_digest(&self) -> String {
         format!("sha256:{}", digest_prefix(&self.digest, 12))
     }
+
+    /// ⭐ REQ-175 · 由 `project_keys` 里的一行**摘要**还原出的 query key。
+    ///
+    /// # 为什么 `token` 是空串
+    ///
+    /// 鉴权只按摘要查库（[`super::db_keys`]），原文在算完 `sha256` 之后**没有再留存的
+    /// 理由**；审计也只写摘要（AC-007）。留一个空串比留明文更安全，而且
+    /// [`TokenTable::find`] 对空串**恒返回 `None`** —— 于是这张 entry 永远不会被
+    /// 误当成一条静态登记（静态优先的前提在类型上也成立）。
+    ///
+    /// # 其余字段的口径
+    ///
+    /// - `kind` **恒 [`TokenKind::Query`]**：`project_keys` 只有查数 key（写面是 admin，
+    ///   从不入库）；⛔ 不接受调用方传 kind。
+    /// - `tenant` **恒 `None`**：这张表**没有**租户列。⛔ 不拿项目名顶替租户（那是串包）。
+    /// - 限额用这张表的默认值（`max_rows` / `max_concurrency` 的缺省，与静态表里
+    ///   「没写这两项」完全一致）—— `project_keys` 也没有限额列。
+    pub fn from_db_key(project: String, digest: String) -> Self {
+        Self {
+            token: String::new(),
+            digest,
+            tenant: None,
+            max_rows: default_max_rows(),
+            max_concurrency: default_max_concurrency(),
+            label: None,
+            project: Some(project),
+            kind: TokenKind::Query,
+        }
+    }
 }
 
 /// ⭐ REQ-159 P1b · 这张表要不要**每一条都绑定项目**（也就是「这个进程是不是多项目模式」）。
@@ -1037,5 +1066,32 @@ mod tests {
                 "本体模式下 kind={kind:?} 应当能读"
             );
         }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-175 · DB 发的 key 还原成 TokenEntry
+    // ══════════════════════════════════════════════════════════
+
+    /// **AC-001 / AC-007 的形状前提**：DB key ⇒ `kind = query`、绑项目、**不留明文**、
+    /// 限额用表默认值、审计只写摘要前缀。
+    ///
+    /// 变异：把 `kind` 写成 `Admin` ⇒ DB key 能调写面（一次静默提权）；把 `token`
+    /// 填回原文 ⇒ 审计划面多了一个不该在内存里长期存在的秘密。
+    #[test]
+    fn a_db_key_becomes_a_query_entry_without_keeping_the_plaintext() {
+        let digest = sha256_hex(b"ontok_q_fake-db-issued-key-aaaaaaaaaaaaaaaa");
+        let e = TokenEntry::from_db_key("cloud-resource".into(), digest.clone());
+
+        assert_eq!(e.kind, TokenKind::Query, "DB 只有 query key");
+        assert!(!e.kind.is_admin(), "⛔ DB key 不许拿到写权限");
+        assert_eq!(e.project.as_deref(), Some("cloud-resource"));
+        assert!(e.tenant.is_none(), "project_keys 没有租户列 ⇒ None，⛔ 不拿项目名顶替");
+        assert_eq!(e.max_rows, default_max_rows());
+        assert_eq!(e.max_concurrency, default_max_concurrency());
+        assert_eq!(e.digest, digest);
+        assert!(e.token.is_empty(), "⛔ 不保留 token 原文");
+        assert_eq!(e.audit_digest(), format!("sha256:{}", &digest[..12]));
+        // 空 token 永远不会被静态表的定长比较命中（静态优先的前提）。
+        assert!(TokenTable::default().find(&e.token).is_none());
     }
 }

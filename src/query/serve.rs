@@ -516,6 +516,12 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
 
     let svc = std::sync::Arc::new(assemble(&dep, prepared, tokens, audit));
 
+    // ⭐ REQ-175 · **静态表没命中时按摘要查 `project_keys`**（`POST /api/projects` 发的
+    // key 必须能鉴权）。缓存 60s、键 = sha256(token)；与写面共用同一个元数据库池。
+    // 单项目模式下它还要判「DB key 绑的项目 == `--project`」（不等 ⇒ 403
+    // `key.project_mismatch`，见 `http::require_token`）。
+    let db_keys = std::sync::Arc::new(super::db_keys::DbKeyAuth::new(pool.clone()));
+
     let tenants = svc.tokens.tenants();
     eprintln!(
         "{}",
@@ -535,10 +541,11 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     );
     announce_write_plane(&svc.tokens, "单项目");
 
-    let app = super::http::build_router_with_write(
+    let app = super::http::build_router_with_write_and_db_keys(
         std::sync::Arc::clone(&svc),
         write,
         Some(overrides),
+        db_keys,
     );
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         anyhow::anyhow!("绑不上 {addr}：{e}（端口被占 / 地址不属于本机？换一个 --bind 再试）")
