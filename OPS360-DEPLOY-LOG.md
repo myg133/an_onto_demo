@@ -136,7 +136,10 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --check \
 （不从 `base_url` 猜），而 AM 是**人写的**（`access` 只有 validate/fetch/publish，**没有生成器**）。
 ⇒ 不存在"生成器会兜住"，只能靠**出厂前验一遍**。
 
-本次实测：UAT 那份 AM 8 个 source **全缺 `service`** ⇒ 直接换镜像会**起不来**；补完后 `0 error`。
+本次实测：UAT 那份 AM 8 个 source **全缺 `service`**；补完后 `0 error`。
+⚠️ **订正（2026-10-28 实测）**：缺 `service` **不会**让服务起不来——进程照常起来、health 200，配方里只是**没有 `auth.service` 这个键**；
+真正失败发生在**取数时**：`access_fetch.py` 报 `am.invalid ... tc3 签名器要求显式声明`（exit 2）。
+⇒ 这道闸挡的是「类能查、数据取不到」的半瘫状态，不是启动失败。
 
 ### ⛔ 同 tag 重建 ⇒ `imagePullPolicy` 必须 `Always`
 

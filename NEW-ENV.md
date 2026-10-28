@@ -150,7 +150,7 @@ python Deploy/skills/ontok-query/scripts/access_fetch.py --selftest   # 98 passe
 
 | # | 坑 | 症状 | 防法 |
 | --- | --- | --- | --- |
-| 1 | **AM 缺 `auth.service`** | 服务**起不来**（tc3 必填、fail-closed） | 发版前 `check_am.py` 必须 0 error |
+| 1 | **AM 缺 `auth.service`** | 服务**照样起**（实测 2026-10-28）；但**取数时**脚本报 `am.invalid`（exit 2，tc3 签名器要求显式声明）⇒ 表现为"类能查、数据取不到" | 发版前 `check_am.py` 必须 0 error（它挡的是**取数期的失败**，不是启动期） |
 | 2 | **没配 `ONTOK_SECRET_KEY`** | **CrashLoopBackOff**（日志：拒绝启动） | Secret `ontok-write` + Deployment env |
 | 3 | **没配 admin token** | 服务能起，但 Studio 写面**全 403** | token 表里加 `kind:"admin"`（不绑 project） |
 | 4 | **同 tag 重建没重拉** | 老 pod 继续跑**旧镜像**，tag/pod 名都一样 | `imagePullPolicy: Always`；验证看 pod 的 `imageID` |
