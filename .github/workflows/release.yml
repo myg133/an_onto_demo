@@ -118,19 +118,51 @@ jobs:
             v*) [ "v$ver" = "${GITHUB_REF_NAME}" ] || { echo "tag 与版本不一致"; exit 1; } ;;
           esac
 
-      - name: publish 平台包（先于主包：主包靠 optionalDependencies 找它们）
+      # ⚠️ token 必须是 **Automation** 类型（Classic → Automation）。
+      #    `Publish` 类型每次都要 OTP ⇒ CI 里必然 EOTP（2026-10-28 实测踩过一次）。
+      - name: preflight · token 与 registry
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::缺 secret NPM_TOKEN —— 第一次发布请手动 npm publish（见 Deploy/fde/INSTALL.md）"
+            echo "::error::缺 secret NPM_TOKEN（Settings → Secrets and variables → Actions → New repository secret）"
             exit 1
           fi
+          if ! who=$(npm whoami 2>&1); then
+            echo "$who"
+            echo "::error::npm whoami 失败 —— token 无效或已过期"
+            exit 1
+          fi
+          echo "npm 身份：$who"
+          npm ping
+
+      - name: publish 平台包（先于主包：主包靠 optionalDependencies 找它们）
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
           for p in npm/out/@anspire-ai/ontok-builder-*; do
             echo "→ $p"
-            npm publish "$p" --access public
+            if ! out=$(npm publish "$p" --access public 2>&1); then
+              echo "$out"
+              case "$out" in
+                *EOTP*)
+                  echo "::error::EOTP —— token 类型是 Publish（要 OTP）。请在 npmjs.com → Access Tokens → Generate New Token → Classic → 选 Automation，再更新 secret NPM_TOKEN" ;;
+                *E403*)
+                  echo "::error::E403 —— 这个 token 对 @anspire-ai 没有发布权（不是 org 成员 / token 权限范围不含该 scope）" ;;
+                *E404*)
+                  echo "::error::E404 —— scope @anspire-ai 在 npm 上不存在（先在 npm 建 org）" ;;
+                *EPUBLISHCONFLICT*|*"cannot publish over"*)
+                  echo "::error::版本已存在 —— 升版本号（Cargo.toml + Cargo.lock），不要复用版本号重试" ;;
+                *)
+                  echo "::error::npm publish 失败（原因见上方 npm 输出）" ;;
+              esac
+              exit 1
+            fi
+            echo "$out" | tail -4
           done
 
       - name: publish 主包
