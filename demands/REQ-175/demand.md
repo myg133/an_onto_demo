@@ -42,6 +42,23 @@
 
 **红绿自证**：把"查库"那一步注掉 ⇒ AC-001 / AC-004红；恢复 ⇒ 绿。
 
+## 三·五 · 追加（用户 2026-10-28 批准，生产实测）
+
+`project.not_found` 现在返回 **500**，而它其实是**配置错**（token 表里 `project` 写了个不存在的名字）：
+
+```
+HTTP 500 {"code":"project.not_found","message":"这张 token 绑定的项目 \"gan-prod\" 不在元数据库里。"}
+```
+
+运维看到 500 会以为进程挂了。⇒ 改成 **404**，文案保持（那条 hint 写得对）。
+
+| # | 判据 |
+| --- | --- |
+| AC-008 | 真进程 + 真库：token 绑不存在的项目 ⇒ **HTTP 404** + `code = project.not_found`（⛔ 不是 500） |
+
+⛔ **不要**顺手改 `project.snapshot_missing` / `project.load_failed`（那两个确实是 500）与
+`project.no_active_version`（503）。
+
 ## 四 · 不在本次范围
 
 - key 轮换 / 多 key 并存（`project_keys` 有部分唯一索引，按现状一次一把）
