@@ -374,6 +374,13 @@ fn outlet_sources() -> BTreeMap<&'static str, String> {
     // 三个资源（HTML / CSS / JS）都是 `include_str!` 常量、都调 `studio_response`，
     // 所以 needle 对账落在那个函数定义上 —— 「壳里混进一条运行期字符串」在这张表上看得见。
     m.insert("src/studio/mod.rs", read_source("src/studio/mod.rs"));
+    // ⭐ REQ-172 · 判定缓存落盘点（I48）在 `src/extract/relation_judge.rs`。
+    // 它不在 `OUTLET_FILES`（不是客户出口），但登记表新增了 I48 —— 同一个理由：
+    // needle 漂移必须在这张表上看得见（否则「缓存换了写点」永远看不见）。
+    m.insert(
+        "src/extract/relation_judge.rs",
+        read_source("src/extract/relation_judge.rs"),
+    );
     m
 }
 
@@ -711,7 +718,7 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     //        ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 已移除 ⇒ 67 - 2 = 65。
     assert_eq!(
         OUTLETS.len(),
-        65,
+        81,
         "33（REQ-107）+ 6（REQ-110 TTL 出口）+ 5（REQ-111 审核界面出口）\
          + 1（REQ-116 文档摄取产物）+ 2（REQ-121 R2RML 出口）+ 1（REQ-122 SPARQL 回执）\
          + 4（REQ-123 REST / MCP / SSE / 审计）+ 4（REQ-124 控制面）\
@@ -720,6 +727,7 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
          + 1（REQ-135 /metrics 指标响应）\
          + 3（REQ-144 access validate / fetch / publish）\
          + 1（REQ-155 Studio 页面壳）\
+         + 16（REQ-172 relation probe/judge 回执与落盘：I33–I48）\
          - 2（REQ-155 删除客户门户：I23/I24）"
     );
 
@@ -754,9 +762,12 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // 内部产物，客户视图零读取；⛔ 阶段 0 不发网络请求，产物也⛔ 不含凭据值。
     // ⚠️ REQ-155 删除客户门户：REQ-126 的 I23/I24 随之移除 ⇒ 内部 36→34；同需求 P2 再加
     // I32（Studio 页面壳，匿名可达、零数据）⇒ 内部 34→35、总条数 64→65。
+    // ⭐ REQ-172 再新增 I33–I48（`relation probe` / `relation judge` 的 14 条屏幕回执
+    // + 2 个原子落盘点，**全部内部轨**：只有计数与分类，零数据行）⇒ 内部 35→51、
+    // 总条数 65→81。
     assert_eq!(outlet_count(Track::Customer), 17);
     assert_eq!(outlet_count(Track::Modeling), 10);
-    assert_eq!(outlet_count(Track::Internal), 35);
+    assert_eq!(outlet_count(Track::Internal), 51);
     assert_eq!(outlet_count(Track::Static), 2);
     assert_eq!(outlet_count(Track::ErrorPath), 1);
 
@@ -782,8 +793,9 @@ fn test_req107_outlet_registry_matches_the_declared_baseline() {
     // REQ-144 · I29–I31（access mapping：`validate` 报告 / `fetch` JSON-LD / `publish` 发布物）
     // ⭐ REQ-155 · I32（Studio 页面壳：匿名可达、零数据的三份静态常量）
     // ⚠️ REQ-155 删除了 REQ-126 的 I23/I24（客户门户）⇒ 编号留空，不回填。
+    // ⭐ REQ-172 · I33–I48（关系探索的屏幕回执 / 落盘点，内部轨）。
     want.extend(
-        (1..=32)
+        (1..=48)
             .filter(|i| *i != 23 && *i != 24)
             .map(|i| format!("I{i}")),
     );
