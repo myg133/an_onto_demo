@@ -95,7 +95,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     // 容量按「全都要发」估算 —— 稳态下真实长度短得多，但多出来的容量
     // 只是没被用到的 Vec 内存，不是一次分配失败。
-    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + JOIN_STATE_PATCH.len() + SCHEMA_PROJECT_BUNDLES.len() + 512;
+    let cap = SCHEMA.len() + SCHEMA_AGENT_REGISTRY_PATCH.len() + BACKFILL_PATCH.len() + JOIN_STATE_PATCH.len() + SCHEMA_PROJECT_BUNDLES.len() + SCHEMA_VERSION_ACCESS_MAPPINGS.len() + 512;
     let mut batch = String::with_capacity(cap);
     batch.push_str(MIGRATE_LOCK_PREFIX);
     batch.push_str(SCHEMA);
@@ -120,6 +120,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     // ⭐ REQ-159 · 项目 / key / 构建包 / 源库 DSN 四张表（+ 一张包字节卫星表）。
     // 它们是**新表、无历史遗留** ⇒ 不进 [`ALTER_PATCHES`]（那张表的跳过判据是逐列的）。
     batch.push_str(SCHEMA_PROJECT_BUNDLES);
+    // ⭐ REQ-174 · access mapping 随版本入库（`version_access_mappings`）。
+    batch.push_str(SCHEMA_VERSION_ACCESS_MAPPINGS);
     batch.push_str(MIGRATE_COMMIT);
     sqlx::raw_sql(batch.as_str()).execute(pool).await?;
     Ok(())
@@ -810,5 +812,44 @@ CREATE TABLE IF NOT EXISTS project_databases (
   last_check_ok    BOOLEAN,
   last_check_at    TIMESTAMPTZ,
   last_error_code  TEXT
+);
+"#;
+
+/// ⭐ REQ-174 · **access mapping 随版本入库** —— 一张新表，无历史遗留。
+///
+/// # 为什么挂在「版本」上，不是「项目」上
+///
+/// `activate` 换的是 `projects.active_version_id` ⇒ AM 自动跟着**生效版本**走，
+/// 不需要第二套「AM 生效指针」；激活 / 回滚的语义与本体完全一致（demand §2.1）。
+///
+/// # 为什么 `raw` 是 TEXT 而不是 JSONB
+///
+/// 判据是「`raw` 与包内 `am/access-mapping.json` **逐字节相同**」（AC-001）。
+/// JSONB 会重排键序 / 归一空白 ⇒ 存进去就再也比不回来了。这一列只搬字节，
+/// 解析只发生在**写入前**（`AccessMapping::parse` + `bind`，见
+/// `console::provision::import_bundle`），读出来的原文交给服务端在**加载快照的同一批**
+/// 里解析。
+///
+/// # 为什么 `ON DELETE CASCADE`
+///
+/// 与 `object_types` / `link_types` 同一条：版本没了，挂在上面的 AM 也不该留 ——
+/// 否则删版本会留下一条谁也认不出的映射行。
+///
+/// # 为什么**不进** [`ALTER_PATCHES`]
+///
+/// 新表，没有历史列要补。`CREATE TABLE IF NOT EXISTS` 在表已存在时一把锁都不取
+/// （同 `SCHEMA_AGENT_REGISTRY` / `ai_cache` / `SCHEMA_PROJECT_BUNDLES` 的先例）。
+const SCHEMA_VERSION_ACCESS_MAPPINGS: &str = r#"
+-- ⭐ REQ-174 · 每个版本一份 access mapping（导入时校验通过才写）。
+--
+-- `raw` = 包内 `am/access-mapping.json` 的**原样字节**（UTF-8）。
+-- ⛔ 这一列不进日志 / 错误消息 / 审计（AC-008）：只有 `db::access_store` 读写它。
+CREATE TABLE IF NOT EXISTS version_access_mappings (
+  version_id  UUID PRIMARY KEY REFERENCES ontology_versions(id) ON DELETE CASCADE,
+  raw         TEXT        NOT NULL,
+  sha256      TEXT        NOT NULL,
+  sources     INTEGER     NOT NULL,
+  entities    INTEGER     NOT NULL,
+  stored_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 "#;

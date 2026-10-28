@@ -28,9 +28,11 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
+use crate::db::access_store::PgAccessStore;
 use crate::db::bundle_store::PgBundleStore;
 use crate::db::project::{PgProjectStore, ProjectError, ProjectRow};
 use crate::db::snapshot_store::PgStore;
+use crate::query::source_gate::AccessMapping;
 
 use crate::provision::bundle::{self, BundleError, State, VerifiedBundle};
 use crate::provision::dsn::{self, SecretCipher, DsnTest};
@@ -689,6 +691,77 @@ pub struct ImportOutcome {
     pub already_imported: bool,
 }
 
+/// ⭐ REQ-174 · 包内 AM 的**已校验原文**（`None` = 包里没有 `components.am`）。
+///
+/// 为什么先校验再建版本：`AccessMapping::parse` → `bind(这一版的模型)` 失败时
+/// **一个版本都不该建**（AC-006）。把校验放在 `write_new_version` 的事务**之前**，
+/// 「版本都不建」就是结构上的事实，而不是靠一次 rollback 兜。
+struct ValidatedAm {
+    /// `am/access-mapping.json` 的**原样字节**（UTF-8）—— 落库后必须能逐字节比回来。
+    raw: String,
+    /// 与 manifest 的 `components.am.sha256` **同一个口径**（包内文件字节的 sha256）。
+    sha256: String,
+    /// `sources[]` 的声明条数（与 manifest 同口径）。
+    sources: usize,
+    /// `entities[]` 的条数。
+    entities: usize,
+}
+
+/// 从**已整包校验**的包取 `components.am` 的原文，并绑定到这一版快照的模型。
+///
+/// # 三条边界
+///
+/// - 包里没有 `components.am` ⇒ `Ok(None)`：不写行、不报错（AC-002）；
+/// - 声明了但文件不在 / 不是 UTF-8 ⇒ 500（`verify_and_read` 已核过 `files[]`，
+///   走到这里还缺就是**数据不自洽**，不是包的形状问题）；
+/// - `parse` / `bind` 失败 ⇒ 422 `am.invalid`，消息**只说位置与原因，⛔ 不回显 AM 原文**
+///   （AC-008：`raw` 里有 `base_url` / `credential_env` 之类的部署信息）。
+fn validated_am(verified: &VerifiedBundle) -> Result<Option<ValidatedAm>, OpError> {
+    let Some(decl) = verified.manifest.am.as_ref() else {
+        return Ok(None);
+    };
+    let bytes = verified.files.get(&decl.path).ok_or_else(|| {
+        OpError::internal(format!(
+            "包的 `components.am.path` = {:?} 不在包内文件里 —— 整包校验漏了一步（这是 bug）。",
+            decl.path
+        ))
+    })?;
+    let sha256 = crate::query::audit::sha256_hex(bytes);
+    if sha256 != decl.sha256 {
+        // `verify_and_read` 的 ⑤ 逐个核过 sha256；走到这里说明两处口径分了家。
+        return Err(OpError::internal(format!(
+            "包内 AM {:?} 的 sha256 与 manifest 声明的不一致（{} vs {}）—— \
+             校验层与这里不是同一个口径（这是 bug）。",
+            decl.path, sha256, decl.sha256
+        )));
+    }
+    let raw = std::str::from_utf8(bytes)
+        .map_err(|e| am_invalid(format!("包里的 AM 不是 UTF-8：{e}")))?
+        .to_string();
+    let model = crate::domain::model_view::project_model_track(&verified.snapshot);
+    let parsed = AccessMapping::parse(&raw)
+        .and_then(|m| m.bind(&model))
+        .map_err(|e| am_invalid(format!("包里的 AM 不合法：{e}")))?;
+    Ok(Some(ValidatedAm {
+        raw,
+        sha256,
+        sources: parsed.source_count(),
+        entities: parsed.api_entities().len(),
+    }))
+}
+
+/// 包内 AM 不合法的统一出口（`am.invalid`，422）。
+fn am_invalid(message: String) -> OpError {
+    OpError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "am.invalid",
+        message,
+        "包里的 `am/access-mapping.json` 必须能解析，且 `entities[].class` 都要在**包里这份本体**\
+         里存在；`contract_version` 只认 1 / 2。\
+         ⛔ 本次 import 没有产生任何版本（AM 校验在**建版本之前**）。",
+    )
+}
+
 /// 解析入库：**单事务**，产生**新版本**，**不冻结**。
 pub async fn import_bundle(
     pool: &PgPool,
@@ -800,8 +873,26 @@ pub async fn import_bundle(
         }
     }
 
+    // ── ⭐ REQ-174 · 包内 AM：**先校验，再建版本**（AC-006 的「版本都不建」）
+    //
+    // 放在 `write_new_version` 之前是有意的：这里失败时**一个事务都还没开**，
+    // 所以「没有新版本」不是靠 rollback 兜出来的，而是根本没有走建版本那一步。
+    // 落库（写 `version_access_mappings`）仍在 `write_new_version` 的事务里，
+    // 于是「版本建了、AM 没写」也不可能出现。
+    let am = match validated_am(&verified) {
+        Ok(v) => v,
+        Err(e) => {
+            // 与其它 import 失败同一条：包状态记 `failed`（**不**产生版本）。
+            // `e.message` 里只有位置与原因，⛔ 没有 AM 原文（AC-008）。
+            let _ = store
+                .set_state(row.id, State::Failed.as_str(), Some((e.code, &e.message)))
+                .await;
+            return Err(e);
+        }
+    };
+
     // ── 落库：**单事务**（失败 ⇒ 一个字节都不落）
-    let result = write_new_version(pool, p.id, row.id, &verified).await;
+    let result = write_new_version(pool, p.id, row.id, &verified, am.as_ref()).await;
     let version_id = match result {
         Ok(v) => v,
         Err(e) => {
@@ -879,13 +970,14 @@ fn warnings_for(
         // 不警告：空集合是正常形态（切片 1 的占位）。
     }
     if let Some(v) = verified {
-        // `am/` 的存在与否看**包里的文件**，不看 `components.am` 声明：
-        // 一个包可以只把 AM 放进 `files[]` 而不声明组件，那时它照样是一份没被
-        // 落库的内容 —— 用户有权知道这一点。
-        if v.files.keys().any(|k| k.starts_with("am/")) {
+        // ⭐ REQ-174 · 声明了 `components.am` ⇒ AM 随版本入库（不再警告）。
+        // 只有「有 `am/` 文件却没声明组件」才是**没被落库**的内容 —— 用户有权知道。
+        // （判据看**包里的文件**，不看 `components.am` 声明：一个包可以只把 AM 放进
+        // `files[]` 而不声明组件，那时它照样是一份没被落库的内容。）
+        if v.manifest.am.is_none() && v.files.keys().any(|k| k.starts_with("am/")) {
             out.push(
-                "包里有 `am/`（访问映射），但 v1 的 import **只落本体快照** —— \
-                 AM 要等 REQ-144 的接线，本次没有丢数据也没有写它。"
+                "包里有 `am/`（访问映射），但 manifest 没有 `components.am` ⇒ 本次只落本体快照，\
+                 那份 AM **不会**随版本入库。要让它入库，请用 `bundle pack --am <文件>` 重新打包。"
                     .to_string(),
             );
         }
@@ -913,6 +1005,7 @@ async fn write_new_version(
     project_id: Uuid,
     bundle_row_id: Uuid,
     verified: &VerifiedBundle,
+    am: Option<&ValidatedAm>,
 ) -> Result<Uuid, OpError> {
     let mut tx = pool.begin().await.map_err(OpError::db)?;
 
@@ -935,6 +1028,26 @@ async fn write_new_version(
         // ⛔ 回滚：一个字节不落（AC-006）
         tx.rollback().await.ok();
         return Err(pack_db_error(e));
+    }
+
+    // ③b ⭐ REQ-174 · 包内 AM（已校验）：与版本**同一事务**。
+    //
+    // 写入失败 ⇒ 连版本一起回滚（AC-006）。这里写的只是字节 + 摘要 + 两个计数，
+    // 解析 / 绑定已在事务之前做过（见 [`validated_am`]）。
+    if let Some(am) = am {
+        if let Err(e) = PgAccessStore::upsert_in(
+            &mut tx,
+            new.version_id,
+            &am.raw,
+            &am.sha256,
+            am.sources,
+            am.entities,
+        )
+        .await
+        {
+            tx.rollback().await.ok();
+            return Err(OpError::db(e));
+        }
     }
 
     // ④ 包的元数据（同一个事务；SQL 的唯一来源在 `db::bundle_store`）

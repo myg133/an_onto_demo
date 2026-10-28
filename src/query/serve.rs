@@ -22,7 +22,7 @@
 //! | ③ | `tokens.json` | 没有 token 表就没有租户（多项目模式：还必须逐条绑项目） |
 //! | ④ | `query-policy.json` | 没有声明 ⇒ 所有表不可查（ADR-006） |
 //! | ⑤ | `schema.json` | 列存在性 / 类型只能来自真实 schema |
-//! | ⑥ | 元数据库：项目 / 版本 / 快照（**必须已冻结**，与 `serve` / `mcp-server` 同一条） | 对外服务只服务定稿（**多项目模式把这一步推迟到请求期**） |
+//! | ⑥ | 元数据库：项目 / 版本 / 快照 / **该版本的 AM**（`version_access_mappings`；**必须已冻结**，与 `serve` / `mcp-server` 同一条） | 对外服务只服务定稿（**多项目模式把这一步推迟到请求期**，AM 与快照同批加载） |
 //! | ⑦ | **映射**（`r2rml::build_mapping`，与 `ontok r2rml generate` 同一个函数） | ⛔ 不解析 TTL |
 //! | ⑧ | **源库只读**池（`connect_read_only`，读回两个会话值） | 客户资产：只读不成立就一条都不查 |
 //! | ⑨ | 启动横幅 → 绑 socket | 横幅里打印绑定地址 / 项目版本 / token 数 / 租户范围 |
@@ -43,6 +43,7 @@ use std::path::PathBuf;
 
 use sqlx::postgres::PgPool;
 
+use crate::db::access_store::PgAccessStore;
 use crate::sparql::policy::QueryPolicy;
 
 use super::audit::AuditSink;
@@ -468,7 +469,16 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
         source: None,
         facts: None,
     };
-    let prepared = prepare_project(pool, &dep, &project, version, &snap).await?;
+    // ⭐ REQ-174 · AM：`--access-mapping 文件` > DB(该版本) > 无（AC-005 的「文件优先」）。
+    let access = resolve_single_access(pool, &dep, v.id, version)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "读项目 {:?} 第 {version} 版的 access 映射（`version_access_mappings`）失败：{e}",
+                project
+            )
+        })?;
+    let prepared = prepare_project(pool, &dep, &project, version, &snap, access).await?;
 
     // ── ⑧ 源库（只读；读回校验）──────────────────────────────
     let (source, facts) = connect_source(&dep).await?;
@@ -607,8 +617,12 @@ pub(crate) fn load_schema(
 
 /// 读 `--access-mapping` 的**原文**（解析与对账在 [`prepare_project`] 里按**那一版本体**做）。
 ///
-/// 为什么不在这里解析：多项目模式下**每一版本体**都要与同一份映射对账（`bind`），
+/// 为什么不在这里解析：多项目模式下**每一版本体**都要与自己的 AM 对账（`bind`），
 /// 而「类必须在这一版里存在」是**逐版本**的判据。
+///
+/// ⭐ REQ-174 起它只是**部署级回退输入**：单项目模式里它压过 DB（AC-005 的旧部署兼容），
+/// 多项目模式里它只在该版本 **DB 没有 AM** 时才用（[`resolve_multi_access`]）——
+/// 于是「一个进程一份 AM」不再抢在各个项目自己那份之前。
 pub(crate) fn read_access_mapping(args: &ServeArgs) -> anyhow::Result<Option<String>> {
     let Some(path) = &args.access_mapping else {
         return Ok(None);
@@ -673,9 +687,15 @@ pub struct Deployment {
     pub policy: QueryPolicy,
     pub base: String,
     pub include_inherit: bool,
-    /// `--access-mapping` 的原文（`None` = 没给 ⇒ 两视图 / catalog 逐字节不变）。
+    /// `--access-mapping` 的原文（`None` = 没给）。
+    ///
+    /// ⭐ REQ-174 起它只是**部署级回退输入**，不再是唯一来源：
+    /// - 单项目模式：文件 > DB(该版本)（[`resolve_single_access`]）；
+    /// - 多项目模式：DB(该 `active_version_id`) > 文件（[`resolve_multi_access`]）。
+    ///
+    /// 于是「多项目共用一份 AM」这个旧形态只在**库里没有 AM** 时才出现。
     pub access_raw: Option<String>,
-    /// 只用于报错时点名（⛔ 不参与任何逻辑）。
+    /// `--access-mapping` 的**路径**（只用于报错时点名，⛔ 不参与任何逻辑）。
     pub access_path: Option<PathBuf>,
     pub tenancy: Option<PathBuf>,
     pub timeout_ms: u64,
@@ -685,6 +705,80 @@ pub struct Deployment {
     /// 源库只读连接池（本体模式恒 `None`）。
     pub source: Option<PgPool>,
     pub facts: Option<crate::sparql::exec::SessionFacts>,
+}
+
+/// ⭐ REQ-174 · 一份**已解析出处的** AM 原文（还没与本体对账）。
+///
+/// 为什么把「原文」和「从哪儿来」一起传：取 AM 的顺序**按模式不同**（单项目文件优先、
+/// 多项目 DB 优先），但解析 / `bind` 必须发生在**拿到那一版快照之后**（类要在这一版
+/// 本体里存在）。把顺序留在调用方、把对账留在 [`prepare_project`] —— 两边谁都不猜。
+pub(crate) struct AccessInput {
+    /// `am/access-mapping.json` 的原文（DB 行或文件，逐字节）。
+    pub raw: String,
+    /// 报错 / 启动输出里用来点名的来源：`"<path>"` 或「第 N 版的 DB 行」。
+    pub label: String,
+}
+
+/// ⭐ REQ-174 · 单项目模式的取 AM 顺序：`--access-mapping 文件` > DB(该版本) > 无。
+///
+/// 「文件优先」是 AC-005 的判据：旧部署传了文件 ⇒ 字节与 REQ-145 起的基线完全一致，
+/// 哪怕库里也存着一份（文件是运维的明确意图）。
+pub(crate) fn file_access(dep: &Deployment) -> Option<AccessInput> {
+    dep.access_raw.as_ref().map(|raw| AccessInput {
+        raw: raw.clone(),
+        label: match &dep.access_path {
+            Some(p) => format!("{:?}", p),
+            None => "命令行给的 access 映射".to_string(),
+        },
+    })
+}
+
+/// ⭐ REQ-174 · DB 里某个版本的 AM（`version_access_mappings` 一行）。
+///
+/// 单独抽出来是为了两个调用点**读同一条 SQL / 给同一种标签**：
+/// 单项目模式把它当第二顺位，多项目模式把它当第一顺位。
+pub(crate) async fn db_access(
+    pool: &PgPool,
+    version_id: uuid::Uuid,
+    version: i32,
+) -> Result<Option<AccessInput>, crate::db::StoreError> {
+    Ok(PgAccessStore::new(pool.clone())
+        .get_raw(version_id)
+        .await?
+        .map(|raw| AccessInput {
+            raw,
+            label: format!("第 {version} 版的 DB 行"),
+        }))
+}
+
+/// ⭐ REQ-174 · 多项目模式的取 AM 顺序：**DB(该 `active_version_id`)** > 文件 > 无。
+///
+/// 为什么与单项目**相反**：多项目是「一个进程服务 N 个项目」，而 `--access-mapping`
+/// 是**进程级**的一个文件。文件优先的话第二个项目永远拿不到自己那份 AM ——
+/// 那正是 REQ-174 要消灭的形态（demand 现状事实 2）。
+pub(crate) async fn resolve_multi_access(
+    pool: &PgPool,
+    dep: &Deployment,
+    version_id: uuid::Uuid,
+    version: i32,
+) -> Result<Option<AccessInput>, crate::db::StoreError> {
+    match db_access(pool, version_id, version).await? {
+        Some(a) => Ok(Some(a)),
+        None => Ok(file_access(dep)),
+    }
+}
+
+/// ⭐ REQ-174 · 单项目模式的取 AM 顺序：**文件** > DB(该版本) > 无（AC-005）。
+pub(crate) async fn resolve_single_access(
+    pool: &PgPool,
+    dep: &Deployment,
+    version_id: uuid::Uuid,
+    version: i32,
+) -> Result<Option<AccessInput>, crate::db::StoreError> {
+    match file_access(dep) {
+        Some(a) => Ok(Some(a)),
+        None => db_access(pool, version_id, version).await,
+    }
 }
 
 /// 一份快照「装起来」之后、还没接上审计 / token 的那一半（[`assemble`] 的入参）。
@@ -709,41 +803,43 @@ pub(crate) async fn prepare_project(
     project: &str,
     version: i32,
     snap: &crate::domain::snapshot::Snapshot,
+    access: Option<AccessInput>,
 ) -> anyhow::Result<Prepared> {
     let mode = dep.mode;
-    // ── ⑥.4 ⭐ REQ-145 · access 映射（`--access-mapping`）──
+    // ── ⑥.4 ⭐ REQ-145 · access 映射 ──
     //
     // 位置在 TTL 之前：两视图都要写 `ontok:sourceKind "api"`，而「哪些类是 api」只在
     // 这份映射里。**加载即对账**（fail-closed）：类必须在这一版本体里存在，否则拒绝启动 ——
     // 一份「一半对不上」的映射最坏的后果是平台以为某类在库、其实在 API。
     //
+    // ⭐ REQ-174 · **原文由调用方给**（[`resolve_single_access`] / [`resolve_multi_access`]）：
+    // 单项目是「文件 > DB」，多项目是「DB > 文件」。本函数只负责
+    // `parse` + `bind(这一版模型)`，于是「AM 跟着 version_id 走」在
+    // 多项目模式下由缓存键（`version_id`）自然保证 —— AM 与快照**同批加载**。
+    //
     // ⚠️ 本段**不读任何凭据 / 端点**，也不执行任何调用：文件里那些字段读进来就丢
     // （见 `query::source_gate` 模块头）。
     let model = crate::domain::model_view::project_model_track(snap);
-    let access = match &dep.access_raw {
-        Some(raw) => {
-            let parsed = crate::query::source_gate::AccessMapping::parse(raw).map_err(|e| {
-                anyhow::anyhow!(
-                    "access 映射 {:?} 不合法：{e}",
-                    dep.access_path.as_deref().unwrap_or_else(|| std::path::Path::new(""))
-                )
+    // 来源标签在 `parse` 之前取下来：`access` 随后被 `bind` 后的映射**遮蔽**，
+    // 而启动输出要说的仍是「这份 AM 是从哪儿读的」（文件路径 / DB 行）。
+    let access_label = access
+        .as_ref()
+        .map(|a| a.label.clone())
+        .unwrap_or_default();
+    let access = match &access {
+        Some(input) => {
+            let parsed = source_gate::AccessMapping::parse(&input.raw).map_err(|e| {
+                anyhow::anyhow!("access 映射 {} 不合法：{e}", input.label)
             })?;
             Some(parsed.bind(&model).map_err(|e| {
-                anyhow::anyhow!(
-                    "access 映射 {:?} 与本体 v{version} 对不上：{e}",
-                    dep.access_path.as_deref().unwrap_or_else(|| std::path::Path::new(""))
-                )
+                anyhow::anyhow!("access 映射 {} 与本体 v{version} 对不上：{e}", input.label)
             })?)
         }
         None => None,
     };
     match &access {
         Some(a) if a.api_classes().is_empty() => eprintln!(
-            "⚠ access 映射 {} 里一条 api 类都没有 ⇒ 全部类按库源处理（这多半不是你要的）",
-            dep.access_path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
+            "⚠ access 映射 {access_label} 里一条 api 类都没有 ⇒ 全部类按库源处理（这多半不是你要的）"
         ),
         Some(a) => {
             let mut keys: Vec<&String> = a.api_classes().keys().collect();
