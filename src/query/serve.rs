@@ -16,7 +16,7 @@
 //!
 //! | # | 步骤 | 为什么在这个位置 |
 //! | --- | --- | --- |
-//! | ⓪ | 单/多项目判定 | 参数自相矛盾时先报参数问题 |
+//! | ⓪ | 单/多项目判定（含 REQ-177：多项目 + `--access-mapping` ⇒ 拒绝） | 参数自相矛盾时先报参数问题 |
 //! | ① | 参数闸（超时 / SSE / 并发） | 最便宜的失败先报 |
 //! | ② | 绑定地址 + 闸门 | 绑错了根本不该读库 |
 //! | ③ | `tokens.json` | 没有 token 表就没有租户（多项目模式：还必须逐条绑项目） |
@@ -99,6 +99,11 @@ pub struct ServeArgs {
     /// `complete` / `mapping_version`，api 类照常按库源处理。
     /// 给了 ⇒ api 类进 TTL（两视图）、进 `catalog`/`describe` 的 `access`，
     /// 查询碰到它们时给 `@pending`（jsonld）或 `NOT_DB_SOURCE`（rows）。
+    ///
+    /// ⛔ ⭐ REQ-177 · **只在单项目模式有效**：多项目模式（`--project` / `--version`
+    /// 都不给）下给这个参数 ⇒ **连库之前**就拒绝启动（退出码 2）。AM 的正确归属是
+    /// **版本**（随构建包入库，按 `active_version_id` 各自加载，REQ-174）；进程级一份
+    /// 会让「没有 AM 的项目」回落到别人的映射并 `bind` 失败。
     pub access_mapping: Option<PathBuf>,
 }
 
@@ -310,6 +315,80 @@ pub(crate) fn announce_write_plane(tokens: &TokenTable, mode_label: &str) {
     );
 }
 
+/// ⭐ REQ-177 · 单 / 多项目模式的**唯一判定结果**。
+///
+/// 为什么要一个枚举而不是布尔：`serve`（真正装配）与「连库之前的参数自检」
+/// （[`preflight`]，由服务面入口在连库前调用）都要用同一个结论。各写一遍
+/// `match (project, version)` 就是两份判定，迟早漂。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectScope {
+    /// `--project` + `--version` 都给：启动时钉死一份快照（单项目模式）。
+    Single { project: String, version: i32 },
+    /// 两个都不给：每次请求按 key → `active_version_id` 解析（多项目模式）。
+    Multi,
+}
+
+/// ⭐ REQ-177 · **单 / 多项目模式的唯一判定**（顺带守住「必须成对」这条参数闸）。
+///
+/// ```text
+/// --project + --version  ⇒ Single
+/// 两个都不给             ⇒ Multi
+/// 只给一个               ⇒ 拒绝启动（参数自相矛盾）
+/// ```
+pub fn project_scope(project: Option<&str>, version: Option<i32>) -> anyhow::Result<ProjectScope> {
+    match (project, version) {
+        (Some(project), Some(version)) => Ok(ProjectScope::Single {
+            project: project.to_string(),
+            version,
+        }),
+        (Some(_), None) => anyhow::bail!(
+            "给了 `--project` 就必须同时给 `--version`：单项目模式要把**一个**版本的快照钉死。\n  \
+             想让服务自己按 key 找每个项目当前生效的版本（多项目模式），请**两个都不给**\
+             —— 那时版本来自 `projects.active_version_id`。"
+        ),
+        (None, Some(_)) => anyhow::bail!(
+            "给了 `--version` 就必须同时给 `--project`：版本号只在单项目模式下有意义。\n  \
+             多项目模式（两个都不给）的版本由每个项目的 `active_version_id` 决定\
+             —— ⛔ 一个 `--version` 套到所有项目上会服务到错的版本。"
+        ),
+        (None, None) => Ok(ProjectScope::Multi),
+    }
+}
+
+/// ⭐ REQ-177 · 多项目模式给了 `--access-mapping` 的**唯一拒绝口径**。
+///
+/// 为什么是**拒绝启动**而不是「文件只当兜底」：REQ-174 之后 AM 的归属是**版本**
+/// （随构建包入库、按 `active_version_id` 各自加载）。进程级一份会让「这个项目
+/// 自己没 AM」静默回落到**别人的**映射，`bind` 对不上（客户实测：14 个类不存在）
+/// ⇒ 整个项目 500 `project.load_failed`。这不是配置错误，是产品允许了自相矛盾的组合。
+fn access_mapping_in_multi_mode() -> anyhow::Error {
+    anyhow::anyhow!(
+        "多项目模式下不要给 `--access-mapping`：每套本体的 AM 随构建包入库（REQ-174），\
+         按 `active_version_id` 各自加载。\n  \
+         进程级一份会让「没有 AM 的项目」回落到别人的映射并 bind 失败。\
+         确实要单项目才用这个参数（同时给 `--project` 与 `--version`）。"
+    )
+}
+
+/// ⭐ REQ-177 · `query serve` 的**启动前参数自检**（⛔ 不碰数据库、不读文件）。
+///
+/// 位置要求（AC-004）：服务面入口必须在**连库之前**调用它 —— 给一个连不上的
+/// `ONTOK_DATABASE_URL` 时，报的应当是这个参数错，而不是连接错。
+///
+/// 返回判定出的模式，供 [`serve`] 直接复用 —— 于是单/多项目判定与
+/// 「多项目不许给 AM」都只有**这一份**实现。
+pub fn preflight(
+    project: Option<&str>,
+    version: Option<i32>,
+    access_mapping: Option<&std::path::Path>,
+) -> anyhow::Result<ProjectScope> {
+    let scope = project_scope(project, version)?;
+    if matches!(scope, ProjectScope::Multi) && access_mapping.is_some() {
+        return Err(access_mapping_in_multi_mode());
+    }
+    Ok(scope)
+}
+
 /// 载入 → 起服务。
 ///
 /// ⭐ REQ-159 P1b · **一个入口两种模式**，判据只有一个 —— `--project` 给没给：
@@ -380,26 +459,21 @@ pub async fn serve(pool: &PgPool, args: ServeArgs) -> anyhow::Result<()> {
     //
     // 位置在「绑 socket / 读文件 / 连库」之前：这两个参数自相矛盾时报的是参数问题，
     // 不该先看到「token 表读不出来」这种下游错误。
-    let single = match (args.project.clone(), args.version) {
-        (Some(project), Some(version)) => Some((project, version)),
-        (Some(_), None) => anyhow::bail!(
-            "给了 `--project` 就必须同时给 `--version`：单项目模式要把**一个**版本的快照钉死。\n  \
-             想让服务自己按 key 找每个项目当前生效的版本（多项目模式），请**两个都不给**\
-             —— 那时版本来自 `projects.active_version_id`。"
-        ),
-        (None, Some(_)) => anyhow::bail!(
-            "给了 `--version` 就必须同时给 `--project`：版本号只在单项目模式下有意义。\n  \
-             多项目模式（两个都不给）的版本由每个项目的 `active_version_id` 决定\
-             —— ⛔ 一个 `--version` 套到所有项目上会服务到错的版本。"
-        ),
-        (None, None) => None,
-    };
-    if single.is_none() {
+    // ⭐ REQ-177 · 判定与「多项目不许给 `--access-mapping`」都走 [`preflight`]
+    // （服务面入口 `service::run` 在**连库之前**也调它 —— 同一份实现，不是第二份判定）。
+    let scope = preflight(
+        args.project.as_deref(),
+        args.version,
+        args.access_mapping.as_deref(),
+    )?;
+    if let ProjectScope::Multi = scope {
         // ⭐ REQ-159 P1b · 多项目模式：启动时**一份快照都不加载**（懒加载），
         // 只做闸门（token 必须逐条绑项目）与部署级输入（声明 / schema / 源库 / 审计）。
         return super::multi::serve(pool, args).await;
     }
-    let (project, version) = single.expect("上面已判：单项目模式");
+    let ProjectScope::Single { project, version } = scope else {
+        unreachable!("上面已判：不是多项目模式就一定是单项目模式")
+    };
 
     // ── ③ 绑定 + 闸门 ───────────────────────────────────────
     let (addr, verdict) = bind_gate(&args)?;
@@ -627,9 +701,11 @@ pub(crate) fn load_schema(
 /// 为什么不在这里解析：多项目模式下**每一版本体**都要与自己的 AM 对账（`bind`），
 /// 而「类必须在这一版里存在」是**逐版本**的判据。
 ///
-/// ⭐ REQ-174 起它只是**部署级回退输入**：单项目模式里它压过 DB（AC-005 的旧部署兼容），
-/// 多项目模式里它只在该版本 **DB 没有 AM** 时才用（[`resolve_multi_access`]）——
-/// 于是「一个进程一份 AM」不再抢在各个项目自己那份之前。
+/// ⭐ REQ-174 起它只是**部署级回退输入**：单项目模式里它压过 DB（AC-005 的旧部署兼容）。
+///
+/// ⛔ ⭐ REQ-177 · 多项目模式**不再允许** `--access-mapping`（[`preflight`] 在连库之前
+/// 就拒绝），所以多项目模式运行期这里**恒为 `None`** —— 每套本体的 AM 只来自它自己
+/// 那一版（`version_access_mappings`）。
 pub(crate) fn read_access_mapping(args: &ServeArgs) -> anyhow::Result<Option<String>> {
     let Some(path) = &args.access_mapping else {
         return Ok(None);
@@ -698,9 +774,8 @@ pub struct Deployment {
     ///
     /// ⭐ REQ-174 起它只是**部署级回退输入**，不再是唯一来源：
     /// - 单项目模式：文件 > DB(该版本)（[`resolve_single_access`]）；
-    /// - 多项目模式：DB(该 `active_version_id`) > 文件（[`resolve_multi_access`]）。
-    ///
-    /// 于是「多项目共用一份 AM」这个旧形态只在**库里没有 AM** 时才出现。
+    /// - 多项目模式：**恒 `None`**（REQ-177：`--access-mapping` 在多项目模式下
+    ///   启动即拒，见 [`preflight`]）—— AM 只来自各版本自己的 DB 行。
     pub access_raw: Option<String>,
     /// `--access-mapping` 的**路径**（只用于报错时点名，⛔ 不参与任何逻辑）。
     pub access_path: Option<PathBuf>,
@@ -763,6 +838,10 @@ pub(crate) async fn db_access(
 /// 为什么与单项目**相反**：多项目是「一个进程服务 N 个项目」，而 `--access-mapping`
 /// 是**进程级**的一个文件。文件优先的话第二个项目永远拿不到自己那份 AM ——
 /// 那正是 REQ-174 要消灭的形态（demand 现状事实 2）。
+///
+/// ⛔ ⭐ REQ-177 · 多项目模式已**不允许** `--access-mapping`（[`preflight`] 启动即拒），
+/// 所以正常启动路径上文件这一支**恒为空**；这里保留它只为「函数被内部直接调用」时的
+/// 防御，⛔ 不是第二套优先级。
 pub(crate) async fn resolve_multi_access(
     pool: &PgPool,
     dep: &Deployment,
@@ -1234,8 +1313,95 @@ mod tests {
     #[test]
     fn the_mode_is_decided_by_the_presence_of_project_and_version() {
         let single = args(Some("p"), Some(1));
-        assert!(single.project.is_some() && single.version.is_some());
+        assert_eq!(
+            project_scope(single.project.as_deref(), single.version).expect("单项目"),
+            ProjectScope::Single {
+                project: "p".into(),
+                version: 1
+            }
+        );
         let multi = args(None, None);
-        assert!(multi.project.is_none() && multi.version.is_none());
+        assert_eq!(
+            project_scope(multi.project.as_deref(), multi.version).expect("多项目"),
+            ProjectScope::Multi
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // ⭐ REQ-177 · 多项目模式不许给 `--access-mapping`
+    // ══════════════════════════════════════════════════════════
+
+    /// 一个**不存在的** AM 路径就够：判据只看「给没给」，⛔ 不读文件
+    /// （读文件是启动后的事 —— 拒绝必须发生在更早的位置）。
+    const ANY_AM: &str = "access-mapping.json";
+
+    /// **AC-001** · 多项目（两个都不给）+ `--access-mapping` ⇒ 参数错。
+    ///
+    /// 消息必须说清**为什么**（AM 随构建包入库）与**怎么改**（要单项目才用）。
+    /// 变异：把 `preflight` 里那个 `if` 注掉 ⇒ 本测试红（会走到下面的多项目分支）。
+    #[test]
+    fn multi_project_mode_refuses_access_mapping() {
+        let e = preflight(None, None, Some(std::path::Path::new(ANY_AM)))
+            .expect_err("多项目 + --access-mapping 必须拒绝");
+        let text = e.to_string();
+        assert!(text.contains("多项目"), "要点明这是多项目模式：{text}");
+        assert!(
+            text.contains("随构建包入库"),
+            "要说清 AM 的正确归属（REQ-174）：{text}"
+        );
+        assert!(text.contains("--access-mapping"), "要点名参数：{text}");
+        assert!(
+            text.contains("--project") && text.contains("--version"),
+            "要给出「确实要单项目」的改法：{text}"
+        );
+    }
+
+    /// **AC-002 / AC-003** · 其余三种组合**一个都不许拦**：
+    /// 单项目 + AM（文件优先，REQ-174 AC-005）、单项目不给、多项目不给。
+    #[test]
+    fn access_mapping_is_only_rejected_in_multi_project_mode() {
+        // 单项目 + AM ⇒ Ok（行为不变：文件 > DB）。
+        assert_eq!(
+            preflight(
+                Some("cloud-resource"),
+                Some(1),
+                Some(std::path::Path::new(ANY_AM))
+            )
+            .expect("单项目模式照常"),
+            ProjectScope::Single {
+                project: "cloud-resource".into(),
+                version: 1
+            }
+        );
+        // 单项目不给 ⇒ Ok。
+        assert!(preflight(Some("cloud-resource"), Some(1), None).is_ok());
+        // 多项目不给 ⇒ Ok（AM 由各版本的构建包提供）。
+        assert_eq!(
+            preflight(None, None, None).expect("多项目不给 AM 照常"),
+            ProjectScope::Multi
+        );
+    }
+
+    /// **AC-004** · `serve` 自己也走同一条 `preflight`（而不是只在入口查一遍）：
+    /// 用连不上的 lazy pool 调 `serve`，得到的是**参数错**，⛔ 不是连接错。
+    /// 这条同时钉住「判定没有第二份」——把 `serve` 里的 `preflight` 换回手写
+    /// `match` 且漏掉 AM 检查 ⇒ 本测试会走到连库并报连接错 ⇒ 红。
+    #[tokio::test]
+    async fn serve_rejects_multi_project_access_mapping_before_touching_the_database() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://nobody@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let mut a = args(None, None);
+        a.access_mapping = Some(std::path::PathBuf::from(ANY_AM));
+
+        let e = serve(&pool, a).await.expect_err("必须拒绝启动");
+        let text = e.to_string();
+        assert!(text.contains("多项目") && text.contains("随构建包入库"), "{text}");
+        assert!(
+            !text.to_lowercase().contains("connect")
+                && !text.contains("127.0.0.1:1")
+                && !text.contains("连库"),
+            "拒绝必须发生在连库之前（不该出现连接错误）：{text}"
+        );
     }
 }

@@ -356,6 +356,11 @@ pub enum QueryCmd {
         include_inherit: bool,
         /// ⭐ REQ-145 · **access 映射**（API 源声明）：哪些类来自云 API、按什么取。
         ///
+        /// ⛔ ⭐ REQ-177 · **只在单项目模式可用**。多项目模式（`--project` / `--version`
+        /// 都不给）下给这个参数 ⇒ **连库之前就拒绝启动**（退出码 2）：每套本体的 AM
+        /// 随构建包入库（REQ-174），按 `active_version_id` 各自加载；进程级一份会让
+        /// 「没有 AM 的项目」回落到别人的映射并 bind 失败。
+        ///
         /// 省略 ⇒ 与不带本参数时**逐字节相同**（零回归）：TTL 无 `ontok:sourceKind`、
         /// `catalog`/`describe` 无 `access`、SPARQL 无 `@pending` / `complete` / `mapping_version`。
         ///
@@ -419,6 +424,32 @@ pub enum QueryCmd {
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     crate::pipe_guard::install_broken_pipe_guard();
+
+    // ⭐ REQ-177 · **连库之前的参数自检**（AC-004）：多项目模式（`--project` /
+    // `--version` 都不给）+ `--access-mapping` ⇒ 参数错，退出码 **2**。
+    //
+    // 位置：必须在取连接串 / 连产品库 / 跑迁移之前。给一个连不上的
+    // `ONTOK_DATABASE_URL` 时，用户该看到的是「这个参数组合不允许」，而不是
+    // 「连不上库」—— 后者会把人带去查网络与凭据，而真正要改的是启动命令。
+    if let Cmd::Query {
+        cmd:
+            QueryCmd::Serve {
+                project,
+                version,
+                access_mapping,
+                ..
+            },
+    } = &cli.cmd
+    {
+        if let Err(e) = crate::query::serve::preflight(
+            project.as_deref(),
+            *version,
+            access_mapping.as_deref(),
+        ) {
+            eprintln!("✗ query serve 拒绝启动：{e}");
+            std::process::exit(2);
+        }
+    }
 
     // 与 `cli::run` **同一条顺序**：先取连接串、连产品库、跑迁移，再分派。
     // 服务面没有「连库之前就返回」的子命令（那些都在构建面）。
