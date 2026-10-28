@@ -52,9 +52,10 @@
 //! - `freshness` 可选（省略 ⇒ `access` 里不出现这个键，⛔ 不编一个「实时」）。
 //!   对象写法里没有 `mode` ⇒ **与省略同义**（同样不编）。
 //!
-//! 契约里其余字段（`source` / `operation` / `iterator` / `iri_template` / `fields`）
-//! 本模块**读进来就丢**：它们只在 access 契约里生效，平台既不执行也不转发
-//! （把 `operation` 写进 `@pending` 等于把「怎么直连我们数据源」交给调用方 —— 契约规则 6）。
+//! 契约里其余字段（`source` / `operation` / `iterator` / `iri_template` / `fields` /
+//! `identity`）在 v1 契约下**读进来就丢**；v2（`contract_version >= 2`）才按
+//! [`Recipe`] **原样**透出进 `@pending[].get`（平台本身仍不执行它们 ——
+//! 把 `operation` 写进 `@pending` 等于把「怎么直连我们数据源」交给调用方 —— 契约规则 6）。
 //!
 //! # 跨源边怎么来的（**不写在映射文件里**）
 //!
@@ -274,9 +275,15 @@ struct RawEntity {
     request: Option<serde_json::Value>,
     #[serde(default)]
     iterator: Option<String>,
+    /// ⭐ REQ-173 · 一行怎么变成节点的 IRI（`get.iri_template`，如 `ontok:cvm_instance/{id}`）。
     #[serde(default)]
-    #[allow(dead_code)]
     iri_template: Option<String>,
+    /// ⭐ REQ-173 · 主键声明（`get.identity`，至少含 `key_path` = **响应记录里**的键名）。
+    ///
+    /// 用 `Value` 而不是一个只有 `key_path` 的结构体：契约允许它带别的键（租户列、
+    /// 复合键……），本模块**只负责搬运**，⛔ 不解释、⛔ 不裁掉它不认识的部分。
+    #[serde(default)]
+    identity: Option<serde_json::Value>,
     #[serde(default)]
     fields: Option<serde_json::Value>,
 }
@@ -346,6 +353,8 @@ const MAX_GET_RECIPE_BYTES: usize = 12 * 1024;
 /// | `iterator` | `entities[].iterator` | 原样透出 |
 /// | `fields` | `entities[].fields` | 摊平成 `属性 → 响应字段路径` |
 /// | `auth` | `sources[].auth` 的声明 | 只透传（变量名 / 头名 / scope 段名 / 签名服务名） |
+/// | `identity` | `entities[].identity` | **原样透出**（`key_path` = 响应记录里的键名） |
+/// | `iri_template` | `entities[].iri_template` | **原样透出**（一行怎么拼 `@id`） |
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Recipe {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,6 +369,26 @@ pub struct Recipe {
     pub fields: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<RecipeAuth>,
+    /// ⭐ REQ-173 · 一行怎么变成节点：`entities[].identity` 的**原样**搬运。
+    ///
+    /// 为什么必须由服务端发出来：下游取数脚本要把一行变成节点，就必须有 `@id`；
+    /// 配方里没有 `identity` 时它只能要求调用方传 `--id-property <fields 里的属性名>` ——
+    /// 而 `fields` 里是**本体属性名**、`identity.key_path` 是**响应记录里的键名**，
+    /// 两者经常不同（实测：属性 `instance_id`，记录里叫 `InstanceId`）⇒ 调用方只能猜，
+    /// `--format rows` 下漏传还会让每行被 `skipped_no_identity` 静默丢掉（**0 行且不报错**）。
+    ///
+    /// 口径：**只搬不推**。AM 没写 ⇒ `None`（键不出现）；⛔ 不替它补 `key_path`、
+    /// ⛔ 不从 `fields` 挑一个属性当主键、⛔ 不塞 `{}`。对象里的键名 / 嵌套**一个字符不改**。
+    ///
+    /// 声明在末尾：v2 既有那几段的字节顺序因此一个字符都不动（只做加法）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<serde_json::Value>,
+    /// ⭐ REQ-173 · `entities[].iri_template`（如 `ontok:cvm_instance/{id}`）**原样**透出。
+    ///
+    /// `None` ⇒ 键不出现（⛔ 不按 `class` 拼一个「像模像样」的模板 ——
+    /// 猜出来的 IRI 会让同一行在两次取数里变成两个节点）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iri_template: Option<String>,
 }
 
 /// `get.source`：打到哪儿、用哪种鉴权**模式**（模式名是给客户端选实现的，不是给代码分支的）。
@@ -409,6 +438,10 @@ impl Recipe {
             && self.iterator.is_none()
             && self.fields.is_none()
             && self.auth.is_none()
+            // ⭐ REQ-173 · 只写了 `identity`（或只写了 `iri_template`）也是非空配方 ——
+            // 漏掉这两项，那种 AM 的配方会被 `parse` 当成「空」整段丢掉。
+            && self.identity.is_none()
+            && self.iri_template.is_none()
     }
 }
 
@@ -481,7 +514,26 @@ fn build_recipe(
                 // ⭐ REQ-169 · 只写了 `service` 的源也要把 `auth` 发出来（否则那条声明消失）。
                 || a.service.is_some()
         }),
+        // ⭐ REQ-173 · 原样透出 `entities[].identity` / `entities[].iri_template`。
+        // 映射没写（`null` / 空对象 / 空串）⇒ 键不出现；⛔ 不补 `key_path`、
+        // ⛔ 不从 `fields` 挑主键、⛔ 不按 `class` 拼模板。缺就是缺。
+        identity: e.identity.as_ref().filter(|v| usable_identity(v)).cloned(),
+        iri_template: e
+            .iri_template
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string),
     }
+}
+
+/// ⭐ REQ-173 · `entities[].identity` 能不能当**声明**透出。
+///
+/// 只判「有没有内容」：对象且非空 ⇒ 原样透出（键名 / 嵌套一个字符不改）。
+/// `null` 由 `Option` 吃掉；`{}` / 数组 / 字符串 / 数字 ⇒ 与「没写」同义 ⇒ 键不出现
+/// （⛔ 不替它补 `key_path` —— 空壳透出去只会让调用方以为拿到了主键，
+/// 而取数脚本判的正是「dict 且 `key_path` 非空」）。
+fn usable_identity(v: &serde_json::Value) -> bool {
+    v.as_object().is_some_and(|obj| !obj.is_empty())
 }
 
 /// ⭐ REQ-152 · CP4 · `sources[].defaults` → `get.request.defaults`（**只搬不改**）。
