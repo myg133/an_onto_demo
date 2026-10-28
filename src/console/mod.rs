@@ -148,11 +148,22 @@ impl OpError {
     }
 
     /// 客户视图命中发布闸（AC-002）：一个字节都不产出。
+    /// 客户视图命中发布闸（AC-002）：一个字节都不产出。
+    ///
+    /// ⚠️ **词条必须进 message**：2026-10-28 生产实测，实施人员只收到
+    /// 「命中了建模术语（出口 C6）」—— 不知道是哪个词，无法修。
+    /// 原来 `leak_hits` 只存不读（全仓零消费者），这里直接拼进 message，HTTP 与 CLI 都能看见。
     pub fn leak(outlet: &'static str, hits: impl Into<String>) -> Self {
         let hits = hits.into();
+        let shown = if hits.chars().count() > 200 {
+            let cut: String = hits.chars().take(200).collect();
+            format!("{cut}…")
+        } else {
+            hits.clone()
+        };
         let mut e = Self::conflict(
             "CUSTOMER_VIEW_LEAKED",
-            format!("客户视图命中了建模术语（出口 {outlet}），已拒绝导出。"),
+            format!("客户视图命中了建模术语（出口 {outlet}）：{shown}。已拒绝导出。"),
             "这是发布闸，不是 bug：客户视图不能带建模术语。改掉命中的说明文字后重试；\
              ⛔ 不要为了导出而放宽闸门。",
         );
@@ -254,5 +265,30 @@ pub fn default_paths() -> decl::DeclPaths {
         exclusions: PathBuf::from(DEFAULT_EXCLUSIONS),
         policy: PathBuf::from(DEFAULT_POLICY),
         tenancy: PathBuf::from(DEFAULT_TENANCY),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 发布闸的**词条必须进 message**：2026-10-28 生产实测，实施人员只看到
+    /// 「命中了建模术语（出口 C6）」，不知道是哪个词 —— `leak_hits` 存了却没人读。
+    #[test]
+    fn leak_message_names_the_hitting_terms() {
+        let e = OpError::leak("C6", "主键、证据");
+        assert!(e.message.contains("主键") && e.message.contains("证据"),
+                "message 必须点名命中的词条，实际：{}", e.message);
+        assert!(e.message.contains("C6"));
+        let api = e.into_api();
+        assert!(api.message.contains("主键"), "into_api 之后词条不能丢：{}", api.message);
+    }
+
+    #[test]
+    fn leak_message_truncates_long_term_lists() {
+        let long = "主键、".repeat(200);
+        let e = OpError::leak("C6", long);
+        assert!(e.message.contains("…"), "超长时应截断");
+        assert!(e.message.chars().count() < 400, "message 不应无限增长");
     }
 }
