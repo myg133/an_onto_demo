@@ -235,14 +235,31 @@ jobs:
           fi
           echo "$out" | tail -4
 
+      # ⚠️ 不能发布完立刻装：npm 的 CDN 有几秒~几分钟的传播延迟，
+      #    立刻 npm i 会 ETARGET「无此版本」（2026-10-29 实测，0.3.10 发布其实是成功的）。
+      #    先轮询等到版本可见，再装。
       - name: 冒烟：从 registry 装回来再跑 --version
         shell: bash
         run: |
           set -euo pipefail
           ver=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').version")
+          ok=""
+          for i in $(seq 1 12); do
+            if npm view "@anspire-ai/ontok-builder@$ver" version >/dev/null 2>&1; then
+              echo "registry 已可见 $ver（第 $i 次检查）"
+              ok=1
+              break
+            fi
+            echo "等待 registry 传播…（$i/12，每 15s）"
+            sleep 15
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::发布后约 3 分钟，registry 仍看不到 @anspire-ai/ontok-builder@$ver —— 若 publish 步确实成功，这是 CDN 延迟，稍后手动重跑本工作流即可"
+            exit 1
+          fi
           d=$(mktemp -d); cd "$d"
           npm init -y >/dev/null
-          npm i "@anspire-ai/ontok-builder@$ver" --include=optional
+          npm i "@anspire-ai/ontok-builder@$ver" --include=optional --prefer-online
           npx ontok-builder --version
 
   # 空跑时也把 4 个包打成一个 artifact：首次发布（手动、要输 OTP）只下一个 zip 就够。
