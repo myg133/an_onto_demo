@@ -1091,3 +1091,17 @@ git -C <worktree> log --oneline -1   # 必须是本单的 commit，不是基线
 
 BA 收到"完成"报告后，**第一件事就是跑这两条** —— 不干净的，先让 Dev 提交再谈验收。
 > 与「长驻服务要复制 exe」「基线要用同一台机同一份 env」同族：**状态要能被独立验证，不能只靠报告自述**。
+
+### 在 Windows 上改文本文件：用 ReadAllText + WriteAllText，⛔ 别用 WriteAllLines（2026-10-29，改版本号时踩到）
+
+改 `Cargo.lock` 里一行版本号，我用了 `[IO.File]::WriteAllLines(...)` —— 它在 Windows 上用 `Environment.NewLine`（**CRLF**）写，
+于是 2524 行全部被重写 ⇒ 提交里 `Cargo.lock` 显示 **2538 增 / 2525 删**，而实际只该改 1 行。事后又得补一个"行尾复原"提交，历史多两次churn。
+
+| 错的写法 | 对的写法 |
+| --- | --- |
+| `WriteAllLines($p, $lines)` | `WriteAllText($p, $text, UTF8NoBOM)` |
+| 用 `-replace` 后直接落盘（保留原换行） | 先 `ReadAllText`，做字符串替换，再 `WriteAllText` |
+
+**判据**：改完看 `git diff --numstat <file>` —— 数字应该与你实际改的行数一致。
+不一致（尤其是等于文件总行数）⇒ 你在**整文件重写**，大概率是行尾或 BOM 被改了。
+> 与「提交前 `git status` 必须干净」同族：**diff 的规模要能被解释**。
