@@ -20,6 +20,9 @@ on:
 
 permissions:
   contents: read
+  # ⭐ 让 npm 走「trusted publishing」（OIDC 免 token）—— 见 Deploy/tools/PUBLISH.md
+  #    没配 trusted publisher 时这个权限不影响任何事
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -126,16 +129,22 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::缺 secret NPM_TOKEN（Settings → Secrets and variables → Actions → New repository secret）"
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            if ! who=$(npm whoami 2>&1); then
+              echo "$who"
+              echo "::error::npm whoami 失败 —— token 无效或已过期"
+              exit 1
+            fi
+            echo "认证方式：NPM_TOKEN（身份 $who）"
+          elif [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            # trusted publishing：不需要 token，npm 用 GitHub 的 OIDC 换短期凭据。
+            # 前置：npm 上该包已存在且配了 trusted publisher（见 Deploy/tools/PUBLISH.md）
+            echo "认证方式：trusted publishing（OIDC，无 token）"
+            echo "::warning::未配 NPM_TOKEN，走 OIDC —— 首次发布前必须先手动发一版并配好 trusted publisher"
+          else
+            echo "::error::既没有 NPM_TOKEN，也没有 OIDC 权限（permissions.id-token）"
             exit 1
           fi
-          if ! who=$(npm whoami 2>&1); then
-            echo "$who"
-            echo "::error::npm whoami 失败 —— token 无效或已过期"
-            exit 1
-          fi
-          echo "npm 身份：$who"
           npm ping
 
       - name: publish 平台包（先于主包：主包靠 optionalDependencies 找它们）
@@ -169,7 +178,19 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish npm/out/@anspire-ai/ontok-builder --access public
+        run: |
+          set -euo pipefail
+          if ! out=$(npm publish npm/out/@anspire-ai/ontok-builder --access public 2>&1); then
+            echo "$out"
+            case "$out" in
+              *EOTP*) echo "::error::EOTP —— token 需要 OTP。改用 granular token（read-write）或 trusted publishing，见 Deploy/tools/PUBLISH.md" ;;
+              *E403*) echo "::error::E403 —— 对该 scope 无发布权" ;;
+              *EPUBLISHCONFLICT*|*"cannot publish over"*) echo "::error::版本已存在 —— 升版本号" ;;
+              *) echo "::error::npm publish 失败（原因见上方）" ;;
+            esac
+            exit 1
+          fi
+          echo "$out" | tail -4
 
       - name: 冒烟：从 registry 装回来再跑 --version
         if: github.event_name == 'push'
@@ -182,3 +203,40 @@ jobs:
           npm init -y >/dev/null
           npm i "@anspire-ai/ontok-builder@$ver" --include=optional
           npx ontok-builder --version
+
+  # 空跑时也把 4 个包打成一个 artifact：首次发布（手动、要输 OTP）只下一个 zip 就够。
+  # 用法见 Deploy/tools/PUBLISH.md「第一次发布」。
+  bundle:
+    name: bundle npm packages
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: 下载三个平台包
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: npm/out
+          merge-multiple: true
+      - name: 生成主包
+        run: node npm/prepare.mjs main
+      - name: 打包
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').version")
+          cd npm/out
+          zip -qr "../../npm-${ver}.zip" .
+          cd ../..
+          ls -lh "npm-${ver}.zip"
+      - name: 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-release-bundle
+          path: npm-*.zip
+          if-no-files-found: error
+          retention-days: 30
