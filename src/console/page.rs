@@ -42,7 +42,7 @@ pub const CONSOLE_HTML: &str = r####"<!doctype html>
   color-scheme:dark;
   --bg:#070a10;--bg2:#0b0f17;--card:#111721;--head:#0d131c;
   --line:rgba(255,255,255,.09);--line2:rgba(255,255,255,.05);
-  --fg:#e8edf6;--mut:#9aa7bd;--mut2:#64708a;
+  --fg:#e8edf6;--mut:#9aa7bd;--mut2:#8b97ad;
   --acc:#6ec8ff;--ok:#5fd3a3;--warn:#e6b455;--bad:#ef7a8a;
   --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
 }

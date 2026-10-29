@@ -34,12 +34,12 @@ const COLOR_KEY = "ontok_studio_color_mode";
    ⚠️ 这里再写一遍是**故意的**：判据不能从被测代码里推导（那样改错也对上）。 */
 const TONE_API = "#e6b455";
 const TONE_OK = "#6ec8ff";
-const TONE_NONE = "#5d6a80";
+const TONE_NONE = "#7d8aa3";
 const TIER = {
   hub: { label: "枢纽", color: "#ef7a8a" },
   core: { label: "中心", color: "#e6b455" },
   mid: { label: "一般", color: "#6ec8ff" },
-  leaf: { label: "边缘", color: "#5d6a80" }
+  leaf: { label: "边缘", color: "#7d8aa3" }
 };
 
 // ── 断言器 ────────────────────────────────────────────────────
@@ -497,7 +497,7 @@ async function scenarioDefaultVerifiability() {
   });
   const paintO = nodePaint(envOnto);
   ok(paintO.get("db_c") && paintO.get("db_c").tone === TONE_NONE,
-    "AC-e7 · 本体模式（ontology-only）的库源 = 灰 #5d6a80（逐字未变）",
+    "AC-e7 · 本体模式（ontology-only）的库源 = 灰 #7d8aa3（逐字未变）",
     paintO.get("db_c") ? paintO.get("db_c").tone : "缺节点");
   ok(paintO.get("db_c") && paintO.get("db_c").glow === "url(#glow-dim)",
     "AC-e7 · 不可查的泛光仍是 glow-dim", paintO.get("db_c") ? paintO.get("db_c").glow : "");

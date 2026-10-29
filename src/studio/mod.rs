@@ -628,7 +628,7 @@ mod tests {
             ("枢纽", "#ef7a8a"),
             ("中心", "#e6b455"),
             ("一般", "#6ec8ff"),
-            ("边缘", "#5d6a80"),
+            ("边缘", "#7d8aa3"),
         ] {
             assert!(
                 STUDIO_JS.contains(&format!("label: \"{label}\", color: \"{color}\"")),
@@ -717,7 +717,7 @@ mod tests {
     /// ⛔ 不许"顺手优化"它。这条用例把返回值、色调表达式、三个判据一起钉住：
     /// 改任何一个字（包括色值）就红。
     ///
-    /// 变异（红）：把 `"#5d6a80"` 改成 `"#606a80"` ⇒ 本用例红。
+    /// 变异（红）：把 `"#7d8aa3"` 改成 `"#606a80"` ⇒ 本用例红。
     #[test]
     fn the_verifiability_three_states_and_colors_are_unchanged() {
         assert!(STUDIO_JS.contains(r#"key: "api", label: "需取数", tone: "warn","#));
@@ -727,7 +727,7 @@ mod tests {
         ));
         assert!(
             STUDIO_JS.contains(
-                r##"v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#5d6a80""##
+                r##"v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#7d8aa3""##
             ),
             "模式 A 的三色映射被改了（AC-e7 钉的就是这个表达式：琥珀 / 蓝 / 灰）"
         );

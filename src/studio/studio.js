@@ -43,7 +43,7 @@
     { key: "hub",   label: "枢纽", color: "#ef7a8a" },
     { key: "core",  label: "中心", color: "#e6b455" },
     { key: "mid",   label: "一般", color: "#6ec8ff" },
-    { key: "leaf",  label: "边缘", color: "#5d6a80" }
+    { key: "leaf",  label: "边缘", color: "#7d8aa3" }
   ];
   var DEGREE_PCTS = { p50: 50, p80: 80, p95: 95 };
 
@@ -471,7 +471,7 @@
     /* ⚠️ 下面三行是**模式 A 的已验收语义**（AC-e7 钉的就是这个表达式，⛔ 别改） */
     var v = verifiability(n.c);
     return {
-      tone: v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#5d6a80",
+      tone: v.key === "api" ? "#e6b455" : v.key === "ok" ? "#6ec8ff" : "#7d8aa3",
       grad: v.key === "api" ? "warn" : v.key === "ok" ? "ok" : "dim"
     };
   }
@@ -1085,7 +1085,7 @@
       h("span", { text: "API 源 " + apiN + " 类 · 平台不执行，按 get 自取" })
     ]));
     rows.push(h("div", { class: "legend-row" }, [
-      h("span", { class: "legend-swatch", style: "color:#5d6a80;background:#5d6a80" }),
+      h("span", { class: "legend-swatch", style: "color:#7d8aa3;background:#7d8aa3" }),
       h("span", { text: "库源 " + (S.classes.length - apiN) + " 类" })
     ]));
     return rows.concat(relationLegendRows());

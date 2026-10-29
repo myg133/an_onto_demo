@@ -9,13 +9,13 @@
   color-scheme: dark;   /* ⭐ 原生控件（下拉弹出层/滚动条）也用深色 */
   --bg: #070a10;
   --bg-2: #0b0f17;
-  --panel: rgba(255, 255, 255, 0.028);
-  --panel-2: rgba(255, 255, 255, 0.05);
-  --line: rgba(255, 255, 255, 0.085);
-  --line-soft: rgba(255, 255, 255, 0.045);
+  --panel: rgba(255, 255, 255, 0.045);
+  --panel-2: rgba(255, 255, 255, 0.072);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-soft: rgba(255, 255, 255, 0.08);
   --text: #e8edf6;
   --text-2: #9aa7bd;
-  --text-3: #64708a;
+  --text-3: #8b97ad;
   --accent: #6ec8ff;
   --accent-soft: rgba(110, 200, 255, 0.16);
   --warn: #e6b455;
