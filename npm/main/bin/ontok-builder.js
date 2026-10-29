@@ -11,6 +11,7 @@
  *   2. 平台包 `@<scope>/ontok-builder-<platform>-<arch>/bin/<exe>`
  *   3. 报错：说清缺哪个包、当前 os/cpu 是什么、怎么补
  */
+import { chmodSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -71,6 +72,15 @@ function resolveBinary() {
 }
 
 const { bin, how } = resolveBinary();
+
+// ⚠️ 兜底：已发布的 0.3.9 平台包里二进制是 0644（没有可执行位），Linux/macOS 上 spawn 会 EACCES。
+//    这里主动补一次（Windows 上是 no-op）。0.3.10 起打包时就会置 755。
+try {
+  chmodSync(bin, 0o755);
+} catch {
+  /* 只读文件系统 / Windows：忽略，交给 spawn 报错 */
+}
+
 const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
 child.on("error", (e) => fail(`执行 ${bin} 失败（来自 ${how}）：${e.message}`));
 child.on("exit", (code, signal) => {

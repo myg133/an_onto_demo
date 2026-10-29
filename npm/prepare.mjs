@@ -13,7 +13,7 @@
  *
  * 产物统一落在 `npm/out/<scope>/<包名>/`（git 忽略）。
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +65,15 @@ function writePkg(name, pkg, extraFiles = []) {
     const dst = path.join(dir, f.dst);
     mkdirSync(path.dirname(dst), { recursive: true });
     copyFileSync(f.src, dst);
+    // ⚠️ 必须置可执行位：npm tarball 默认打包成 0644，Linux/macOS 上 spawn 会 EACCES
+    //    （2026-10-29 实测：0.3.9 的 linux/darwin 包 tar 里是 -rw-r--r--，CI 冒烟 EACCES 失败）
+    if (!dst.endsWith(".js") && !dst.endsWith(".json")) {
+      try {
+        chmodSync(dst, 0o755);
+      } catch {
+        /* Windows 上 chmod 基本无效，忽略 */
+      }
+    }
   }
   return dir;
 }
