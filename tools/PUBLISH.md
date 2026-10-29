@@ -47,20 +47,37 @@ ontok-builder --version     # 必须等于刚发的版本
 
 ## 三 · 之后：接上 CI 自动发布
 
-### 方式 B（推荐）：trusted publishing
+### 方式 B（推荐）：trusted publishing（OIDC，无 token）
 
-在 npm 上给**每个包**（4 个）配：
+**按包配置，4 个包各配一次，值完全相同**：
 
 ```
-npmjs.com → 包页面 → Settings → Trusted publishing → Add
+npmjs.com → 该包页面 → Settings → Trusted publishing → Add
   Provider:      GitHub Actions
   Organization:  myg133
   Repository:    an_onto_demo
-  Workflow:      release.yml
+  Workflow:      release.yml      ← 文件名必须与 .github/workflows/release.yml 一致
   Environment:   （留空）
 ```
 
-配好之后：**不用 `NPM_TOKEN`**，工作流会走 OIDC。
+要配的 4 个包：
+
+```
+@anspire-ai/ontok-builder
+@anspire-ai/ontok-builder-win32-x64
+@anspire-ai/ontok-builder-darwin-arm64
+@anspire-ai/ontok-builder-linux-x64
+```
+
+⚠️ 三个前提：
+
+| # | 前提 | 不满足会怎样 |
+| --- | --- | --- |
+| 1 | **包必须已存在**（先手动发过一版） | 包设置页没有 Trusted publishing 这一节 |
+| 2 | 工作流里 **npm ≥ 11.5.1** | OIDC 交换不生效（工作流已加 `npm i -g npm@latest`） |
+| 3 | 工作流有 `permissions: id-token: write` | 拿不到 OIDC token（已加） |
+
+**配好之后不需要删 `NPM_TOKEN`**：工作流的 `auth` 参数默认 `auto` —— 有 `id-token` 就**优先走 OIDC**，token 只作兜底。想强制走 OIDC 就把 `auth` 选成 `oidc`。
 
 ### 方式 A：granular token
 
