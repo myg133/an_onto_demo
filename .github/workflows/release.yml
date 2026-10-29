@@ -187,6 +187,13 @@ jobs:
           set -euo pipefail
           echo "模式：${AUTH_MODE}"
           for p in npm/out/@anspire-ai/ontok-builder-*; do
+            name=$(node -p "require('./$p/package.json').name")
+            ver=$(node -p "require('./$p/package.json').version")
+            # 幂等：已发布过的版本就跳过（这样「先 dispatch 发成功、再推 tag 记账」不会红）
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "↷ $name@$ver 已存在，跳过"
+              continue
+            fi
             echo "→ $p"
             if ! out=$(npm publish "$p" --access public 2>&1); then
               echo "$out"
@@ -210,6 +217,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          name=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').name")
+          ver=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').version")
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "↷ $name@$ver 已存在，跳过"
+            exit 0
+          fi
           if ! out=$(npm publish npm/out/@anspire-ai/ontok-builder --access public 2>&1); then
             echo "$out"
             case "$out" in
