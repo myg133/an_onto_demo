@@ -49,6 +49,14 @@ const base = "ontok-builder";
 const mainName = `${scope}/${base}`;
 const version = cargoVersion();
 
+/**
+ * ⚠️ 带 provenance 发布时 npm 会校验：package.json 的 repository.url 必须与
+ * provenance 里的来源仓库一致，否则整包发布失败（E422，2026-10-29 实测）。
+ * 这里写死一次，主包与平台包都用它。
+ */
+const REPO_URL = "git+https://github.com/myg133/an_onto_demo.git";
+const HOMEPAGE = "https://github.com/myg133/an_onto_demo";
+
 function writePkg(name, pkg, extraFiles = []) {
   const dir = path.join(outRoot, ...name.split("/"));
   mkdirSync(path.join(dir, "bin"), { recursive: true });
@@ -72,6 +80,8 @@ function platform(slug, binPath) {
     version,
     description: `ontok-builder 的 ${slug} 二进制（由主包按平台自动安装，⛔ 不要直接装它）`,
     license: "UNLICENSED",
+    repository: { type: "git", url: REPO_URL },
+    homepage: HOMEPAGE,
     os: [spec.os],
     cpu: [spec.cpu],
     files: [`bin/${exe}`],
@@ -91,6 +101,8 @@ function main() {
       "ontok 构建端 CLI（本体构建：doc ingest / propose / console / bundle / access / relation）。" +
       "本包只带一个转发器，真二进制在平台包 ontok-builder-<platform>-<arch> 里。",
     license: "UNLICENSED",
+    repository: { type: "git", url: REPO_URL },
+    homepage: HOMEPAGE,
     type: "module",
     bin: { "ontok-builder": "bin/ontok-builder.js" },
     files: ["bin/ontok-builder.js"],
