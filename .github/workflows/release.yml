@@ -1,27 +1,35 @@
 name: release
 
-# 只在两种情况下跑：
-#   1. 手动触发（第一次发布 npm 必须手动 —— 那时 token/包都还不存在）
-#   2. 打 tag（v0.3.1 这种），且 publish=true
+# 什么时候跑：
+#   1. workflow_dispatch（手动）—— 可勾 publish 决定真发还是空跑
+#   2. push tag `v*` —— 一律发
 #
-# ⛔ 只构建 ontok-builder（用户口径：服务端二进制不在这个流水线里）
+# ⛔ 只构建 ontok-builder（用户口径：服务端二进制不进这条流水线）
 # ⛔ 平台只发三个：win32-x64 · darwin-arm64 · linux-x64（linux 不要 arm，mac 不要 x64）
+#
+# 认证有两条路（见 Deploy/tools/PUBLISH.md）：
+#   · OIDC / trusted publishing —— 推荐，无 token、不过期、自动 provenance
+#   · NPM_TOKEN（granular token）—— 兜底；账号强制 2FA 且 token 不能绕时可能 EOTP
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "真的发布到 npm（需要仓库 secret NPM_TOKEN；不勾就只构建并上传 artifact）"
+        description: "真的发布到 npm（不勾就只构建 + 上传 bundle）"
         type: boolean
         default: false
+      auth:
+        description: "认证方式。auto = 有 id-token 就走 trusted publishing，否则用 NPM_TOKEN"
+        type: choice
+        options: [auto, oidc, token]
+        default: auto
   push:
     tags:
       - "v*"
 
 permissions:
   contents: read
-  # ⭐ 让 npm 走「trusted publishing」（OIDC 免 token）—— 见 Deploy/tools/PUBLISH.md
-  #    没配 trusted publisher 时这个权限不影响任何事
+  # ⭐ trusted publishing 必需：npm 用 GitHub 的 OIDC 换短期凭据（无 token）
   id-token: write
 
 concurrency:
@@ -30,6 +38,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  REGISTRY: https://registry.npmjs.org
 
 jobs:
   build:
@@ -60,10 +69,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: setup node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # ⚠️ --locked：Cargo.lock 必须与 Cargo.toml 一致（2026-10-27 就因为发版只改了
       #    Cargo.toml 没改 lock，导致 --locked 构建直接失败过一次）
@@ -89,15 +97,23 @@ jobs:
     name: publish to npm
     needs: build
     runs-on: ubuntu-latest
-    # 手动触发要看勾没勾；tag 触发一律发
     if: github.event_name == 'push' || inputs.publish == true
     steps:
       - uses: actions/checkout@v4
 
+      # ⚠️ 这里**故意不用** setup-node 的 registry-url：
+      #    它会往 .npmrc 写 `_authToken=${NODE_AUTH_TOKEN}`，OIDC 模式下那行是空的，
+      #    反而让 npm 以为"要用 token 但没给"。registry 下面手动配。
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          node-version: "22"
+
+      - name: 升级 npm（trusted publishing 需要 npm ≥ 11.5.1）
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm i -g npm@latest >/dev/null 2>&1
+          echo "npm $(npm --version) · node $(node --version)"
 
       - name: 下载三个平台包
         uses: actions/download-artifact@v4
@@ -116,58 +132,74 @@ jobs:
           ver=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').version")
           cargo_ver=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "npm=$ver cargo=$cargo_ver ref=${GITHUB_REF_NAME}"
-          [ "$ver" = "$cargo_ver" ] || { echo "版本不一致：npm=$ver cargo=$cargo_ver"; exit 1; }
+          [ "$ver" = "$cargo_ver" ] || { echo "::error::版本不一致：npm=$ver cargo=$cargo_ver"; exit 1; }
           case "${GITHUB_REF_NAME}" in
-            v*) [ "v$ver" = "${GITHUB_REF_NAME}" ] || { echo "tag 与版本不一致"; exit 1; } ;;
+            v*) [ "v$ver" = "${GITHUB_REF_NAME}" ] || { echo "::error::tag 与版本不一致"; exit 1; } ;;
           esac
 
-      # ⚠️ token 必须是 **Automation** 类型（Classic → Automation）。
-      #    `Publish` 类型每次都要 OTP ⇒ CI 里必然 EOTP（2026-10-28 实测踩过一次）。
-      - name: preflight · token 与 registry
+      # 选认证方式并配好 .npmrc；结果写进 $GITHUB_ENV 供后面几步复用
+      - name: preflight · 选认证方式 + 配 registry
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          AUTH_INPUT: ${{ inputs.auth }}
         run: |
           set -euo pipefail
-          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+          npm config set registry "$REGISTRY"
+          want="${AUTH_INPUT:-auto}"
+          have_oidc=""
+          [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && have_oidc=1
+          have_token=""
+          [ -n "${NODE_AUTH_TOKEN:-}" ] && have_token=1
+
+          mode=""
+          if [ "$want" = "oidc" ]; then
+            [ -n "$have_oidc" ] || { echo "::error::要求 oidc，但工作流没有 id-token: write 权限"; exit 1; }
+            mode=oidc
+          elif [ "$want" = "token" ]; then
+            [ -n "$have_token" ] || { echo "::error::要求 token，但仓库没有 NPM_TOKEN secret"; exit 1; }
+            mode=token
+          else
+            [ -n "$have_oidc" ] && mode=oidc || mode=token
+          fi
+
+          if [ "$mode" = "token" ]; then
+            [ -n "$have_token" ] || { echo "::error::既没有 OIDC 也没有 NPM_TOKEN"; exit 1; }
+            npm config set "//registry.npmjs.org/:_authToken" "$NODE_AUTH_TOKEN"
             if ! who=$(npm whoami 2>&1); then
               echo "$who"
-              echo "::error::npm whoami 失败 —— token 无效或已过期"
+              echo "::error::npm whoami 失败 —— token 无效/过期/类型不对"
               exit 1
             fi
             echo "认证方式：NPM_TOKEN（身份 $who）"
-          elif [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            # trusted publishing：不需要 token，npm 用 GitHub 的 OIDC 换短期凭据。
-            # 前置：npm 上该包已存在且配了 trusted publisher（见 Deploy/tools/PUBLISH.md）
-            echo "认证方式：trusted publishing（OIDC，无 token）"
-            echo "::warning::未配 NPM_TOKEN，走 OIDC —— 首次发布前必须先手动发一版并配好 trusted publisher"
           else
-            echo "::error::既没有 NPM_TOKEN，也没有 OIDC 权限（permissions.id-token）"
-            exit 1
+            # 清掉可能存在的空 token 行，确保 npm 走 OIDC
+            npm config delete "//registry.npmjs.org/:_authToken" 2>/dev/null || true
+            echo "认证方式：trusted publishing（OIDC，无 token）"
+            echo "::notice::前提：npm 上这 4 个包都已配置 trusted publisher = GitHub Actions / myg133 / an_onto_demo / release.yml"
           fi
+          echo "AUTH_MODE=$mode" >> "$GITHUB_ENV"
           npm ping
 
       - name: publish 平台包（先于主包：主包靠 optionalDependencies 找它们）
         shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          echo "模式：${AUTH_MODE}"
           for p in npm/out/@anspire-ai/ontok-builder-*; do
             echo "→ $p"
             if ! out=$(npm publish "$p" --access public 2>&1); then
               echo "$out"
               case "$out" in
                 *EOTP*)
-                  echo "::error::EOTP —— token 类型是 Publish（要 OTP）。请在 npmjs.com → Access Tokens → Generate New Token → Classic → 选 Automation，再更新 secret NPM_TOKEN" ;;
-                *E403*)
-                  echo "::error::E403 —— 这个 token 对 @anspire-ai 没有发布权（不是 org 成员 / token 权限范围不含该 scope）" ;;
-                *E404*)
-                  echo "::error::E404 —— scope @anspire-ai 在 npm 上不存在（先在 npm 建 org）" ;;
+                  echo "::error::EOTP —— token 需要一次性密码。改用 trusted publishing（auth=oidc），或用 granular token（read-write）" ;;
+                *"trusted publisher"*|*"not authorized"*|*ENEEDAUTH*)
+                  echo "::error::认证失败 —— 若走 OIDC：检查该包是否配了 trusted publisher（仓库 an_onto_demo / 工作流 release.yml / org myg133）" ;;
+                *E403*) echo "::error::E403 —— 无发布权（org 成员？scope 权限？）" ;;
+                *E404*) echo "::error::E404 —— scope/包不存在" ;;
                 *EPUBLISHCONFLICT*|*"cannot publish over"*)
-                  echo "::error::版本已存在 —— 升版本号（Cargo.toml + Cargo.lock），不要复用版本号重试" ;;
-                *)
-                  echo "::error::npm publish 失败（原因见上方 npm 输出）" ;;
+                  echo "::error::该版本已存在 —— 升版本号（Cargo.toml + Cargo.lock），⛔ 不要复用版本号" ;;
+                *) echo "::error::npm publish 失败（原因见上方）" ;;
               esac
               exit 1
             fi
@@ -176,16 +208,14 @@ jobs:
 
       - name: publish 主包
         shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if ! out=$(npm publish npm/out/@anspire-ai/ontok-builder --access public 2>&1); then
             echo "$out"
             case "$out" in
-              *EOTP*) echo "::error::EOTP —— token 需要 OTP。改用 granular token（read-write）或 trusted publishing，见 Deploy/tools/PUBLISH.md" ;;
-              *E403*) echo "::error::E403 —— 对该 scope 无发布权" ;;
-              *EPUBLISHCONFLICT*|*"cannot publish over"*) echo "::error::版本已存在 —— 升版本号" ;;
+              *EOTP*) echo "::error::EOTP —— 改用 trusted publishing 或 granular token" ;;
+              *E403*) echo "::error::E403 —— 无发布权" ;;
+              *EPUBLISHCONFLICT*|*"cannot publish over"*) echo "::error::该版本已存在 —— 升版本号" ;;
               *) echo "::error::npm publish 失败（原因见上方）" ;;
             esac
             exit 1
@@ -193,13 +223,11 @@ jobs:
           echo "$out" | tail -4
 
       - name: 冒烟：从 registry 装回来再跑 --version
-        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
           ver=$(node -p "require('./npm/out/@anspire-ai/ontok-builder/package.json').version")
-          d=$(mktemp -d)
-          cd "$d"
+          d=$(mktemp -d); cd "$d"
           npm init -y >/dev/null
           npm i "@anspire-ai/ontok-builder@$ver" --include=optional
           npx ontok-builder --version
@@ -215,7 +243,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: 下载三个平台包
         uses: actions/download-artifact@v4
         with:
