@@ -5,7 +5,7 @@
 
 | session-id | 角色 | 状态 | 最后活动 | 当前任务 |
 | --- | --- | --- | --- | --- |
-| ba-join-michael-workstation-1340-20261027-093836 | ba | **online** | 2026-10-27 09:40 | join · 服务端（与 lion 分工：lion=本地抽取端）|
+| ba-join-michael-workstation-1340-20261027-093836 | ba | **offline** | 2026-10-30 11:09 | join · 服务端 已**注销**；交接见 `BA/STATE.md`（三环境版本/UAT 18 套本体可打开/6 条待办/7 条红线） |
 | ba-lion-michael-workstation-49056-20261027-094244 | ba | **online** | 2026-10-27 09:52 | lion · 本地抽取端；今日按用户指令只做账本与复核：一致性审计已出（5 条漂移全在服务端）、分工已与 join 双向确认；REQ-153 暂缓 |
 | ba-michael-worksta-14864-20261020-151752 | ba | **stale** | 2026-10-21 18:20 | REQ-108 已完成（合并 `a8a51ed`）；REQ-109 AI 接入开工 |
 | ba-bogon-112089-20261002-165609 | ba | **stale** | 2026-10-02 16:56 | REQ-002 独立 QA 审核（已派出 verifier） |
